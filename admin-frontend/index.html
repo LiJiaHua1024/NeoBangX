@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NeoBangX 管理后台</title>
+  <meta name="description" content="NeoBangX 使用码与配置管理后台">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23b4502a'/%3E%3Cstop offset='1' stop-color='%238c3316'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script defer src="/static/script.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
+  <!-- 首屏防闪烁 -->
+  <script>
+    try { document.documentElement.dataset.theme = localStorage.getItem("nbx_admin_theme") || "paper"; }
+    catch (e) { document.documentElement.dataset.theme = "paper"; }
+  </script>
+</head>
+<body>
+  <div class="bg-orbs" aria-hidden="true"></div>
+
+  <div x-data="adminApp()" x-init="init()" x-cloak class="layout">
+    <!-- 侧栏 -->
+    <aside class="sidebar glass">
+      <div class="brand">
+        <div class="brand-logo">⚡</div>
+        <div>
+          <div class="brand-title">NeoBangX</div>
+          <div class="brand-sub">管理后台 · 内网</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item" :class="{ on: tab === 'dashboard' }" @click="tab = 'dashboard'">
+          <span>概览</span>
+        </button>
+        <button class="nav-item" :class="{ on: tab === 'codes' }" @click="tab = 'codes'; loadCodes()">
+          <span>使用码</span>
+        </button>
+        <button class="nav-item" :class="{ on: tab === 'logs' }" @click="tab = 'logs'; loadLogs()">
+          <span>使用日志</span>
+        </button>
+        <button class="nav-item" :class="{ on: tab === 'config' }" @click="tab = 'config'; loadConfig()">
+          <span>API 配置</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="mb-2">
+          <div class="hint mb-1.5">主题</div>
+          <div class="theme-dots">
+            <template x-for="th in themes" :key="th.id">
+              <button class="theme-dot" :class="{ 'on': theme === th.id }" :style="'background:' + th.dot"
+                      @click="setTheme(th.id)" :title="th.name"></button>
+            </template>
+          </div>
+        </div>
+        <div class="hint">无需登录 · 请勿映射公网</div>
+        <div class="hint mono" x-text="'v' + version"></div>
+      </div>
+    </aside>
+
+    <!-- 主区 -->
+    <main class="main">
+      <header class="topbar glass">
+        <div>
+          <h1 class="page-title" x-text="pageTitle"></h1>
+          <p class="page-desc" x-text="pageDesc"></p>
+        </div>
+        <button class="btn-ghost" @click="refreshAll()" :disabled="loading">
+          刷新
+        </button>
+      </header>
+
+      <!-- 概览 -->
+      <section x-show="tab === 'dashboard'" class="panel-stack">
+        <div class="stat-grid">
+          <div class="stat-card glass">
+            <div class="stat-label">使用码总数</div>
+            <div class="stat-value" x-text="stats.total_codes ?? '—'"></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-label">启用中</div>
+            <div class="stat-value" x-text="stats.enabled_codes ?? '—'"></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-label">累计调用</div>
+            <div class="stat-value" x-text="stats.total_used ?? '—'"></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-label">日志条数</div>
+            <div class="stat-value" x-text="stats.total_logs ?? '—'"></div>
+          </div>
+        </div>
+
+        <div class="glass card">
+          <h2 class="card-title">快速操作</h2>
+          <div class="quick-actions">
+            <button class="btn-primary" @click="openCreate()">生成使用码</button>
+            <button class="btn-ghost" @click="tab = 'codes'; loadCodes()">管理使用码</button>
+            <button class="btn-ghost" @click="tab = 'config'; loadConfig()">配置 LLM</button>
+          </div>
+          <p class="muted mt-4">主站端口 8000 对外；本管理后台 8001 仅内网访问。</p>
+        </div>
+      </section>
+
+      <!-- 使用码 -->
+      <section x-show="tab === 'codes'" class="panel-stack">
+        <div class="glass card toolbar">
+          <div class="filters">
+            <input type="search" x-model="codeQuery" @keydown.enter="codesPage = 1; loadCodes()" placeholder="搜索码 / 备注">
+
+            <!-- 类型筛选 -->
+            <div class="custom-select" @click.outside="codeTypeMenuOpen = false">
+              <button class="custom-select-trigger" :class="{ open: codeTypeMenuOpen }"
+                      @click="codeTypeMenuOpen = !codeTypeMenuOpen">
+                <span x-text="codeTypeFilterLabel"></span>
+                <span class="chev">▼</span>
+              </button>
+              <div class="custom-select-menu" x-show="codeTypeMenuOpen" x-cloak>
+                <button class="custom-select-item" :class="{ on: codeTypeFilter === '' }"
+                        @click="codeTypeFilter = ''; codeTypeMenuOpen = false; codesPage = 1; loadCodes()">全部类型</button>
+                <button class="custom-select-item" :class="{ on: codeTypeFilter === 'user' }"
+                        @click="codeTypeFilter = 'user'; codeTypeMenuOpen = false; codesPage = 1; loadCodes()">普通用户</button>
+                <button class="custom-select-item" :class="{ on: codeTypeFilter === 'admin' }"
+                        @click="codeTypeFilter = 'admin'; codeTypeMenuOpen = false; codesPage = 1; loadCodes()">管理员</button>
+              </div>
+            </div>
+
+            <!-- 状态筛选 -->
+            <div class="custom-select" @click.outside="codeEnabledMenuOpen = false">
+              <button class="custom-select-trigger" :class="{ open: codeEnabledMenuOpen }"
+                      @click="codeEnabledMenuOpen = !codeEnabledMenuOpen">
+                <span x-text="codeEnabledFilterLabel"></span>
+                <span class="chev">▼</span>
+              </button>
+              <div class="custom-select-menu" x-show="codeEnabledMenuOpen" x-cloak>
+                <button class="custom-select-item" :class="{ on: codeEnabledFilter === '' }"
+                        @click="codeEnabledFilter = ''; codeEnabledMenuOpen = false; codesPage = 1; loadCodes()">全部状态</button>
+                <button class="custom-select-item" :class="{ on: codeEnabledFilter === 'true' }"
+                        @click="codeEnabledFilter = 'true'; codeEnabledMenuOpen = false; codesPage = 1; loadCodes()">已启用</button>
+                <button class="custom-select-item" :class="{ on: codeEnabledFilter === 'false' }"
+                        @click="codeEnabledFilter = 'false'; codeEnabledMenuOpen = false; codesPage = 1; loadCodes()">已禁用</button>
+              </div>
+            </div>
+
+            <button class="btn-ghost" @click="codesPage = 1; loadCodes()">查询</button>
+          </div>
+          <button class="btn-primary" @click="openCreate()">+ 生成使用码</button>
+        </div>
+
+        <div class="glass card table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>使用码</th>
+                <th>类型</th>
+                <th>额度</th>
+                <th>已用</th>
+                <th>剩余</th>
+                <th>状态</th>
+                <th>备注</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr x-show="!codes.length">
+                <td colspan="9" class="empty">暂无使用码</td>
+              </tr>
+              <template x-for="c in codes" :key="c.id">
+                <tr>
+                  <td class="mono code-cell">
+                    <span x-text="c.code"></span>
+                    <button class="link-btn" @click="copyText(c.code)" title="复制">复制</button>
+                  </td>
+                  <td>
+                    <span class="badge" :class="c.code_type === 'admin' ? 'badge-admin' : 'badge-user'"
+                          x-text="c.code_type === 'admin' ? '管理员' : '用户'"></span>
+                  </td>
+                  <td x-text="c.is_unlimited ? '∞' : c.quota"></td>
+                  <td x-text="c.used_count"></td>
+                  <td x-text="c.is_unlimited ? '∞' : c.remaining"></td>
+                  <td>
+                    <span class="dot" :class="c.is_enabled ? 'on' : 'off'"></span>
+                    <span x-text="c.is_enabled ? '启用' : '禁用'"></span>
+                  </td>
+                  <td class="dim" x-text="c.note || '—'"></td>
+                  <td class="dim mono" x-text="fmtTime(c.created_at)"></td>
+                  <td class="actions">
+                    <button class="link-btn" @click="toggleCode(c)" x-text="c.is_enabled ? '禁用' : '启用'"></button>
+                    <button class="link-btn" @click="editNote(c)">备注</button>
+                    <button class="link-btn" x-show="c.code_type === 'user'" @click="openEditQuota(c)">改额度</button>
+                    <button class="link-btn danger" @click="deleteCode(c)">删除</button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+
+          <div class="pager" x-show="codesTotal > codesPageSize">
+            <button class="btn-ghost" :disabled="codesPage <= 1" @click="codesPage--; loadCodes()">上一页</button>
+            <span class="dim" x-text="`第 ${codesPage} 页 · 共 ${codesTotal} 条`"></span>
+            <button class="btn-ghost" :disabled="codesPage * codesPageSize >= codesTotal" @click="codesPage++; loadCodes()">下一页</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 日志 -->
+      <section x-show="tab === 'logs'" class="panel-stack">
+        <div class="glass card toolbar">
+          <div class="filters">
+            <input type="search" x-model="logCode" @keydown.enter="logsPage = 1; loadLogs()" placeholder="按使用码筛选">
+            <input type="text" x-model="logToolId" @keydown.enter="logsPage = 1; loadLogs()" placeholder="工具 ID">
+            <button class="btn-ghost" @click="logsPage = 1; loadLogs()">查询</button>
+          </div>
+        </div>
+
+        <div class="glass card table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>使用码</th>
+                <th>工具</th>
+                <th>模型</th>
+                <th>请求 ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr x-show="!logs.length">
+                <td colspan="5" class="empty">暂无日志</td>
+              </tr>
+              <template x-for="l in logs" :key="l.id">
+                <tr>
+                  <td class="mono dim" x-text="fmtTime(l.created_at)"></td>
+                  <td class="mono" x-text="l.code"></td>
+                  <td>
+                    <span x-text="l.tool_name || l.tool_id"></span>
+                    <span class="dim" x-show="l.tool_id"> (#<span x-text="l.tool_id"></span>)</span>
+                  </td>
+                  <td class="dim mono truncate-cell" x-text="l.model || '—'"></td>
+                  <td class="dim mono truncate-cell" x-text="l.request_id || '—'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <div class="pager" x-show="logsTotal > logsPageSize">
+            <button class="btn-ghost" :disabled="logsPage <= 1" @click="logsPage--; loadLogs()">上一页</button>
+            <span class="dim" x-text="`第 ${logsPage} 页 · 共 ${logsTotal} 条`"></span>
+            <button class="btn-ghost" :disabled="logsPage * logsPageSize >= logsTotal" @click="logsPage++; loadLogs()">下一页</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 配置 -->
+      <section x-show="tab === 'config'" class="panel-stack">
+        <!-- 模型管理 -->
+        <div class="glass card">
+          <div class="card-head-row">
+            <div>
+              <h2 class="card-title">模型管理</h2>
+              <p class="muted">用户可选的模型列表；每个模型可单独设置显示名称与思考（Thinking）控制。修改后需点击下方“保存配置”生效。</p>
+            </div>
+            <button class="btn-primary" @click="openAddModel()">+ 添加模型</button>
+          </div>
+
+          <table class="data-table mt-3">
+            <thead>
+              <tr>
+                <th>显示名称</th>
+                <th>模型 ID</th>
+                <th>思考控制</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr x-show="!configForm.models.length">
+                <td colspan="4" class="empty">暂无模型，点击右上角“添加模型”</td>
+              </tr>
+              <template x-for="(m, i) in configForm.models" :key="m.id + '-' + i">
+                <tr>
+                  <td>
+                    <span x-text="m.name || m.id"></span>
+                    <span class="badge badge-admin ml-1.5" x-show="m.id === configForm.default_model">默认</span>
+                  </td>
+                  <td class="dim mono truncate-cell" x-text="m.id"></td>
+                  <td><span class="badge badge-user" x-text="thinkingLabel(m)"></span></td>
+                  <td class="actions">
+                    <button class="link-btn" x-show="m.id !== configForm.default_model" @click="setDefaultModel(m.id)">设为默认</button>
+                    <button class="link-btn" @click="openEditModel(i)">编辑</button>
+                    <button class="link-btn" :disabled="i === 0" @click="moveModel(i, -1)" title="上移">↑</button>
+                    <button class="link-btn" :disabled="i === configForm.models.length - 1" @click="moveModel(i, 1)" title="下移">↓</button>
+                    <button class="link-btn danger" @click="removeModel(i)">删除</button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <p class="field-hint mt-2" x-show="defaultModelMissing">⚠ 当前默认模型不在列表中，请重新选择或添加。</p>
+        </div>
+
+        <div class="glass card">
+          <h2 class="card-title">LLM / API 配置</h2>
+          <p class="muted mb-4">配置保存在后端 SQLite，主站立即生效。API Key 展示已脱敏；留空可清除密钥。</p>
+
+          <datalist id="nbx-model-ids">
+            <template x-for="m in configForm.models" :key="'dl-' + m.id">
+              <option :value="m.id"></option>
+            </template>
+          </datalist>
+
+          <div class="form-grid">
+            <label class="field">
+              <span>默认模型</span>
+              <div class="custom-select" @click.outside="defaultModelMenuOpen = false">
+                <button class="custom-select-trigger" :class="{ open: defaultModelMenuOpen }"
+                        @click="defaultModelMenuOpen = !defaultModelMenuOpen">
+                  <span class="truncate" x-text="defaultModelLabel"></span>
+                  <span class="chev">▼</span>
+                </button>
+                <div class="custom-select-menu" x-show="defaultModelMenuOpen" x-cloak>
+                  <template x-for="m in configForm.models" :key="'dm-' + m.id">
+                    <button class="custom-select-item" :class="{ on: configForm.default_model === m.id }"
+                            @click="configForm.default_model = m.id; defaultModelMenuOpen = false"
+                            x-text="m.name || m.id"></button>
+                  </template>
+                  <div class="custom-select-item" x-show="!configForm.models.length" style="cursor:default">请先在上方添加模型</div>
+                </div>
+              </div>
+              <span class="field-hint">用户端未选择模型时使用</span>
+            </label>
+            <label class="field">
+              <span>主 AI 模型</span>
+              <input type="text" x-model="configForm.llm_model" list="nbx-model-ids" placeholder="留空则用默认模型">
+            </label>
+            <label class="field">
+              <span>主 AI Base URL</span>
+              <input type="text" x-model="configForm.llm_base_url" placeholder="可留空">
+            </label>
+            <label class="field">
+              <span>主 AI API Key</span>
+              <input type="password" x-model="configForm.llm_api_key" placeholder="sk-... 或留空不改/清除">
+              <span class="field-hint" x-show="hasLlmKey">当前已配置密钥（脱敏显示）</span>
+            </label>
+            <label class="field">
+              <span>Chores AI 模型</span>
+              <input type="text" x-model="configForm.chores_model" list="nbx-model-ids" placeholder="标题生成等轻量任务">
+            </label>
+            <label class="field">
+              <span>Chores AI Base URL</span>
+              <input type="text" x-model="configForm.chores_base_url" placeholder="留空回退主 AI">
+            </label>
+            <label class="field">
+              <span>Chores AI API Key</span>
+              <input type="password" x-model="configForm.chores_api_key" placeholder="留空回退主 AI">
+            </label>
+            <label class="field">
+              <span>Max Tokens</span>
+              <input type="number" x-model.number="configForm.max_tokens" min="256" max="128000">
+              <span class="field-hint">推理模型的思考 token 也计入此预算，建议适当调大</span>
+            </label>
+            <label class="field">
+              <span>Timeout（秒）</span>
+              <input type="number" x-model.number="configForm.timeout" min="10" max="600">
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存配置</button>
+            <button class="btn-ghost" @click="loadConfig()">重新加载</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- 生成使用码弹窗 -->
+    <div class="modal-mask" x-show="createOpen" x-transition.opacity @click.self="createOpen = false">
+      <div class="modal glass" @click.stop>
+        <div class="modal-head">
+          <h3>生成使用码</h3>
+          <button class="icon-x" @click="createOpen = false">×</button>
+        </div>
+        <div class="modal-body form-grid">
+          <label class="field">
+            <span>类型</span>
+            <div class="custom-select" @click.outside="createTypeMenuOpen = false">
+              <button class="custom-select-trigger" :class="{ open: createTypeMenuOpen }"
+                      @click="createTypeMenuOpen = !createTypeMenuOpen">
+                <span x-text="createForm.code_type === 'admin' ? '管理员（NBXA · 无限额度）' : '普通用户（NBXU）'"></span>
+                <span class="chev">▼</span>
+              </button>
+              <div class="custom-select-menu" x-show="createTypeMenuOpen" x-cloak>
+                <button class="custom-select-item" :class="{ on: createForm.code_type === 'user' }"
+                        @click="createForm.code_type = 'user'; createTypeMenuOpen = false">普通用户（NBXU）</button>
+                <button class="custom-select-item" :class="{ on: createForm.code_type === 'admin' }"
+                        @click="createForm.code_type = 'admin'; createTypeMenuOpen = false">管理员（NBXA · 无限额度）</button>
+              </div>
+            </div>
+          </label>
+          <label class="field" x-show="createForm.code_type === 'user'">
+            <span>额度（次）</span>
+            <div class="custom-select" @click.outside="createQuotaMenuOpen = false">
+              <button class="custom-select-trigger" :class="{ open: createQuotaMenuOpen }"
+                      @click="createQuotaMenuOpen = !createQuotaMenuOpen">
+                <span x-text="createForm.quota"></span>
+                <span class="chev">▼</span>
+              </button>
+              <div class="custom-select-menu" x-show="createQuotaMenuOpen" x-cloak>
+                <template x-for="q in quotaPresets" :key="q">
+                  <button class="custom-select-item" :class="{ on: createForm.quota === q }"
+                          @click="createForm.quota = q; createQuotaMenuOpen = false" x-text="q"></button>
+                </template>
+              </div>
+            </div>
+          </label>
+          <label class="field">
+            <span>生成数量</span>
+            <input type="number" x-model.number="createForm.count" min="1" max="200">
+          </label>
+          <label class="field">
+            <span>备注</span>
+            <input type="text" x-model="createForm.note" placeholder="可选，如：某校教研组">
+          </label>
+        </div>
+        <div class="modal-foot">
+          <button class="btn-ghost" @click="createOpen = false">取消</button>
+          <button class="btn-primary" @click="createCodes()" :disabled="creating">生成</button>
+        </div>
+
+        <div class="created-box" x-show="createdItems.length">
+          <div class="created-head">
+            <span>已生成 <span x-text="createdItems.length"></span> 个</span>
+            <button class="link-btn" @click="copyCreated()">全部复制</button>
+          </div>
+          <ul class="created-list">
+            <template x-for="item in createdItems" :key="item.code">
+              <li class="mono" x-text="item.code"></li>
+            </template>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- 改额度弹窗 -->
+    <div class="modal-mask" x-show="quotaModalOpen" x-transition.opacity @click.self="quotaModalOpen = false">
+      <div class="modal glass" style="max-width: 360px" @click.stop>
+        <div class="modal-head">
+          <h3>修改额度</h3>
+          <button class="icon-x" @click="quotaModalOpen = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="muted mb-3" x-text="`使用码：${editingQuotaCode} · 已用 ${editingQuotaUsed} 次`"></p>
+          <label class="field">
+            <span>新额度</span>
+            <div class="custom-select" @click.outside="editQuotaMenuOpen = false">
+              <button class="custom-select-trigger" :class="{ open: editQuotaMenuOpen }"
+                      @click="editQuotaMenuOpen = !editQuotaMenuOpen">
+                <span x-text="editingQuotaValue"></span>
+                <span class="chev">▼</span>
+              </button>
+              <div class="custom-select-menu" x-show="editQuotaMenuOpen" x-cloak>
+                <template x-for="q in quotaPresets" :key="q">
+                  <button class="custom-select-item" :class="{ on: editingQuotaValue === q }"
+                          @click="editingQuotaValue = q; editQuotaMenuOpen = false" x-text="q"></button>
+                </template>
+              </div>
+            </div>
+          </label>
+          <p class="field-hint">也可直接输入自定义数字；新额度不能小于已用次数。</p>
+          <input type="number" x-model.number="editingQuotaValue" min="1" class="mt-2">
+        </div>
+        <div class="modal-foot">
+          <button class="btn-ghost" @click="quotaModalOpen = false">取消</button>
+          <button class="btn-primary" @click="saveEditQuota()" :disabled="savingQuota">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模型添加/编辑弹窗 -->
+    <div class="modal-mask" x-show="modelModalOpen" x-transition.opacity @click.self="modelModalOpen = false">
+      <div class="modal glass" style="max-width: 460px" @click.stop>
+        <div class="modal-head">
+          <h3 x-text="modelModalIndex === null ? '添加模型' : '编辑模型'"></h3>
+          <button class="icon-x" @click="modelModalOpen = false">×</button>
+        </div>
+        <div class="modal-body">
+          <label class="field mb-3">
+            <span>模型 ID（LiteLLM 格式）</span>
+            <input type="text" class="mono" x-model="modelForm.id" placeholder="openrouter/google/gemini-2.5-flash">
+            <span class="field-hint">如 openrouter/anthropic/claude-sonnet-4.5、openai/gpt-5.2</span>
+          </label>
+          <label class="field mb-3">
+            <span>显示名称</span>
+            <input type="text" x-model="modelForm.name" placeholder="留空则显示模型 ID，如：Gemini 2.5 Flash">
+          </label>
+          <label class="field mb-3">
+            <span>思考（Thinking）控制</span>
+            <div class="custom-select" @click.outside="thinkingMenuOpen = false">
+              <button class="custom-select-trigger" :class="{ open: thinkingMenuOpen }"
+                      @click="thinkingMenuOpen = !thinkingMenuOpen">
+                <span x-text="thinkingModeLabel(modelForm.mode)"></span>
+                <span class="chev">▼</span>
+              </button>
+              <div class="custom-select-menu" x-show="thinkingMenuOpen" x-cloak>
+                <template x-for="opt in thinkingModes" :key="opt.id">
+                  <button class="custom-select-item" :class="{ on: modelForm.mode === opt.id }"
+                          @click="modelForm.mode = opt.id; thinkingMenuOpen = false" x-text="opt.label"></button>
+                </template>
+              </div>
+            </div>
+            <span class="field-hint" x-text="thinkingModeHint(modelForm.mode)"></span>
+          </label>
+          <label class="field" x-show="modelForm.mode === 'budget'">
+            <span>思考 Token 预算</span>
+            <input type="number" x-model.number="modelForm.thinking_budget" min="1" step="256" placeholder="如 8192">
+          </label>
+        </div>
+        <div class="modal-foot">
+          <button class="btn-ghost" @click="modelModalOpen = false">取消</button>
+          <button class="btn-primary" @click="saveModelModal()">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toasts">
+      <template x-for="t in toasts" :key="t.id">
+        <div class="toast" :class="t.type" x-text="t.msg"></div>
+      </template>
+    </div>
+  </div>
+</body>
+</html>

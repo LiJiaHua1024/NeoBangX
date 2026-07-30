@@ -1,0 +1,513 @@
+/* NeoBangX Admin Frontend */
+
+const ADMIN_THEMES = [
+  { id: "paper", name: "宣纸", dot: "linear-gradient(135deg,#b4502a,#8c3316)" },
+  { id: "celadon", name: "青瓷", dot: "linear-gradient(135deg,#0e6e5f,#0a5245)" },
+  { id: "obsidian", name: "曜石", dot: "linear-gradient(135deg,#e9a15b,#cf7038)" },
+  { id: "jade", name: "墨翠", dot: "linear-gradient(135deg,#5cb787,#2f8a66)" },
+];
+
+function adminApp() {
+  return {
+    version: "1.1.0",
+    theme: "paper",
+    themes: ADMIN_THEMES,
+    tab: "dashboard",
+    loading: false,
+    stats: {},
+    codes: [],
+    codesTotal: 0,
+    codesPage: 1,
+    codesPageSize: 20,
+    codeQuery: "",
+    codeTypeFilter: "",
+    codeEnabledFilter: "",
+    codeTypeMenuOpen: false,
+    codeEnabledMenuOpen: false,
+    logs: [],
+    logsTotal: 0,
+    logsPage: 1,
+    logsPageSize: 30,
+    logCode: "",
+    logToolId: "",
+    configForm: {
+      default_model: "",
+      models: [],
+      llm_base_url: "",
+      llm_api_key: "",
+      llm_model: "",
+      chores_model: "",
+      chores_base_url: "",
+      chores_api_key: "",
+      max_tokens: 4096,
+      timeout: 120,
+    },
+    hasLlmKey: false,
+    hasChoresKey: false,
+    savingConfig: false,
+    defaultModelMenuOpen: false,
+    // 模型添加/编辑弹窗
+    modelModalOpen: false,
+    modelModalIndex: null,
+    modelForm: { id: "", name: "", mode: "default", thinking_budget: null },
+    thinkingMenuOpen: false,
+    thinkingModes: [
+      { id: "default", label: "跟随模型默认", hint: "不传任何参数，是否思考由供应商默认策略决定" },
+      { id: "none", label: "关闭思考", hint: "尽可能禁用思考，响应更快、消耗更少" },
+      { id: "minimal", label: "最低强度", hint: "保留极少量思考" },
+      { id: "low", label: "低强度", hint: "轻度思考，适合简单任务" },
+      { id: "medium", label: "中强度", hint: "均衡的思考投入" },
+      { id: "high", label: "高强度", hint: "深度思考，适合复杂分析任务，响应较慢" },
+      { id: "budget", label: "自定义 Token 预算", hint: "显式指定思考 token 上限（Anthropic 风格 thinking 参数）" },
+    ],
+    createOpen: false,
+    creating: false,
+    createForm: { code_type: "user", quota: 10, count: 1, note: "" },
+    createTypeMenuOpen: false,
+    createQuotaMenuOpen: false,
+    quotaPresets: [1, 3, 5, 10, 50, 100, 200, 500, 1000],
+    createdItems: [],
+    quotaModalOpen: false,
+    savingQuota: false,
+    editingQuotaId: null,
+    editingQuotaCode: "",
+    editingQuotaUsed: 0,
+    editingQuotaValue: 10,
+    editQuotaMenuOpen: false,
+    toasts: [],
+
+    get pageTitle() {
+      return (
+        {
+          dashboard: "概览",
+          codes: "使用码管理",
+          logs: "使用日志",
+          config: "API 配置",
+        }[this.tab] || "管理后台"
+      );
+    },
+    get pageDesc() {
+      return (
+        {
+          dashboard: "查看整体使用情况与快捷入口",
+          codes: "生成、启用/禁用/删除使用码，查看额度",
+          logs: "查看每次工具调用的详细记录",
+          config: "管理 LLM 密钥、模型与调用参数",
+        }[this.tab] || ""
+      );
+    },
+    get codeTypeFilterLabel() {
+      const map = { "": "全部类型", user: "普通用户", admin: "管理员" };
+      return map[this.codeTypeFilter] || "全部类型";
+    },
+    get codeEnabledFilterLabel() {
+      const map = { "": "全部状态", true: "已启用", false: "已禁用" };
+      return map[this.codeEnabledFilter] || "全部状态";
+    },
+    get defaultModelLabel() {
+      const m = this.configForm.models.find((x) => x.id === this.configForm.default_model);
+      if (m) return m.name || m.id;
+      return this.configForm.default_model || "请选择默认模型";
+    },
+    get defaultModelMissing() {
+      return (
+        !!this.configForm.default_model &&
+        this.configForm.models.length > 0 &&
+        !this.configForm.models.some((m) => m.id === this.configForm.default_model)
+      );
+    },
+
+    async init() {
+      const saved = localStorage.getItem("nbx_admin_theme");
+      if (saved && ADMIN_THEMES.some((t) => t.id === saved)) this.theme = saved;
+      this.applyTheme();
+      await this.refreshAll();
+    },
+
+    setTheme(id) {
+      this.theme = id;
+      this.applyTheme();
+      try { localStorage.setItem("nbx_admin_theme", id); } catch {}
+    },
+    applyTheme() {
+      document.documentElement.dataset.theme = this.theme;
+    },
+
+    async refreshAll() {
+      this.loading = true;
+      try {
+        await Promise.all([this.loadStats(), this.loadCodes(), this.loadLogs()]);
+        if (this.tab === "config") await this.loadConfig();
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async api(path, options = {}) {
+      const res = await fetch(path, {
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        ...options,
+      });
+      let data = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      if (!res.ok) {
+        const msg =
+          (data && (data.detail || data.message)) ||
+          `请求失败 HTTP ${res.status}`;
+        throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+      }
+      return data;
+    },
+
+    toast(msg, type = "ok") {
+      const id = Date.now() + Math.random();
+      this.toasts.push({ id, msg, type });
+      setTimeout(() => {
+        this.toasts = this.toasts.filter((t) => t.id !== id);
+      }, 2800);
+    },
+
+    fmtTime(iso) {
+      if (!iso) return "—";
+      try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return iso;
+        const pad = (n) => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      } catch {
+        return iso;
+      }
+    },
+
+    async copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        this.toast("已复制");
+      } catch {
+        this.toast("复制失败", "error");
+      }
+    },
+
+    async loadStats() {
+      try {
+        this.stats = await this.api("/api/admin/stats");
+      } catch (e) {
+        this.toast(e.message || "加载统计失败", "error");
+      }
+    },
+
+    async loadCodes() {
+      try {
+        const params = new URLSearchParams({
+          page: String(this.codesPage),
+          page_size: String(this.codesPageSize),
+        });
+        if (this.codeQuery.trim()) params.set("q", this.codeQuery.trim());
+        if (this.codeTypeFilter) params.set("code_type", this.codeTypeFilter);
+        if (this.codeEnabledFilter !== "") params.set("enabled", this.codeEnabledFilter);
+
+        const data = await this.api(`/api/admin/codes?${params}`);
+        this.codes = data.items || [];
+        this.codesTotal = data.total || 0;
+      } catch (e) {
+        this.toast(e.message || "加载使用码失败", "error");
+      }
+    },
+
+    openCreate() {
+      this.createForm = { code_type: "user", quota: 10, count: 1, note: "" };
+      this.createdItems = [];
+      this.createOpen = true;
+      this.createTypeMenuOpen = false;
+      this.createQuotaMenuOpen = false;
+    },
+
+    async createCodes() {
+      this.creating = true;
+      try {
+        const body = {
+          code_type: this.createForm.code_type,
+          quota: this.createForm.code_type === "admin" ? -1 : Number(this.createForm.quota) || 1,
+          count: Number(this.createForm.count) || 1,
+          note: this.createForm.note || "",
+        };
+        const data = await this.api("/api/admin/codes", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        this.createdItems = data.items || [];
+        this.toast(`已生成 ${data.count} 个使用码`);
+        await this.loadCodes();
+        await this.loadStats();
+      } catch (e) {
+        this.toast(e.message || "生成失败", "error");
+      } finally {
+        this.creating = false;
+      }
+    },
+
+    async copyCreated() {
+      const text = this.createdItems.map((i) => i.code).join("\n");
+      await this.copyText(text);
+    },
+
+    async toggleCode(c) {
+      try {
+        await this.api(`/api/admin/codes/${c.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ is_enabled: !c.is_enabled }),
+        });
+        this.toast(c.is_enabled ? "已禁用" : "已启用");
+        await this.loadCodes();
+        await this.loadStats();
+      } catch (e) {
+        this.toast(e.message || "更新失败", "error");
+      }
+    },
+
+    async editNote(c) {
+      const note = prompt("备注", c.note || "");
+      if (note === null) return;
+      try {
+        await this.api(`/api/admin/codes/${c.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ note }),
+        });
+        this.toast("备注已更新");
+        await this.loadCodes();
+      } catch (e) {
+        this.toast(e.message || "更新失败", "error");
+      }
+    },
+
+    openEditQuota(c) {
+      this.editingQuotaId = c.id;
+      this.editingQuotaCode = c.code;
+      this.editingQuotaUsed = c.used_count;
+      this.editingQuotaValue = c.quota;
+      this.editQuotaMenuOpen = false;
+      this.quotaModalOpen = true;
+    },
+
+    async saveEditQuota() {
+      const quota = parseInt(this.editingQuotaValue, 10);
+      if (!Number.isFinite(quota) || quota < 1) {
+        this.toast("额度需为正整数", "error");
+        return;
+      }
+      this.savingQuota = true;
+      try {
+        await this.api(`/api/admin/codes/${this.editingQuotaId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ quota }),
+        });
+        this.toast("额度已更新");
+        this.quotaModalOpen = false;
+        await this.loadCodes();
+      } catch (e) {
+        this.toast(e.message || "更新失败", "error");
+      } finally {
+        this.savingQuota = false;
+      }
+    },
+
+    async deleteCode(c) {
+      if (!confirm(`确定要删除使用码「${c.code}」吗？此操作不可恢复。`)) return;
+      try {
+        await this.api(`/api/admin/codes/${c.id}`, { method: "DELETE" });
+        this.toast("已删除");
+        await this.loadCodes();
+        await this.loadStats();
+      } catch (e) {
+        this.toast(e.message || "删除失败", "error");
+      }
+    },
+
+    async loadLogs() {
+      try {
+        const params = new URLSearchParams({
+          page: String(this.logsPage),
+          page_size: String(this.logsPageSize),
+        });
+        if (this.logCode.trim()) params.set("code", this.logCode.trim());
+        if (this.logToolId.trim()) params.set("tool_id", this.logToolId.trim());
+        const data = await this.api(`/api/admin/logs?${params}`);
+        this.logs = data.items || [];
+        this.logsTotal = data.total || 0;
+      } catch (e) {
+        this.toast(e.message || "加载日志失败", "error");
+      }
+    },
+
+    async loadConfig() {
+      try {
+        const data = await this.api("/api/admin/config");
+        const cfg = data.config || {};
+        this.configForm = {
+          default_model: cfg.default_model || "",
+          models: Array.isArray(cfg.models)
+            ? cfg.models.map((m) => ({
+                id: m.id || "",
+                name: m.name && m.name !== m.id ? m.name : "",
+                reasoning_effort: m.reasoning_effort || null,
+                thinking_budget: m.thinking_budget || null,
+              }))
+            : [],
+          llm_base_url: cfg.llm_base_url || "",
+          llm_api_key: cfg.llm_api_key || "",
+          llm_model: cfg.llm_model || "",
+          chores_model: cfg.chores_model || "",
+          chores_base_url: cfg.chores_base_url || "",
+          chores_api_key: cfg.chores_api_key || "",
+          max_tokens: Number(cfg.max_tokens) || 4096,
+          timeout: Number(cfg.timeout) || 120,
+        };
+        this.hasLlmKey = !!data.has_llm_api_key;
+        this.hasChoresKey = !!data.has_chores_api_key;
+      } catch (e) {
+        this.toast(e.message || "加载配置失败", "error");
+      }
+    },
+
+    /* ============ 模型管理 ============ */
+    thinkingLabel(m) {
+      if (m.thinking_budget) return `预算 ${m.thinking_budget} tokens`;
+      const opt = this.thinkingModes.find((o) => o.id === m.reasoning_effort);
+      return opt ? opt.label : "跟随模型默认";
+    },
+    thinkingModeLabel(mode) {
+      const opt = this.thinkingModes.find((o) => o.id === mode);
+      return opt ? opt.label : "跟随模型默认";
+    },
+    thinkingModeHint(mode) {
+      const opt = this.thinkingModes.find((o) => o.id === mode);
+      return opt ? opt.hint : "";
+    },
+
+    openAddModel() {
+      this.modelModalIndex = null;
+      this.modelForm = { id: "", name: "", mode: "default", thinking_budget: null };
+      this.thinkingMenuOpen = false;
+      this.modelModalOpen = true;
+    },
+
+    openEditModel(i) {
+      const m = this.configForm.models[i];
+      if (!m) return;
+      this.modelModalIndex = i;
+      this.modelForm = {
+        id: m.id,
+        name: m.name || "",
+        mode: m.thinking_budget ? "budget" : m.reasoning_effort || "default",
+        thinking_budget: m.thinking_budget || null,
+      };
+      this.thinkingMenuOpen = false;
+      this.modelModalOpen = true;
+    },
+
+    saveModelModal() {
+      const id = (this.modelForm.id || "").trim();
+      if (!id) {
+        this.toast("模型 ID 不能为空", "error");
+        return;
+      }
+      const dupIndex = this.configForm.models.findIndex((m) => m.id === id);
+      if (dupIndex !== -1 && dupIndex !== this.modelModalIndex) {
+        this.toast("该模型 ID 已在列表中", "error");
+        return;
+      }
+      const mode = this.modelForm.mode;
+      if (mode === "budget") {
+        const budget = parseInt(this.modelForm.thinking_budget, 10);
+        if (!Number.isFinite(budget) || budget < 1) {
+          this.toast("请填写有效的思考 Token 预算", "error");
+          return;
+        }
+      }
+      const entry = {
+        id,
+        name: (this.modelForm.name || "").trim(),
+        reasoning_effort: mode !== "default" && mode !== "budget" ? mode : null,
+        thinking_budget: mode === "budget" ? parseInt(this.modelForm.thinking_budget, 10) : null,
+      };
+      const oldId =
+        this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
+      if (this.modelModalIndex === null) {
+        this.configForm.models.push(entry);
+      } else {
+        this.configForm.models.splice(this.modelModalIndex, 1, entry);
+        // 同步更新引用了旧 ID 的默认模型
+        if (oldId && this.configForm.default_model === oldId) {
+          this.configForm.default_model = id;
+        }
+      }
+      if (!this.configForm.default_model) this.configForm.default_model = id;
+      this.modelModalOpen = false;
+      this.toast("已更新列表，记得点击“保存配置”生效");
+    },
+
+    removeModel(i) {
+      const m = this.configForm.models[i];
+      if (!m) return;
+      if (!confirm(`确定从列表移除模型「${m.name || m.id}」？`)) return;
+      this.configForm.models.splice(i, 1);
+      if (this.configForm.default_model === m.id) {
+        this.configForm.default_model = this.configForm.models[0]?.id || "";
+      }
+    },
+
+    moveModel(i, dir) {
+      const j = i + dir;
+      if (j < 0 || j >= this.configForm.models.length) return;
+      const arr = this.configForm.models;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    },
+
+    setDefaultModel(id) {
+      this.configForm.default_model = id;
+    },
+
+    async saveConfig() {
+      if (!this.configForm.models.length) {
+        this.toast("模型列表不能为空，请至少添加一个模型", "error");
+        return;
+      }
+      if (this.defaultModelMissing || !this.configForm.default_model) {
+        this.toast("请从模型列表中选择默认模型", "error");
+        return;
+      }
+      this.savingConfig = true;
+      try {
+        const body = {
+          ...this.configForm,
+          models: this.configForm.models.map((m) => ({
+            id: m.id,
+            name: m.name || "",
+            reasoning_effort: m.reasoning_effort || null,
+            thinking_budget: m.thinking_budget || null,
+          })),
+        };
+        if (typeof body.llm_api_key === "string" && body.llm_api_key.includes("****")) {
+          delete body.llm_api_key;
+        }
+        if (typeof body.chores_api_key === "string" && body.chores_api_key.includes("****")) {
+          delete body.chores_api_key;
+        }
+        await this.api("/api/admin/config", {
+          method: "PUT",
+          body: JSON.stringify(body),
+        });
+        this.toast("配置已保存");
+        await this.loadConfig();
+      } catch (e) {
+        this.toast(e.message || "保存失败", "error");
+      } finally {
+        this.savingConfig = false;
+      }
+    },
+  };
+}
