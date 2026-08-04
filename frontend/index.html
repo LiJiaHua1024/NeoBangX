@@ -324,12 +324,20 @@
 
               <!-- 生成结果 -->
               <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6" x-show="output || streaming">
-                <!-- 等待首个 token 的骨架 -->
-                <div x-show="streaming && !output" class="space-y-3">
-                  <div class="skel h-4 w-2/5"></div>
-                  <div class="skel h-4 w-full"></div>
-                  <div class="skel h-4 w-11/12"></div>
-                  <div class="skel h-4 w-3/5"></div>
+                <!-- 思考中动画 -->
+                <div x-show="thinking" class="thinking-block fade-in">
+                  <div class="thinking-orb-wrap">
+                    <div class="thinking-orb">
+                      <div class="thinking-orb-inner"></div>
+                    </div>
+                  </div>
+                  <div class="thinking-label">
+                    <span class="thinking-dots">
+                      <span></span><span></span><span></span>
+                    </span>
+                    <span class="thinking-text">模型正在思考</span>
+                    <span class="thinking-time" x-text="thinkingElapsed + 's'"></span>
+                  </div>
                 </div>
                 <div class="md" x-ref="mdRoot"
                      :class="{ 'mask-answers': maskOn && currentTool && currentTool.id === '13' }"
