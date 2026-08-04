@@ -69,6 +69,37 @@ function icon(name, cls = "w-5 h-5") {
   return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 }
 
+/* ---------------- 剪贴板复制（兼容 HTTP 内网部署：execCommand 回退，不依赖安全上下文） ---------------- */
+function copyToClipboard(text) {
+  return new Promise((resolve) => {
+    const fallback = () => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;top:0;left:0;width:2em;height:2em;opacity:0;pointer-events:none;";
+      document.body.appendChild(ta);
+      const sel = document.getSelection();
+      const restore = sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch { ok = false; }
+      if (restore) {
+        sel.removeAllRanges();
+        sel.addRange(restore);
+      }
+      ta.remove();
+      resolve(ok);
+    };
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => resolve(true), fallback);
+    } else {
+      fallback();
+    }
+  });
+}
+
 /* ---------------- 常量 ---------------- */
 const LS = {
   theme: "nbx_theme",
@@ -446,9 +477,11 @@ function nbx() {
     output: "",
     rendered: "",
     streaming: false,
+    thinking: false,
     status: "idle",
     errorMsg: "",
     elapsed: "0.0",
+    thinkingElapsed: "0.0",
     requestId: null,
     maskOn: false,
     copied: false,
@@ -514,6 +547,7 @@ function nbx() {
     _abortCtrl: null,
     _stopRequested: false,
     _timer: null,
+    _thinkTimer: null,
     _startTs: 0,
     _renderPending: false,
     _nearBottom: true,
@@ -936,12 +970,15 @@ function nbx() {
       this.rendered = "";
       this.errorMsg = "";
       this.streaming = true;
+      this.thinking = true;
+      this.thinkingElapsed = "0.0";
       this._stopRequested = false;
       this.status = "connecting";
       this._nearBottom = true;
       this.requestId = `${this.currentTool.id}_${Date.now()}`;
       this._abortCtrl = new AbortController();
       this.startTimer();
+      this.startThinkTimer();
 
       this.submittedInput = text;
       this.submittedFileName = this.attachedFile ? this.attachedFile.name : "";
@@ -1008,12 +1045,14 @@ function nbx() {
               if (typeof parsed === "string") text = parsed;
             } catch {}
             if (text) {
+              if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
               this.output += text;
               this.scheduleRender();
             }
             return;
           }
           if (data) {
+            if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
             this.output += data;
             this.scheduleRender();
           }
@@ -1071,7 +1110,9 @@ function nbx() {
 
     finalize(state, errMsg) {
       this.streaming = false;
+      this.thinking = false;
       this.stopTimer();
+      this.stopThinkTimer();
       this.doRender();
       if (state === "error") {
         this.status = "error";
@@ -1134,21 +1175,25 @@ function nbx() {
       clearInterval(this._timer);
       this._timer = null;
     },
+    startThinkTimer() {
+      const startTs = performance.now();
+      clearInterval(this._thinkTimer);
+      this._thinkTimer = setInterval(() => {
+        this.thinkingElapsed = ((performance.now() - startTs) / 1000).toFixed(1);
+      }, 100);
+    },
+    stopThinkTimer() {
+      clearInterval(this._thinkTimer);
+      this._thinkTimer = null;
+    },
 
     /* ============ 复制 ============ */
     async copyResult() {
       if (!this.output) return;
-      try {
-        await navigator.clipboard.writeText(this.output);
-      } catch {
-        const ta = document.createElement("textarea");
-        ta.value = this.output;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        try { document.execCommand("copy"); } catch {}
-        ta.remove();
+      const ok = await copyToClipboard(this.output);
+      if (!ok) {
+        this.toast("复制失败，请手动复制", "error");
+        return;
       }
       this.copied = true;
       this.toast("已复制到剪贴板");
@@ -1178,35 +1223,28 @@ function nbx() {
     },
 
     async exportCopyRichText() {
-      const html = renderMd(this.output);
-      try {
-        await navigator.clipboard.write([
-          new ClipboardItem({
-            "text/html": new Blob([html], { type: "text/html" }),
-            "text/plain": new Blob([this.output], { type: "text/plain" }),
-          }),
-        ]);
-        this.toast("已复制富文本，可直接粘贴到 Word");
-      } catch {
-        await this.exportCopyMd();
-        this.toast("当前浏览器不支持富文本复制，已改为复制纯文本", "warn");
+      if (window.isSecureContext && navigator.clipboard && window.ClipboardItem) {
+        const html = renderMd(this.output);
+        try {
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              "text/html": new Blob([html], { type: "text/html" }),
+              "text/plain": new Blob([this.output], { type: "text/plain" }),
+            }),
+          ]);
+          this.toast("已复制富文本，可直接粘贴到 Word");
+          return;
+        } catch { /* 回退纯文本 */ }
       }
+      const ok = await copyToClipboard(this.output);
+      if (ok) this.toast("当前环境不支持富文本复制，已改为复制纯文本", "warn");
+      else this.toast("复制失败，请手动复制", "error");
     },
 
     async exportCopyMd() {
-      try {
-        await navigator.clipboard.writeText(this.output);
-      } catch {
-        const ta = document.createElement("textarea");
-        ta.value = this.output;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        try { document.execCommand("copy"); } catch {}
-        ta.remove();
-      }
-      this.toast("已复制 Markdown 源码");
+      const ok = await copyToClipboard(this.output);
+      if (ok) this.toast("已复制 Markdown 源码");
+      else this.toast("复制失败，请手动复制", "error");
     },
 
     buildExportHtml(fontSize) {
@@ -1483,8 +1521,8 @@ function nbx() {
     },
     get statusText() {
       switch (this.status) {
-        case "connecting": return "正在连接模型…";
-        case "streaming": return "生成中… " + this.elapsed + "s";
+        case "connecting": return this.thinking ? "思考中… " + this.thinkingElapsed + "s" : "正在连接模型…";
+        case "streaming": return this.thinking ? "思考中… " + this.thinkingElapsed + "s" : "生成中… " + this.elapsed + "s";
         case "done": return "已完成 · 用时 " + this.elapsed + "s";
         case "stopped": return "已手动停止";
         case "error": return "出错了";

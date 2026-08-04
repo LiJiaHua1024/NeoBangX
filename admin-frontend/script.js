@@ -1,5 +1,36 @@
 /* NeoBangX Admin Frontend */
 
+/* ---------- 剪贴板复制（兼容 HTTP 内网部署：execCommand 回退，不依赖安全上下文） ---------- */
+function copyToClipboard(text) {
+  return new Promise((resolve) => {
+    const fallback = () => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;top:0;left:0;width:2em;height:2em;opacity:0;pointer-events:none;";
+      document.body.appendChild(ta);
+      const sel = document.getSelection();
+      const restore = sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch { ok = false; }
+      if (restore) {
+        sel.removeAllRanges();
+        sel.addRange(restore);
+      }
+      ta.remove();
+      resolve(ok);
+    };
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => resolve(true), fallback);
+    } else {
+      fallback();
+    }
+  });
+}
+
 const ADMIN_THEMES = [
   { id: "paper", name: "宣纸", dot: "linear-gradient(135deg,#b4502a,#8c3316)" },
   { id: "celadon", name: "青瓷", dot: "linear-gradient(135deg,#0e6e5f,#0a5245)" },
@@ -184,12 +215,9 @@ function adminApp() {
     },
 
     async copyText(text) {
-      try {
-        await navigator.clipboard.writeText(text);
-        this.toast("已复制");
-      } catch {
-        this.toast("复制失败", "error");
-      }
+      const ok = await copyToClipboard(text);
+      if (ok) this.toast("已复制");
+      else this.toast("复制失败，请手动复制", "error");
     },
 
     async loadStats() {
