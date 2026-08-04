@@ -86,7 +86,9 @@ cd backend
 cp .env.example .env
 ```
 
-编辑 `.env`，填入 `OPENROUTER_API_KEY` 或 `LLM_API_KEY` 等。
+编辑 `backend/.env`，填入 `OPENROUTER_API_KEY` 或 `LLM_API_KEY` 等。
+
+> 该文件为**唯一**配置入口，本地开发与 Docker 部署共用同一份（见 [5. Docker 部署](#5-docker-部署)）。
 
 ### 4.3 安装依赖并启动
 
@@ -118,24 +120,41 @@ uv run uvicorn app.admin_main:app --host 0.0.0.0 --port 8001 --reload
 
 ### 5.1 构建并运行
 
+配置统一使用 `backend/.env`（与本地开发共用）：
+
 ```bash
-# 在项目根目录执行
+# 1. 首次部署：生成配置文件并填入 API Key
+cd backend
+cp .env.example .env
+# 编辑 .env，填入 LLM_API_KEY / CHORES_API_KEY 等
+
+# 2. 构建并启动（在项目根目录执行）
+cd ..
 docker-compose up --build -d
 ```
 
-### 5.2 端口说明
+### 5.2 更新部署
+
+```bash
+git pull
+docker-compose up --build -d
+```
+
+> 注意：Docker 构建时会将 `backend/.env` 写入镜像，因此**修改 `.env` 后需重新构建**（`--build`）才生效。管理后台中修改的配置（模型、API Key 等）存储在 SQLite 数据卷中，重建容器不会丢失。
+
+### 5.3 端口说明
 
 | 端口 | 用途 | 公网暴露 |
 |------|------|----------|
 | 8000 | 主站服务 + 前端 | 通过 FRP/Nginx 暴露 |
 | 8001 | 管理后台 | **仅内网访问，不映射到公网** |
 
-### 5.3 访问服务
+### 5.4 访问服务
 
 - 主站：http://localhost:8000/
 - 管理后台：http://localhost:8001/
 
-### 5.4 停止服务
+### 5.5 停止服务
 
 ```bash
 docker-compose down
@@ -145,7 +164,7 @@ docker-compose down
 
 ## 6. 配置项说明
 
-配置优先级：环境变量 > `.env` 文件 > 默认值。
+配置统一由 `backend/.env` 提供（本地开发与 Docker 部署共用）。读取优先级：环境变量 > `.env` 文件 > 默认值；Docker 部署时无额外环境变量注入，直接读取构建进镜像的 `backend/.env`。
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -274,7 +293,7 @@ NBXU-3XXX-XXXX-XXXX
 ## 11. 注意事项
 
 1. **安全**：生产环境务必修改 `JWT_SECRET`；管理后台 8001 仅内网访问，不映射到公网。
-2. **密钥**：妥善保管 `.env` 中的 API Key，不要提交到 Git。
+2. **密钥**：妥善保管 `backend/.env` 中的 API Key，不要提交到 Git。该文件会被构建进 Docker 镜像，请注意镜像的访问权限。
 3. **使用码**：首次启动后，立即从日志中复制初始管理员码，登录管理后台生成更多用户码。
 4. **Prompt**：当前 Prompt 文件为占位版本，后续需人工补全 14 个待补工具。
 5. **历史/收藏**：清理浏览器数据会丢失历史记录与收藏。

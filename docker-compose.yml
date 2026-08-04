@@ -9,25 +9,6 @@ services:
       - "8001:8001"
     volumes:
       - neobangx_data:/app/data
-    environment:
-      # 容器内绝对路径
-      - PROMPTS_DIR=/app/prompts
-      - STATIC_DIR=/app/frontend
-      - ADMIN_STATIC_DIR=/app/admin-frontend
-      # 模型配置
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-openrouter/google/gemini-3-flash-preview}
-      - MODELS=${MODELS:-openrouter/google/gemini-3-flash-preview}
-      # 主 AI 连接
-      - LLM_BASE_URL=${LLM_BASE_URL:-}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-}
-      # Chores AI
-      - CHORES_MODEL=${CHORES_MODEL:-openrouter/google/gemma-4-26b-a4b-it:free}
-      - CHORES_BASE_URL=${CHORES_BASE_URL:-}
-      - CHORES_API_KEY=${CHORES_API_KEY:-}
-      # LLM 参数
-      - MAX_TOKENS=${MAX_TOKENS:-8192}
-      - TIMEOUT=${TIMEOUT:-120}
     restart: unless-stopped
 
 volumes:
