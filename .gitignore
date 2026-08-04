@@ -1,26 +1,23 @@
-# Byte-compiled / optimized
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Virtual environments
 .venv/
 venv/
 
-# Environment variables
 .env
 backend/.env
 
-# IDE
 .idea/
 .vscode/
 
-# Logs
 *.log
 
-# SQLite data files
 backend/data/
 
-# OS
 .DS_Store
 Thumbs.db
+
+包含原版指令/
+prompt教学教程分析类文章/
+PRD*.md
