@@ -628,7 +628,13 @@
                            title="导出 / 下载"
                            x-html="icon('insert','w-4 h-4')"></button>
                    <!-- 导出面板 -->
-                   <div x-show="exportMenuOpen" x-transition.origin.bottom.right
+                   <div x-show="exportMenuOpen"
+                        x-transition:enter="export-menu-anim"
+                        x-transition:enter-start="export-menu-anim-from"
+                        x-transition:enter-end="export-menu-anim-to"
+                        x-transition:leave="export-menu-anim-leave"
+                        x-transition:leave-start="export-menu-anim-to"
+                        x-transition:leave-end="export-menu-anim-from"
                         class="export-menu glass-deep rounded-xl"
                         data-export-menu :style="exportMenuStyle">
                     <!-- 文字大小 -->
@@ -732,7 +738,12 @@
 
     <!-- 智能错题迁移导出菜单：脱离滚动结果区，避免被卡片或滚动容器裁剪 -->
     <div x-show="exportMenuOpen && hasMigrationExportTarget()" x-cloak
-         x-transition.origin.bottom.right
+         x-transition:enter="export-menu-anim"
+         x-transition:enter-start="export-menu-anim-from"
+         x-transition:enter-end="export-menu-anim-to"
+         x-transition:leave="export-menu-anim-leave"
+         x-transition:leave-start="export-menu-anim-to"
+         x-transition:leave-end="export-menu-anim-from"
          class="export-menu migration-export-menu migration-export-menu-global glass-deep rounded-xl"
          data-migration-export-menu
          :style="migrationExportStyle"

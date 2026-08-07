@@ -1818,8 +1818,19 @@ function nbx() {
       } else if (!this.migrationHasOutput) {
         return;
       }
+
+      const sameTarget = this.exportMenuOpen
+        && this.migrationExportTarget
+        && this.migrationExportTarget.scope === scope
+        && this.migrationExportTarget.cardId === cardId;
+      if (sameTarget) {
+        this.closeExportMenu();
+        return;
+      }
+
+      const menuAlreadyOpen = this.exportMenuOpen && this.migrationExportTarget;
       this._migrationExportAnchor = anchor;
-      this.migrationExportStyle = "visibility:hidden;";
+      if (!menuAlreadyOpen) this.migrationExportStyle = "visibility:hidden;";
       this.migrationExportTarget = { scope, cardId };
       this.exportMenuOpen = true;
       this.$nextTick(() => this.repositionMigrationExport());
@@ -1841,18 +1852,29 @@ function nbx() {
           ? Math.max(0, viewportWidth - padding * 2)
           : Math.min(280, Math.max(0, viewportWidth - padding * 2));
         const availableHeight = Math.max(96, viewportHeight - padding * 2);
+        const anchorGap = 10;
 
         menu.style.width = `${menuWidth}px`;
-        menu.style.maxHeight = `${availableHeight}px`;
-        const menuHeight = Math.min(menu.getBoundingClientRect().height || 360, availableHeight);
+        menu.style.maxHeight = "none";
+        menu.style.overflowY = "hidden";
+        const naturalMenuHeight = menu.scrollHeight || menu.getBoundingClientRect().height || 360;
         const anchorRect = anchor.getBoundingClientRect();
-        const spaceAbove = anchorRect.top - padding;
-        const spaceBelow = viewportHeight - anchorRect.bottom - padding;
+        const spaceAbove = Math.max(0, Math.floor(anchorRect.top - padding - anchorGap));
+        const spaceBelow = Math.max(0, Math.floor(viewportHeight - anchorRect.bottom - padding - anchorGap));
+        const opensAbove = naturalMenuHeight <= spaceAbove || spaceAbove > spaceBelow;
+        const menuMaxHeight = Math.min(
+          availableHeight,
+          Math.max(96, opensAbove ? spaceAbove : spaceBelow),
+        );
+        const menuHeight = Math.min(naturalMenuHeight, menuMaxHeight);
+        const needsScroll = naturalMenuHeight > menuMaxHeight;
+        menu.style.maxHeight = `${menuMaxHeight}px`;
+        menu.style.overflowY = needsScroll ? "auto" : "hidden";
         let top;
-        if (spaceAbove >= menuHeight + 10 || spaceAbove > spaceBelow) {
-          top = anchorRect.top - menuHeight - 10;
+        if (opensAbove) {
+          top = anchorRect.top - menuHeight - anchorGap;
         } else {
-          top = anchorRect.bottom + 10;
+          top = anchorRect.bottom + anchorGap;
         }
         top = Math.max(padding, Math.min(top, viewportHeight - padding - menuHeight));
 
@@ -1863,7 +1885,10 @@ function nbx() {
           `top:${Math.round(top)}px`,
           `left:${Math.round(left)}px`,
           `width:${Math.round(menuWidth)}px`,
-          `max-height:${Math.round(availableHeight)}px`,
+          `max-height:${Math.round(menuMaxHeight)}px`,
+          `overflow-y:${needsScroll ? "auto" : "hidden"}`,
+          `transform-origin:${opensAbove ? "bottom right" : "top right"}`,
+          `--export-menu-pop-y:${opensAbove ? "0.5rem" : "-0.5rem"}`,
           "visibility:visible",
         ].join(";");
       });
@@ -1874,10 +1899,8 @@ function nbx() {
       if (this._migrationExportPositionFrame) cancelAnimationFrame(this._migrationExportPositionFrame);
       this._migrationExportPositionFrame = null;
       this.exportMenuOpen = false;
-      this.exportMenuStyle = "";
       this._exportMenuAnchor = null;
       this.migrationExportTarget = null;
-      this.migrationExportStyle = "";
       this._migrationExportAnchor = null;
     },
     hasMigrationExportTarget() {

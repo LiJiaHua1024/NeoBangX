@@ -1124,6 +1124,22 @@ html[data-theme="jade"] {
 .export-menu::-webkit-scrollbar-track { background: transparent; }
 .export-menu::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
 .export-menu::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+.export-menu-anim {
+  transform-origin: bottom right;
+  transition: transform 0.34s var(--ease-pop), opacity 0.24s ease;
+  will-change: transform, opacity;
+}
+.export-menu-anim-from {
+  opacity: 0;
+  transform: scale(0.88) translateY(var(--export-menu-pop-y, 0.5rem));
+}
+.export-menu-anim-to {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+.export-menu-anim-leave {
+  transition: transform 0.16s ease-in, opacity 0.12s ease-in;
+}
 .export-size-row {
   display: flex;
   align-items: center;
