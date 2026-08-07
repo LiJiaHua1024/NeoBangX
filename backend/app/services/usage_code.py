@@ -159,17 +159,21 @@ def consume_quota(
     tool_name: str = "",
     model: str = "",
     request_id: str = "",
+    units: int = 1,
 ) -> UsageCode:
     """生成成功后扣减额度并写日志。管理员码不扣额度但仍记日志。"""
+    if units < 1:
+        raise ValueError("扣减次数必须至少为 1")
+
     # 重新加载，避免并发脏写
     row = db.get(UsageCode, code.id)
     if row is None:
         raise HTTPException(status_code=401, detail="使用码不存在")
 
     if row.code_type != "admin" and row.quota >= 0:
-        if row.used_count >= row.quota:
+        if row.used_count + units > row.quota:
             raise HTTPException(status_code=403, detail="额度已用尽")
-        row.used_count += 1
+        row.used_count += units
 
     log = UsageLog(
         code_id=row.id,

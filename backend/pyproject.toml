@@ -1,6 +1,6 @@
 [project]
 name = "neobangx-backend"
-version = "1.1.0"
+version = "1.2.0"
 description = "NeoBangX backend: FastAPI + LiteLLM + SQLite usage codes"
 requires-python = ">=3.12"
 dependencies = [

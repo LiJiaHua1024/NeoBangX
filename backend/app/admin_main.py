@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="NeoBangX Admin",
     description="NeoBangX 管理后台 API（内网访问，无需登录）",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan,
 )
 
@@ -61,7 +61,7 @@ app.include_router(admin.router)
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "admin", "version": "1.1.0"}
+    return {"status": "ok", "service": "admin", "version": "1.2.0"}
 
 
 admin_static = Path(settings.admin_static_dir)
@@ -76,5 +76,5 @@ async def root():
         return FileResponse(index_path)
     return {
         "message": "NeoBangX admin is running. Visit /docs for API documentation.",
-        "version": "1.1.0",
+        "version": "1.2.0",
     }

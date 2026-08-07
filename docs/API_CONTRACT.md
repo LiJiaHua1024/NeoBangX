@@ -1,8 +1,8 @@
-# NeoBangX API 契约文档（v1.1）
+# NeoBangX API 契约文档（v1.2）
 
-> 版本：1.1.0
-> 日期：2026-07-28
-> 说明：本文档定义 NeoBangX v1.1 后端与前端的完整接口契约，包含使用码认证与管理后台 API。
+> 版本：1.2.0
+> 日期：2026-08-07
+> 说明：本文档定义 NeoBangX v1.2 后端与前端的完整接口契约，包含使用码认证、管理后台 API 与智能错题迁移。
 
 ---
 
@@ -32,6 +32,8 @@
 | POST | `/api/auth/activate` | 验证使用码，返回 JWT | 否 |
 | GET | `/api/auth/me` | 当前使用码状态 | 是 |
 | POST | `/api/chat/preview` | 预览最终 Prompt | 是 |
+| POST | `/api/chat/migration/analyze` | 非流式分析智能错题迁移错因（不扣费） | 是 |
+| POST | `/api/chat/migration/quota` | 预检查智能错题迁移额度（不扣费） | 是 |
 | POST | `/api/chat/stream` | 流式调用工具（SSE） | 是 |
 | POST | `/api/chat/stop` | 中止流式生成 | 是 |
 | POST | `/api/chat/title` | 为生成结果生成标题 | 是 |
@@ -125,7 +127,7 @@
 ```json
 {
   "status": "ok",
-  "version": "1.1.0"
+  "version": "1.2.0"
 }
 ```
 
@@ -144,7 +146,7 @@
   "models": ["openrouter/google/gemini-2.0-flash"],
   "default_model": "openrouter/google/gemini-2.0-flash",
   "app_name": "NeoBangX",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "slogan": "Bang助教学，大有可AI",
   "auth_required": true
 }
@@ -231,6 +233,60 @@
 }
 ```
 
+### 7.1 智能错题迁移错因分析
+
+#### POST `/api/chat/migration/analyze`
+
+非流式分析，不扣减额度。`feedback_history` 每次必须携带从第一次 Retry 开始的全部反馈。点击 More 时，客户端还需携带上一次响应返回的 `analysis_history`，服务端会在完整历史末尾追加一条 `role: user` 消息，要求模型只补充新的错因。
+
+**请求体：**
+
+```json
+{
+  "question": "题干与选项",
+  "standard_answer": "B",
+  "student_answers": "多数学生选择 A",
+  "error_cause": "可为空",
+  "feedback_history": [],
+  "analysis_history": [],
+  "continue_generation": false,
+  "model": "openrouter/google/gemini-2.0-flash"
+}
+```
+
+**成功响应：**
+
+```json
+{
+  "causes": [
+    { "id": "cause_0", "label": "忽略语篇中的转折信号" }
+  ],
+  "analysis_history": [
+    { "role": "user", "content": "..." },
+    { "role": "assistant", "content": "{\"causes\":[...]}" }
+  ]
+}
+```
+
+### 7.2 智能错题迁移额度预检查
+
+#### POST `/api/chat/migration/quota`
+
+请求体只需提供选中的错因数量 `cause_count`。扣费次数为 `max(1, floor(cause_count / 2))`，预检查不扣费；最终卡片全部成功后由批次流式请求统一扣减。
+
+```json
+{ "cause_count": 3 }
+```
+
+```json
+{
+  "can_generate": true,
+  "required": 1,
+  "remaining": 10,
+  "cause_count": 3
+}
+```
+
 ---
 
 ## 8. 流式调用（SSE）
@@ -260,6 +316,9 @@
 | `input` | string | 是 | 用户输入文本 |
 | `model` | string | 否 | 模型 ID，为空则使用后端默认模型 |
 | `request_id` | string | 否 | 客户端生成的请求 ID，用于后续调用 `/api/chat/stop` 中止生成 |
+| `batch_id` | string | 否 | 智能错题迁移批次 ID；同一批卡片使用相同值 |
+| `batch_size` | integer | 否 | 智能错题迁移批次内错因卡片总数 |
+| `batch_index` | integer | 否 | 当前卡片在批次内的序号，从 0 开始 |
 
 **响应：** SSE 事件流（`Content-Type: text/event-stream`）
 
@@ -284,6 +343,8 @@ data: [DONE]
 | `token` | 文本片段 | LLM 生成的内容片段 |
 | `done` | `[DONE]` | 生成正常结束 |
 | `error` | JSON 字符串 `{"message": "..."}` | 生成过程中发生错误 |
+
+智能错题迁移的同一批请求共享 `batch_id`。后端只有在 `batch_size` 张卡片全部自然完成后，才按 `max(1, floor(batch_size / 2))` 扣减一次额度；任一卡片失败或被停止时不扣减。
 
 ---
 
@@ -545,6 +606,7 @@ data: [DONE]
 | 23 | 英语试题 Bug 侦察 | `英语试题 Bug 侦察.md` |
 | 24 | 超标词排查+替换 | `超标词排查+替换.md` |
 | 25 | 自由对话 | `自由对话.md` |
+| 26 | 智能错题迁移 | `智能错题迁移.md` |
 
 ---
 
@@ -581,3 +643,4 @@ openrouter/deepseek/deepseek-chat
 | 0.1.0 | 2026-07-24 | 阶段一后端 API 契约初始版本 |
 | 0.2.0 | 2026-07-24 | 新增 `/api/chat/title`、模型连接配置字段 |
 | 1.1.0 | 2026-07-28 | v1.1：新增使用码认证（`/api/auth/*`）、管理后台 API（`/api/admin/*`）、移除前端 API 设置字段、更新配置管理说明 |
+| 1.2.0 | 2026-08-07 | 新增智能错题迁移错因分析、额度预检查与批量并行流式生成 |

@@ -88,10 +88,13 @@ class LLMService:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        messages: Optional[list[dict]] = None,
     ) -> str:
         """非流式调用，返回完整字符串"""
-        messages = self._get_messages(system_prompt, user_prompt)
-        kwargs = self._build_kwargs(model, messages, api_key, base_url, max_tokens, stream=False)
+        request_messages = messages or self._get_messages(system_prompt, user_prompt)
+        kwargs = self._build_kwargs(
+            model, request_messages, api_key, base_url, max_tokens, stream=False,
+        )
 
         try:
             response = await acompletion(**kwargs)

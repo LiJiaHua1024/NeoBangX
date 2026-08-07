@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>NeoBangX · Bang助教学，大有可AI</title>
-  <meta name="description" content="NeoBangX：25 个中学英语教学 AI 工具，输入使用码即可开始。">
+  <meta name="description" content="NeoBangX：26 个中学英语教学 AI 工具，输入使用码即可开始。">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23e9a15b'/%3E%3Cstop offset='1' stop-color='%23cf7038'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
@@ -153,7 +153,7 @@
             </h1>
 
             <p class="fade-up mt-5 max-w-xl text-dim leading-relaxed" style="font-size:1.02rem;animation-delay:.15s">
-              25 个中学英语教学 AI 工具。<br>
+              26 个中学英语教学 AI 工具。<br>
               输入使用码即可开始，额度用完自动锁定。
             </p>
 
@@ -215,7 +215,7 @@
                 <div class="font-semibold text-sm flex items-center gap-1.5">
                   <span x-html="icon('book-open','w-4 h-4')"></span>选工具 · 输入
                 </div>
-                <p class="text-xs text-dim mt-1.5 leading-relaxed">左侧 25 个工具；粘贴语篇、作文、试卷或上传文件。</p>
+                 <p class="text-xs text-dim mt-1.5 leading-relaxed">左侧 26 个工具；粘贴语篇、作文、试卷或上传文件。</p>
               </div>
               <div class="glass-soft rounded-2xl p-5">
                 <div class="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm mb-3"
@@ -223,7 +223,7 @@
                 <div class="font-semibold text-sm flex items-center gap-1.5">
                   <span x-html="icon('sparkle','w-4 h-4')"></span>看结果
                 </div>
-                <p class="text-xs text-dim mt-1.5 leading-relaxed">流式生成、一键复制；每次生成消耗 1 次额度。</p>
+                 <p class="text-xs text-dim mt-1.5 leading-relaxed">流式生成、一键复制；按工具规则消耗额度。</p>
               </div>
             </div>
 
@@ -231,7 +231,7 @@
             <div class="fade-up flex flex-wrap items-center justify-center gap-2 mt-8" style="animation-delay:.38s">
               <span class="chip neutral">使用码登录</span>
               <span class="chip neutral">按次计费</span>
-              <span class="chip neutral">25 个教学工具</span>
+               <span class="chip neutral">26 个教学工具</span>
               <span class="chip neutral">流式秒回</span>
               <span class="chip neutral">历史存本机</span>
             </div>
@@ -250,8 +250,260 @@
           </div>
         </div>
 
-        <!-- ========== 工具操作页 ========== -->
-        <template x-if="currentTool">
+        <!-- ========== 智能错题迁移 ========== -->
+        <template x-if="currentTool && isMigrationTool">
+          <div class="flex-1 min-h-0 flex flex-col migration-shell">
+            <div class="px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
+              <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
+                    style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
+                    x-html="icon(currentTool.icon,'w-5 h-5')"></span>
+              <div class="min-w-0">
+                <h2 class="font-bold leading-tight truncate" style="font-size:.98rem" x-text="currentTool.name"></h2>
+                <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
+              </div>
+              <div class="ml-auto flex items-center gap-2">
+                <span class="text-xs text-faint hidden sm:inline">模型</span>
+                <div class="ms-wrap" @click.outside="modelMenuOpen = false">
+                  <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
+                          @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
+                    <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
+                    <span class="truncate" x-text="shortModel(selectedModel)"></span>
+                    <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                  </button>
+                  <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
+                       x-transition:enter="ms-anim" x-transition:enter-start="ms-anim-from" x-transition:enter-end="ms-anim-to"
+                       x-transition:leave="ms-anim-leave" x-transition:leave-start="ms-anim-to" x-transition:leave-end="ms-anim-from">
+                    <template x-for="m in allModels" :key="m.id">
+                      <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
+                        <div class="min-w-0">
+                          <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
+                          <div class="ms-item-sub truncate" x-text="m.id"></div>
+                        </div>
+                        <span class="ck" x-show="m.id === selectedModel" x-html="icon('check','w-4 h-4')"></span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex-1 min-h-0 overflow-y-auto scroll-thin" x-ref="migrationScroll" @scroll.passive="repositionMigrationExport()">
+              <!-- Step 1：输入信息 -->
+              <div x-show="migration.step === 1" class="migration-step max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6">
+                <div class="migration-step-head">
+                  <span class="migration-step-number">1</span>
+                  <div>
+                    <h3>输入错题信息</h3>
+                    <p>题干必填；标准答案和学生作答信息建议填写，错因交给 AI 判断即可。</p>
+                  </div>
+                </div>
+                <div class="migration-form space-y-4 mt-6">
+                  <label class="migration-field required">
+                    <span>题干 <b>*</b></span>
+                    <textarea x-model="migration.form.question" rows="5" placeholder="粘贴完整题干、选项或语篇片段"></textarea>
+                  </label>
+                  <label class="migration-field">
+                    <span>标准答案 <em>建议填写</em></span>
+                    <textarea x-model="migration.form.standardAnswer" rows="2" placeholder="例如：C；或填写参考答案及关键依据"></textarea>
+                  </label>
+                  <label class="migration-field">
+                    <span>学生错误作答 / 错误选项分布 <em>建议填写</em></span>
+                    <textarea x-model="migration.form.studentAnswers" rows="3" placeholder="例如：12 人选 A，8 人选 B；典型学生答案是……"></textarea>
+                  </label>
+                  <label class="migration-field optional-cause">
+                    <span>老师认为的错因 <em>完全可选，不建议预判</em></span>
+                    <textarea x-model="migration.form.errorCause" rows="2" placeholder="可以留空，让 AI 从题目和作答中自主分析"></textarea>
+                    <small>不确定错因很正常。留空有助于避免先入为主，AI 会在下一步给出可勾选的诊断。</small>
+                  </label>
+                </div>
+                <div class="flex justify-end mt-6">
+                  <button class="btn-primary" @click="analyzeMigration()" :disabled="migration.analyzing || !migration.form.question.trim()">
+                    <span x-html="icon('wand','w-4 h-4')"></span>
+                    <span x-text="migration.analyzing ? '分析中…' : '分析错因'"></span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Step 2：错因确认与再讨论 -->
+              <div x-show="migration.step === 2" class="migration-step max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6">
+                <div class="migration-step-head">
+                  <span class="migration-step-number">2</span>
+                  <div>
+                    <h3>确认本质错因</h3>
+                    <p>勾选本次要处理的错因。每个错因之后会独立生成一张迁移卡片。</p>
+                  </div>
+                </div>
+                <div x-show="migration.analyzing" class="migration-analysis-loading">
+                  <div class="thinking-orb"><div class="thinking-orb-inner"></div></div>
+                  <span>AI 正在还原本质错因，请稍候…</span>
+                </div>
+                <div x-show="!migration.analyzing && migration.causes.length" class="migration-cause-list mt-6">
+                  <template x-for="cause in migration.causes" :key="cause.id">
+                    <label class="migration-cause-option" :class="{ 'selected': migration.selectedCauseIds.includes(cause.id) }">
+                      <input type="checkbox" :checked="migration.selectedCauseIds.includes(cause.id)" @change="toggleMigrationCause(cause.id)">
+                      <span class="migration-check" x-html="icon('check','w-4 h-4')"></span>
+                       <span class="migration-cause-label" x-text="cause.label"></span>
+                    </label>
+                  </template>
+                </div>
+                <div x-show="!migration.analyzing && migration.causes.length" class="migration-more-wrap">
+                  <button class="migration-more-btn" @click="loadMoreMigrationCauses()"
+                          :disabled="migration.moreAnalyzing || migration.analyzing"
+                          title="让 AI 继续分析更多不同的错因">
+                    <span x-html="icon('chevron-down','w-4 h-4')"></span>
+                    <span x-text="migration.moreAnalyzing ? '生成中…' : 'More'"></span>
+                  </button>
+                </div>
+                <div x-show="migration.analysisError && !migration.analyzing" class="error-card mt-5" x-text="migration.analysisError"></div>
+                <div class="migration-discuss glass-soft mt-6">
+                  <div class="flex items-center gap-2">
+                    <span class="migration-discuss-mark" x-html="icon('speech-bubble','w-4 h-4')"></span>
+                    <div>
+                      <div class="font-semibold text-sm">再讨论</div>
+                      <div class="text-xs text-dim mt-0.5">对结果不满意？反馈会和此前所有意见一起发给 AI。</div>
+                    </div>
+                    <span class="chip neutral ml-auto" x-show="migration.feedbackHistory.length" x-text="migration.feedbackHistory.length + ' 条历史反馈'"></span>
+                  </div>
+                  <div class="flex gap-2 mt-3">
+                    <input type="text" x-model="migration.feedback" @keydown.enter="analyzeMigration(true)" :disabled="migration.moreAnalyzing" placeholder="例如：第二项其实应拆成两个不同的错因">
+                    <button class="btn-primary migration-retry-btn shrink-0" @click="analyzeMigration(true)" :disabled="migration.analyzing || migration.moreAnalyzing">
+                      <span x-html="icon('refresh','w-4 h-4')"></span>Retry
+                    </button>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between gap-3 mt-6">
+                  <button class="btn-ghost" @click="backMigrationStep(1)" :disabled="migration.analyzing">返回修改输入</button>
+                  <button class="btn-primary" @click="passMigrationCauses()" :disabled="migration.analyzing || migration.moreAnalyzing || !migrationSelectedCauses.length">
+                    <span x-html="icon('check','w-4 h-4')"></span>Pass
+                  </button>
+                </div>
+              </div>
+
+              <!-- Step 3：调整参数 -->
+              <div x-show="migration.step === 3" class="migration-step max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6">
+                <div class="migration-step-head">
+                  <span class="migration-step-number">3</span>
+                  <div>
+                    <h3>调整迁移参数</h3>
+                    <p>参数对本次选中的全部错因统一生效。</p>
+                  </div>
+                </div>
+                <div class="migration-selected-summary mt-6">
+                  <span class="text-xs text-dim">已选错因</span>
+                   <div class="migration-selected-causes flex flex-wrap gap-2 mt-2">
+                    <template x-for="cause in migrationSelectedCauses" :key="cause.id">
+                      <span class="chip" x-text="cause.label"></span>
+                    </template>
+                  </div>
+                </div>
+                <div class="migration-params glass-soft mt-5">
+                  <div class="migration-param">
+                    <span class="font-semibold text-sm">难度</span>
+                    <div class="ms-wrap migration-difficulty-wrap" @click.outside="migrationDifficultyMenuOpen = false">
+                      <button class="ms-trigger migration-difficulty-trigger" :class="{ 'open': migrationDifficultyMenuOpen }"
+                              @click="migrationDifficultyMenuOpen = !migrationDifficultyMenuOpen"
+                              aria-label="选择迁移难度" :aria-expanded="migrationDifficultyMenuOpen">
+                        <span class="ms-spark" x-html="icon('target','w-3.5 h-3.5')"></span>
+                        <span class="migration-difficulty-label" x-text="migrationDifficultyName(migration.difficulty)"></span>
+                        <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                      </button>
+                      <div class="ms-menu migration-difficulty-menu glass-deep" x-show="migrationDifficultyMenuOpen" x-cloak
+                           x-transition:enter="ms-anim" x-transition:enter-start="ms-anim-from" x-transition:enter-end="ms-anim-to"
+                           x-transition:leave="ms-anim-leave" x-transition:leave-start="ms-anim-to" x-transition:leave-end="ms-anim-from">
+                        <template x-for="option in migrationDifficultyOptions" :key="option.value">
+                          <button class="ms-item" :class="{ 'on': option.value === migration.difficulty }"
+                                  @click="chooseMigrationDifficulty(option.value)">
+                            <div class="min-w-0">
+                              <div class="ms-item-name" x-text="option.name"></div>
+                              <div class="ms-item-sub" x-text="option.desc"></div>
+                            </div>
+                            <span class="ck" x-show="option.value === migration.difficulty" x-html="icon('check','w-4 h-4')"></span>
+                          </button>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                  <label class="migration-param">
+                    <span class="font-semibold text-sm">迁移题量 <b class="text-dim font-normal" x-text="migration.questionCount + ' 题'"></b></span>
+                    <input type="range" min="1" max="10" step="1" x-model.number="migration.questionCount">
+                    <div class="migration-range-labels"><span>1</span><span>10</span></div>
+                  </label>
+                </div>
+                <div class="migration-charge-note">
+                  <span x-html="icon('shield','w-4 h-4')"></span>
+                   <span>本次生成将消耗 <b x-text="migrationChargeUnits"></b> 次额度</span>
+                </div>
+                <div class="flex items-center justify-between gap-3 mt-6">
+                  <button class="btn-ghost" @click="backMigrationStep(2)">返回修改错因</button>
+                  <button class="btn-primary" @click="beginMigration()" :disabled="migration.prechecking || migration.generating">
+                    <span x-html="icon('sparkle','w-4 h-4')"></span>
+                    <span x-text="migration.prechecking ? '检查额度…' : '开始生成'"></span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Step 4：多错因并行结果 -->
+              <div x-show="migration.step === 4" class="migration-step max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6">
+                <div class="migration-step-head">
+                  <span class="migration-step-number">4</span>
+                  <div>
+                    <h3>迁移结果</h3>
+                    <p x-show="migration.generating">多个错因正在并行生成，卡片会同时流式更新。</p>
+                    <p x-show="!migration.generating">本次结果已作为一条完整历史记录保存。</p>
+                  </div>
+                  <button class="btn-ghost ml-auto" x-show="!migration.generating" @click="resetMigration()">
+                    <span x-html="icon('plus','w-4 h-4')"></span>新建迁移
+                  </button>
+                </div>
+                <div class="migration-result-list mt-6">
+                  <template x-for="card in migration.results" :key="card.id">
+                    <article class="migration-result-card" :class="{ 'collapsed': card.collapsed, 'is-error': card.status === 'error' }">
+                      <div class="migration-result-head">
+                        <button class="migration-result-toggle" @click="card.collapsed = !card.collapsed">
+                          <span class="migration-result-ico" x-html="icon('target','w-4 h-4')"></span>
+                          <span class="migration-result-cause" x-text="card.cause"></span>
+                          <span class="migration-result-status" :class="card.status" x-text="card.status === 'done' ? '已完成' : (card.status === 'error' ? '失败' : (card.status === 'stopped' ? '已停止' : '生成中'))"></span>
+                          <span class="chev" x-html="icon('chevron-down','w-4 h-4')"></span>
+                        </button>
+                        <div class="migration-card-actions" @click.stop @click.outside="closeExportMenu()">
+                          <button class="icon-btn" style="width:2rem;height:2rem" title="导出该卡片"
+                                  @click="openMigrationExport('card', card.id, $event.currentTarget)" :disabled="!card.output"
+                                  x-html="icon('insert','w-4 h-4')"></button>
+                        </div>
+                      </div>
+                      <div class="migration-result-body" x-show="!card.collapsed" x-collapse>
+                        <div x-show="card.streaming && !card.output" class="migration-card-loading">
+                          <span class="thinking-dots"><span></span><span></span><span></span></span>正在生成
+                        </div>
+                        <div class="md" x-show="card.output" x-html="card.rendered"></div>
+                        <span class="tw-cursor" x-show="card.streaming"></span>
+                        <div x-show="card.error" class="error-card" x-text="card.error"></div>
+                      </div>
+                    </article>
+                  </template>
+                </div>
+                <div class="migration-batch-actions" x-show="migrationHasOutput">
+                  <div class="migration-export-wrap" @click.stop @click.outside="closeExportMenu()">
+                    <button class="btn-ghost" @click="openMigrationExport('all', '', $event.currentTarget)"><span x-html="icon('insert','w-4 h-4')"></span>导出全部</button>
+                  </div>
+                  <button class="btn-ghost" @click="saveMigrationFavorite()"><span x-html="icon('bookmark-plus','w-4 h-4')"></span>收藏整条记录</button>
+                </div>
+                <div class="flex justify-center mt-5" x-show="migration.generating">
+                  <button class="btn-primary btn-stop" @click="stopMigration()"><span x-html="icon('stop','w-4 h-4')"></span>停止全部生成</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="px-4 sm:px-5 py-1.5 flex items-center gap-2 text-xs text-dim border-t shrink-0" style="border-color:var(--border)">
+              <span class="status-dot" :class="{ 'live': migration.generating, 'ok': migration.generated && !migration.generating }"></span>
+              <span x-text="migration.generating ? '多卡片生成中…' : (migration.generated ? '已完成 · 多卡片结果' : ('Step ' + migration.step + ' / 4'))"></span>
+              <span class="text-faint" x-show="migration.results.length" x-text="'· ' + migration.results.length + ' 张卡片'"></span>
+            </div>
+          </div>
+        </template>
+
+        <!-- ========== 普通工具操作页 ========== -->
+        <template x-if="currentTool && !isMigrationTool">
           <div class="flex-1 min-h-0 flex flex-col">
 
             <!-- 工具头部 -->
@@ -370,7 +622,7 @@
                         :title="copied ? '已复制' : '复制全文'"
                         x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
                 <!-- 导出菜单 -->
-                <div class="relative" x-show="output" @click.outside="exportMenuOpen = false">
+                 <div class="relative" x-show="output" @click.outside="closeExportMenu()">
                   <button class="icon-btn" style="width:2rem;height:2rem"
                           :class="{ 'on': exportMenuOpen }" @click="exportMenuOpen = !exportMenuOpen"
                           title="导出 / 下载"
@@ -476,6 +728,38 @@
         </template>
       </section>
     </main>
+
+    <!-- 智能错题迁移导出菜单：脱离滚动结果区，避免被卡片或滚动容器裁剪 -->
+    <div x-show="exportMenuOpen && hasMigrationExportTarget()" x-cloak
+         x-transition.origin.bottom.right
+         class="export-menu migration-export-menu migration-export-menu-global glass-deep rounded-xl"
+         data-migration-export-menu
+         :style="migrationExportStyle"
+         @click.stop @click.outside="closeExportMenu()">
+      <div class="export-size-row">
+        <span class="export-size-label" :class="{ 'disabled': !exportSizeEnabled }">文字大小</span>
+        <input type="range" class="export-slider" min="10" max="24" step="1"
+               x-model.number="exportFontSize" :disabled="!exportSizeEnabled">
+        <span class="export-size-num" :class="{ 'disabled': !exportSizeEnabled }" x-text="exportFontSize"></span>
+      </div>
+      <div class="export-list">
+        <template x-for="f in exportFormats" :key="f.id">
+          <div class="export-item" :class="{ 'active': exportFormat === f.id }"
+               @click="exportFormat = f.id">
+            <span class="export-item-icon" x-html="icon(f.icon, 'w-4 h-4')"></span>
+            <div class="export-item-text">
+              <span class="export-item-name" x-text="f.name"></span>
+              <span class="export-item-desc" x-text="f.desc"></span>
+            </div>
+            <span class="export-check" x-show="exportFormat === f.id" x-html="icon('check','w-3.5 h-3.5')"></span>
+          </div>
+        </template>
+      </div>
+      <div class="export-action">
+        <button class="btn-primary w-full justify-center" @click="doExport()"
+                x-text="exportIsCopy ? '复制' : '下载'"></button>
+      </div>
+    </div>
 
     <!-- ==================== 右侧：历史 / 收藏 ==================== -->
     <aside class="glass rounded-[1.4rem] fixed inset-y-3 right-3 z-50 w-[320px] max-w-[86vw]

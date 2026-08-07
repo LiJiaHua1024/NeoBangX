@@ -2,14 +2,14 @@
 
 NeoBangX —— 面向中学英语教师的 AI 辅助教学平台。
 
-> 版本：v1.1
-> 核心变更：引入使用码系统 + 管理后台 + 后端 SQLite 数据存储。
+> 版本：v1.2
+> 核心变更：引入使用码系统、管理后台、后端 SQLite 数据存储与智能错题迁移。
 
 ---
 
 ## 1. 功能概览
 
-- **25 个中学英语教学 AI 工具**：语篇分析、教学设计、命题辅助、作文批改、试卷讲评等。
+- **26 个中学英语教学 AI 工具**：新增独家功能“智能错题迁移”，覆盖语篇分析、教学设计、命题辅助、作文批改、试卷讲评等。
 - **使用码系统**：使用码即登录凭据，无需注册；无码不可用，按次计费，用完锁定。
 - **管理后台**：内网访问，生成/管理使用码、查看使用日志、配置 LLM API。
 - **流式生成**：SSE 打字机效果，生成过程可中止。
@@ -52,6 +52,7 @@ NeoBangX —— 面向中学英语教师的 AI 辅助教学平台。
 │   │   │   └── admin.py         # 管理后台 API
 │   │   └── services/
 │   │       ├── llm.py           # LiteLLM 调用
+│   │       ├── migration.py     # 智能错题迁移规则与错因解析
 │   │       ├── prompt_loader.py # Prompt 加载
 │   │       ├── usage_code.py    # 使用码生成/校验/扣次
 │   │       └── runtime_config.py# 运行时配置管理
@@ -60,7 +61,7 @@ NeoBangX —— 面向中学英语教师的 AI 辅助教学平台。
 │   └── .env.example
 ├── frontend/                    # 主站前端（Alpine.js + Tailwind v4，纯静态）
 ├── admin-frontend/              # 管理后台前端
-├── prompts/                     # 25 个工具 Prompt 文件
+├── prompts/                     # 26 个工具 Prompt 文件
 ├── Dockerfile
 ├── docker-compose.yml
 ├── supervisord.conf             # Docker 内双进程管理
@@ -234,6 +235,8 @@ NBXU-3XXX-XXXX-XXXX
 - `POST /api/auth/activate` — 验证使用码，返回 JWT
 - `GET /api/auth/me` — 当前使用码状态
 - `GET /api/tools/` — 工具元数据 + 模型列表
+- `POST /api/chat/migration/analyze` — 非流式错因分析（不扣费）
+- `POST /api/chat/migration/quota` — 最终生成额度预检查（不扣费）
 - `POST /api/chat/stream` — 流式调用（需 Authorization）
 - `POST /api/chat/stop` — 中止生成
 - `POST /api/chat/title` — 生成历史标题
@@ -306,3 +309,4 @@ NBXU-3XXX-XXXX-XXXX
 |------|------|------|
 | 1.0.0 | 2026-07-24 | 阶段一：后端 API + 25 工具 Prompt + demo 前端 |
 | 1.1.0 | 2026-07-28 | 阶段一补充：使用码系统、管理后台、后端 SQLite、双端口部署 |
+| 1.2.0 | 2026-08-07 | 新增独家功能“智能错题迁移”：错因确认、并行迁移卡片、批量操作与分阶段计费 |

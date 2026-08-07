@@ -46,8 +46,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NeoBangX Backend",
-    description="NeoBangX 后端 API（v1.1 使用码系统）",
-    version="1.1.0",
+    description="NeoBangX 后端 API（v1.2 智能错题迁移）",
+    version="1.2.0",
     lifespan=lifespan,
 )
 
@@ -66,7 +66,7 @@ app.include_router(auth.router)
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "version": "1.1.0"}
+    return {"status": "ok", "version": "1.2.0"}
 
 
 @app.get("/api/config")
@@ -85,7 +85,7 @@ async def get_config():
         "models": llm_cfg["models"],
         "default_model": llm_cfg["default_model"],
         "app_name": "NeoBangX",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "slogan": "Bang助教学，大有可AI",
         "auth_required": True,
     }
@@ -103,5 +103,5 @@ async def root():
         return FileResponse(index_path)
     return {
         "message": "NeoBangX backend is running. Visit /docs for API documentation.",
-        "version": "1.1.0",
+        "version": "1.2.0",
     }

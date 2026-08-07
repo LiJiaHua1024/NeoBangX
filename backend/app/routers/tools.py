@@ -8,6 +8,7 @@ from app.database import get_db
 from app.services.prompt_loader import PromptLoader
 from app.services.runtime_config import resolve_llm_settings
 from app.config import settings
+from app.services.migration import MIGRATION_TOOL_ID, MIGRATION_TOOL_NAME
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
 
@@ -21,6 +22,15 @@ def get_prompt_loader() -> PromptLoader:
 
 # 工具分组数据
 # 工具 id 与 prompts/ 目录下的文件名（不含 .md）一一对应
+EXCLUSIVE_TOOLS = [
+    {
+        "id": MIGRATION_TOOL_ID,
+        "name": MIGRATION_TOOL_NAME,
+        "icon": "migration",
+        "description": "锁定本质错因，讲懂方法并生成高质量迁移练习",
+    },
+]
+
 TEACHING_TOOLS = [
     {"id": "1", "name": "语篇深度分析", "icon": "document-magnifier", "description": "主题/文体/语言特点/观点分析"},
     {"id": "2", "name": "言说策略分析", "icon": "speech-bubble", "description": "语篇中“怎么说”的策略分析"},
@@ -84,6 +94,7 @@ def _resolve_prompt_filename(tool_id: str) -> str:
         "23": "英语试题 Bug 侦察",
         "24": "超标词排查+替换",
         "25": "自由对话",
+        MIGRATION_TOOL_ID: MIGRATION_TOOL_NAME,
     }
     return mapping.get(tool_id, "")
 
@@ -123,6 +134,12 @@ async def list_tools(
         ]
 
     groups = [
+        {
+            "id": "exclusive",
+            "title": "独家功能",
+            "collapsed": False,
+            "tools": enrich(EXCLUSIVE_TOOLS),
+        },
         {
             "id": "teaching",
             "title": "辅助教学功能",

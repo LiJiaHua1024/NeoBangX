@@ -1,11 +1,11 @@
 /* ============================================================
    NeoBangX — 前端应用（Alpine.js）
-   对接 docs/API_CONTRACT.md 定义的全部接口（v1.1 使用码）
+   对接 docs/API_CONTRACT.md 定义的全部接口（v1.2 智能错题迁移）
    ============================================================ */
 
 /* ---------------- 自定义 SVG 图标库（不依赖第三方图标库） ---------------- */
 const ICON_PATHS = {
-  // —— 25 个工具图标 ——
+  // —— 26 个工具图标 ——
   "document-magnifier": '<path d="M13.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8.5"/><path d="M13.5 3v5.5H19"/><circle cx="11.5" cy="14.5" r="2.6"/><path d="m13.6 16.6 2.2 2.2"/>',
   "speech-bubble": '<path d="M21 12a8.5 8.5 0 0 1-8.5 8.5c-1.35 0-2.63-.32-3.76-.88L4 21l1.4-4.7A8.5 8.5 0 1 1 21 12Z"/><path d="M8.5 12h.01M12.5 12h.01M16.5 12h.01"/>',
   "report": '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 2.8h6v3H9z"/><path d="M9 10.5h6M9 14h6M9 17.5h3.5"/>',
@@ -31,6 +31,7 @@ const ICON_PATHS = {
   "bug": '<rect x="8" y="8.5" width="8" height="10" rx="4"/><path d="M9.5 7a2.5 2.5 0 0 1 5 0"/><path d="M12 8.5V6.5M8.6 10 5 8.8M15.4 10 19 8.8M8 13.5H4M16 13.5h4M8.6 16.8 5 18.5M15.4 16.8 19 18.5"/>',
   "replace": '<path d="M4 8h12.5L13 4.5M20 16H7.5L11 19.5"/>',
   "chat": '<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5c-1.4 0-2.75-.34-3.94-.93L3 21l1.93-5.57A8.5 8.5 0 1 1 21 11.5Z"/>',
+  "migration": '<path d="M5 6.5h14M5 12h9M5 17.5h5"/><path d="m16 14 4 4-4 4M20 18h-7"/>',
 
   // —— UI 图标 ——
   "logo": '<path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2Z"/>',
@@ -486,6 +487,17 @@ function nbx() {
     maskOn: false,
     copied: false,
 
+    /* --- 智能错题迁移 --- */
+    migration: null,
+    migrationExportTarget: null,
+    migrationExportStyle: "",
+    migrationDifficultyMenuOpen: false,
+    migrationDifficultyOptions: [
+      { value: "same", name: "同难度迁移", desc: "保持与原题相近的难度" },
+      { value: "harder", name: "逐步升难", desc: "逐步提高综合复杂度" },
+      { value: "easiest", name: "专出最容易错的题", desc: "优先诱发当前错因" },
+    ],
+
     /* --- 导出 --- */
     exportMenuOpen: false,
     exportFormat: "richtext",
@@ -553,10 +565,63 @@ function nbx() {
     _nearBottom: true,
     _draftTimer: null,
     _bg: null,
+    _migrationAbortControllers: {},
+    _migrationExportAnchor: null,
+    _migrationExportPositionFrame: null,
+
+    newMigrationState() {
+      return {
+        step: 1,
+        form: {
+          question: "",
+          standardAnswer: "",
+          studentAnswers: "",
+          errorCause: "",
+        },
+        causes: [],
+        selectedCauseIds: [],
+        feedback: "",
+        feedbackHistory: [],
+        analysisHistory: [],
+        analyzing: false,
+        moreAnalyzing: false,
+        prechecking: false,
+        analysisError: "",
+        difficulty: "easiest",
+        questionCount: 3,
+        results: [],
+        generated: false,
+        generating: false,
+        stopRequested: false,
+        batchId: "",
+      };
+    },
+    resetMigration() {
+      this.migration = this.newMigrationState();
+      this.closeExportMenu();
+      this.migrationDifficultyMenuOpen = false;
+      this._migrationAbortControllers = {};
+    },
+    get isMigrationTool() {
+      return !!this.currentTool && this.currentTool.id === "26";
+    },
+    get migrationSelectedCauses() {
+      if (!this.migration) return [];
+      const selected = new Set(this.migration.selectedCauseIds);
+      return this.migration.causes.filter((cause) => selected.has(cause.id));
+    },
+    get migrationChargeUnits() {
+      const count = this.migrationSelectedCauses.length;
+      return Math.max(1, Math.floor(count / 2));
+    },
+    get migrationHasOutput() {
+      return !!this.migration && this.migration.results.some((card) => card.output && card.output.trim());
+    },
 
     /* ============ 初始化 ============ */
     async init() {
       configureMarked();
+      this.resetMigration();
 
       // 主题
       const savedTheme = localStorage.getItem(LS.theme);
@@ -596,6 +661,7 @@ function nbx() {
       window.addEventListener("resize", () => {
         if (window.innerWidth >= 1024) this.leftOpen = false;
         if (window.innerWidth >= 1280) this.rightMobileOpen = false;
+        this.repositionMigrationExport();
       });
 
       this.$nextTick(() => this.autoGrow());
@@ -762,9 +828,10 @@ function nbx() {
 
     selectTool(tool, ev) {
       if (!this.requireAuth("请先输入使用码再选择工具")) return;
-      if (this.streaming) {
+      if (this.streaming || (this.migration && this.migration.generating)) {
         if (!confirm("正在生成中，切换工具将停止本次生成。确定切换吗？")) return;
-        this.stop();
+        if (this.streaming) this.stop();
+        if (this.migration && this.migration.generating) this.stopMigration();
       }
       this.currentTool = tool;
       this.output = "";
@@ -777,6 +844,7 @@ function nbx() {
       this.submittedInput = "";
       this.submittedFileName = "";
       this.submittedExpanded = false;
+      this.resetMigration();
       const el = ev && ev.currentTarget ? ev.currentTarget : null;
       if (el && this._bg) {
         const r = el.getBoundingClientRect();
@@ -786,9 +854,10 @@ function nbx() {
     },
 
     goHome() {
-      if (this.streaming) {
+      if (this.streaming || (this.migration && this.migration.generating)) {
         if (!confirm("正在生成中，返回首页将停止本次生成。确定吗？")) return;
-        this.stop();
+        if (this.streaming) this.stop();
+        if (this.migration && this.migration.generating) this.stopMigration();
       }
       this.currentTool = null;
       this.leftOpen = false;
@@ -828,6 +897,11 @@ function nbx() {
       this.selectedModel = m;
       this.modelMenuOpen = false;
       try { localStorage.setItem(LS.model, m); } catch {}
+    },
+    chooseMigrationDifficulty(value) {
+      if (!this.migrationDifficultyOptions.some((option) => option.value === value)) return;
+      this.migration.difficulty = value;
+      this.migrationDifficultyMenuOpen = false;
     },
 
     /* ============ UI 持久化 ============ */
@@ -948,9 +1022,562 @@ function nbx() {
       return (bytes / (1024 * 1024)).toFixed(1) + " MB";
     },
 
+    /* ============ 智能错题迁移 ============ */
+    migrationDifficultyLabel(value) {
+      return {
+        same: "同难度迁移",
+        harder: "逐步升难",
+        easiest: "专出该易错因下最容易让学生出错的题",
+      }[value] || "专出该易错因下最容易让学生出错的题";
+    },
+    migrationDifficultyName(value) {
+      const option = this.migrationDifficultyOptions.find((item) => item.value === value);
+      return option ? option.name : "专出最容易错的题";
+    },
+    migrationBuildInput(cause) {
+      const form = this.migration.form;
+      return [
+        "【原题干】",
+        form.question.trim(),
+        "",
+        "【标准答案】",
+        form.standardAnswer.trim() || "（老师未提供，请先依据题干判断）",
+        "",
+        "【学生错误作答 / 错误选项分布】",
+        form.studentAnswers.trim() || "（老师未提供）",
+        "",
+        "【已经确认的本质错因】",
+        cause.label,
+        "",
+        "【迁移难度】",
+        this.migrationDifficultyLabel(this.migration.difficulty),
+        "",
+        "【迁移题量】",
+        String(this.migration.questionCount),
+        "",
+        "请严格围绕这一个本质错因完成全部四个部分。",
+      ].join("\n");
+    },
+    async migrationReadError(res, fallback) {
+      let message = fallback;
+      try {
+        const data = await res.json();
+        if (data && data.detail) {
+          message = typeof data.detail === "string"
+            ? data.detail
+            : (data.detail.message || JSON.stringify(data.detail));
+        }
+      } catch {}
+      return message;
+    },
+    migrationCauseKey(label) {
+      return String(label || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+    },
+    migrationParseCauses(rawCauses, prefix = "cause") {
+      if (!Array.isArray(rawCauses)) return [];
+      return rawCauses.map((cause, index) => ({
+        id: String(cause.id || `${prefix}_${index}`),
+        label: String(cause.label || cause.cause || cause).trim(),
+      })).filter((cause) => cause.label);
+    },
+    async analyzeMigration(retry = false) {
+      if (!this.requireAuth("请先输入使用码")) return;
+      if (!this.migration || this.migration.analyzing) return;
+      const state = this.migration;
+      if (!state.form.question.trim()) {
+        this.toast("请先填写题干", "warn");
+        return;
+      }
+      if (retry) {
+        const feedback = state.feedback.trim();
+        if (!feedback) {
+          this.toast("请先写下需要调整的意见", "warn");
+          return;
+        }
+        // 不覆盖旧反馈，后端每次都会收到完整历史。
+        state.feedbackHistory = [...state.feedbackHistory, feedback];
+        state.feedback = "";
+      }
+
+      state.step = 2;
+      state.analyzing = true;
+      state.analysisError = "";
+      try {
+        const res = await fetch("/api/chat/migration/analyze", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...this.authHeaders(),
+          },
+          body: JSON.stringify({
+            question: state.form.question.trim(),
+            standard_answer: state.form.standardAnswer.trim(),
+            student_answers: state.form.studentAnswers.trim(),
+            error_cause: state.form.errorCause.trim(),
+            feedback_history: state.feedbackHistory.slice(),
+            model: this.selectedModel || undefined,
+          }),
+        });
+        if (!res.ok) {
+          if (res.status === 401) this.clearAuth();
+          throw new Error(await this.migrationReadError(res, "错因分析失败"));
+        }
+        const data = await res.json();
+        const causes = this.migrationParseCauses(data.causes);
+        if (!causes.length) throw new Error("模型没有返回可确认的错因");
+        state.analysisHistory = Array.isArray(data.analysis_history)
+          ? data.analysis_history
+          : [];
+        state.causes = causes;
+        state.selectedCauseIds = [];
+      } catch (e) {
+        state.analysisError = e.message || "错因分析失败";
+        this.toast(state.analysisError, "error");
+      } finally {
+        state.analyzing = false;
+      }
+    },
+    async loadMoreMigrationCauses() {
+      if (!this.requireAuth("请先输入使用码")) return;
+      if (!this.migration || this.migration.analyzing || this.migration.moreAnalyzing) return;
+      const state = this.migration;
+      if (!state.causes.length || !state.analysisHistory.length) {
+        this.toast("当前没有可继续分析的错因历史", "warn");
+        return;
+      }
+
+      state.moreAnalyzing = true;
+      state.analysisError = "";
+      try {
+        const res = await fetch("/api/chat/migration/analyze", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...this.authHeaders(),
+          },
+          body: JSON.stringify({
+            question: state.form.question.trim(),
+            standard_answer: state.form.standardAnswer.trim(),
+            student_answers: state.form.studentAnswers.trim(),
+            error_cause: state.form.errorCause.trim(),
+            feedback_history: state.feedbackHistory.slice(),
+            analysis_history: state.analysisHistory.slice(),
+            continue_generation: true,
+            model: this.selectedModel || undefined,
+          }),
+        });
+        if (!res.ok) {
+          if (res.status === 401) this.clearAuth();
+          throw new Error(await this.migrationReadError(res, "继续生成错因失败"));
+        }
+        const data = await res.json();
+        const existing = new Set(state.causes.map((cause) => this.migrationCauseKey(cause.label)));
+        const additions = this.migrationParseCauses(data.causes, `more_${Date.now()}`)
+          .filter((cause) => {
+            const key = this.migrationCauseKey(cause.label);
+            if (!key || existing.has(key)) return false;
+            existing.add(key);
+            return true;
+          })
+          .map((cause, index) => ({ ...cause, id: `more_${Date.now()}_${index}` }));
+        state.causes = [...state.causes, ...additions];
+        if (Array.isArray(data.analysis_history)) state.analysisHistory = data.analysis_history;
+        if (additions.length) this.toast(`已补充 ${additions.length} 个新错因`);
+        else this.toast("AI 暂时没有发现新的独立错因", "warn");
+      } catch (e) {
+        state.analysisError = e.message || "继续生成错因失败";
+        this.toast(state.analysisError, "error");
+      } finally {
+        state.moreAnalyzing = false;
+      }
+    },
+    toggleMigrationCause(id) {
+      const selected = new Set(this.migration.selectedCauseIds);
+      if (selected.has(id)) selected.delete(id);
+      else selected.add(id);
+      this.migration.selectedCauseIds = [...selected];
+    },
+    passMigrationCauses() {
+      if (!this.migrationSelectedCauses.length) {
+        this.toast("请至少勾选一个需要处理的错因", "warn");
+        return;
+      }
+      this.migration.step = 3;
+    },
+    backMigrationStep(step) {
+      if (this.migration.generating) return;
+      this.migration.step = step;
+    },
+    async beginMigration() {
+      if (!this.requireAuth("请先输入使用码")) return;
+      if (this.migration.generating || this.migration.prechecking) return;
+      const selected = this.migrationSelectedCauses;
+      if (!selected.length) {
+        this.toast("请至少勾选一个需要处理的错因", "warn");
+        this.migration.step = 2;
+        return;
+      }
+
+      const state = this.migration;
+      state.prechecking = true;
+      try {
+        const quotaRes = await fetch("/api/chat/migration/quota", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...this.authHeaders(),
+          },
+          body: JSON.stringify({ cause_count: selected.length }),
+        });
+        if (!quotaRes.ok) {
+          if (quotaRes.status === 401) this.clearAuth();
+          throw new Error(await this.migrationReadError(quotaRes, "额度不足，无法开始生成"));
+        }
+
+        state.step = 4;
+        state.generated = false;
+        state.stopRequested = false;
+        state.batchId = `migration_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        state.results = selected.map((cause, index) => ({
+          id: `${state.batchId}_${index}`,
+          causeId: cause.id,
+          cause: cause.label,
+          output: "",
+          rendered: "",
+          status: "waiting",
+          error: "",
+          streaming: true,
+          collapsed: false,
+          requestId: `${state.batchId}_${index}`,
+        }));
+        state.generating = true;
+        const batchId = state.batchId;
+        await Promise.all(state.results.map((card, index) => (
+          this.streamMigrationCard(card, index, batchId, selected.length)
+        )));
+        state.generating = false;
+        state.generated = true;
+        const partial = state.results.some((card) => card.status !== "done");
+        if (this.migrationHasOutput) {
+          const item = this.pushMigrationHistory(partial);
+          this.generateTitle(item);
+        }
+        if (!partial) this.verifyAuth();
+        if (partial) this.toast("部分迁移卡片未完成，请检查后重试", "warn");
+        else this.toast(`已完成 ${state.results.length} 张迁移卡片`);
+      } catch (e) {
+        state.generating = false;
+        state.analysisError = e.message || "生成失败";
+        this.toast(state.analysisError, "error");
+      } finally {
+        state.prechecking = false;
+      }
+    },
+    async consumeSSE(res, onEvent) {
+      if (!res.body) throw new Error("浏览器不支持流式读取");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      let eventName = "message";
+      let eventData = "";
+      const dispatch = () => {
+        if (eventData !== "" || eventName !== "message") onEvent(eventName, eventData);
+        eventName = "message";
+        eventData = "";
+      };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const raw of lines) {
+          const line = raw.replace(/\r$/, "");
+          if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          else if (line.startsWith("data:")) {
+            const data = line.slice(5);
+            eventData += (eventData ? "\n" : "") + (data.startsWith(" ") ? data.slice(1) : data);
+          } else if (!line) dispatch();
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer) {
+        for (const raw of buffer.split("\n")) {
+          const line = raw.replace(/\r$/, "");
+          if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          else if (line.startsWith("data:")) {
+            const data = line.slice(5);
+            eventData += (eventData ? "\n" : "") + (data.startsWith(" ") ? data.slice(1) : data);
+          } else if (!line) dispatch();
+        }
+      }
+      dispatch();
+    },
+    async streamMigrationCard(card, index, batchId, batchSize) {
+      const controller = new AbortController();
+      this._migrationAbortControllers[card.requestId] = controller;
+      try {
+        const cause = { id: card.causeId, label: card.cause };
+        const res = await fetch("/api/chat/stream", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...this.authHeaders(),
+          },
+          body: JSON.stringify({
+            tool_id: "26",
+            input: this.migrationBuildInput(cause),
+            model: this.selectedModel || undefined,
+            request_id: card.requestId,
+            batch_id: batchId,
+            batch_size: batchSize,
+            batch_index: index,
+          }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          if (res.status === 401) this.clearAuth();
+          throw new Error(await this.migrationReadError(res, `HTTP ${res.status}`));
+        }
+        card.status = "streaming";
+        await this.consumeSSE(res, (event, data) => {
+          if (event === "error") {
+            let message = data;
+            try { message = JSON.parse(data).message || data; } catch {}
+            throw new Error(message);
+          }
+          if (event === "token") {
+            let text = data;
+            try {
+              const parsed = JSON.parse(data);
+              if (typeof parsed === "string") text = parsed;
+            } catch {}
+            if (text) {
+              card.output += text;
+              card.rendered = renderMd(card.output);
+            }
+          } else if (event === "done" || data === "[DONE]") {
+            if (data === "[CANCELLED]") card.status = "stopped";
+            else card.status = "done";
+          }
+        });
+        if (card.status === "streaming" || card.status === "waiting") card.status = "done";
+      } catch (e) {
+        if (e && e.name === "AbortError") card.status = "stopped";
+        else {
+          card.status = "error";
+          card.error = e.message || "生成失败";
+        }
+      } finally {
+        card.streaming = false;
+        delete this._migrationAbortControllers[card.requestId];
+      }
+    },
+    async stopMigration() {
+      if (!this.migration || !this.migration.generating) return;
+      this.migration.stopRequested = true;
+      const requests = this.migration.results.map((card) => card.requestId).filter(Boolean);
+      const controllers = { ...this._migrationAbortControllers };
+      await Promise.all(requests.map((requestId) => fetch("/api/chat/stop", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...this.authHeaders(),
+        },
+        body: JSON.stringify({ request_id: requestId }),
+      }).catch(() => null)));
+      Object.values(controllers).forEach((controller) => {
+        try { controller.abort(); } catch {}
+      });
+    },
+    migrationCardText(card, markdown = false) {
+      const heading = markdown ? `## 错因：${card.cause}\n\n` : `错因：${card.cause}\n\n`;
+      if (markdown) return heading + (card.output || "");
+      const box = document.createElement("div");
+      box.innerHTML = renderMd(card.output || "");
+      return heading + (box.textContent || card.output || "").trim();
+    },
+    migrationAllText(markdown = false) {
+      return this.migration.results
+        .filter((card) => card.output && card.output.trim())
+        .map((card) => this.migrationCardText(card, markdown))
+        .join(markdown ? "\n\n---\n\n" : "\n\n");
+    },
+    migrationExportCards() {
+      if (!this.migration || !this.migrationExportTarget) return [];
+      if (this.migrationExportTarget.scope === "card") {
+        const card = this.migration.results.find(
+          (item) => item.id === this.migrationExportTarget.cardId,
+        );
+        return card && card.output ? [card] : [];
+      }
+      return this.migration.results.filter((card) => card.output && card.output.trim());
+    },
+    openMigrationExport(scope, cardId = "", anchor = null) {
+      if (scope === "card") {
+        const card = this.migration.results.find((item) => item.id === cardId);
+        if (!card || !card.output) return;
+      } else if (!this.migrationHasOutput) {
+        return;
+      }
+      this._migrationExportAnchor = anchor;
+      this.migrationExportStyle = "visibility:hidden;";
+      this.migrationExportTarget = { scope, cardId };
+      this.exportMenuOpen = true;
+      this.$nextTick(() => this.repositionMigrationExport());
+    },
+    repositionMigrationExport() {
+      if (!this.exportMenuOpen || !this.migrationExportTarget || !this._migrationExportAnchor) return;
+      if (this._migrationExportPositionFrame) cancelAnimationFrame(this._migrationExportPositionFrame);
+      this._migrationExportPositionFrame = requestAnimationFrame(() => {
+        this._migrationExportPositionFrame = null;
+        const anchor = this._migrationExportAnchor;
+        const menu = document.querySelector("[data-migration-export-menu]");
+        if (!anchor || !menu || !document.documentElement.contains(anchor)) return;
+
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        const isMobile = viewportWidth <= 640;
+        const padding = isMobile ? 12 : 16;
+        const menuWidth = isMobile
+          ? Math.max(0, viewportWidth - padding * 2)
+          : Math.min(280, Math.max(0, viewportWidth - padding * 2));
+        const availableHeight = Math.max(96, viewportHeight - padding * 2);
+
+        menu.style.width = `${menuWidth}px`;
+        menu.style.maxHeight = `${availableHeight}px`;
+        const menuHeight = Math.min(menu.getBoundingClientRect().height || 360, availableHeight);
+        const anchorRect = anchor.getBoundingClientRect();
+        const spaceAbove = anchorRect.top - padding;
+        const spaceBelow = viewportHeight - anchorRect.bottom - padding;
+        let top;
+        if (spaceAbove >= menuHeight + 10 || spaceAbove > spaceBelow) {
+          top = anchorRect.top - menuHeight - 10;
+        } else {
+          top = anchorRect.bottom + 10;
+        }
+        top = Math.max(padding, Math.min(top, viewportHeight - padding - menuHeight));
+
+        const left = isMobile
+          ? Math.max(padding, (viewportWidth - menuWidth) / 2)
+          : Math.max(padding, Math.min(anchorRect.right - menuWidth, viewportWidth - padding - menuWidth));
+        this.migrationExportStyle = [
+          `top:${Math.round(top)}px`,
+          `left:${Math.round(left)}px`,
+          `width:${Math.round(menuWidth)}px`,
+          `max-height:${Math.round(availableHeight)}px`,
+          "visibility:visible",
+        ].join(";");
+      });
+    },
+    closeExportMenu() {
+      if (this._migrationExportPositionFrame) cancelAnimationFrame(this._migrationExportPositionFrame);
+      this._migrationExportPositionFrame = null;
+      this.exportMenuOpen = false;
+      this.migrationExportTarget = null;
+      this.migrationExportStyle = "";
+      this._migrationExportAnchor = null;
+    },
+    hasMigrationExportTarget() {
+      return this.isMigrationTool && !!this.migrationExportTarget;
+    },
+    getExportMarkdown() {
+      if (this.hasMigrationExportTarget()) {
+        const cards = this.migrationExportCards();
+        return this.migrationExportTarget.scope === "all"
+          ? cards.map((card) => this.migrationCardText(card, true)).join("\n\n---\n\n")
+          : (cards[0] ? this.migrationCardText(cards[0], true) : "");
+      }
+      return this.output;
+    },
+    getExportPlain() {
+      if (this.hasMigrationExportTarget()) {
+        const cards = this.migrationExportCards();
+        return this.migrationExportTarget.scope === "all"
+          ? cards.map((card) => this.migrationCardText(card, false)).join("\n\n")
+          : (cards[0] ? this.migrationCardText(cards[0], false) : "");
+      }
+      return this.output;
+    },
+    buildExportContent() {
+      let content;
+      if (this.hasMigrationExportTarget()) {
+        content = this.migrationExportCards()
+          .map((card, index) => {
+            const pageBreak = this.migrationExportTarget.scope === "all" && index
+              ? "page-break-before:always;"
+              : "";
+            return `<section style="${pageBreak}">${renderMd(this.migrationCardText(card, true))}</section>`;
+          })
+          .join("");
+      } else {
+        content = renderMd(this.output);
+      }
+      // 移除答案遮罩 class，导出时正常显示
+      return content.replace(/ class="ans"/g, "");
+    },
+    saveMigrationFavorite() {
+      if (!this.migrationHasOutput) return;
+      const form = this.migration.form;
+      const favorite = {
+        id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+        title: `智能错题迁移 · ${this.excerpt(form.question, 20) || "未命名"}`,
+        content: this.migrationAllText(true),
+        toolId: "26",
+        toolName: "智能错题迁移",
+        createdAt: Date.now(),
+        migration: {
+          form: { ...form },
+          causes: this.migrationSelectedCauses.map((cause) => ({ ...cause })),
+          difficulty: this.migration.difficulty,
+          questionCount: this.migration.questionCount,
+          results: this.migration.results
+            .filter((card) => card.output && card.output.trim())
+            .map((card) => ({ causeId: card.causeId, cause: card.cause, output: card.output })),
+        },
+      };
+      this.favorites.unshift(favorite);
+      lsSet(LS.favorites, this.favorites);
+      this.toast("已收藏整条迁移记录");
+    },
+    pushMigrationHistory(partial = false) {
+      const form = this.migration.form;
+      const output = this.migrationAllText(true);
+      const item = {
+        id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+        toolId: this.currentTool.id,
+        toolName: this.currentTool.name,
+        icon: this.currentTool.icon,
+        title: "",
+        input: form.question.trim(),
+        fileName: "",
+        output,
+        model: this.selectedModel,
+        partial: !!partial,
+        createdAt: Date.now(),
+        migration: {
+          form: { ...form },
+          causes: this.migrationSelectedCauses.map((cause) => ({ ...cause })),
+          difficulty: this.migration.difficulty,
+          questionCount: this.migration.questionCount,
+          results: this.migration.results
+            .filter((card) => card.output && card.output.trim())
+            .map((card) => ({ causeId: card.causeId, cause: card.cause, output: card.output })),
+        },
+      };
+      this.history.unshift(item);
+      if (this.history.length > HISTORY_LIMIT) this.history.length = HISTORY_LIMIT;
+      lsSet(LS.history, this.history);
+      return item;
+    },
+
     /* ============ 流式生成（SSE） ============ */
     async run() {
       if (!this.requireAuth("请先输入使用码")) return;
+      if (this.isMigrationTool) {
+        await this.analyzeMigration();
+        return;
+      }
       if (this.streaming) return;
       if (!this.currentTool) {
         this.toast("请先在左侧选择一个工具", "warn");
@@ -1210,7 +1837,7 @@ function nbx() {
     },
 
     async doExport() {
-      if (!this.output) return;
+      if (!this.getExportMarkdown()) return;
       switch (this.exportFormat) {
         case "richtext": await this.exportCopyRichText(); break;
         case "mdsource": await this.exportCopyMd(); break;
@@ -1219,38 +1846,38 @@ function nbx() {
         case "md": this.exportDownloadMd(); break;
         case "txt": this.exportDownloadTxt(); break;
       }
-      this.exportMenuOpen = false;
+      this.closeExportMenu();
     },
 
     async exportCopyRichText() {
+      const markdown = this.getExportMarkdown();
+      const plain = this.getExportPlain();
       if (window.isSecureContext && navigator.clipboard && window.ClipboardItem) {
-        const html = renderMd(this.output);
+        const html = this.buildExportContent();
         try {
           await navigator.clipboard.write([
             new ClipboardItem({
               "text/html": new Blob([html], { type: "text/html" }),
-              "text/plain": new Blob([this.output], { type: "text/plain" }),
+              "text/plain": new Blob([plain], { type: "text/plain" }),
             }),
           ]);
           this.toast("已复制富文本，可直接粘贴到 Word");
           return;
         } catch { /* 回退纯文本 */ }
       }
-      const ok = await copyToClipboard(this.output);
+      const ok = await copyToClipboard(markdown);
       if (ok) this.toast("当前环境不支持富文本复制，已改为复制纯文本", "warn");
       else this.toast("复制失败，请手动复制", "error");
     },
 
     async exportCopyMd() {
-      const ok = await copyToClipboard(this.output);
+      const ok = await copyToClipboard(this.getExportMarkdown());
       if (ok) this.toast("已复制 Markdown 源码");
       else this.toast("复制失败，请手动复制", "error");
     },
 
     buildExportHtml(fontSize) {
-      let content = renderMd(this.output);
-      // 移除答案遮罩 class，导出时正常显示
-      content = content.replace(/ class="ans"/g, "");
+      const content = this.buildExportContent();
       return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:'Microsoft YaHei','PingFang SC','Hiragino Sans GB',sans-serif;font-size:${fontSize}pt;line-height:1.8;color:#222;max-width:100%;padding:0;margin:0;">${content}</body></html>`;
     },
 
@@ -1290,8 +1917,7 @@ function nbx() {
        相比旧的 html2canvas 截图方案：矢量文字可选中、排版与页面一致、
        分页不切断表格行、文件体积小。文档标题即另存时的默认文件名。 */
     exportPdf() {
-      let content = renderMd(this.output);
-      content = content.replace(/ class="ans"/g, "");
+      const content = this.buildExportContent();
       const title = this.exportFilename("pdf").replace(/\.pdf$/, "");
     
       // 同一时刻只保留一个打印 iframe
@@ -1333,13 +1959,13 @@ function nbx() {
     },
 
     exportDownloadMd() {
-      const blob = new Blob([this.output], { type: "text/markdown;charset=utf-8" });
+      const blob = new Blob([this.getExportMarkdown()], { type: "text/markdown;charset=utf-8" });
       this.downloadBlob(blob, this.exportFilename("md"));
       this.toast("Markdown 文件已开始下载");
     },
 
     exportDownloadTxt() {
-      const blob = new Blob([this.output], { type: "text/plain;charset=utf-8" });
+      const blob = new Blob([this.getExportPlain()], { type: "text/plain;charset=utf-8" });
       this.downloadBlob(blob, this.exportFilename("txt"));
       this.toast("纯文本文件已开始下载");
     },
@@ -1391,9 +2017,14 @@ function nbx() {
       }
     },
     openHistory(item) {
-      if (this.streaming) {
+      if (this.streaming || (this.migration && this.migration.generating)) {
         if (!confirm("正在生成中，查看历史将停止本次生成。确定吗？")) return;
-        this.stop();
+        if (this.streaming) this.stop();
+        if (this.migration && this.migration.generating) this.stopMigration();
+      }
+      if (item.migration) {
+        this.openMigrationHistory(item);
+        return;
       }
       const tool = this.findTool(item.toolId);
       this.currentTool = tool || {
@@ -1417,7 +2048,50 @@ function nbx() {
         if (el) el.scrollTop = 0;
       });
     },
+    openMigrationHistory(item) {
+      const tool = this.findTool(item.toolId) || {
+        id: "26", name: "智能错题迁移", icon: "migration", description: "", prompt_loaded: true,
+      };
+      this.currentTool = tool;
+      this.resetMigration();
+      const saved = item.migration || {};
+      const form = saved.form || {};
+      const causes = Array.isArray(saved.causes) ? saved.causes : [];
+      this.migration.form = {
+        question: form.question || item.input || "",
+        standardAnswer: form.standardAnswer || "",
+        studentAnswers: form.studentAnswers || "",
+        errorCause: form.errorCause || "",
+      };
+      this.migration.causes = causes.map((cause, index) => ({
+        id: String(cause.id || cause.causeId || `cause_${index}`),
+        label: String(cause.label || cause.cause || cause),
+      }));
+      this.migration.selectedCauseIds = this.migration.causes.map((cause) => cause.id);
+      this.migration.difficulty = saved.difficulty || "easiest";
+      this.migration.questionCount = Number(saved.questionCount) || 3;
+      this.migration.results = (Array.isArray(saved.results) ? saved.results : []).map((card, index) => ({
+        id: `${item.id}_${index}`,
+        causeId: card.causeId || `cause_${index}`,
+        cause: card.cause || "未命名错因",
+        output: card.output || "",
+        rendered: renderMd(card.output || ""),
+        status: "done",
+        error: "",
+        streaming: false,
+        collapsed: false,
+        requestId: "",
+      }));
+      this.migration.step = 4;
+      this.migration.generated = true;
+      this.migration.generating = false;
+      this.rightMobileOpen = false;
+    },
     startNewTopic() {
+      if (this.isMigrationTool) {
+        this.resetMigration();
+        return;
+      }
       this.inputCollapsed = false;
       this.submittedInput = "";
       this.submittedFileName = "";
@@ -1469,6 +2143,11 @@ function nbx() {
       this.toast("已收藏到笔记本");
     },
     insertFavorite(fav) {
+      if (fav.migration) {
+        this.openMigrationHistory(fav);
+        this.toast("已打开整条迁移记录");
+        return;
+      }
       this.input = fav.content;
       this.rightMobileOpen = false;
       this.$nextTick(() => {

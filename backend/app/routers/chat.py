@@ -1,7 +1,9 @@
 import asyncio
 import json
 import logging
-from typing import Annotated, Optional
+from dataclasses import dataclass, field
+from time import monotonic
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -14,6 +16,13 @@ from app.deps import get_current_code
 from app.models import UsageCode
 from app.routers.tools import _resolve_prompt_filename, get_prompt_loader
 from app.services.llm import LLMService
+from app.services.migration import (
+    MIGRATION_ANALYSIS_PROMPT_NAME,
+    MIGRATION_TOOL_ID,
+    MIGRATION_TOOL_NAME,
+    migration_charge_units,
+    parse_error_causes,
+)
 from app.services.prompt_loader import PromptLoader
 from app.services.runtime_config import find_model_entry, resolve_llm_settings
 from app.services.usage_code import assert_can_generate, consume_quota
@@ -24,6 +33,23 @@ logger = logging.getLogger(__name__)
 # 用于支持 SSE 请求中止的全局事件字典
 # key: request_id, value: asyncio.Event
 _stop_events: dict[str, asyncio.Event] = {}
+
+
+@dataclass
+class _MigrationBatch:
+    code_id: int
+    expected: int
+    charge_units: int
+    created_at: float = field(default_factory=monotonic)
+    completed: set[int] = field(default_factory=set)
+    failed: bool = False
+
+
+# 批量迁移请求需要在全部卡片成功后才扣费。主站当前为单进程部署，
+# 这里沿用停止事件的进程内协调方式；额度实际扣减仍在独立数据库会话中完成。
+_migration_batches: dict[str, _MigrationBatch] = {}
+_migration_reserved: dict[int, int] = {}
+_MIGRATION_BATCH_TTL = 30 * 60
 
 
 def _build_llm(cfg: dict, chores: bool = False) -> LLMService:
@@ -49,6 +75,39 @@ class ChatRequest(BaseModel):
     input: str = Field(..., min_length=1, description="用户输入文本")
     model: Optional[str] = Field(None, description="模型 ID，为空则使用默认模型")
     request_id: Optional[str] = Field(None, description="客户端生成的请求 ID，用于停止生成")
+    batch_id: Optional[str] = Field(None, max_length=128, description="智能错题迁移批次 ID")
+    batch_size: Optional[int] = Field(None, ge=1, description="批次内错因卡片总数")
+    batch_index: Optional[int] = Field(None, ge=0, description="当前错因在批次中的序号")
+
+
+class MigrationAnalyzeRequest(BaseModel):
+    question: str = Field(..., min_length=1, description="题干")
+    standard_answer: str = Field(default="", description="标准答案")
+    student_answers: str = Field(default="", description="学生错误作答或错误选项分布")
+    error_cause: str = Field(default="", description="老师填写的错因，可为空")
+    feedback_history: list[str] = Field(
+        default_factory=list,
+        description="历次再讨论反馈，必须完整传递",
+    )
+    analysis_history: list["MigrationAnalysisMessage"] = Field(
+        default_factory=list,
+        max_length=40,
+        description="错因分析对话历史，More 请求会在其末尾追加 user 消息",
+    )
+    continue_generation: bool = Field(
+        default=False,
+        description="是否基于 analysis_history 继续生成更多错因",
+    )
+    model: Optional[str] = Field(None, description="模型 ID")
+
+
+class MigrationAnalysisMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1)
+
+
+class MigrationQuotaRequest(BaseModel):
+    cause_count: int = Field(..., ge=1, description="选中的错因数量")
 
 
 class ChatPreviewRequest(BaseModel):
@@ -72,6 +131,203 @@ TITLE_SYSTEM_PROMPT = (
     "生成一个简短的中文标题（不超过 15 个字），准确概括主题。"
     "只输出标题，不要解释、不要引号、不要多余内容。"
 )
+
+
+def _cleanup_migration_batches() -> None:
+    now = monotonic()
+    expired = [
+        batch_id
+        for batch_id, batch in _migration_batches.items()
+        if now - batch.created_at > _MIGRATION_BATCH_TTL
+    ]
+    for batch_id in expired:
+        batch = _migration_batches.pop(batch_id)
+        _release_migration_reservation(batch)
+
+
+def _release_migration_reservation(batch: _MigrationBatch) -> None:
+    reserved = _migration_reserved.get(batch.code_id, 0) - batch.charge_units
+    if reserved > 0:
+        _migration_reserved[batch.code_id] = reserved
+    else:
+        _migration_reserved.pop(batch.code_id, None)
+
+
+def _register_migration_batch(
+    req: ChatRequest,
+    code: UsageCode,
+) -> _MigrationBatch | None:
+    has_batch_fields = any(
+        value is not None for value in (req.batch_id, req.batch_size, req.batch_index)
+    )
+    if not has_batch_fields:
+        if req.tool_id == MIGRATION_TOOL_ID:
+            raise HTTPException(status_code=400, detail="智能错题迁移必须通过批次请求生成")
+        return None
+    if req.tool_id != MIGRATION_TOOL_ID:
+        raise HTTPException(status_code=400, detail="批量参数仅适用于智能错题迁移")
+    if not req.batch_id or req.batch_size is None or req.batch_index is None:
+        raise HTTPException(status_code=400, detail="智能错题迁移批量参数不完整")
+    if req.batch_index >= req.batch_size:
+        raise HTTPException(status_code=400, detail="智能错题迁移批次序号无效")
+
+    _cleanup_migration_batches()
+    charge_units = migration_charge_units(req.batch_size)
+    batch = _migration_batches.get(req.batch_id)
+    if batch:
+        if (
+            batch.code_id != code.id
+            or batch.expected != req.batch_size
+            or batch.charge_units != charge_units
+        ):
+            raise HTTPException(status_code=400, detail="智能错题迁移批次参数不一致")
+        return batch
+
+    remaining = code.remaining
+    reserved = _migration_reserved.get(code.id, 0)
+    if remaining is not None and remaining - reserved < charge_units:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "额度不足，无法生成本次智能错题迁移",
+                "required": charge_units,
+                "remaining": max(0, remaining - reserved),
+            },
+        )
+
+    batch = _MigrationBatch(
+        code_id=code.id,
+        expected=req.batch_size,
+        charge_units=charge_units,
+    )
+    _migration_batches[req.batch_id] = batch
+    _migration_reserved[code.id] = reserved + charge_units
+    return batch
+
+
+def _finish_migration_stream(
+    *,
+    batch_id: str,
+    batch_index: int,
+    code_id: int,
+    success: bool,
+) -> bool:
+    """标记一张卡片完成，返回是否应由当前请求完成整批扣费。"""
+    batch = _migration_batches.get(batch_id)
+    if not batch or batch.code_id != code_id:
+        return False
+
+    if not success:
+        batch.failed = True
+    batch.completed.add(batch_index)
+    if batch.failed:
+        _migration_batches.pop(batch_id, None)
+        _release_migration_reservation(batch)
+        return False
+    if len(batch.completed) < batch.expected:
+        return False
+
+    _migration_batches.pop(batch_id, None)
+    _release_migration_reservation(batch)
+    return True
+
+
+def _migration_prompt_input(req: MigrationAnalyzeRequest) -> str:
+    payload = {
+        "题干": req.question,
+        "标准答案": req.standard_answer,
+        "学生错误作答或错误选项分布": req.student_answers,
+        "老师填写的错因（可能为空；为空时必须自主分析）": req.error_cause,
+        "历次再讨论反馈（必须全部吸收）": req.feedback_history,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+MIGRATION_MORE_USER_MESSAGE = (
+    "这是一次 More 请求。请基于前面的题目、诊断过程和已有错因，继续补充更多"
+    "彼此不同、可以独立处理的本质错因。只输出这一轮新增的错因，不要重复前面已经"
+    "出现过的任何错因；如果确实没有新的本质错因，只返回一个空的 causes 数组。"
+    "仍然只输出合法 JSON。"
+)
+
+
+def _migration_analysis_messages(req: MigrationAnalyzeRequest, prompt: str) -> list[dict[str, str]]:
+    if not req.continue_generation:
+        return [{"role": "user", "content": prompt}]
+
+    history = [
+        {"role": message.role, "content": message.content.strip()}
+        for message in req.analysis_history
+        if message.content.strip()
+    ]
+    if not history or history[-1]["role"] != "assistant":
+        raise HTTPException(status_code=400, detail="More 请求缺少有效的错因分析历史")
+    history.append({"role": "user", "content": MIGRATION_MORE_USER_MESSAGE})
+    return history
+
+
+@router.post("/migration/analyze")
+async def analyze_migration_causes(
+    req: MigrationAnalyzeRequest,
+    _code: Annotated[UsageCode, Depends(get_current_code)],
+    db: Annotated[Session, Depends(get_db)],
+    loader: PromptLoader = Depends(get_prompt_loader),
+):
+    """非流式分析智能错题迁移的错因，不扣减额度。"""
+    prompt = loader.render(
+        MIGRATION_ANALYSIS_PROMPT_NAME,
+        _migration_prompt_input(req),
+    )
+    if prompt is None:
+        raise HTTPException(status_code=404, detail="智能错题迁移错因分析 Prompt 不存在")
+
+    messages = _migration_analysis_messages(req, prompt)
+    cfg = resolve_llm_settings(db)
+    llm = _build_llm(cfg, chores=False)
+    try:
+        raw = await llm.chat(user_prompt=prompt, messages=messages, model=req.model)
+    except Exception as exc:
+        logger.error("Migration cause analysis error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"错因分析失败: {exc}") from exc
+
+    causes = parse_error_causes(raw)
+    if not causes and not req.continue_generation:
+        raise HTTPException(status_code=502, detail="模型未返回可确认的错因，请重试")
+    return {
+        "causes": [
+            {"id": f"cause_{index}", "label": cause}
+            for index, cause in enumerate(causes)
+        ],
+        "analysis_history": [
+            *messages,
+            {"role": "assistant", "content": raw},
+        ],
+    }
+
+
+@router.post("/migration/quota")
+async def check_migration_quota(
+    req: MigrationQuotaRequest,
+    code: Annotated[UsageCode, Depends(get_current_code)],
+):
+    """生成最终迁移结果前预检查本次所需额度，不扣费。"""
+    required = migration_charge_units(req.cause_count)
+    remaining = code.remaining
+    if remaining is not None and remaining < required:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "额度不足，无法生成本次智能错题迁移",
+                "required": required,
+                "remaining": remaining,
+            },
+        )
+    return {
+        "can_generate": True,
+        "required": required,
+        "remaining": remaining,
+        "cause_count": req.cause_count,
+    }
 
 
 @router.post("/preview")
@@ -107,7 +363,7 @@ async def chat_stream(
     db: Annotated[Session, Depends(get_db)],
     loader: PromptLoader = Depends(get_prompt_loader),
 ):
-    """流式调用工具，返回 SSE 事件流。需要有效使用码；成功生成后扣减 1 次额度。"""
+    """流式调用工具，返回 SSE 事件流。"""
     assert_can_generate(code)
 
     prompt_filename = _resolve_prompt_filename(req.tool_id)
@@ -120,6 +376,8 @@ async def chat_stream(
             status_code=404,
             detail=f"Prompt file {prompt_filename}.md not found",
         )
+
+    migration_batch = _register_migration_batch(req, code)
 
     cfg = resolve_llm_settings(db)
     llm = _build_llm(cfg, chores=False)
@@ -136,6 +394,8 @@ async def chat_stream(
 
     async def event_generator():
         charged = False
+        migration_finished = False
+        client_disconnected = False
         try:
             async for token in llm.chat_stream_with_stop(
                 user_prompt=prompt,
@@ -146,34 +406,70 @@ async def chat_stream(
             ):
                 if await request.is_disconnected():
                     logger.info(f"Client disconnected: {request_id}")
+                    client_disconnected = True
                     break
                 # JSON 编码 token：SSE 按行分帧会丢失尾部换行符，
                 # 编码后换行以 \n 转义形式单行传输，前端 JSON.parse 无损还原
                 yield {"event": "token", "data": json.dumps(token, ensure_ascii=False)}
 
-            # 正常结束（含用户停止后的收尾）：计一次使用
-            if not charged:
-                _charge_usage(
+            if migration_batch:
+                # 智能错题迁移只有整批卡片全部自然完成才扣费；手动停止或断开不扣费。
+                success = not client_disconnected and not stop_event.is_set()
+                should_charge = _finish_migration_stream(
+                    batch_id=req.batch_id or "",
+                    batch_index=req.batch_index or 0,
                     code_id=code_id,
-                    tool_id=req.tool_id,
-                    tool_name=tool_name,
-                    model=model_used,
-                    request_id=request_id,
+                    success=success,
                 )
-                charged = True
-            yield {"event": "done", "data": "[DONE]"}
+                migration_finished = True
+                if should_charge and success:
+                    _charge_usage(
+                        code_id=code_id,
+                        tool_id=req.tool_id,
+                        tool_name=MIGRATION_TOOL_NAME,
+                        model=model_used,
+                        request_id=req.batch_id or request_id,
+                        units=migration_batch.charge_units,
+                    )
+                yield {
+                    "event": "done",
+                    "data": "[DONE]" if success else "[CANCELLED]",
+                }
+            else:
+                # 保持现有工具的计费行为：流正常收尾（包括用户停止）后扣 1 次。
+                if not charged:
+                    _charge_usage(
+                        code_id=code_id,
+                        tool_id=req.tool_id,
+                        tool_name=tool_name,
+                        model=model_used,
+                        request_id=request_id,
+                    )
+                    charged = True
+                yield {"event": "done", "data": "[DONE]"}
         except asyncio.CancelledError:
             logger.info(f"Stream cancelled: {request_id}")
-            if not charged:
-                _charge_usage(
-                    code_id=code_id,
-                    tool_id=req.tool_id,
-                    tool_name=tool_name,
-                    model=model_used,
-                    request_id=request_id,
-                )
-                charged = True
-            yield {"event": "done", "data": "[CANCELLED]"}
+            if migration_batch:
+                if not migration_finished:
+                    _finish_migration_stream(
+                        batch_id=req.batch_id or "",
+                        batch_index=req.batch_index or 0,
+                        code_id=code_id,
+                        success=False,
+                    )
+                    migration_finished = True
+                yield {"event": "done", "data": "[CANCELLED]"}
+            else:
+                if not charged:
+                    _charge_usage(
+                        code_id=code_id,
+                        tool_id=req.tool_id,
+                        tool_name=tool_name,
+                        model=model_used,
+                        request_id=request_id,
+                    )
+                    charged = True
+                yield {"event": "done", "data": "[CANCELLED]"}
         except Exception as e:
             logger.error(f"Stream error for {request_id}: {e}")
             yield {
@@ -181,6 +477,13 @@ async def chat_stream(
                 "data": json.dumps({"message": str(e)}, ensure_ascii=False),
             }
         finally:
+            if migration_batch and not migration_finished:
+                _finish_migration_stream(
+                    batch_id=req.batch_id or "",
+                    batch_index=req.batch_index or 0,
+                    code_id=code_id,
+                    success=False,
+                )
             _stop_events.pop(request_id, None)
 
     return EventSourceResponse(
@@ -197,6 +500,7 @@ def _charge_usage(
     tool_name: str,
     model: str,
     request_id: str,
+    units: int = 1,
 ) -> None:
     """在独立会话中扣减额度，避免生成器生命周期问题。"""
     db = SessionLocal()
@@ -211,6 +515,7 @@ def _charge_usage(
             tool_name=tool_name,
             model=model,
             request_id=request_id,
+            units=units,
         )
     except Exception as e:
         logger.error(f"Failed to charge usage for {request_id}: {e}")
