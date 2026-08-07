@@ -509,6 +509,7 @@ function nbx() {
 
     /* --- 导出 --- */
     exportMenuOpen: false,
+    exportMenuStyle: "",
     exportFormat: "richtext",
     exportFontSize: 14,
     exportFormats: [
@@ -575,6 +576,8 @@ function nbx() {
     _draftTimer: null,
     _bg: null,
     _migrationAbortControllers: {},
+    _exportMenuAnchor: null,
+    _exportMenuPositionFrame: null,
     _migrationExportAnchor: null,
     _migrationExportPositionFrame: null,
 
@@ -670,6 +673,7 @@ function nbx() {
       window.addEventListener("resize", () => {
         if (window.innerWidth >= 1024) this.leftOpen = false;
         if (window.innerWidth >= 1280) this.rightMobileOpen = false;
+        this.repositionExportMenu();
         this.repositionMigrationExport();
       });
 
@@ -1412,6 +1416,39 @@ function nbx() {
         .map((card) => this.migrationCardText(card, markdown))
         .join(markdown ? "\n\n---\n\n" : "\n\n");
     },
+    toggleExportMenu(anchor) {
+      if (this.exportMenuOpen && !this.migrationExportTarget) {
+        this.closeExportMenu();
+        return;
+      }
+      this.closeExportMenu();
+      this._exportMenuAnchor = anchor;
+      this.exportMenuStyle = "visibility:hidden;";
+      this.exportMenuOpen = true;
+      this.$nextTick(() => this.repositionExportMenu());
+    },
+    repositionExportMenu() {
+      if (!this.exportMenuOpen || this.migrationExportTarget || !this._exportMenuAnchor) return;
+      if (this._exportMenuPositionFrame) cancelAnimationFrame(this._exportMenuPositionFrame);
+      this._exportMenuPositionFrame = requestAnimationFrame(() => {
+        this._exportMenuPositionFrame = null;
+        const anchor = this._exportMenuAnchor;
+        const menu = document.querySelector("[data-export-menu]");
+        if (!anchor || !menu || !document.documentElement.contains(anchor)) return;
+
+        const padding = window.innerWidth <= 640 ? 12 : 16;
+        const availableHeight = Math.max(96, Math.floor(anchor.getBoundingClientRect().top - padding));
+        menu.style.maxHeight = "none";
+        menu.style.overflowY = "hidden";
+        const naturalHeight = menu.scrollHeight;
+        const needsScroll = naturalHeight > availableHeight;
+        this.exportMenuStyle = [
+          needsScroll ? `max-height:${availableHeight}px` : "max-height:none",
+          `overflow-y:${needsScroll ? "auto" : "hidden"}`,
+          "visibility:visible",
+        ].join(";");
+      });
+    },
     migrationExportCards() {
       if (!this.migration || !this.migrationExportTarget) return [];
       if (this.migrationExportTarget.scope === "card") {
@@ -1480,9 +1517,13 @@ function nbx() {
       });
     },
     closeExportMenu() {
+      if (this._exportMenuPositionFrame) cancelAnimationFrame(this._exportMenuPositionFrame);
+      this._exportMenuPositionFrame = null;
       if (this._migrationExportPositionFrame) cancelAnimationFrame(this._migrationExportPositionFrame);
       this._migrationExportPositionFrame = null;
       this.exportMenuOpen = false;
+      this.exportMenuStyle = "";
+      this._exportMenuAnchor = null;
       this.migrationExportTarget = null;
       this.migrationExportStyle = "";
       this._migrationExportAnchor = null;

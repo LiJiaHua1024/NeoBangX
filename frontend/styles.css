@@ -1110,13 +1110,20 @@ html[data-theme="jade"] {
   right: 0;
   z-index: 60;
   width: 17.5rem;
-  max-height: min(26rem, calc(100vh - 6rem));
+  max-height: none;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
   padding: 0.85rem;
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
 }
+.export-menu::-webkit-scrollbar { width: 6px; height: 6px; }
+.export-menu::-webkit-scrollbar-track { background: transparent; }
+.export-menu::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+.export-menu::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
 .export-size-row {
   display: flex;
   align-items: center;

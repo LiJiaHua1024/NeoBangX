@@ -621,15 +621,16 @@
                 <button class="icon-btn" style="width:2rem;height:2rem" x-show="output" @click="copyResult()"
                         :title="copied ? '已复制' : '复制全文'"
                         x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
-                <!-- 导出菜单 -->
-                 <div class="relative" x-show="output" @click.outside="closeExportMenu()">
-                  <button class="icon-btn" style="width:2rem;height:2rem"
-                          :class="{ 'on': exportMenuOpen }" @click="exportMenuOpen = !exportMenuOpen"
-                          title="导出 / 下载"
-                          x-html="icon('insert','w-4 h-4')"></button>
-                  <!-- 导出面板 -->
-                  <div x-show="exportMenuOpen" x-transition.origin.bottom.right
-                       class="export-menu glass-deep rounded-xl">
+                   <!-- 导出菜单 -->
+                  <div class="relative" x-show="output" @click.outside="closeExportMenu()">
+                   <button class="icon-btn" style="width:2rem;height:2rem"
+                           :class="{ 'on': exportMenuOpen }" @click="toggleExportMenu($event.currentTarget)"
+                           title="导出 / 下载"
+                           x-html="icon('insert','w-4 h-4')"></button>
+                   <!-- 导出面板 -->
+                   <div x-show="exportMenuOpen" x-transition.origin.bottom.right
+                        class="export-menu glass-deep rounded-xl"
+                        data-export-menu :style="exportMenuStyle">
                     <!-- 文字大小 -->
                     <div class="export-size-row">
                       <span class="export-size-label" :class="{ 'disabled': !exportSizeEnabled }">文字大小</span>
