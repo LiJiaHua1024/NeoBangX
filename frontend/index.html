@@ -619,7 +619,7 @@
                         :title="maskOn ? '显示答案' : '隐藏答案（课堂投影模式）'"
                         x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
                 <button class="icon-btn" style="width:2rem;height:2rem" x-show="output" @click="copyResult()"
-                        :title="copied ? '已复制' : '复制全文'"
+                        :title="copied ? '已复制' : '复制纯文本'"
                         x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
                    <!-- 导出菜单 -->
                   <div class="relative" x-show="output" @click.outside="closeExportMenu()">

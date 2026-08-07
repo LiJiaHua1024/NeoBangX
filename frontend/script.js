@@ -101,6 +101,55 @@ function copyToClipboard(text) {
   });
 }
 
+function copyRichTextToClipboard(html, plain) {
+  return new Promise((resolve) => {
+    const fallback = () => {
+      const holder = document.createElement("div");
+      holder.contentEditable = "true";
+      holder.setAttribute("aria-hidden", "true");
+      holder.style.cssText = "position:fixed;left:-10000px;top:0;width:1px;height:1px;overflow:hidden;";
+      holder.innerHTML = html;
+      document.body.appendChild(holder);
+
+      const selection = document.getSelection();
+      const restore = selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null;
+      const range = document.createRange();
+      range.selectNodeContents(holder);
+      holder.focus();
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      const onCopy = (event) => {
+        if (!event.clipboardData) return;
+        event.clipboardData.setData("text/html", html);
+        event.clipboardData.setData("text/plain", plain);
+        event.preventDefault();
+      };
+      document.addEventListener("copy", onCopy);
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch { ok = false; }
+      document.removeEventListener("copy", onCopy);
+      if (restore) {
+        selection.removeAllRanges();
+        selection.addRange(restore);
+      }
+      holder.remove();
+      resolve(ok);
+    };
+
+    if (window.isSecureContext && navigator.clipboard && window.ClipboardItem) {
+      navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+        }),
+      ]).then(() => resolve(true), fallback);
+    } else {
+      fallback();
+    }
+  });
+}
+
 /* ---------------- 常量 ---------------- */
 const LS = {
   theme: "nbx_theme",
@@ -359,36 +408,340 @@ function configureMarked() {
 
 function normalizeMarkdown(raw) {
   // SSE 已改为 JSON 编码传输，换行不再丢失；这里只保留少量兜底规则，
-  // 处理 LLM 偶发的真·不规范输出（跳过 ``` 代码块，避免误伤）：
+  // 处理 LLM 偶发的真·不规范输出（跳过代码块，避免误伤）：
   // 1) 分隔线与标题粘在同一行：---### 标题
   // 2) 段落文字后直接粘标题：……。#### 标题（限 ## 及以上，避免误伤 “C#” 等）
-  const parts = raw.split(/(```[\s\S]*?(?:```|$))/);
+  const normalizeText = (text) => text
+    .replace(/^([ \t]*)---(#{1,6}[ \t])/gm, "\n$1---\n\n$2")
+    .replace(/([^\s#])(#{2,6}[ \t]+\S)/g, "$1\n\n$2")
+    // 有些模型会把强调标记转义成 \*\*文本\*\*，或在闭合标记前多留空格；
+    // 这两种写法会被 marked 当作普通文本，导致页面直接显示星号。
+    .replace(/\\\*\\\*([^\n]*?)\\\*\\\*/g, "**$1**")
+    .replace(/\\_\\_([^\n]*?)\\_\\_/g, "__$1__")
+    .replace(/\*\*[ \t]*([^\n*]*?\S)[ \t]*\*\*/g, "**$1**")
+    // marked 对中文成对标点紧贴强调边界的写法兼容性不足；只移动成对标点，
+    // 避免使用宽泛匹配把相邻强调语的闭合标记误当成新的开始标记。
+    .replace(/\*\*([“‘「『（【《〈〔(<"])([^\n*]*?)([”’」』）】》〉〕)>"'])\*\*/g, "$1**$2**$3");
+
+  const normalizeOutsideCode = (text) => {
+    // 代码块和行内代码中的符号是内容，不参与 Markdown 兜底修复。
+    // 用反引号运行长度配对，覆盖单反引号代码、双反引号代码和围栏代码块。
+    const parts = [];
+    let cursor = 0;
+    while (cursor < text.length) {
+      let start = text.indexOf("`", cursor);
+      while (start >= 0) {
+        let slashCount = 0;
+        for (let i = start - 1; i >= 0 && text[i] === "\\"; i -= 1) slashCount += 1;
+        if (slashCount % 2 === 0) break;
+        start = text.indexOf("`", start + 1);
+      }
+      if (start < 0) {
+        parts.push(normalizeText(text.slice(cursor)));
+        cursor = text.length;
+        break;
+      }
+
+      parts.push(normalizeText(text.slice(cursor, start)));
+      let markerEnd = start + 1;
+      while (text[markerEnd] === "`") markerEnd += 1;
+      const marker = text.slice(start, markerEnd);
+      const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+      const openingIndent = text.slice(lineStart, start);
+      const openingLineEnd = text.indexOf("\n", markerEnd);
+      let codeEnd = -1;
+
+      // 三个及以上反引号在行首是围栏代码，闭合标记必须独占一行；
+      // 不能把代码内容里的反引号误当成闭合标记。
+      if (marker.length >= 3 && /^[ \t]{0,3}$/.test(openingIndent) && openingLineEnd >= 0) {
+        let line = openingLineEnd + 1;
+        while (line <= text.length) {
+          const lineEnd = text.indexOf("\n", line);
+          const end = lineEnd < 0 ? text.length : lineEnd;
+          let candidate = line;
+          while (text[candidate] === " " || text[candidate] === "\t") candidate += 1;
+          let candidateEnd = candidate;
+          while (text[candidateEnd] === "`") candidateEnd += 1;
+          const trailing = text.slice(candidateEnd, end).replace(/\r$/, "");
+          if (candidateEnd - candidate >= marker.length && /^[ \t]*$/.test(trailing)) {
+            codeEnd = lineEnd < 0 ? text.length : lineEnd + 1;
+            break;
+          }
+          if (lineEnd < 0) break;
+          line = lineEnd + 1;
+        }
+      } else {
+        const close = text.indexOf(marker, markerEnd);
+        if (close >= 0) codeEnd = close + marker.length;
+      }
+
+      if (codeEnd < 0) {
+        parts.push(text.slice(start));
+        cursor = text.length;
+        break;
+      }
+      parts.push(text.slice(start, codeEnd));
+      cursor = codeEnd;
+    }
+    return cursor === 0 ? normalizeText(text) : parts.join("");
+  };
+
+  // GFM 也支持 ~~~ 围栏代码；它同样不能被普通文本规则改写。
+  const tildeFence = /((?:^|\n)[ \t]{0,3}~{3,}[^\n]*(?:\r?\n|$)[\s\S]*?(?:\n[ \t]{0,3}~{3,}[ \t]*(?:\r?\n|$)|$))/g;
+  const parts = raw.split(tildeFence);
   for (let i = 0; i < parts.length; i += 2) {
-    parts[i] = parts[i]
-      .replace(/^([ \t]*)---(#{1,6}[ \t])/gm, "\n$1---\n\n$2")
-      .replace(/([^\s#])(#{2,6}[ \t]+\S)/g, "$1\n\n$2")
-      // 有些模型会把强调标记转义成 \*\*文本\*\*，或在闭合标记前多留空格；
-      // 这两种写法会被 marked 当作普通文本，导致页面直接显示星号。
-      .replace(/\\\*\\\*([^\n]*?)\\\*\\\*/g, "**$1**")
-      .replace(/\\_\\_([^\n]*?)\\_\\_/g, "__$1__")
-      .replace(/\*\*[ \t]+([^\n*]*?\S)[ \t]*\*\*/g, "**$1**")
-      .replace(/\*\*([^\n*]*?\S)[ \t]+\*\*/g, "**$1**")
-      // marked 对强调内容首尾是中文引号、括号等标点的情况不一定能识别；
-      // 把成对标点移到强调范围外，视觉效果不变且不会引入隐藏字符。
-      .replace(/\*\*([“‘「『（【《〈〔(<"])([^\n*]*?)([”’」』）】》〉〕)>"'])\*\*/g, "$1**$2**$3");
+    parts[i] = normalizeOutsideCode(parts[i]);
   }
   return parts.join("");
 }
 
+function renderInlineMdFallback(raw) {
+  const slots = [];
+  const protect = (html) => `\uE000${slots.push(html) - 1}\uE001`;
+  let text = escapeHtml(String(raw || ""));
+
+  // 先保护代码和链接，后续强调规则就不会误伤它们的内容。
+  text = text.replace(/(`+)([\s\S]*?)\1/g, (_, marks, code) => protect(`<code>${code}</code>`));
+  text = text.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, "$1");
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_, label, href) => `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+
+  text = text.replace(/\*\*\*([^*\n]+?)\*\*\*/g, "<strong><em>$1</em></strong>");
+  text = text.replace(/(?<!\*)\*\*([^*\n]+?)\*\*(?!\*)/g, "<strong>$1</strong>");
+  text = text.replace(/(?<!_)__([^_\n]+?)__(?!_)/g, "<strong>$1</strong>");
+  text = text.replace(/~~([^~\n]+?)~~/g, "<del>$1</del>");
+  text = text.replace(/(?<![\*])\*([^*\n]+?)\*(?![\*])/g, "<em>$1</em>");
+  text = text.replace(/(?<!_)_([^_\n]+?)_(?!_)/g, "<em>$1</em>");
+
+  return text
+    .replace(/\n/g, "<br>\n")
+    .replace(/\uE000(\d+)\uE001/g, (_, index) => slots[Number(index)] || "");
+}
+
+function renderMdFallback(raw) {
+  const lines = String(raw || "").replace(/\r\n?/g, "\n").split("\n");
+  const html = [];
+  let paragraph = [];
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${renderInlineMdFallback(paragraph.join("\n"))}</p>`);
+    paragraph = [];
+  };
+  const tableCells = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "")
+    .split("|").map((cell) => renderInlineMdFallback(cell.trim()));
+  const isTableDivider = (line) => /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)+\|?\s*$/.test(line);
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) {
+      flushParagraph();
+      i += 1;
+      continue;
+    }
+
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})([^\n]*)$/);
+    if (fence) {
+      flushParagraph();
+      const marker = fence[1];
+      const info = fence[2].trim().split(/\s+/, 1)[0];
+      const code = [];
+      i += 1;
+      while (i < lines.length) {
+        const close = lines[i].match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+        if (close && close[1][0] === marker[0] && close[1].length >= marker.length) {
+          i += 1;
+          break;
+        }
+        code.push(lines[i]);
+        i += 1;
+      }
+      const className = /^[A-Za-z0-9_-]+$/.test(info) ? ` class="language-${info}"` : "";
+      html.push(`<pre><code${className}>${escapeHtml(code.join("\n"))}${code.length ? "\n" : ""}</code></pre>`);
+      continue;
+    }
+
+    const heading = line.match(/^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/);
+    if (heading) {
+      flushParagraph();
+      const level = heading[1].length;
+      html.push(`<h${level}>${renderInlineMdFallback(heading[2])}</h${level}>`);
+      i += 1;
+      continue;
+    }
+    if (/^ {0,3}(?:\*{3,}|-{3,}|_{3,})[ \t]*$/.test(line)) {
+      flushParagraph();
+      html.push("<hr>");
+      i += 1;
+      continue;
+    }
+
+    if (line.includes("|") && i + 1 < lines.length && isTableDivider(lines[i + 1])) {
+      flushParagraph();
+      const header = tableCells(line);
+      const rows = [];
+      i += 2;
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
+        rows.push(tableCells(lines[i]));
+        i += 1;
+      }
+      html.push(`<table><thead><tr>${header.map((cell) => `<th>${cell}</th>`).join("")}</tr></thead>`
+        + `<tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+      continue;
+    }
+
+    const quote = line.match(/^ {0,3}>[ \t]?(.*)$/);
+    if (quote) {
+      flushParagraph();
+      const quoted = [];
+      while (i < lines.length) {
+        const current = lines[i].match(/^ {0,3}>[ \t]?(.*)$/);
+        if (!current) break;
+        quoted.push(current[1]);
+        i += 1;
+      }
+      html.push(`<blockquote>${renderMdFallback(quoted.join("\n"))}</blockquote>`);
+      continue;
+    }
+
+    const listItem = line.match(/^ {0,3}([-+*]|\d+[.)])[ \t]+(.+)$/);
+    if (listItem) {
+      flushParagraph();
+      const ordered = /^\d/.test(listItem[1]);
+      const items = [];
+      while (i < lines.length) {
+        const current = lines[i].match(/^ {0,3}([-+*]|\d+[.)])[ \t]+(.+)$/);
+        if (!current || /^\d/.test(current[1]) !== ordered) break;
+        items.push(`<li>${renderInlineMdFallback(current[2])}</li>`);
+        i += 1;
+      }
+      const tag = ordered ? "ol" : "ul";
+      html.push(`<${tag}>${items.join("")}</${tag}>`);
+      continue;
+    }
+
+    paragraph.push(line);
+    i += 1;
+  }
+  flushParagraph();
+  return html.join("\n");
+}
+
 function renderMd(raw) {
   if (!raw) return "";
+  const normalized = normalizeMarkdown(raw);
   try {
-    const normalized = normalizeMarkdown(raw);
-    const html = window.marked ? marked.parse(normalized) : escapeHtml(normalized);
+    const parser = window.marked && typeof window.marked.parse === "function" ? window.marked : null;
+    const html = parser ? parser.parse(normalized) : renderMdFallback(normalized);
     return window.DOMPurify ? DOMPurify.sanitize(html) : html;
   } catch {
-    return escapeHtml(raw);
+    const html = renderMdFallback(raw);
+    return window.DOMPurify ? DOMPurify.sanitize(html) : html;
   }
+}
+
+function markdownToPlainText(raw) {
+  if (!raw) return "";
+  const root = document.createElement("div");
+  root.innerHTML = renderMd(raw);
+  const lines = [];
+
+  const inlineText = (node) => {
+    if (node.nodeType === 3) return node.nodeValue.replace(/\s+/g, " ");
+    if (node.nodeType !== 1) return "";
+    const tag = node.tagName.toLowerCase();
+    if (tag === "br") return "\n";
+    if (tag === "img") return node.getAttribute("alt") || "";
+    if (tag === "a") {
+      const text = Array.from(node.childNodes).map(inlineText).join("");
+      const href = node.getAttribute("href") || "";
+      return href && href !== text.trim() ? `${text} (${href})` : text;
+    }
+    if (tag === "code" && node.parentElement?.tagName.toLowerCase() !== "pre") {
+      return node.textContent || "";
+    }
+    return Array.from(node.childNodes).map(inlineText).join("");
+  };
+
+  const cleanLine = (text) => String(text || "")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+  const addBlock = (text) => {
+    const chunks = String(text || "")
+      .split("\n")
+      .map(cleanLine);
+    while (chunks.length && !chunks[0]) chunks.shift();
+    while (chunks.length && !chunks[chunks.length - 1]) chunks.pop();
+    if (!chunks.length) return;
+    lines.push(...chunks, "");
+  };
+  const addCodeBlock = (text) => {
+    const code = String(text || "").replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+    if (!code) return;
+    lines.push(...code.split("\n"), "");
+  };
+  const addTable = (table) => {
+    const rows = Array.from(table.querySelectorAll("tr"));
+    let rowCount = 0;
+    rows.forEach((row) => {
+      const cells = Array.from(row.children)
+        .filter((cell) => /^(TH|TD)$/.test(cell.tagName))
+        .map((cell) => cleanLine(inlineText(cell)));
+      if (!cells.length) return;
+      lines.push(cells.join("\t"));
+      rowCount += 1;
+    });
+    if (rowCount) lines.push("");
+  };
+  const addList = (list, depth) => {
+    const ordered = list.tagName.toLowerCase() === "ol";
+    let index = Number(list.getAttribute("start")) || 1;
+    Array.from(list.children)
+      .filter((item) => item.tagName && item.tagName.toLowerCase() === "li")
+      .forEach((item) => {
+        const ownText = Array.from(item.childNodes)
+          .filter((child) => !(child.nodeType === 1 && /^(UL|OL)$/.test(child.tagName)))
+          .map(inlineText)
+          .join("");
+        const value = cleanLine(ownText);
+        if (value) lines.push(`${"  ".repeat(depth)}${ordered ? `${index}. ` : "• "}${value}`);
+        Array.from(item.children)
+          .filter((child) => child.tagName && /^(UL|OL)$/.test(child.tagName))
+          .forEach((child) => addList(child, depth + 1));
+        index += 1;
+      });
+    lines.push("");
+  };
+  const visit = (node) => {
+    if (node.nodeType === 3) {
+      if (node.nodeValue.trim()) addBlock(node.nodeValue);
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const tag = node.tagName.toLowerCase();
+    if (/^h[1-6]$/.test(tag) || tag === "p") {
+      addBlock(inlineText(node));
+    } else if (tag === "ul" || tag === "ol") {
+      addList(node, 0);
+    } else if (tag === "blockquote") {
+      addBlock(inlineText(node).split("\n").map((line) => `  ${line}`).join("\n"));
+    } else if (tag === "pre") {
+      addCodeBlock(node.textContent || "");
+    } else if (tag === "hr") {
+      addBlock("----------------");
+    } else if (tag === "table") {
+      addTable(node);
+    } else if (tag === "div" || tag === "section" || tag === "article") {
+      Array.from(node.childNodes).forEach(visit);
+    } else if (tag === "li") {
+      addBlock(inlineText(node));
+    } else {
+      addBlock(inlineText(node));
+    }
+  };
+
+  Array.from(root.childNodes).forEach(visit);
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function escapeHtml(s) {
@@ -510,10 +863,11 @@ function nbx() {
     /* --- 导出 --- */
     exportMenuOpen: false,
     exportMenuStyle: "",
-    exportFormat: "richtext",
+    exportFormat: "plaintext",
     exportFontSize: 14,
     exportFormats: [
-      { id: "richtext", name: "复制富文本", desc: "粘贴到 Word / WPS 即有排版", icon: "copy", type: "copy" },
+      { id: "plaintext", name: "复制纯文本", desc: "去除 Markdown 标记，保留段落和列表结构", icon: "copy", type: "copy" },
+      { id: "richtext", name: "复制富文本", desc: "粘贴到 Word / WPS 时请选择“保留源格式”", icon: "copy", type: "copy" },
       { id: "mdsource", name: "复制 Markdown", desc: "保留原始标记符号", icon: "copy", type: "copy" },
       { id: "word", name: "Word (.docx)", desc: "可编辑，适合打印分发", icon: "file-text", type: "download" },
       { id: "pdf", name: "PDF", desc: "高保真排版，打印窗口中另存为 PDF", icon: "report", type: "download" },
@@ -1406,9 +1760,7 @@ function nbx() {
     migrationCardText(card, markdown = false) {
       const heading = markdown ? `## 错因：${card.cause}\n\n` : `错因：${card.cause}\n\n`;
       if (markdown) return heading + (card.output || "");
-      const box = document.createElement("div");
-      box.innerHTML = renderMd(card.output || "");
-      return heading + (box.textContent || card.output || "").trim();
+      return heading + markdownToPlainText(card.output || "");
     },
     migrationAllText(markdown = false) {
       return this.migration.results
@@ -1547,7 +1899,7 @@ function nbx() {
           ? cards.map((card) => this.migrationCardText(card, false)).join("\n\n")
           : (cards[0] ? this.migrationCardText(cards[0], false) : "");
       }
-      return this.output;
+      return markdownToPlainText(this.output);
     },
     buildExportContent() {
       let content;
@@ -1867,13 +2219,13 @@ function nbx() {
     /* ============ 复制 ============ */
     async copyResult() {
       if (!this.output) return;
-      const ok = await copyToClipboard(this.output);
+      const ok = await copyToClipboard(this.getExportPlain());
       if (!ok) {
         this.toast("复制失败，请手动复制", "error");
         return;
       }
       this.copied = true;
-      this.toast("已复制到剪贴板");
+      this.toast("已复制排版纯文本");
       setTimeout(() => (this.copied = false), 1600);
     },
 
@@ -1889,6 +2241,7 @@ function nbx() {
     async doExport() {
       if (!this.getExportMarkdown()) return;
       switch (this.exportFormat) {
+        case "plaintext": await this.exportCopyPlain(); break;
         case "richtext": await this.exportCopyRichText(); break;
         case "mdsource": await this.exportCopyMd(); break;
         case "word": this.exportWord(); break;
@@ -1900,23 +2253,20 @@ function nbx() {
     },
 
     async exportCopyRichText() {
-      const markdown = this.getExportMarkdown();
       const plain = this.getExportPlain();
-      if (window.isSecureContext && navigator.clipboard && window.ClipboardItem) {
-        const html = this.buildExportContent();
-        try {
-          await navigator.clipboard.write([
-            new ClipboardItem({
-              "text/html": new Blob([html], { type: "text/html" }),
-              "text/plain": new Blob([plain], { type: "text/plain" }),
-            }),
-          ]);
-          this.toast("已复制富文本，可直接粘贴到 Word");
-          return;
-        } catch { /* 回退纯文本 */ }
+      const ok = await copyRichTextToClipboard(this.buildRichClipboardHtml(), plain);
+      if (ok) {
+        this.toast("已复制富文本，粘贴到 Word / WPS 时请选择“保留源格式”");
+        return;
       }
-      const ok = await copyToClipboard(markdown);
-      if (ok) this.toast("当前环境不支持富文本复制，已改为复制纯文本", "warn");
+      const plainOk = await copyToClipboard(plain);
+      if (plainOk) this.toast("当前环境不支持富文本，已复制排版纯文本", "warn");
+      else this.toast("复制失败，请手动复制", "error");
+    },
+
+    async exportCopyPlain() {
+      const ok = await copyToClipboard(this.getExportPlain());
+      if (ok) this.toast("已复制排版纯文本");
       else this.toast("复制失败，请手动复制", "error");
     },
 
@@ -1924,6 +2274,18 @@ function nbx() {
       const ok = await copyToClipboard(this.getExportMarkdown());
       if (ok) this.toast("已复制 Markdown 源码");
       else this.toast("复制失败，请手动复制", "error");
+    },
+
+    buildRichClipboardHtml() {
+      const content = this.buildExportContent()
+        .replace(/<h([1-6])>/g, (_, level) => `<h${level} style="font-weight:700;line-height:1.4;margin:1em 0 0.5em;">`)
+        .replace(/<p>/g, '<p style="margin:0.7em 0;">')
+        .replace(/<(ul|ol)>/g, '<$1 style="margin:0.7em 0;padding-left:1.6em;">')
+        .replace(/<blockquote>/g, '<blockquote style="margin:1em 0;padding:0.6em 1em;border-left:3px solid #b26a2e;">')
+        .replace(/<table>/g, '<table border="1" bordercolor="#c8c8c8" cellpadding="6" cellspacing="0" style="border-collapse:collapse;border:1px solid #c8c8c8;width:100%;">')
+        .replace(/<(th|td)>/g, '<$1 style="border:1px solid #c8c8c8;padding:6px 8px;text-align:left;vertical-align:top;">')
+        .replace(/<hr>/g, '<hr style="border:0;border-top:1px solid #c8c8c8;margin:1.2em 0;">');
+      return `<div style="font-family:'Microsoft YaHei','PingFang SC','Hiragino Sans GB',sans-serif;font-size:14pt;line-height:1.8;color:#222;">${content}</div>`;
     },
 
     buildExportHtml(fontSize) {
