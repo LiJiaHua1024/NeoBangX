@@ -627,16 +627,21 @@ function renderMdFallback(raw) {
   return html.join("\n");
 }
 
+function finalizeRenderedHtml(html) {
+  // 极少数未配对的加粗标记可能被 Markdown 解析器原样输出，避免它们漏到页面上。
+  return String(html || "").replace(/\*{2,}/g, "");
+}
+
 function renderMd(raw) {
   if (!raw) return "";
   const normalized = normalizeMarkdown(raw);
   try {
     const parser = window.marked && typeof window.marked.parse === "function" ? window.marked : null;
     const html = parser ? parser.parse(normalized) : renderMdFallback(normalized);
-    return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+    return finalizeRenderedHtml(window.DOMPurify ? DOMPurify.sanitize(html) : html);
   } catch {
     const html = renderMdFallback(raw);
-    return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+    return finalizeRenderedHtml(window.DOMPurify ? DOMPurify.sanitize(html) : html);
   }
 }
 
