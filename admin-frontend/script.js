@@ -82,6 +82,10 @@ function adminApp() {
     modelModalIndex: null,
     modelForm: { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null },
     thinkingMenuOpen: false,
+    // 模型拖拽排序
+    dragIndex: null,
+    dragOverIndex: null,
+    dragOverBefore: false,
     thinkingModes: [
       { id: "default", label: "跟随模型默认", hint: "不传任何参数，是否思考由供应商默认策略决定" },
       { id: "none", label: "关闭思考", hint: "尽可能禁用思考，响应更快、消耗更少" },
@@ -509,6 +513,50 @@ function adminApp() {
       if (j < 0 || j >= this.configForm.models.length) return;
       const arr = this.configForm.models;
       [arr[i], arr[j]] = [arr[j], arr[i]];
+    },
+
+    /* ============ 模型拖拽排序 ============ */
+    startModelDrag(i, e) {
+      this.dragIndex = i;
+      this.dragOverIndex = null;
+      this.dragOverBefore = false;
+      if (e && e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(i));
+      }
+    },
+
+    endModelDrag() {
+      this.dragIndex = null;
+      this.dragOverIndex = null;
+      this.dragOverBefore = false;
+    },
+
+    dragModelOver(i, e) {
+      if (this.dragIndex === null || i === this.dragIndex) return;
+      this.dragOverIndex = i;
+      if (e && e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      const rect = e.currentTarget.getBoundingClientRect();
+      this.dragOverBefore = e.clientY < rect.top + rect.height / 2;
+    },
+
+    dragLeaveModel() {
+      if (this.dragIndex !== null) this.dragOverIndex = null;
+    },
+
+    dropModel() {
+      const from = this.dragIndex;
+      const to = this.dragOverIndex;
+      if (from === null || to === null || from === to) {
+        this.endModelDrag();
+        return;
+      }
+      const arr = this.configForm.models;
+      const [moved] = arr.splice(from, 1);
+      const shifted = to > from ? to - 1 : to;
+      const insertAt = this.dragOverBefore ? shifted : shifted + 1;
+      arr.splice(insertAt, 0, moved);
+      this.endModelDrag();
     },
 
     setDefaultModel(id) {

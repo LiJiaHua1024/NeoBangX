@@ -408,6 +408,25 @@ select option { background: var(--bg); color: var(--text); }
 .truncate-cell { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .actions { display: flex; gap: 0.45rem; }
 
+/* 模型拖拽排序 */
+.drag-cell { width: 2.2rem; padding-right: 0.25rem !important; }
+.drag-handle {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0.2rem 0.35rem; border-radius: 6px;
+  color: var(--faint);
+  cursor: grab;
+  opacity: 0.4;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+  user-select: none; -webkit-user-select: none;
+}
+.data-table tbody tr:hover .drag-handle { opacity: 1; color: var(--dim); }
+.drag-handle:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.drag-handle:active { cursor: grabbing; }
+.data-table tr.dragging { opacity: 0.45; }
+.data-table tr.drag-over td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.data-table tr.drag-over-before td { border-top: 2px solid var(--accent); }
+.data-table tr.drag-over-after td { border-bottom: 2px solid var(--accent); }
+
 .badge {
   display: inline-flex; align-items: center;
   padding: 0.15rem 0.5rem; border-radius: 999px;
