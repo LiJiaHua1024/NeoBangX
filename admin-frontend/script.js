@@ -80,7 +80,7 @@ function adminApp() {
     // 模型添加/编辑弹窗
     modelModalOpen: false,
     modelModalIndex: null,
-    modelForm: { id: "", name: "", mode: "default", thinking_budget: null },
+    modelForm: { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null },
     thinkingMenuOpen: false,
     thinkingModes: [
       { id: "default", label: "跟随模型默认", hint: "不传任何参数，是否思考由供应商默认策略决定" },
@@ -381,6 +381,8 @@ function adminApp() {
             ? cfg.models.map((m) => ({
                 id: m.id || "",
                 name: m.name && m.name !== m.id ? m.name : "",
+                description: m.description || "",
+                score: m.score ?? null,
                 reasoning_effort: m.reasoning_effort || null,
                 thinking_budget: m.thinking_budget || null,
               }))
@@ -402,6 +404,11 @@ function adminApp() {
     },
 
     /* ============ 模型管理 ============ */
+    scoreColor(score) {
+      if (score == null || !Number.isFinite(Number(score))) return "";
+      const s = Math.max(0, Math.min(10, Number(score)));
+      return `hsl(${Math.round(s * 12)} 85% 45%)`;
+    },
     thinkingLabel(m) {
       if (m.thinking_budget) return `预算 ${m.thinking_budget} tokens`;
       const opt = this.thinkingModes.find((o) => o.id === m.reasoning_effort);
@@ -418,7 +425,7 @@ function adminApp() {
 
     openAddModel() {
       this.modelModalIndex = null;
-      this.modelForm = { id: "", name: "", mode: "default", thinking_budget: null };
+      this.modelForm = { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null };
       this.thinkingMenuOpen = false;
       this.modelModalOpen = true;
     },
@@ -430,6 +437,8 @@ function adminApp() {
       this.modelForm = {
         id: m.id,
         name: m.name || "",
+        description: m.description || "",
+        score: m.score ?? null,
         mode: m.thinking_budget ? "budget" : m.reasoning_effort || "default",
         thinking_budget: m.thinking_budget || null,
       };
@@ -456,9 +465,16 @@ function adminApp() {
           return;
         }
       }
+      const score = this.modelForm.score;
+      if (score != null && (score === "" || !Number.isFinite(Number(score)) || Number(score) < 0 || Number(score) > 10)) {
+        this.toast("推荐评分需为 0 到 10 之间的数字，留空则不展示", "error");
+        return;
+      }
       const entry = {
         id,
         name: (this.modelForm.name || "").trim(),
+        description: (this.modelForm.description || "").trim(),
+        score: this.modelForm.score,
         reasoning_effort: mode !== "default" && mode !== "budget" ? mode : null,
         thinking_budget: mode === "budget" ? parseInt(this.modelForm.thinking_budget, 10) : null,
       };
@@ -515,6 +531,8 @@ function adminApp() {
           models: this.configForm.models.map((m) => ({
             id: m.id,
             name: m.name || "",
+            description: m.description || "",
+            score: m.score ?? null,
             reasoning_effort: m.reasoning_effort || null,
             thinking_budget: m.thinking_budget || null,
           })),

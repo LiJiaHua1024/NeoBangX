@@ -41,6 +41,8 @@ class UpdateCodeRequest(BaseModel):
 class ModelEntry(BaseModel):
     id: str = Field(..., min_length=1, description="LiteLLM 格式模型 ID")
     name: str = Field("", max_length=100, description="显示名称，留空回退模型 ID")
+    description: str = Field("", max_length=200, description="用户端展示的模型描述，替代模型 ID 显示")
+    score: Optional[float] = Field(None, ge=0, le=10, description="推荐评分 0-10，用户端以红绿圆环展示")
     reasoning_effort: Optional[str] = Field(
         None, description="思考强度：none/minimal/low/medium/high；空为供应商默认"
     )

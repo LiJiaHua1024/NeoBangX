@@ -2618,6 +2618,19 @@ function nbx() {
     },
 
     /* ============ 小工具 ============ */
+    modelScoreColor(score) {
+      const s = Math.max(0, Math.min(10, Number(score) || 0));
+      return `hsl(${Math.round(s * 12)} 85% 45%)`;
+    },
+    modelRingOffset(score) {
+      const s = Math.max(0, Math.min(10, Number(score) || 0));
+      return (62.83 * (1 - s / 10)).toFixed(2);
+    },
+    modelScoreText(score) {
+      const n = Number(score);
+      if (!Number.isFinite(n)) return "";
+      return n % 1 === 0 ? String(n) : String(Math.round(n * 10) / 10);
+    },
     shortModel(id) {
       const m = this.models.find((x) => x.id === id);
       if (m && m.name && m.name !== m.id) return m.name;

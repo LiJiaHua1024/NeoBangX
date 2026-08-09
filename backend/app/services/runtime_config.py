@@ -30,10 +30,17 @@ SENSITIVE_KEYS = {"llm_api_key", "chores_api_key", "openrouter_api_key"}
 REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high"}
 
 
+def _clamp_score(score) -> float | None:
+    """校验推荐评分，非法值返回 None。"""
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        return None
+    return round(max(0.0, min(10.0, float(score))), 1)
+
+
 def parse_models(raw: str) -> list[dict]:
     """解析模型配置。
 
-    新格式：JSON 数组，每项含 id / name / reasoning_effort / thinking_budget；
+    新格式：JSON 数组，每项含 id / name / description / score / reasoning_effort / thinking_budget；
     旧格式：逗号分隔的模型 ID 字符串，自动升级为结构化条目。
     """
     raw = (raw or "").strip()
@@ -60,13 +67,22 @@ def parse_models(raw: str) -> list[dict]:
             out.append({
                 "id": model_id,
                 "name": str(item.get("name") or "").strip() or model_id,
+                "description": str(item.get("description") or "").strip(),
+                "score": _clamp_score(item.get("score")),
                 "reasoning_effort": effort if effort in REASONING_EFFORTS else None,
                 "thinking_budget": int(budget) if isinstance(budget, (int, float)) and int(budget) > 0 else None,
             })
         return out
     # 旧版逗号分隔格式
     return [
-        {"id": m.strip(), "name": m.strip(), "reasoning_effort": None, "thinking_budget": None}
+        {
+            "id": m.strip(),
+            "name": m.strip(),
+            "description": "",
+            "score": None,
+            "reasoning_effort": None,
+            "thinking_budget": None,
+        }
         for m in raw.split(",")
         if m.strip()
     ]

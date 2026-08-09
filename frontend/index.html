@@ -277,9 +277,18 @@
                       <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
                         <div class="min-w-0">
                           <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
-                          <div class="ms-item-sub truncate" x-text="m.id"></div>
+                          <div class="ms-item-sub truncate" x-text="m.description || '未填写描述'"></div>
                         </div>
-                        <span class="ck" x-show="m.id === selectedModel" x-html="icon('check','w-4 h-4')"></span>
+                        <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
+                          <svg viewBox="0 0 24 24">
+                            <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
+                            <circle class="ms-ring-bar" cx="12" cy="12" r="10"
+                                    :stroke="modelScoreColor(m.score)"
+                                    stroke-dasharray="62.83"
+                                    :stroke-dashoffset="modelRingOffset(m.score)"></circle>
+                          </svg>
+                          <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
+                        </span>
                       </button>
                     </template>
                   </div>
@@ -535,9 +544,18 @@
                       <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
                         <div class="min-w-0">
                           <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
-                          <div class="ms-item-sub truncate" x-text="m.id"></div>
+                          <div class="ms-item-sub truncate" x-text="m.description || '未填写描述'"></div>
                         </div>
-                        <span class="ck" x-show="m.id === selectedModel" x-html="icon('check','w-4 h-4')"></span>
+                        <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
+                          <svg viewBox="0 0 24 24">
+                            <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
+                            <circle class="ms-ring-bar" cx="12" cy="12" r="10"
+                                    :stroke="modelScoreColor(m.score)"
+                                    stroke-dasharray="62.83"
+                                    :stroke-dashoffset="modelRingOffset(m.score)"></circle>
+                          </svg>
+                          <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
+                        </span>
                       </button>
                     </template>
                   </div>

@@ -260,7 +260,7 @@
           <div class="card-head-row">
             <div>
               <h2 class="card-title">模型管理</h2>
-              <p class="muted">用户可选的模型列表；每个模型可单独设置显示名称与思考（Thinking）控制。修改后需点击下方“保存配置”生效。</p>
+              <p class="muted">用户可选的模型列表；每个模型可单独设置显示名称、描述、推荐评分与思考（Thinking）控制。修改后需点击下方“保存配置”生效。</p>
             </div>
             <button class="btn-primary" @click="openAddModel()">+ 添加模型</button>
           </div>
@@ -269,14 +269,15 @@
             <thead>
               <tr>
                 <th>显示名称</th>
-                <th>模型 ID</th>
+                <th>描述</th>
+                <th>推荐评分</th>
                 <th>思考控制</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
               <tr x-show="!configForm.models.length">
-                <td colspan="4" class="empty">暂无模型，点击右上角“添加模型”</td>
+                <td colspan="5" class="empty">暂无模型，点击右上角“添加模型”</td>
               </tr>
               <template x-for="(m, i) in configForm.models" :key="m.id + '-' + i">
                 <tr>
@@ -284,7 +285,11 @@
                     <span x-text="m.name || m.id"></span>
                     <span class="badge badge-admin ml-1.5" x-show="m.id === configForm.default_model">默认</span>
                   </td>
-                  <td class="dim mono truncate-cell" x-text="m.id"></td>
+                  <td class="dim truncate-cell" x-text="m.description || '—'"></td>
+                  <td>
+                    <span class="badge" :style="m.score != null ? 'color:' + scoreColor(m.score) + ';border-color:' + scoreColor(m.score) + '66;background:' + scoreColor(m.score) + '1a' : ''"
+                          x-text="m.score != null ? m.score + ' / 10' : '—'"></span>
+                  </td>
                   <td><span class="badge badge-user" x-text="thinkingLabel(m)"></span></td>
                   <td class="actions">
                     <button class="link-btn" x-show="m.id !== configForm.default_model" @click="setDefaultModel(m.id)">设为默认</button>
@@ -493,6 +498,15 @@
           <label class="field mb-3">
             <span>显示名称</span>
             <input type="text" x-model="modelForm.name" placeholder="留空则显示模型 ID，如：Gemini 2.5 Flash">
+          </label>
+          <label class="field mb-3">
+            <span>描述</span>
+            <textarea x-model="modelForm.description" rows="2" maxlength="200" placeholder="用户端模型列表展示的描述，替代模型 ID 显示，如：速度快、性价比高，适合日常使用"></textarea>
+          </label>
+          <label class="field mb-3">
+            <span>推荐评分（0-10）</span>
+            <input type="number" x-model.number="modelForm.score" min="0" max="10" step="0.5" placeholder="留空不展示推荐环">
+            <span class="field-hint">用户端以红→绿渐变圆环展示，评分越高越推荐</span>
           </label>
           <label class="field mb-3">
             <span>思考（Thinking）控制</span>

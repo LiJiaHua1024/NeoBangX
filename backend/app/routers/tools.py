@@ -163,7 +163,10 @@ async def list_tools(
     llm_cfg = resolve_llm_settings(db)
     return {
         "groups": groups,
-        "models": [{"id": m["id"], "name": m["name"]} for m in llm_cfg["models"]],
+        "models": [
+            {"id": m["id"], "name": m["name"], "description": m["description"], "score": m["score"]}
+            for m in llm_cfg["models"]
+        ],
         "default_model": llm_cfg["default_model"],
     }
 
@@ -177,6 +180,8 @@ async def list_models(db: Annotated[Session, Depends(get_db)]):
             {
                 "id": m["id"],
                 "label": m["name"],
+                "description": m["description"],
+                "score": m["score"],
             }
             for m in llm_cfg["models"]
         ],
