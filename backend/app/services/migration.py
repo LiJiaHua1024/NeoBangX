@@ -11,6 +11,7 @@ MIGRATION_TOOL_ID = "26"
 MIGRATION_TOOL_NAME = "智能错题迁移"
 MIGRATION_PROMPT_NAME = "智能错题迁移"
 MIGRATION_ANALYSIS_PROMPT_NAME = "智能错题迁移错因分析"
+MIGRATION_MORE_ANALYSIS_PROMPT_NAME = "智能错题迁移错因分析More"
 
 
 def migration_charge_units(cause_count: int) -> int:

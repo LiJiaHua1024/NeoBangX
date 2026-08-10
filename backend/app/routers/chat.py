@@ -18,6 +18,7 @@ from app.routers.tools import _resolve_prompt_filename, get_prompt_loader
 from app.services.llm import LLMService
 from app.services.migration import (
     MIGRATION_ANALYSIS_PROMPT_NAME,
+    MIGRATION_MORE_ANALYSIS_PROMPT_NAME,
     MIGRATION_TOOL_ID,
     MIGRATION_TOOL_NAME,
     migration_charge_units,
@@ -243,15 +244,11 @@ def _migration_prompt_input(req: MigrationAnalyzeRequest) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-MIGRATION_MORE_USER_MESSAGE = (
-    "这是一次 More 请求。请基于前面的题目、诊断过程和已有错因，继续补充更多"
-    "彼此不同、可以独立处理的本质错因。只输出这一轮新增的错因，不要重复前面已经"
-    "出现过的任何错因；如果确实没有新的本质错因，只返回一个空的 causes 数组。"
-    "仍然只输出合法 JSON。"
-)
-
-
-def _migration_analysis_messages(req: MigrationAnalyzeRequest, prompt: str) -> list[dict[str, str]]:
+def _migration_analysis_messages(
+    req: MigrationAnalyzeRequest,
+    prompt: str,
+    loader: PromptLoader,
+) -> list[dict[str, str]]:
     if not req.continue_generation:
         return [{"role": "user", "content": prompt}]
 
@@ -262,7 +259,10 @@ def _migration_analysis_messages(req: MigrationAnalyzeRequest, prompt: str) -> l
     ]
     if not history or history[-1]["role"] != "assistant":
         raise HTTPException(status_code=400, detail="More 请求缺少有效的错因分析历史")
-    history.append({"role": "user", "content": MIGRATION_MORE_USER_MESSAGE})
+    more_prompt = loader.get(MIGRATION_MORE_ANALYSIS_PROMPT_NAME)
+    if more_prompt is None:
+        raise HTTPException(status_code=404, detail="智能错题迁移 More Prompt 不存在")
+    history.append({"role": "user", "content": more_prompt})
     return history
 
 
@@ -281,7 +281,7 @@ async def analyze_migration_causes(
     if prompt is None:
         raise HTTPException(status_code=404, detail="智能错题迁移错因分析 Prompt 不存在")
 
-    messages = _migration_analysis_messages(req, prompt)
+    messages = _migration_analysis_messages(req, prompt, loader)
     cfg = resolve_llm_settings(db)
     llm = _build_llm(cfg, chores=False)
     try:
