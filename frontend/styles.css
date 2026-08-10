@@ -1524,19 +1524,6 @@ html[data-theme="jade"] {
   border-radius: 0.95rem;
 }
 .migration-param { display: block; }
-.migration-difficulty-wrap { width: 100%; }
-.migration-difficulty-trigger {
-  width: 100%;
-  max-width: none;
-  justify-content: space-between;
-}
-.migration-difficulty-label {
-  min-width: 0;
-  flex: 1;
-  text-align: left;
-  line-height: 1.35;
-}
-.migration-difficulty-menu { width: 100%; min-width: 0; }
 .migration-param > span {
   display: flex;
   align-items: baseline;

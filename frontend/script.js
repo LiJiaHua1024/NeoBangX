@@ -858,12 +858,6 @@ function nbx() {
     migration: null,
     migrationExportTarget: null,
     migrationExportStyle: "",
-    migrationDifficultyMenuOpen: false,
-    migrationDifficultyOptions: [
-      { value: "same", name: "同难度迁移", desc: "保持与原题相近的难度" },
-      { value: "harder", name: "逐步升难", desc: "逐步提高综合复杂度" },
-      { value: "easiest", name: "专出最容易错的题", desc: "优先诱发当前错因" },
-    ],
 
     /* --- 导出 --- */
     exportMenuOpen: false,
@@ -958,7 +952,6 @@ function nbx() {
         moreAnalyzing: false,
         prechecking: false,
         analysisError: "",
-        difficulty: "easiest",
         questionCount: 3,
         results: [],
         generated: false,
@@ -970,7 +963,6 @@ function nbx() {
     resetMigration() {
       this.migration = this.newMigrationState();
       this.closeExportMenu();
-      this.migrationDifficultyMenuOpen = false;
       this._migrationAbortControllers = {};
     },
     get isMigrationTool() {
@@ -1270,11 +1262,6 @@ function nbx() {
       this.modelMenuOpen = false;
       try { localStorage.setItem(LS.model, m); } catch {}
     },
-    chooseMigrationDifficulty(value) {
-      if (!this.migrationDifficultyOptions.some((option) => option.value === value)) return;
-      this.migration.difficulty = value;
-      this.migrationDifficultyMenuOpen = false;
-    },
 
     /* ============ UI 持久化 ============ */
     persistUI() {
@@ -1395,17 +1382,6 @@ function nbx() {
     },
 
     /* ============ 智能错题迁移 ============ */
-    migrationDifficultyLabel(value) {
-      return {
-        same: "同难度迁移",
-        harder: "逐步升难",
-        easiest: "专出该易错因下最容易让学生出错的题",
-      }[value] || "专出该易错因下最容易让学生出错的题";
-    },
-    migrationDifficultyName(value) {
-      const option = this.migrationDifficultyOptions.find((item) => item.value === value);
-      return option ? option.name : "专出最容易错的题";
-    },
     migrationBuildInput(cause) {
       const form = this.migration.form;
       return [
@@ -1420,9 +1396,6 @@ function nbx() {
         "",
         "【已经确认的本质错因】",
         cause.label,
-        "",
-        "【迁移难度】",
-        this.migrationDifficultyLabel(this.migration.difficulty),
         "",
         "【迁移题量】",
         String(this.migration.questionCount),
@@ -1959,7 +1932,6 @@ function nbx() {
         migration: {
           form: { ...form },
           causes: this.migrationSelectedCauses.map((cause) => ({ ...cause })),
-          difficulty: this.migration.difficulty,
           questionCount: this.migration.questionCount,
           results: this.migration.results
             .filter((card) => card.output && card.output.trim())
@@ -1988,7 +1960,6 @@ function nbx() {
         migration: {
           form: { ...form },
           causes: this.migrationSelectedCauses.map((cause) => ({ ...cause })),
-          difficulty: this.migration.difficulty,
           questionCount: this.migration.questionCount,
           results: this.migration.results
             .filter((card) => card.output && card.output.trim())
@@ -2508,7 +2479,6 @@ function nbx() {
         label: String(cause.label || cause.cause || cause),
       }));
       this.migration.selectedCauseIds = this.migration.causes.map((cause) => cause.id);
-      this.migration.difficulty = saved.difficulty || "easiest";
       this.migration.questionCount = Number(saved.questionCount) || 3;
       this.migration.results = (Array.isArray(saved.results) ? saved.results : []).map((card, index) => ({
         id: `${item.id}_${index}`,

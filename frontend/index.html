@@ -406,32 +406,6 @@
                   </div>
                 </div>
                 <div class="migration-params glass-soft mt-5">
-                  <div class="migration-param">
-                    <span class="font-semibold text-sm">难度</span>
-                    <div class="ms-wrap migration-difficulty-wrap" @click.outside="migrationDifficultyMenuOpen = false">
-                      <button class="ms-trigger migration-difficulty-trigger" :class="{ 'open': migrationDifficultyMenuOpen }"
-                              @click="migrationDifficultyMenuOpen = !migrationDifficultyMenuOpen"
-                              aria-label="选择迁移难度" :aria-expanded="migrationDifficultyMenuOpen">
-                        <span class="ms-spark" x-html="icon('target','w-3.5 h-3.5')"></span>
-                        <span class="migration-difficulty-label" x-text="migrationDifficultyName(migration.difficulty)"></span>
-                        <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
-                      </button>
-                      <div class="ms-menu migration-difficulty-menu glass-deep" x-show="migrationDifficultyMenuOpen" x-cloak
-                           x-transition:enter="ms-anim" x-transition:enter-start="ms-anim-from" x-transition:enter-end="ms-anim-to"
-                           x-transition:leave="ms-anim-leave" x-transition:leave-start="ms-anim-to" x-transition:leave-end="ms-anim-from">
-                        <template x-for="option in migrationDifficultyOptions" :key="option.value">
-                          <button class="ms-item" :class="{ 'on': option.value === migration.difficulty }"
-                                  @click="chooseMigrationDifficulty(option.value)">
-                            <div class="min-w-0">
-                              <div class="ms-item-name" x-text="option.name"></div>
-                              <div class="ms-item-sub" x-text="option.desc"></div>
-                            </div>
-                            <span class="ck" x-show="option.value === migration.difficulty" x-html="icon('check','w-4 h-4')"></span>
-                          </button>
-                        </template>
-                      </div>
-                    </div>
-                  </div>
                   <label class="migration-param">
                     <span class="font-semibold text-sm">迁移题量 <b class="text-dim font-normal" x-text="migration.questionCount + ' 题'"></b></span>
                     <input type="range" min="1" max="10" step="1" x-model.number="migration.questionCount">
