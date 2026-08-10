@@ -485,8 +485,158 @@
           </div>
         </template>
 
+        <!-- ========== 超标词排查+替换 ========== -->
+        <template x-if="currentTool && isVocabTool">
+          <div class="flex-1 min-h-0 flex flex-col vocab-shell">
+            <div class="px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
+              <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
+                    style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
+                    x-html="icon(currentTool.icon,'w-5 h-5')"></span>
+              <div class="min-w-0">
+                <h2 class="font-bold leading-tight truncate" style="font-size:.98rem" x-text="currentTool.name"></h2>
+                <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
+              </div>
+              <div class="ml-auto flex items-center gap-2">
+                <span class="text-xs text-faint hidden sm:inline">模型</span>
+                <div class="ms-wrap" @click.outside="modelMenuOpen = false">
+                  <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
+                          @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
+                    <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
+                    <span class="truncate" x-text="shortModel(selectedModel)"></span>
+                    <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                  </button>
+                  <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
+                       x-transition:enter="ms-anim" x-transition:enter-start="ms-anim-from" x-transition:enter-end="ms-anim-to"
+                       x-transition:leave="ms-anim-leave" x-transition:leave-start="ms-anim-to" x-transition:leave-end="ms-anim-from">
+                    <template x-for="m in allModels" :key="m.id">
+                      <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
+                        <div class="min-w-0">
+                          <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
+                          <div class="ms-item-sub truncate" x-text="m.description || '未填写描述'"></div>
+                        </div>
+                        <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
+                          <svg viewBox="0 0 24 24">
+                            <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
+                            <circle class="ms-ring-bar" cx="12" cy="12" r="10"
+                                    :stroke="modelScoreColor(m.score)"
+                                    stroke-dasharray="62.83"
+                                    :stroke-dashoffset="modelRingOffset(m.score)"></circle>
+                          </svg>
+                          <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
+                        </span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex-1 min-h-0 overflow-y-auto scroll-thin">
+              <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6 h-full flex flex-col gap-5">
+
+                <!-- 输入区: 初始撑满; 有排查/替换结果后压缩让位 -->
+                <div class="glass-soft rounded-2xl p-4 flex flex-col shrink-0"
+                     :class="(vocab.checked || vocab.replacing || vocab.output) ? 'min-h-[280px]' : 'flex-1 min-h-[320px]'">
+                  <div class="flex items-center gap-2 mb-2 shrink-0">
+                    <span class="font-semibold text-sm">待排查文本</span>
+                    <span class="text-[11px] text-faint">机器分词 + 课标词表匹配，毫秒级返回，不消耗额度</span>
+                  </div>
+                  <textarea x-model="vocab.text" spellcheck="false" class="flex-1 min-h-0 w-full"
+                            placeholder="粘贴英语文本（改编文本 / 试题 / 学生作文）…"></textarea>
+                  <div class="flex items-center gap-2 mt-2 shrink-0">
+                    <button class="btn-primary" @click="checkVocab()"
+                            :disabled="vocab.checking || vocab.replacing">
+                      <span x-html="icon('search','w-4 h-4')"></span>
+                      <span x-text="vocab.checking ? '排查中…' : '开始排查'"></span>
+                    </button>
+                    <span class="text-[11px] text-faint" x-show="vocab.text.length > 0" x-text="vocab.text.length + ' 字符'"></span>
+                  </div>
+                </div>
+
+                <!-- 排查结果表格 -->
+                <div x-show="vocab.checked && vocab.result" class="glass-soft rounded-2xl p-4">
+                  <div class="flex flex-wrap items-center gap-2 mb-3">
+                    <span class="chip" style="background:color-mix(in srgb, var(--accent) 14%, transparent)">
+                      共 <b x-text="vocab.result.total_words"></b> 词 · 疑似超标 <b x-text="vocabOverCount"></b> 个
+                    </span>
+                    <span class="text-[11px] text-faint">
+                      <template x-if="vocabOverCount === 0">词汇均在课标范围内，无需替换</template>
+                      <template x-if="vocabOverCount > 0">屈折与常见派生（副词、-tion/-al/-ly 等）已自动归并；全部首字母大写的词标记为可能专有名词</template>
+                    </span>
+                  </div>
+
+                  <div class="text-sm" x-show="vocab.result.over_words.length === 0">
+                    <p class="text-dim">未发现超标词。</p>
+                  </div>
+
+                  <div x-show="vocab.result.over_words.length > 0" class="overflow-x-auto">
+                    <table border="1" bordercolor="#c8c8c8" cellpadding="6" cellspacing="0"
+                           style="border-collapse:collapse;border:1px solid #c8c8c8;width:100%;">
+                      <thead>
+                        <tr style="background:color-mix(in srgb, var(--accent) 8%, transparent)">
+                          <th style="border:1px solid #c8c8c8;padding:6px 8px;text-align:left;white-space:nowrap;">单词</th>
+                          <th style="border:1px solid #c8c8c8;padding:6px 8px;text-align:left;">词性</th>
+                          <th style="border:1px solid #c8c8c8;padding:6px 8px;text-align:left;">次数</th>
+                          <th style="border:1px solid #c8c8c8;padding:6px 8px;text-align:left;">所在句子</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <template x-for="o in vocab.result.over_words" :key="o.word">
+                          <tr>
+                            <td style="border:1px solid #c8c8c8;padding:6px 8px;white-space:nowrap;">
+                              <b x-text="o.word"></b>
+                              <span class="chip neutral ml-1" x-show="o.maybe_proper" title="首字母大写，可能为专有名词（不替换）">专有名词?</span>
+                            </td>
+                            <td style="border:1px solid #c8c8c8;padding:6px 8px;white-space:nowrap;" x-text="o.pos || '-'"></td>
+                            <td style="border:1px solid #c8c8c8;padding:6px 8px;white-space:nowrap;" x-text="o.count"></td>
+                            <td style="border:1px solid #c8c8c8;padding:6px 8px;font-size:.85rem;line-height:1.4;" x-text="o.sentences[0] || ''"></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div class="flex flex-wrap items-center gap-3 mt-4">
+                    <button class="btn-primary" @click="replaceVocab()"
+                            :disabled="vocab.replacing || vocab.result.over_words.length === 0">
+                      <span x-html="icon('replace','w-4 h-4')"></span>
+                      <span x-text="vocab.replacing ? '替换中…' : '全部替换（消耗 1 次额度）'"></span>
+                    </button>
+                    <span class="text-[11px] text-faint">由 AI 逐词替换为常用同义词；无法替换的词会保留并加中文注释</span>
+                  </div>
+                </div>
+
+                <!-- 替换结果 -->
+                <div x-show="vocab.replacing || vocab.output" class="glass-soft rounded-2xl p-4">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="font-semibold text-sm">替换结果</span>
+                    <span class="status-dot" :class="{ 'live': vocab.replacing, 'ok': !vocab.replacing && vocab.output, 'err': vocab.status === 'error' }"></span>
+                    <span class="text-[11px] text-faint" x-show="vocab.replacing" x-text="'生成中… ' + vocab.elapsed + 's'"></span>
+                    <span class="ml-auto">
+                      <button x-show="vocab.replacing" class="btn-primary btn-stop" @click="stopVocabReplace()">
+                        <span x-html="icon('stop','w-4 h-4')"></span>停止
+                      </button>
+                    </span>
+                  </div>
+                  <div class="md" x-show="vocab.output" x-html="vocab.rendered"></div>
+                  <div class="vocab-loading" x-show="vocab.replacing && !vocab.output">
+                    <span>AI 正在替换超标词…</span>
+                  </div>
+                  <p class="text-sm text-danger mt-2" x-show="vocab.status === 'error'" x-text="vocab.checkError"></p>
+                </div>
+
+              </div>
+            </div>
+
+            <div class="px-4 sm:px-5 py-1.5 flex items-center gap-2 text-xs text-dim border-t shrink-0" style="border-color:var(--border)">
+              <span class="status-dot" :class="{ 'live': vocab.replacing, 'ok': vocab.checked && vocab.status === 'done' }"></span>
+              <span x-text="!vocab.checked ? '机器排查 → AI 替换' : (vocab.replacing ? 'AI 替换中…' : (vocab.status === 'done' ? '已完成替换' : (vocab.status === 'error' ? '替换失败' : '排查完成'))"></span>
+            </div>
+          </div>
+        </template>
+
         <!-- ========== 普通工具操作页 ========== -->
-        <template x-if="currentTool && !isMigrationTool">
+        <template x-if="currentTool && !isMigrationTool && !isVocabTool">
           <div class="flex-1 min-h-0 flex flex-col">
 
             <!-- 工具头部 -->

@@ -58,7 +58,7 @@ PROPOSITION_TOOLS = [
     {"id": "21", "name": "辅助完形填空命题", "icon": "cloze", "description": "完形设空 + 选项 + 答案解析"},
     {"id": "22", "name": "试题解读分析", "icon": "analysis", "description": "选材立意 / 能力考查 / 教学引导"},
     {"id": "23", "name": "英语试题 Bug 侦察", "icon": "bug", "description": "拼写 / 标点 / 中式英语 / 逻辑漏洞"},
-    {"id": "24", "name": "超标词排查+替换", "icon": "replace", "description": "课标词排查 + 替换方案"},
+    {"id": "24", "name": "超标词排查+替换", "icon": "replace", "description": "机器排查课标外词汇 + AI 一键替换"},
 ]
 
 REFERENCE_TOOLS = [
@@ -92,7 +92,7 @@ def _resolve_prompt_filename(tool_id: str) -> str:
         "21": "辅助完形填空命题",
         "22": "试题解读分析",
         "23": "英语试题 Bug 侦察",
-        "24": "超标词排查+替换",
+        "24": "超标词替换",
         "25": "自由对话",
         MIGRATION_TOOL_ID: MIGRATION_TOOL_NAME,
     }

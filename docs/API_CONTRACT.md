@@ -32,6 +32,7 @@
 | POST | `/api/auth/activate` | 验证使用码，返回 JWT | 否 |
 | GET | `/api/auth/me` | 当前使用码状态 | 是 |
 | POST | `/api/chat/preview` | 预览最终 Prompt | 是 |
+| POST | `/api/chat/vocab/check` | 机械排查超标词：分词 + 课标词表匹配（不扣费） | 是 |
 | POST | `/api/chat/migration/analyze` | 非流式分析智能错题迁移错因（不扣费） | 是 |
 | POST | `/api/chat/migration/quota` | 预检查智能错题迁移额度（不扣费） | 是 |
 | POST | `/api/chat/stream` | 流式调用工具（SSE） | 是 |
@@ -233,7 +234,43 @@
 }
 ```
 
-### 7.1 智能错题迁移错因分析
+### 7.1 超标词机械排查
+
+#### POST `/api/chat/vocab/check`
+
+对英语文本做纯机械的超标词排查：正则分词后逐词与高考课标词表（`backend/app/data/gaokao3500_words.json`，含义务教育补漏词）做集合匹配。屈折变化（复数/时态/比较级/所有格/不规则动词）与常见派生（副词 -ly、-tion/-ness/-ment/-al/-ive/-ful/-er/-en、un-/dis-/re- 前缀等）均可叠加回退，词根在表即放行；单字母大写选项标记（B. C. D.）、全大写缩写（USA）与常见头衔（Dr.）跳过。毫秒级返回，不扣减额度。
+
+**请求头：** `Authorization: Bearer <token>`
+
+**请求体：**
+
+```json
+{
+  "text": "粘贴待排查的英语文本"
+}
+```
+
+**成功响应：**
+
+```json
+{
+  "total_words": 111,
+  "over_words": [
+    {
+      "word": "utilize",
+      "count": 2,
+      "maybe_proper": false,
+      "sentences": ["In modern society, people often utilize various facilities to facilitate their daily work."],
+      "pos": "v.",
+      "meaning": "利用, 使用"
+    }
+  ]
+}
+```
+
+`over_words` 按出现次数降序排列；`pos`/`meaning` 从词表回填，缺失时为空字符串；`sentences` 最多 3 条所在句子（截断 220 字符）。
+
+### 7.2 智能错题迁移错因分析
 
 #### POST `/api/chat/migration/analyze`
 
@@ -268,7 +305,7 @@
 }
 ```
 
-### 7.2 智能错题迁移额度预检查
+### 7.3 智能错题迁移额度预检查
 
 #### POST `/api/chat/migration/quota`
 
@@ -604,7 +641,7 @@ data: [DONE]
 | 21 | 辅助完形填空命题 | `辅助完形填空命题.md` |
 | 22 | 试题解读分析 | `试题解读分析.md` |
 | 23 | 英语试题 Bug 侦察 | `英语试题 Bug 侦察.md` |
-| 24 | 超标词排查+替换 | `超标词排查+替换.md` |
+| 24 | 超标词排查+替换 | `超标词替换.md`（仅替换；排查由机械接口完成） |
 | 25 | 自由对话 | `自由对话.md` |
 | 26 | 智能错题迁移 | `智能错题迁移.md` |
 
@@ -644,3 +681,4 @@ openrouter/deepseek/deepseek-chat
 | 0.2.0 | 2026-07-24 | 新增 `/api/chat/title`、模型连接配置字段 |
 | 1.1.0 | 2026-07-28 | v1.1：新增使用码认证（`/api/auth/*`）、管理后台 API（`/api/admin/*`）、移除前端 API 设置字段、更新配置管理说明 |
 | 1.2.0 | 2026-08-07 | 新增智能错题迁移错因分析、额度预检查与批量并行流式生成 |
+| 1.3.0 | 2026-08-10 | 超标词排查改为机械实现（新增 `/api/chat/vocab/check`），替换独立为 `超标词替换.md` Prompt |

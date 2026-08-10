@@ -27,6 +27,7 @@ from app.services.migration import (
 from app.services.prompt_loader import PromptLoader
 from app.services.runtime_config import find_model_entry, resolve_llm_settings
 from app.services.usage_code import assert_can_generate, consume_quota
+from app.services.vocab_check import check_over_words
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -264,6 +265,24 @@ def _migration_analysis_messages(
         raise HTTPException(status_code=404, detail="智能错题迁移 More Prompt 不存在")
     history.append({"role": "user", "content": more_prompt})
     return history
+
+
+class VocabCheckRequest(BaseModel):
+    text: str = Field(..., min_length=1, description="待排查的英语文本")
+
+
+@router.post("/vocab/check")
+async def check_vocabulary(
+    req: VocabCheckRequest,
+    _code: Annotated[UsageCode, Depends(get_current_code)],
+):
+    """机械排查超标词:分词 + 课标词表集合匹配,毫秒级返回,不扣减额度。"""
+    try:
+        result = check_over_words(req.text)
+    except Exception as exc:
+        logger.error("Vocabulary check error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"词汇排查失败: {exc}") from exc
+    return result
 
 
 @router.post("/migration/analyze")

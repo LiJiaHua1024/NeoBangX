@@ -30,6 +30,7 @@ const ICON_PATHS = {
   "analysis": '<path d="M4 4v15a1 1 0 0 0 1 1h15"/><path d="M8.5 15.5v-4M12.5 15.5v-7M16.5 15.5v-2.5M20 15.5V6"/>',
   "bug": '<rect x="8" y="8.5" width="8" height="10" rx="4"/><path d="M9.5 7a2.5 2.5 0 0 1 5 0"/><path d="M12 8.5V6.5M8.6 10 5 8.8M15.4 10 19 8.8M8 13.5H4M16 13.5h4M8.6 16.8 5 18.5M15.4 16.8 19 18.5"/>',
   "replace": '<path d="M4 8h12.5L13 4.5M20 16H7.5L11 19.5"/>',
+  "search": '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/>',
   "chat": '<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5c-1.4 0-2.75-.34-3.94-.93L3 21l1.93-5.57A8.5 8.5 0 1 1 21 11.5Z"/>',
   "migration": '<path d="M5 6.5h14M5 12h9M5 17.5h5"/><path d="m16 14 4 4-4 4M20 18h-7"/>',
 
@@ -859,6 +860,9 @@ function nbx() {
     migrationExportTarget: null,
     migrationExportStyle: "",
 
+    /* --- 超标词排查+替换 --- */
+    vocab: null,
+
     /* --- 导出 --- */
     exportMenuOpen: false,
     exportMenuStyle: "",
@@ -981,10 +985,182 @@ function nbx() {
       return !!this.migration && this.migration.results.some((card) => card.output && card.output.trim());
     },
 
+    /* ============ 超标词排查+替换 ============ */
+    newVocabState() {
+      return {
+        text: "",
+        result: null,
+        checking: false,
+        checkError: "",
+        checked: false,
+        replacing: false,
+        stopRequested: false,
+        thinking: false,
+        status: "idle",
+        elapsed: "0.0",
+        output: "",
+        rendered: "",
+        requestId: null,
+      };
+    },
+    resetVocab() {
+      this.vocab = this.newVocabState();
+    },
+    get isVocabTool() {
+      return !!this.currentTool && this.currentTool.id === "24";
+    },
+    get vocabOverCount() {
+      return this.vocab && this.vocab.result ? (this.vocab.result.over_words || []).length : 0;
+    },
+    async checkVocab() {
+      if (!this.requireAuth("请先输入使用码")) return;
+      const text = (this.vocab.text || "").trim();
+      if (!text) {
+        this.toast("请先粘贴要排查的英语文本", "warn");
+        return;
+      }
+      this.vocab.checking = true;
+      this.vocab.checkError = "";
+      this.vocab.result = null;
+      this.vocab.checked = false;
+      try {
+        const res = await fetch("/api/chat/vocab/check", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...this.authHeaders(),
+          },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) {
+          if (res.status === 401) {
+            this.clearAuth();
+            throw new Error("登录已过期，请重新输入使用码");
+          }
+          if (res.status === 403) throw new Error("额度已用尽或使用码已被禁用");
+          let msg = "HTTP " + res.status;
+          try {
+            const j = await res.json();
+            if (j && j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+          } catch {}
+          throw new Error(msg);
+        }
+        const data = await res.json();
+        this.vocab.result = data;
+        this.vocab.checked = true;
+        if (!data.over_words || !data.over_words.length) {
+          this.toast("未发现超标词，词汇均在课标范围内", "ok");
+        } else {
+          this.toast("排查完成，发现 " + data.over_words.length + " 个疑似超标词", "ok");
+        }
+      } catch (e) {
+        this.vocab.checkError = (e && e.message) || "排查失败";
+        this.toast("排查失败：" + this.vocab.checkError, "error");
+      } finally {
+        this.vocab.checking = false;
+      }
+    },
+    buildReplacementInput() {
+      const over = (this.vocab.result && this.vocab.result.over_words) || [];
+      const lines = over.map((o, i) => {
+        const sentence = (o.sentences && o.sentences[0]) || "";
+        return `${i + 1}. ${o.word} | ${o.pos || "-"} | ×${o.count} | ${sentence}`;
+      });
+      return ["<over_words>", ...lines, "</over_words>", "", this.vocab.text].join("\n");
+    },
+    async replaceVocab() {
+      if (this.vocab.replacing) return;
+      if (!this.vocab.result || !this.vocab.result.over_words || !this.vocab.result.over_words.length) {
+        this.toast("没有超标词，无需替换", "warn");
+        return;
+      }
+      const input = this.buildReplacementInput();
+      this.vocab.replacing = true;
+      this.vocab.stopRequested = false;
+      this.vocab.thinking = true;
+      this.vocab.status = "connecting";
+      this.vocab.elapsed = "0.0";
+      this.vocab.output = "";
+      this.vocab.rendered = "";
+      this.vocab.requestId = "24_" + Date.now();
+      this._abortCtrl = new AbortController();
+      this._startTs = performance.now();
+      clearInterval(this._timer);
+      this._timer = setInterval(() => {
+        this.vocab.elapsed = ((performance.now() - this._startTs) / 1000).toFixed(1);
+      }, 100);
+
+      try {
+        const { state } = await this._streamChat({
+          toolId: this.currentTool.id,
+          input,
+          requestId: this.vocab.requestId,
+          onToken: (text) => {
+            if (this.vocab.thinking) {
+              this.vocab.thinking = false;
+              this.vocab.status = "streaming";
+            }
+            this.vocab.output += text;
+            this.scheduleRender();
+          },
+        });
+        this.vocab.status = state === "stopped" ? "stopped" : "done";
+        if (state === "stopped") {
+          this.toast("已停止生成", "warn");
+        } else if (this.vocab.output.trim()) {
+          const item = {
+            id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+            toolId: this.currentTool.id,
+            toolName: this.currentTool.name,
+            icon: this.currentTool.icon,
+            title: "",
+            input: this.vocab.text.trim(),
+            fileName: "",
+            output: this.vocab.output,
+            model: this.selectedModel,
+            partial: false,
+            createdAt: Date.now(),
+          };
+          this.history.unshift(item);
+          if (this.history.length > HISTORY_LIMIT) this.history.length = HISTORY_LIMIT;
+          lsSet(LS.history, this.history);
+          this.generateTitle(item);
+        }
+      } catch (e) {
+        if (e && e.name === "AbortError") {
+          this.vocab.status = "stopped";
+        } else {
+          this.vocab.status = "error";
+          this.vocab.checkError = (e && e.message) || "替换失败";
+          this.toast("替换失败：" + this.vocab.checkError, "error");
+        }
+      } finally {
+        clearInterval(this._timer);
+        this._timer = null;
+        this.vocab.replacing = false;
+      }
+    },
+    stopVocabReplace() {
+      if (!this.vocab || !this.vocab.replacing) return;
+      this.vocab.stopRequested = true;
+      try {
+        fetch("/api/chat/stop", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...this.authHeaders(),
+          },
+          body: JSON.stringify({ request_id: this.vocab.requestId }),
+        });
+      } catch {}
+      try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
+    },
+
     /* ============ 初始化 ============ */
     async init() {
       configureMarked();
       this.resetMigration();
+      this.resetVocab();
 
       // 主题
       const savedTheme = localStorage.getItem(LS.theme);
@@ -1192,10 +1368,11 @@ function nbx() {
 
     selectTool(tool, ev) {
       if (!this.requireAuth("请先输入使用码再选择工具")) return;
-      if (this.streaming || (this.migration && this.migration.generating)) {
+      if (this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing)) {
         if (!confirm("正在生成中，切换工具将停止本次生成。确定切换吗？")) return;
         if (this.streaming) this.stop();
         if (this.migration && this.migration.generating) this.stopMigration();
+        if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
       }
       this.currentTool = tool;
       this.output = "";
@@ -1209,6 +1386,7 @@ function nbx() {
       this.submittedFileName = "";
       this.submittedExpanded = false;
       this.resetMigration();
+      this.resetVocab();
       const el = ev && ev.currentTarget ? ev.currentTarget : null;
       if (el && this._bg) {
         const r = el.getBoundingClientRect();
@@ -1218,10 +1396,11 @@ function nbx() {
     },
 
     goHome() {
-      if (this.streaming || (this.migration && this.migration.generating)) {
+      if (this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing)) {
         if (!confirm("正在生成中，返回首页将停止本次生成。确定吗？")) return;
         if (this.streaming) this.stop();
         if (this.migration && this.migration.generating) this.stopMigration();
+        if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
       }
       this.currentTool = null;
       this.leftOpen = false;
@@ -1979,6 +2158,10 @@ function nbx() {
         await this.analyzeMigration();
         return;
       }
+      if (this.isVocabTool) {
+        await this.checkVocab();
+        return;
+      }
       if (this.streaming) return;
       if (!this.currentTool) {
         this.toast("请先在左侧选择一个工具", "warn");
@@ -2015,102 +2198,19 @@ function nbx() {
       this.attachedFile = null;
       this.inputMode = "text";
 
-      let gotDone = false;
-
       try {
-        const res = await fetch("/api/chat/stream", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...this.authHeaders(),
-          },
-          body: JSON.stringify({
-            tool_id: this.currentTool.id,
-            input: text,
-            model: this.selectedModel || undefined,
-            request_id: this.requestId,
-          }),
-          signal: this._abortCtrl.signal,
-        });
-
-        if (!res.ok) {
-          if (res.status === 401) {
-            this.clearAuth();
-            throw new Error("登录已过期，请重新输入使用码");
-          }
-          if (res.status === 403) {
-            throw new Error("额度已用尽或使用码已被禁用");
-          }
-          let msg = "HTTP " + res.status;
-          try {
-            const j = await res.json();
-            if (j && j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
-          } catch {}
-          throw new Error(msg);
-        }
-        if (!res.body) throw new Error("浏览器不支持流式读取");
-
-        this.status = "streaming";
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        let buffer = "";
-        let evName = "message";
-        let evData = "";
-
-        const dispatch = (ev, data) => {
-          if (ev === "done" || data === "[DONE]") { gotDone = true; return; }
-          if (ev === "error") {
-            let m = data;
-            try { m = JSON.parse(data).message || data; } catch {}
-            throw new Error(m);
-          }
-          if (data === "[CANCELLED]") { this._stopRequested = true; return; }
-          if (ev === "token") {
-            // token 为 JSON 编码字符串（换行保真传输），解码失败时降级为原文
-            let text = data;
-            try {
-              const parsed = JSON.parse(data);
-              if (typeof parsed === "string") text = parsed;
-            } catch {}
-            if (text) {
-              if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
-              this.output += text;
-              this.scheduleRender();
-            }
-            return;
-          }
-          if (data) {
+        const { state } = await this._streamChat({
+          toolId: this.currentTool.id,
+          input: text,
+          requestId: this.requestId,
+          onToken: (text) => {
             if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
-            this.output += data;
+            this.status = "streaming";
+            this.output += text;
             this.scheduleRender();
-          }
-        };
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const raw of lines) {
-            const line = raw.replace(/\r$/, "");
-            if (line.startsWith("event:")) {
-              evName = line.slice(6).trim();
-            } else if (line.startsWith("data:")) {
-              const d = line.slice(5);
-              evData = evData ? evData + "\n" + (d.startsWith(" ") ? d.slice(1) : d) : (d.startsWith(" ") ? d.slice(1) : d);
-            } else if (line === "") {
-              if (evData !== "" || evName !== "message") {
-                dispatch(evName, evData);
-              }
-              evName = "message";
-              evData = "";
-            }
-          }
-        }
-        if (evData !== "" || evName !== "message") dispatch(evName, evData);
-
-        this.finalize(this._stopRequested ? "stopped" : "done");
+          },
+        });
+        this.finalize(state === "stopped" ? "stopped" : "done");
       } catch (e) {
         if (e && e.name === "AbortError") {
           this.finalize("stopped");
@@ -2118,6 +2218,94 @@ function nbx() {
           this.finalize("error", (e && e.message) || "网络请求失败");
         }
       }
+    },
+
+    /* 通用 SSE 流式调用：返回 { state: "done" | "stopped" }，出错时抛出 Error */
+    async _streamChat({ toolId, input, requestId, onToken }) {
+      const res = await fetch("/api/chat/stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...this.authHeaders(),
+        },
+        body: JSON.stringify({
+          tool_id: toolId,
+          input,
+          model: this.selectedModel || undefined,
+          request_id: requestId,
+        }),
+        signal: this._abortCtrl.signal,
+      });
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          this.clearAuth();
+          throw new Error("登录已过期，请重新输入使用码");
+        }
+        if (res.status === 403) {
+          throw new Error("额度已用尽或使用码已被禁用");
+        }
+        let msg = "HTTP " + res.status;
+        try {
+          const j = await res.json();
+          if (j && j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+        } catch {}
+        throw new Error(msg);
+      }
+      if (!res.body) throw new Error("浏览器不支持流式读取");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      let evName = "message";
+      let evData = "";
+      let stopped = false;
+
+      const dispatch = (ev, data) => {
+        if (ev === "done" || data === "[DONE]") return;
+        if (ev === "error") {
+          let m = data;
+          try { m = JSON.parse(data).message || data; } catch {}
+          throw new Error(m);
+        }
+        if (data === "[CANCELLED]") { stopped = true; return; }
+        if (ev === "token") {
+          // token 为 JSON 编码字符串（换行保真传输），解码失败时降级为原文
+          let text = data;
+          try {
+            const parsed = JSON.parse(data);
+            if (typeof parsed === "string") text = parsed;
+          } catch {}
+          if (text) onToken(text);
+          return;
+        }
+        if (data) onToken(data);
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const raw of lines) {
+          const line = raw.replace(/\r$/, "");
+          if (line.startsWith("event:")) {
+            evName = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            const d = line.slice(5);
+            evData = evData ? evData + "\n" + (d.startsWith(" ") ? d.slice(1) : d) : (d.startsWith(" ") ? d.slice(1) : d);
+          } else if (line === "") {
+            if (evData !== "" || evName !== "message") {
+              dispatch(evName, evData);
+            }
+            evName = "message";
+            evData = "";
+          }
+        }
+      }
+      if (evData !== "" || evName !== "message") dispatch(evName, evData);
+      return { state: stopped ? "stopped" : "done" };
     },
 
     async stop() {
@@ -2167,6 +2355,7 @@ function nbx() {
     },
     doRender() {
       this.rendered = renderMd(this.output);
+      if (this.vocab) this.vocab.rendered = renderMd(this.vocab.output || "");
       this.$nextTick(() => {
         if (this.maskOn && this.currentTool && this.currentTool.id === "13") {
           tagAnswerElements(this.$refs.mdRoot);
@@ -2442,6 +2631,16 @@ function nbx() {
         id: item.toolId, name: item.toolName, icon: item.icon,
         description: "", prompt_loaded: true,
       };
+      if (this.isVocabTool || item.toolId === "24") {
+        // 超标词工具: 历史只保存替换结果, 载入到 vocab 独立视图
+        this.resetVocab();
+        this.vocab.text = item.input || "";
+        this.vocab.output = item.output || "";
+        this.vocab.rendered = renderMd(item.output || "");
+        this.vocab.status = item.output ? "done" : "idle";
+        this.rightMobileOpen = false;
+        return;
+      }
       this.submittedInput = item.input;
       this.submittedFileName = item.fileName || "";
       this.submittedExpanded = false;
@@ -2500,6 +2699,10 @@ function nbx() {
     startNewTopic() {
       if (this.isMigrationTool) {
         this.resetMigration();
+        return;
+      }
+      if (this.isVocabTool) {
+        this.resetVocab();
         return;
       }
       this.inputCollapsed = false;
