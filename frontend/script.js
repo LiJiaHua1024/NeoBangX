@@ -1140,7 +1140,7 @@ function nbx() {
         } else {
           this.retreatMascot();
         }
-      }, 1200);
+      }, 1220);
     },
     retreatMascot() {
       clearTimeout(this._mascotAnimationTimer);
@@ -1151,7 +1151,7 @@ function nbx() {
         this._mascotAnimationTimer = null;
         this.mascotState = "hidden";
         this.scheduleMascotCheck(40);
-      }, 430);
+      }, 460);
     },
     get isVocabTool() {
       return !!this.currentTool && this.currentTool.id === "24";
