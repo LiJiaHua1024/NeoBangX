@@ -204,6 +204,72 @@ html[data-theme="jade"] {
   transition: background 0.6s ease, border-color 0.6s ease;
 }
 
+/* ============================================================
+   Sora mascot — cropped viewport over the transparent source canvas
+   ============================================================ */
+.mascot-layer {
+  --mascot-w: clamp(8rem, 11vw, 11rem);
+  position: absolute;
+  z-index: 4;
+  width: var(--mascot-w);
+  aspect-ratio: 1792 / 1741;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  transform-origin: 78% 12%;
+  filter: drop-shadow(0 0.7rem 0.9rem rgba(0, 0, 0, 0.18));
+}
+.mascot-layer img {
+  position: absolute;
+  display: block;
+  width: calc(var(--mascot-w) * 2.132);
+  max-width: none;
+  left: calc(var(--mascot-w) * -1.062);
+  top: calc(var(--mascot-w) * -0.011);
+  pointer-events: none;
+}
+.mascot-anchor-home { top: -1.9rem; right: 0.75rem; }
+.mascot-anchor-tool,
+.mascot-anchor-vocab,
+.mascot-anchor-migration { top: 5.1rem; right: 0.75rem; }
+.mascot-hidden {
+  opacity: 0;
+  visibility: hidden;
+  transform: translate3d(118%, -118%, 0) rotate(8deg) scale(0.92);
+}
+.mascot-peeking {
+  opacity: 0.94;
+  visibility: visible;
+  transform: translate3d(0, 0, 0) rotate(0) scale(1);
+}
+.mascot-entering {
+  visibility: visible;
+  animation: mascot-peek 1.15s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+.mascot-retreating {
+  visibility: visible;
+  animation: mascot-retreat 0.42s var(--ease-out) both;
+}
+.mascot-measuring {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  transform: none !important;
+  animation: none !important;
+}
+@keyframes mascot-peek {
+  0% { opacity: 0; transform: translate3d(118%, -118%, 0) rotate(8deg) scale(0.92); }
+  24% { opacity: 0.42; transform: translate3d(42%, -38%, 0) rotate(5deg) scale(0.94); }
+  72% { opacity: 0.88; transform: translate3d(4%, -4%, 0) rotate(1deg) scale(0.99); }
+  90% { opacity: 0.96; transform: translate3d(-1.5%, 1.5%, 0) rotate(-1deg) scale(1.01); }
+  100% { opacity: 0.94; transform: translate3d(0, 0, 0) rotate(0) scale(1); }
+}
+@keyframes mascot-retreat {
+  0% { opacity: 0.94; transform: translate3d(0, 0, 0) rotate(0) scale(1); }
+  11% { opacity: 0.98; transform: translate3d(-3%, 4%, 0) rotate(-2deg) scale(1.01); }
+  28% { opacity: 0.82; transform: translate3d(10%, -9%, 0) rotate(2deg) scale(0.98); }
+  100% { opacity: 0; transform: translate3d(118%, -118%, 0) rotate(8deg) scale(0.92); }
+}
+
 .text-dim { color: var(--text-dim); }
 .text-faint { color: var(--text-faint); }
 .text-danger { color: #f0958a; }

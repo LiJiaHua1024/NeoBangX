@@ -136,8 +136,15 @@
       </div>
 
       <!-- 主面板 -->
-      <section class="glass rounded-[1.4rem] flex-1 min-h-0 flex flex-col overflow-hidden relative">
+      <section x-ref="mainPanel" class="glass rounded-[1.4rem] flex-1 min-h-0 flex flex-col overflow-hidden relative">
         <div class="stream-bar" x-show="streaming"></div>
+
+        <!-- 穹妹布玩具：单实例，按当前页面状态和可用空间探出 / 收回 -->
+        <div x-ref="mascotLayer" class="mascot-layer mascot-hidden"
+             :class="['mascot-' + mascotState, 'mascot-anchor-' + mascotAnchorName]"
+             aria-hidden="true">
+          <img src="/static/Sora_Rabbit_Plush.png" alt="" draggable="false">
+        </div>
 
         <!-- ========== 欢迎页 ========== -->
         <div x-show="!currentTool" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
@@ -253,7 +260,7 @@
         <!-- ========== 智能错题迁移 ========== -->
         <template x-if="currentTool && isMigrationTool">
           <div class="flex-1 min-h-0 flex flex-col migration-shell">
-            <div class="px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
+            <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
               <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
@@ -488,7 +495,7 @@
         <!-- ========== 超标词排查+替换 ========== -->
         <template x-if="currentTool && isVocabTool">
           <div class="flex-1 min-h-0 flex flex-col vocab-shell">
-            <div class="px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
+            <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
               <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
@@ -640,7 +647,7 @@
           <div class="flex-1 min-h-0 flex flex-col">
 
             <!-- 工具头部 -->
-            <div class="px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
+            <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
               <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>

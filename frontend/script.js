@@ -937,6 +937,11 @@ function nbx() {
     _exportMenuPositionFrame: null,
     _migrationExportAnchor: null,
     _migrationExportPositionFrame: null,
+    mascotState: "hidden",
+    _mascotCheckTimer: null,
+    _mascotAnimationTimer: null,
+    _mascotResizeObserver: null,
+    _mascotMutationObserver: null,
 
     newMigrationState() {
       return {
@@ -1006,6 +1011,139 @@ function nbx() {
     resetVocab() {
       this.vocab = this.newVocabState();
     },
+    get mascotAnchorName() {
+      if (!this.currentTool) return "home";
+      return "tool";
+    },
+    get mascotIsBusy() {
+      return !!(
+        this.streaming
+        || (this.migration && (this.migration.analyzing || this.migration.moreAnalyzing
+          || this.migration.prechecking || this.migration.generating))
+        || (this.vocab && (this.vocab.checking || this.vocab.replacing))
+      );
+    },
+    get mascotCanPeek() {
+      if (this.mascotIsBusy) return false;
+      if (!this.currentTool) return true;
+      if (this.isMigrationTool) {
+        return !!this.migration && this.migration.step < 4 && !this.migration.generated;
+      }
+      if (this.isVocabTool) {
+        return !!this.vocab && !this.vocab.checked && !this.vocab.output;
+      }
+      return !this.inputCollapsed && !this.submittedInput && !this.output && !this.errorMsg;
+    },
+    mascotRectsOverlap(a, b, padding = 0) {
+      return !(
+        a.right + padding <= b.left
+        || a.left - padding >= b.right
+        || a.bottom + padding <= b.top
+        || a.top - padding >= b.bottom
+      );
+    },
+    mascotHasSafeSpace() {
+      if (!this.mascotCanPeek) return false;
+      const panel = this.$refs.mainPanel;
+      const layer = this.$refs.mascotLayer;
+      if (!panel || !layer) return false;
+
+      const panelRect = panel.getBoundingClientRect();
+      if (window.innerWidth < 760 || panelRect.width < 540 || panelRect.height < 440) return false;
+
+      layer.classList.add("mascot-measuring");
+      const mascotRect = layer.getBoundingClientRect();
+      layer.classList.remove("mascot-measuring");
+
+      const panelPadding = 10;
+      if (mascotRect.width < 80 || mascotRect.height < 70) return false;
+      if (
+        mascotRect.left < panelRect.left + panelPadding
+        || mascotRect.right > panelRect.right - panelPadding
+        || (this.mascotAnchorName !== "home" && mascotRect.top < panelRect.top + panelPadding)
+        || mascotRect.bottom > panelRect.bottom - panelPadding
+      ) return false;
+
+      const keepouts = panel.querySelectorAll(
+        ".mascot-keepout, .glass-soft, .submitted-card, .migration-step, "
+        + ".migration-result-card, .error-card, input, textarea, button, h1, h2, h3, p, table"
+      );
+      const collisionPadding = this.mascotAnchorName === "home" ? 4 : 12;
+      for (const el of keepouts) {
+        if (el === layer || layer.contains(el)) continue;
+        const style = getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) < 0.02) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) continue;
+        if (this.mascotRectsOverlap(mascotRect, rect, collisionPadding)) return false;
+      }
+      return true;
+    },
+    scheduleMascotCheck(delay = 0) {
+      clearTimeout(this._mascotCheckTimer);
+      this._mascotCheckTimer = setTimeout(() => {
+        this._mascotCheckTimer = null;
+        this.$nextTick(() => this.reconcileMascot());
+      }, delay);
+    },
+    setupMascotObservers() {
+      const panel = this.$refs.mainPanel;
+      const layer = this.$refs.mascotLayer;
+      if (!panel || !layer) return;
+
+      const schedule = () => this.scheduleMascotCheck(60);
+      if (typeof ResizeObserver !== "undefined") {
+        this._mascotResizeObserver = new ResizeObserver(schedule);
+        this._mascotResizeObserver.observe(panel);
+      }
+      if (typeof MutationObserver !== "undefined") {
+        this._mascotMutationObserver = new MutationObserver((records) => {
+          const relevant = records.some((record) => {
+            const target = record.target;
+            return !(target && target.nodeType === 1 && target.closest(".mascot-layer"));
+          });
+          if (relevant) schedule();
+        });
+        this._mascotMutationObserver.observe(panel, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          attributeFilter: ["class", "style"],
+        });
+      }
+
+      const image = layer.querySelector("img");
+      if (image && !image.complete) image.addEventListener("load", schedule, { once: true });
+    },
+    reconcileMascot() {
+      if (this.mascotCanPeek && this.mascotHasSafeSpace()) this.showMascot();
+      else this.retreatMascot();
+    },
+    showMascot() {
+      if (this.mascotState === "peeking" || this.mascotState === "entering") return;
+      if (this.mascotState === "retreating") return;
+      clearTimeout(this._mascotAnimationTimer);
+      this.mascotState = "entering";
+      this._mascotAnimationTimer = setTimeout(() => {
+        this._mascotAnimationTimer = null;
+        if (this.mascotCanPeek && this.mascotHasSafeSpace()) {
+          this.mascotState = "peeking";
+        } else {
+          this.retreatMascot();
+        }
+      }, 1200);
+    },
+    retreatMascot() {
+      clearTimeout(this._mascotAnimationTimer);
+      this._mascotAnimationTimer = null;
+      if (this.mascotState === "hidden" || this.mascotState === "retreating") return;
+      this.mascotState = "retreating";
+      this._mascotAnimationTimer = setTimeout(() => {
+        this._mascotAnimationTimer = null;
+        this.mascotState = "hidden";
+        this.scheduleMascotCheck(40);
+      }, 430);
+    },
     get isVocabTool() {
       return !!this.currentTool && this.currentTool.id === "24";
     },
@@ -1019,6 +1157,7 @@ function nbx() {
         this.toast("请先粘贴要排查的英语文本", "warn");
         return;
       }
+      this.retreatMascot();
       this.vocab.checking = true;
       this.vocab.checkError = "";
       this.vocab.result = null;
@@ -1075,6 +1214,7 @@ function nbx() {
         return;
       }
       const input = this.buildReplacementInput();
+      this.retreatMascot();
       this.vocab.replacing = true;
       this.vocab.stopRequested = false;
       this.vocab.thinking = true;
@@ -1202,9 +1342,20 @@ function nbx() {
         if (window.innerWidth >= 1280) this.rightMobileOpen = false;
         this.repositionExportMenu();
         this.repositionMigrationExport();
+        this.scheduleMascotCheck(80);
       });
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", () => this.scheduleMascotCheck(80));
+      }
 
-      this.$nextTick(() => this.autoGrow());
+      this.$nextTick(() => {
+        this.autoGrow();
+        this.scheduleMascotCheck(80);
+      });
+      this.$nextTick(() => {
+        this.setupMascotObservers();
+        this.scheduleMascotCheck(120);
+      });
     },
 
     /* ============ 认证 ============ */
@@ -1392,7 +1543,10 @@ function nbx() {
         const r = el.getBoundingClientRect();
         this._bg.attract(r.left + r.width * 0.5, r.top + r.height * 0.5);
       }
-      this.$nextTick(() => this.autoGrow());
+      this.$nextTick(() => {
+        this.autoGrow();
+        this.scheduleMascotCheck(80);
+      });
     },
 
     goHome() {
@@ -1404,6 +1558,7 @@ function nbx() {
       }
       this.currentTool = null;
       this.leftOpen = false;
+      this.scheduleMascotCheck(80);
     },
 
     startFirst() {
@@ -1623,6 +1778,7 @@ function nbx() {
         state.feedback = "";
       }
 
+      this.retreatMascot();
       state.step = 2;
       state.analyzing = true;
       state.analysisError = "";
@@ -1670,6 +1826,7 @@ function nbx() {
         return;
       }
 
+      this.retreatMascot();
       state.moreAnalyzing = true;
       state.analysisError = "";
       try {
@@ -1743,6 +1900,7 @@ function nbx() {
       }
 
       const state = this.migration;
+      this.retreatMascot();
       state.prechecking = true;
       try {
         const quotaRes = await fetch("/api/chat/migration/quota", {
@@ -1758,6 +1916,7 @@ function nbx() {
           throw new Error(await this.migrationReadError(quotaRes, "额度不足，无法开始生成"));
         }
 
+        this.retreatMascot();
         state.step = 4;
         state.generated = false;
         state.stopRequested = false;
@@ -2177,6 +2336,7 @@ function nbx() {
         if (!confirm(`「${this.currentTool.name}」的提示词文件尚未加载，生成效果可能不完整。仍要继续吗？`)) return;
       }
 
+      this.retreatMascot();
       this.output = "";
       this.rendered = "";
       this.errorMsg = "";
@@ -2699,10 +2859,12 @@ function nbx() {
     startNewTopic() {
       if (this.isMigrationTool) {
         this.resetMigration();
+        this.scheduleMascotCheck(80);
         return;
       }
       if (this.isVocabTool) {
         this.resetVocab();
+        this.scheduleMascotCheck(80);
         return;
       }
       this.inputCollapsed = false;
@@ -2719,6 +2881,7 @@ function nbx() {
         this.autoGrow();
         const el = this.$refs.inputEl;
         if (el) el.focus();
+        this.scheduleMascotCheck(80);
       });
     },
     removeHistory(id) {
