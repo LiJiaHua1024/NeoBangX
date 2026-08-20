@@ -1066,11 +1066,16 @@ function nbx() {
 
       const keepouts = panel.querySelectorAll(
         ".mascot-keepout, .glass-soft, .submitted-card, .migration-step, "
-        + ".migration-result-card, .error-card, input, textarea, button, h1, h2, h3, p, table"
+        + ".migration-result-card, .error-card, .composer"
       );
       const collisionPadding = this.mascotAnchorName === "home" ? 4 : 12;
       for (const el of keepouts) {
         if (el === layer || layer.contains(el)) continue;
+        if (el.closest && el.closest(".ms-menu")) continue;
+        if (el.closest && el.closest(".ms-wrap") && el !== panel.querySelector(".mascot-keepout")) {
+          const wrapTrigger = el.closest(".ms-wrap");
+          if (wrapTrigger && wrapTrigger.querySelector(".ms-menu")) continue;
+        }
         const style = getComputedStyle(el);
         if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) < 0.02) continue;
         const rect = el.getBoundingClientRect();
@@ -1100,7 +1105,11 @@ function nbx() {
         this._mascotMutationObserver = new MutationObserver((records) => {
           const relevant = records.some((record) => {
             const target = record.target;
-            return !(target && target.nodeType === 1 && target.closest(".mascot-layer"));
+            if (!(target && target.nodeType === 1)) return false;
+            if (target.closest(".mascot-layer")) return false;
+            if (target.closest(".ms-wrap")) return false;
+            if (target.closest(".ms-menu")) return false;
+            return true;
           });
           if (relevant) schedule();
         });
