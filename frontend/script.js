@@ -169,7 +169,11 @@ const THEMES = [
   { id: "celadon", name: "青瓷", dot: "linear-gradient(135deg,#0e6e5f,#0a5245)" },
   { id: "obsidian", name: "曜石", dot: "linear-gradient(135deg,#e9a15b,#cf7038)" },
   { id: "jade", name: "墨翠", dot: "linear-gradient(135deg,#5cb787,#2f8a66)" },
+  { id: "sora", name: "悠空", dot: "linear-gradient(160deg,#6fa8d8 0%,#a8cbe8 55%,#eef6fc 100%)" },
 ];
+
+/* 悠空主题：favicon 联动（云朵图标） */
+const FAVICON_SORA = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%236fa8d8'/%3E%3Cstop offset='1' stop-color='%23a8cbe8'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M20 44a8 8 0 0 1-.9-15.95A11 11 0 0 1 40.5 24 9.5 9.5 0 0 1 44 42.9z' fill='white'/%3E%3C/svg%3E";
 
 /* ---------------- 动态光影背景引擎 ---------------- */
 function createBackground(canvas) {
@@ -186,6 +190,8 @@ function createBackground(canvas) {
   let particles = [];
   let pulses = [];
   let sparks = [];
+  let clouds = [];
+  let birds = [];
 
   const parse = (s) => (s || "0,0,0").split(",").map((n) => parseFloat(n) || 0);
   const lerp3 = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
@@ -199,6 +205,11 @@ function createBackground(canvas) {
       gm: parse(cs.getPropertyValue("--c-glow-mouse")),
       p: parse(cs.getPropertyValue("--c-particle")),
       blend: cs.getPropertyValue("--c-glow-blend").trim() || "lighter",
+      sky: parseFloat(cs.getPropertyValue("--c-sky")) || 0,
+      rays: parseFloat(cs.getPropertyValue("--c-sky-rays")) || 0,
+      stars: parseFloat(cs.getPropertyValue("--c-sky-stars")) || 0,
+      birds: parseFloat(cs.getPropertyValue("--c-sky-birds")) || 0,
+      boost: parseFloat(cs.getPropertyValue("--c-glow-boost")) || 1,
     };
   }
   let cur = readTheme();
@@ -247,6 +258,24 @@ function createBackground(canvas) {
       a: 0.3 + Math.random() * 0.5,
       ox: 0, oy: 0,
     }));
+    // 悠空主题的云絮：大团块、缓慢水平漂移，会被鼠标拨开、被光晕照亮
+    clouds = Array.from({ length: coarse ? 6 : 10 }, () => ({
+      x: Math.random() * innerWidth,
+      y: innerHeight * (0.06 + Math.random() * 0.62),
+      s: 50 + Math.random() * 110,
+      v: 0.1 + Math.random() * 0.22,
+      a: 0.14 + Math.random() * 0.14,
+      ox: 0, oy: 0,
+    }));
+    // 悠空·白昼的飞鸟：三两只，斜向缓缓掠过天际
+    birds = Array.from({ length: 3 }, (_, i) => ({
+      x: Math.random() * innerWidth,
+      y: innerHeight * (0.12 + Math.random() * 0.3),
+      s: 7 + Math.random() * 6,
+      vx: 0.35 + Math.random() * 0.25,
+      vy: -(0.02 + Math.random() * 0.04),
+      ph: i * 1.7 + Math.random(),
+    }));
   }
   spawn();
 
@@ -268,28 +297,72 @@ function createBackground(canvas) {
     ctx.fillRect(x - r, y - r, r * 2, r * 2);
   }
 
+  /* 悠空：一朵云 = 五个柔和团块的叠加 */
+  const CLOUD_PUFFS = [[-0.9, 0.15, 0.55], [-0.35, -0.18, 0.7], [0.25, -0.3, 0.8], [0.85, 0.05, 0.6], [0, 0.24, 0.72]];
+  function drawCloud(x, y, s, color, alpha) {
+    for (const [ox, oy, or] of CLOUD_PUFFS) {
+      glowSpot(x + ox * s, y + oy * s, s * or, color, alpha);
+    }
+  }
+
+  /* 悠空·白昼：云隙光——角度缓缓摇摆、亮度呼吸脉动的阳光光束 */
+  function drawSunRays(W, H, strength, time) {
+    const sway = Math.sin(time * 2.2) * 0.06;
+    const pulse = 0.78 + 0.22 * Math.sin(time * 3.1);
+    ctx.save();
+    ctx.translate(W * 0.8, -H * 0.15);
+    ctx.rotate(0.42 + sway);
+    for (const [ox, w, a] of [[0, 150, 0.075], [220, 90, 0.05], [-200, 60, 0.032]]) {
+      const g = ctx.createLinearGradient(ox, 0, ox + w, 0);
+      g.addColorStop(0, "rgba(255,246,222,0)");
+      g.addColorStop(0.5, `rgba(255,246,222,${(a * strength * pulse).toFixed(4)})`);
+      g.addColorStop(1, "rgba(255,246,222,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(ox, 0, w, H * 1.9);
+    }
+    ctx.restore();
+  }
+
+  /* 悠空·黄昏：一只归鸟 = 两条二次曲线，翅膀上下扇动 */
+  function drawBird(b, color, alpha) {
+    const w = Math.sin(b.ph) * b.s * 0.42;
+    ctx.beginPath();
+    ctx.moveTo(b.x - b.s, b.y - w);
+    ctx.quadraticCurveTo(b.x - b.s * 0.45, b.y + b.s * 0.32, b.x, b.y);
+    ctx.quadraticCurveTo(b.x + b.s * 0.45, b.y + b.s * 0.32, b.x + b.s, b.y - w);
+    ctx.strokeStyle = rgba(color, alpha);
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = "round";
+    ctx.stroke();
+  }
+
   function frame(staticOnly) {
     const W = innerWidth, H = innerHeight;
     cur = {
       g1: lerp3(cur.g1, tgt.g1, 0.06), g2: lerp3(cur.g2, tgt.g2, 0.06),
       gm: lerp3(cur.gm, tgt.gm, 0.06), p: lerp3(cur.p, tgt.p, 0.06),
       blend: tgt.blend,
+      sky: cur.sky + (tgt.sky - cur.sky) * 0.06,
+      rays: cur.rays + (tgt.rays - cur.rays) * 0.06,
+      stars: cur.stars + (tgt.stars - cur.stars) * 0.06,
+      birds: cur.birds + (tgt.birds - cur.birds) * 0.06,
+      boost: cur.boost + (tgt.boost - cur.boost) * 0.06,
     };
     ctx.clearRect(0, 0, W, H);
     ctx.globalCompositeOperation = cur.blend === "lighter" ? "lighter" : "source-over";
 
     if (!staticOnly) stepLights();
     const m = Math.max(W, H);
-    glowSpot(lights[0].x, lights[0].y, m * 0.5, cur.g1, 0.09);
-    glowSpot(lights[1].x, lights[1].y, m * 0.46, cur.g2, 0.085);
-    glowSpot(lights[2].x, lights[2].y, m * 0.38, cur.gm, 0.05);
+    glowSpot(lights[0].x, lights[0].y, m * 0.5, cur.g1, 0.09 * cur.boost);
+    glowSpot(lights[1].x, lights[1].y, m * 0.46, cur.g2, 0.085 * cur.boost);
+    glowSpot(lights[2].x, lights[2].y, m * 0.38, cur.gm, 0.05 * cur.boost);
 
     if (!staticOnly) {
       halo.x += (halo.tx - halo.x) * 0.07;
       halo.y += (halo.ty - halo.y) * 0.07;
     }
-    glowSpot(halo.x, halo.y, 380, cur.gm, 0.12);
-    glowSpot(halo.x, halo.y, 130, cur.gm, 0.06);
+    glowSpot(halo.x, halo.y, 380 + 60 * (cur.boost - 1), cur.gm, 0.12 * cur.boost);
+    glowSpot(halo.x, halo.y, 150, cur.gm, 0.06 * cur.boost);
 
     for (let i = pulses.length - 1; i >= 0; i--) {
       const pu = pulses[i];
@@ -298,7 +371,7 @@ function createBackground(canvas) {
       if (pu.a < 0.01) { pulses.splice(i, 1); continue; }
       ctx.beginPath();
       ctx.arc(pu.x, pu.y, pu.r, 0, Math.PI * 2);
-      ctx.strokeStyle = rgba(cur.gm, pu.a * 0.65);
+      ctx.strokeStyle = rgba(cur.gm, Math.min(0.95, pu.a * 0.65 * cur.boost));
       ctx.lineWidth = 1.3;
       ctx.stroke();
     }
@@ -311,36 +384,90 @@ function createBackground(canvas) {
       if (s.life <= 0) { sparks.splice(i, 1); continue; }
       ctx.beginPath();
       ctx.arc(s.x, s.y, s.r * (0.5 + s.life * 0.5), 0, Math.PI * 2);
-      ctx.fillStyle = rgba(cur.gm, s.life * 0.75);
+      ctx.fillStyle = rgba(cur.gm, Math.min(0.95, s.life * 0.75 * cur.boost));
       ctx.fill();
     }
 
     ctx.globalCompositeOperation = "source-over";
-    for (const pt of particles) {
-      if (!staticOnly) {
-        pt.ph += 0.012 * pt.ps;
-        pt.x += pt.vx + Math.sin(pt.ph * 0.6) * 0.06;
-        pt.y += pt.vy;
-        if (!coarse) {
-          const dx = pt.x + pt.ox - mouse.x, dy = pt.y + pt.oy - mouse.y;
-          const d2 = dx * dx + dy * dy;
-          if (d2 < 16900) {
-            const d = Math.sqrt(d2) || 1;
-            const f = (130 - d) / 130;
-            pt.ox += (dx / d) * f * 1.1;
-            pt.oy += (dy / d) * f * 1.1;
+
+    /* 悠空：云隙光 + 云絮漂移（鼠标可拨开、光晕可照亮）+ 白昼飞鸟 */
+    if (cur.sky > 0.02) {
+      if (cur.rays > 0.02) drawSunRays(W, H, Math.min(cur.sky, cur.rays), t);
+      for (const c of clouds) {
+        if (!staticOnly) {
+          c.x += c.v;
+          if (c.x - c.s * 2.4 > W) {
+            c.x = -c.s * 2.4;
+            c.y = H * (0.06 + Math.random() * 0.62);
           }
-          pt.ox *= 0.92; pt.oy *= 0.92;
+          if (!coarse) {
+            // 鼠标像风一样把云轻轻推开
+            const dx = c.x + c.ox - mouse.x, dy = c.y + c.oy - mouse.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < 67600) {
+              const d = Math.sqrt(d2) || 1;
+              const f = (260 - d) / 260;
+              c.ox += (dx / d) * f * 2.2;
+              c.oy += (dy / d) * f * 2.2;
+            }
+            c.ox *= 0.94; c.oy *= 0.94;
+          }
         }
-        if (pt.y < -12) { pt.y = H + 12; pt.x = Math.random() * W; }
-        if (pt.x < -12) pt.x = W + 12;
-        if (pt.x > W + 12) pt.x = -12;
+        const depth = c.s / 110;
+        const px = c.x + c.ox + (mouse.x - W * 0.5) * 0.03 * depth;
+        const py = c.y + c.oy + (mouse.y - H * 0.5) * 0.014 * depth;
+        // 云飘到光晕附近时被阳光照亮
+        const hx = px - halo.x, hy = py - halo.y;
+        const lit = Math.max(0, 1 - Math.sqrt(hx * hx + hy * hy) / 320);
+        drawCloud(px, py, c.s, cur.p, Math.min(0.55, c.a * cur.sky * (1 + lit * 0.7)));
       }
-      const tw = 0.55 + 0.45 * Math.sin(pt.ph);
-      ctx.beginPath();
-      ctx.arc(pt.x + pt.ox, pt.y + pt.oy, pt.r, 0, Math.PI * 2);
-      ctx.fillStyle = rgba(cur.p, Math.min(0.9, pt.a * tw * 0.85));
-      ctx.fill();
+      if (cur.birds > 0.02) {
+        for (const b of birds) {
+          if (!staticOnly) {
+            b.ph += 0.09;
+            b.x += b.vx;
+            b.y += b.vy;
+            if (b.x - b.s * 2 > W || b.y < -20) {
+              b.x = -b.s * 2;
+              b.y = H * (0.12 + Math.random() * 0.3);
+            }
+          }
+          drawBird(b, cur.gm, 0.42 * cur.birds);
+        }
+      }
+    }
+
+    /* 粒子：常规主题为光尘；悠空·星夜下变为繁星（白昼/黄昏不绘制） */
+    const particleAlphaScale = cur.sky > 0.5 ? cur.stars : 1;
+    if (particleAlphaScale > 0.02) {
+      for (const pt of particles) {
+        if (!staticOnly) {
+          pt.ph += 0.012 * pt.ps;
+          pt.x += pt.vx + Math.sin(pt.ph * 0.6) * 0.06;
+          pt.y += pt.vy;
+          if (!coarse && cur.sky <= 0.5) {
+            const dx = pt.x + pt.ox - mouse.x, dy = pt.y + pt.oy - mouse.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < 16900) {
+              const d = Math.sqrt(d2) || 1;
+              const f = (130 - d) / 130;
+              pt.ox += (dx / d) * f * 1.1;
+              pt.oy += (dy / d) * f * 1.1;
+            }
+            pt.ox *= 0.92; pt.oy *= 0.92;
+          }
+          if (pt.y < -12) { pt.y = H + 12; pt.x = Math.random() * W; }
+          if (pt.x < -12) pt.x = W + 12;
+          if (pt.x > W + 12) pt.x = -12;
+        }
+        const tw = 0.55 + 0.45 * Math.sin(pt.ph);
+        // 悠空下粒子放大为漂浮的光絮（白昼）/ 初星（黄昏）/ 繁星（星夜）
+        const pr = cur.sky > 0.5 ? pt.r * 1.9 : pt.r;
+        ctx.beginPath();
+        ctx.arc(pt.x + pt.ox, pt.y + pt.oy, pr, 0, Math.PI * 2);
+        ctx.fillStyle = rgba(cur.p, Math.min(0.9, pt.a * tw * 0.85 * particleAlphaScale));
+        ctx.fill();
+      }
     }
   }
 
@@ -942,6 +1069,10 @@ function nbx() {
     _mascotAnimationTimer: null,
     _mascotResizeObserver: null,
     _mascotMutationObserver: null,
+    _preSoraTheme: null,
+    _lastMascotDbl: 0,
+    _skyTimer: null,
+    _faviconDefault: "",
 
     newMigrationState() {
       return {
@@ -1316,6 +1447,12 @@ function nbx() {
       if (savedTheme && THEMES.some((t) => t.id === savedTheme)) this.theme = savedTheme;
       this.applyTheme();
 
+      // 悠空 · 三时段天空：每分钟校准一次，回到前台时立即校准
+      this._skyTimer = setInterval(() => this.updateSkyPeriod(), 60000);
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) this.updateSkyPeriod();
+      });
+
       // 动态光影背景
       this._bg = createBackground(document.getElementById("bgfx"));
 
@@ -1590,6 +1727,21 @@ function nbx() {
 
     /* ============ 主题 ============ */
     setTheme(id) {
+      if (id === this.theme) {
+        // 重复点击当前主题：不转场，仅校准一次天空时段（便于调试三时段）
+        this.updateSkyPeriod();
+        return;
+      }
+      // 悠空独占的云扫转场：进入或离开悠空时，一朵云扫过屏幕，扫至满屏时换肤
+      const involvesSora = id === "sora" || this.theme === "sora";
+      const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (involvesSora && !reduced) {
+        this.playSkySweep(() => this._applyThemeNow(id));
+      } else {
+        this._applyThemeNow(id);
+      }
+    },
+    _applyThemeNow(id) {
       this.theme = id;
       this.applyTheme();
       try { localStorage.setItem(LS.theme, id); } catch {}
@@ -1597,6 +1749,55 @@ function nbx() {
     },
     applyTheme() {
       document.documentElement.dataset.theme = this.theme;
+      this.updateSkyPeriod();
+      this.updateFavicon();
+    },
+    /* 悠空 · 两时段天空：白昼 6-18 / 星夜 18-6
+       调试可用 URL hash 强制锁定时段，如 #sky=day（改 hash 后一分钟内生效，重新点主题圆点立即生效） */
+    skyPeriod() {
+      const m = (location.hash || "").match(/sky=(day|night)/);
+      if (m) return m[1];
+      const h = new Date().getHours();
+      return h >= 6 && h < 18 ? "day" : "night";
+    },
+    updateSkyPeriod() {
+      const de = document.documentElement;
+      if (this.theme !== "sora") {
+        if (de.dataset.sky) delete de.dataset.sky;
+        return;
+      }
+      const p = this.skyPeriod();
+      if (de.dataset.sky !== p) {
+        de.dataset.sky = p;
+        if (this._bg) this._bg.themeChanged();
+      }
+    },
+    updateFavicon() {
+      const link = document.querySelector('link[rel="icon"]');
+      if (!link) return;
+      if (!this._faviconDefault) this._faviconDefault = link.href;
+      link.href = this.theme === "sora" ? FAVICON_SORA : this._faviconDefault;
+    },
+    playSkySweep(midCallback) {
+      const el = this.$refs.skySweep;
+      if (!el) { midCallback(); return; }
+      // 世代计数：连续切主题时，前一次转场的收尾定时器不得误摘后一次的动画类
+      this._sweepGen = (this._sweepGen || 0) + 1;
+      const gen = this._sweepGen;
+      el.classList.remove("run");
+      void el.offsetWidth;
+      el.classList.add("run");
+      setTimeout(midCallback, 520);
+      setTimeout(() => { if (gen === this._sweepGen) el.classList.remove("run"); }, 1450);
+    },
+    /* 悠空 · 暗线：双击兔子，自动切入 / 切回 */
+    mascotSecretTap() {
+      if (this.theme === "sora") {
+        this.setTheme(this._preSoraTheme && this._preSoraTheme !== "sora" ? this._preSoraTheme : "paper");
+      } else {
+        this._preSoraTheme = this.theme;
+        this.setTheme("sora");
+      }
     },
 
     /* ============ 模型下拉 ============ */

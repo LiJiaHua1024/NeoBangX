@@ -22,7 +22,7 @@ html, body { height: 100%; }
 body {
   font-family: var(--font);
   color: var(--text);
-  background: var(--bg);
+  background: var(--bg-grad, var(--bg));
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
@@ -163,6 +163,189 @@ html[data-theme="jade"] {
   --c-glow-mouse: 92, 183, 135;
   --c-particle: 150, 210, 172;
   --c-glow-blend: lighter;
+}
+
+/* ============================================================
+   悠空 —— 《缘之空》特别主题
+   唯一的渐变背景主题；随真实时间在两时段天空间流转：
+   白昼（6:00-18:00）/ 星夜（18:00-6:00）
+   --bg 保持纯色（供 color-mix 计算），渐变由 --bg-grad 承担。
+   --c-sky / --c-sky-rays / --c-sky-stars / --c-sky-birds / --c-glow-boost
+   供 bgfx 引擎读取。
+   ============================================================ */
+
+/* 悠空·白昼：高远晴空 */
+html[data-theme="sora"] {
+  color-scheme: light;
+  --bg: #e9f0f7;
+  --bg-grad:
+    radial-gradient(circle 3rem at 80% 12%, rgba(255, 253, 242, 0.98) 0%, rgba(255, 253, 242, 0) 72%),
+    radial-gradient(circle 13rem at 80% 12%, rgba(255, 238, 190, 0.42) 0%, rgba(255, 238, 190, 0) 70%),
+    radial-gradient(circle 46rem at 12% 112%,
+      rgba(0, 0, 0, 0) 62%, rgba(255, 120, 120, 0.1) 63%, rgba(255, 200, 110, 0.1) 64.5%,
+      rgba(255, 255, 150, 0.1) 66%, rgba(140, 220, 160, 0.1) 67.5%, rgba(140, 180, 255, 0.1) 69%,
+      rgba(190, 150, 255, 0.1) 70.5%, rgba(0, 0, 0, 0) 72%),
+    radial-gradient(ellipse 34% 13% at 12% 103%, rgba(255, 255, 255, 0.85) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(ellipse 42% 15% at 48% 106%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(ellipse 30% 12% at 84% 104%, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0) 70%),
+    linear-gradient(180deg, #d3e2f1 0%, #e6eef7 45%, #f7fbfe 100%);
+  --accent: #4f8cc4;
+  --accent-2: #35709f;
+  --title-grad: linear-gradient(112deg, #9cc4e6 0%, var(--accent) 55%, var(--accent-2) 100%);
+  --text: #1d2733;
+  --text-dim: #5c6d7f;
+  --text-faint: #93a3b3;
+  --panel: rgba(255, 255, 255, 0.42);
+  --panel-soft: rgba(255, 255, 255, 0.3);
+  --panel-strong: rgba(247, 251, 254, 0.72);
+  --border: rgba(45, 75, 105, 0.1);
+  --border-strong: rgba(45, 75, 105, 0.18);
+  --hover-bg: rgba(255, 255, 255, 0.6);
+  --active-bg: color-mix(in srgb, var(--accent) 10%, transparent);
+  --btn-bg: #2c3e52;
+  --btn-text: #eef6fc;
+  --btn-hover: #1d2b3b;
+  --code-bg: rgba(45, 75, 105, 0.06);
+  --shadow: 0 18px 50px -18px rgba(60, 100, 140, 0.25);
+  --glow: rgba(79, 140, 196, 0.22);
+  --c-glow-1: 186, 210, 234;
+  --c-glow-2: 205, 224, 240;
+  --c-glow-mouse: 140, 185, 225;
+  --c-particle: 255, 255, 255;
+  --c-glow-blend: source-over;
+  --c-sky: 1;
+  --c-sky-rays: 1;
+  --c-sky-stars: 0.45;
+  --c-sky-birds: 1;
+  --c-glow-boost: 1.8;
+}
+
+/* 悠空·星夜：同一轮明月下的夜空 */
+html[data-theme="sora"][data-sky="night"] {
+  color-scheme: dark;
+  --bg: #0d1524;
+  --bg-grad:
+    radial-gradient(circle 3.2rem at 82% 14%, rgba(246, 248, 252, 0.95) 0%, rgba(246, 248, 252, 0) 72%),
+    radial-gradient(circle 11rem at 82% 14%, rgba(190, 214, 246, 0.28) 0%, rgba(190, 214, 246, 0) 70%),
+    radial-gradient(ellipse 36% 13% at 16% 104%, rgba(30, 46, 74, 0.9) 0%, rgba(30, 46, 74, 0) 70%),
+    radial-gradient(ellipse 44% 15% at 55% 107%, rgba(36, 54, 86, 0.9) 0%, rgba(36, 54, 86, 0) 70%),
+    radial-gradient(ellipse 30% 12% at 88% 105%, rgba(28, 42, 70, 0.85) 0%, rgba(28, 42, 70, 0) 70%),
+    linear-gradient(180deg, #080f1d 0%, #0d1730 55%, #132039 100%);
+  --accent: #8fb6e6;
+  --accent-2: #5d86c2;
+  --title-grad: linear-gradient(112deg, #dcebff 0%, var(--accent) 55%, var(--accent-2) 100%);
+  --text: #e3ecf7;
+  --text-dim: #8ba0b8;
+  --text-faint: #5b6f85;
+  --panel: rgba(160, 200, 255, 0.05);
+  --panel-soft: rgba(160, 200, 255, 0.035);
+  --panel-strong: rgba(10, 17, 32, 0.78);
+  --border: rgba(180, 210, 255, 0.09);
+  --border-strong: rgba(180, 210, 255, 0.16);
+  --hover-bg: rgba(180, 210, 255, 0.08);
+  --active-bg: color-mix(in srgb, var(--accent) 12%, transparent);
+  --btn-bg: #dceafb;
+  --btn-text: #101a2c;
+  --btn-hover: #ffffff;
+  --code-bg: rgba(0, 0, 0, 0.35);
+  --shadow: 0 20px 55px -14px rgba(0, 0, 0, 0.6);
+  --glow: rgba(143, 182, 230, 0.25);
+  --c-glow-1: 60, 90, 140;
+  --c-glow-2: 40, 60, 105;
+  --c-glow-mouse: 143, 182, 230;
+  --c-particle: 235, 242, 252;
+  --c-glow-blend: lighter;
+  --c-sky: 1;
+  --c-sky-rays: 0;
+  --c-sky-stars: 1;
+  --c-sky-birds: 0;
+  --c-glow-boost: 1;
+}
+
+/* ============================================================
+   悠空 · 整体视觉覆盖（结构 / 组件 / 动效 / 彩蛋）
+   ============================================================ */
+
+/* 结构层：更圆润的云感圆角 */
+html[data-theme="sora"] aside.glass,
+html[data-theme="sora"] section.glass { border-radius: 1.9rem; }
+html[data-theme="sora"] .rounded-2xl { border-radius: 1.25rem; }
+html[data-theme="sora"] .rounded-xl { border-radius: 1.05rem; }
+
+/* 组件层：按钮胶囊化 */
+html[data-theme="sora"] .btn-primary,
+html[data-theme="sora"] .btn-ghost { border-radius: 999px; }
+
+/* 组件层：主题圆点上的一朵小云 */
+.theme-dot-sora { position: relative; overflow: hidden; }
+.theme-dot-sora::after {
+  content: "";
+  position: absolute;
+  left: 16%;
+  bottom: 18%;
+  width: 68%;
+  height: 46%;
+  background:
+    radial-gradient(circle at 32% 38%, #ffffff 0 30%, rgba(255, 255, 255, 0) 33%),
+    radial-gradient(circle at 62% 30%, #ffffff 0 36%, rgba(255, 255, 255, 0) 39%),
+    radial-gradient(circle at 50% 68%, #ffffff 0 46%, rgba(255, 255, 255, 0) 49%);
+}
+
+/* 动效层：兔子在悠空下的呼吸感待机；探出时可点击（暗线入口） */
+.mascot-layer.mascot-peeking { pointer-events: auto; cursor: pointer; }
+html[data-theme="sora"] .mascot-peeking {
+  animation: mascot-breathe 4.6s ease-in-out infinite;
+}
+@keyframes mascot-breathe {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(0) scale(1); }
+  50% { transform: translate3d(0, -4px, 0) rotate(-1.2deg) scale(1.012); }
+}
+
+/* 彩蛋层：页角台词 —— 切到悠空后延迟浮现 */
+.sky-quote {
+  position: absolute;
+  left: 1.4rem;
+  bottom: 2.6rem;
+  z-index: 3;
+  max-width: 70%;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  pointer-events: none;
+  user-select: none;
+  animation: sky-quote-in 2.4s ease 0.9s both;
+}
+@keyframes sky-quote-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 动效层：云扫转场（悠空独占） */
+.sky-sweep {
+  position: fixed;
+  top: -12vh;
+  left: 0;
+  width: 165vw;
+  height: 124vh;
+  z-index: 95;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-130%);
+  background:
+    radial-gradient(ellipse 15% 20% at 10% 34%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0) 68%),
+    radial-gradient(ellipse 20% 26% at 30% 52%, rgba(255, 255, 255, 0.99) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(ellipse 17% 22% at 50% 30%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0) 68%),
+    radial-gradient(ellipse 22% 28% at 66% 58%, rgba(255, 255, 255, 0.99) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(ellipse 16% 22% at 84% 36%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0) 68%),
+    radial-gradient(ellipse 18% 24% at 94% 62%, rgba(255, 255, 255, 0.97) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(ellipse 26% 18% at 45% 78%, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0) 70%);
+}
+.sky-sweep.run { animation: sky-sweep-pass 1.35s cubic-bezier(0.55, 0.08, 0.35, 1) both; }
+@keyframes sky-sweep-pass {
+  0% { opacity: 0; transform: translateX(-130%); }
+  14% { opacity: 1; }
+  82% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(112%); }
 }
 
 /* ============================================================
