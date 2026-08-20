@@ -55,13 +55,18 @@
            aria-label="工具列表">
 
       <!-- Logo -->
-      <div class="flex items-center gap-2.5 px-4 pt-4 pb-3 shrink-0">
+      <div class="flex items-center gap-2.5 px-4 pt-4 pb-3 shrink-0 side-logo-container">
         <div class="logo-tile w-9 h-9 rounded-xl flex items-center justify-center text-white shrink-0 cursor-pointer"
              style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 16px -6px var(--glow)"
-             @click="goHome()" title="回到首页" x-html="icon('logo','w-5 h-5')"></div>
-        <div class="min-w-0 cursor-pointer select-none" @click="goHome()">
-          <div class="font-extrabold tracking-tight leading-tight">NeoBangX</div>
-          <div class="text-[11px] text-faint leading-tight">英语教学 AI 工作台</div>
+             @click="goHome()" title="回到首页" x-html="icon(theme === 'sora' ? 'cloud' : 'logo','w-5 h-5')"></div>
+        <div class="min-w-0 cursor-pointer select-none" @click="goHome()"
+             :title="theme === 'sora' ? '英语教学 AI 工作台' : ''">
+          <div class="font-extrabold tracking-tight leading-tight truncate">NeoBangX</div>
+          <!-- 悠空台词：窄栏时按“逗号 → 哪里后”分级换行；极窄则整段隐藏 -->
+          <div x-show="theme === 'sora'" x-cloak class="sky-side-quote text-[11px] text-faint leading-tight">
+            <span>真正的天空，</span><span class="sky-quote-rest">广阔且无论到哪里<span>都紧紧相连</span></span>
+          </div>
+          <div x-show="theme !== 'sora'" x-cloak class="text-[11px] text-faint leading-tight truncate">英语教学 AI 工作台</div>
         </div>
         <span class="ml-auto lg:hidden"><button class="icon-btn" @click="leftOpen = false" title="关闭"
                 x-html="icon('x','w-4 h-4')"></button></span>
@@ -134,8 +139,8 @@
                 x-html="icon('menu','w-5 h-5')"></button></span>
         <div class="flex items-center gap-2 ml-0.5 cursor-pointer select-none" @click="goHome()">
           <div class="w-7 h-7 rounded-lg flex items-center justify-center text-white"
-               style="background:linear-gradient(135deg,var(--accent),var(--accent-2))"
-               x-html="icon('logo','w-4 h-4')"></div>
+                style="background:linear-gradient(135deg,var(--accent),var(--accent-2))"
+                x-html="icon(theme === 'sora' ? 'cloud' : 'logo','w-4 h-4')"></div>
           <span class="font-bold text-sm tracking-tight">NeoBangX</span>
         </div>
         <button class="icon-btn ml-auto" @click="rightMobileOpen = true" title="历史与收藏"
@@ -154,12 +159,12 @@
           <img src="/static/Sora_Rabbit_Plush.png?v=sora260820" alt="" draggable="false">
         </div>
 
-        <!-- 悠空 · 页角台词 -->
-        <div x-show="theme === 'sora'" x-cloak class="sky-quote">真正的天空，广阔且无论到哪里都紧紧相连</div>
-
         <!-- ========== 欢迎页 ========== -->
         <div x-show="!currentTool" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
-          <div class="min-h-full flex flex-col items-center justify-center text-center px-6 py-12">
+          <div class="min-h-full flex flex-col items-center text-center px-6 py-12">
+
+            <!-- 主内容：在剩余空间内垂直居中 -->
+            <div class="w-full flex-1 flex flex-col items-center justify-center">
 
             <div class="fade-up chip neutral" style="animation-delay:.02s">
               NeoBangX · 英语教学 AI 工作台
@@ -264,6 +269,11 @@
                 </template>
               </div>
             </div>
+
+            </div>
+
+            <!-- 悠空 · 首页底部台词 -->
+            <p x-show="theme === 'sora'" x-cloak class="sky-quote">真正的天空，广阔且无论到哪里都紧紧相连</p>
 
           </div>
         </div>

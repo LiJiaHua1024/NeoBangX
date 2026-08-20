@@ -301,23 +301,51 @@ html[data-theme="sora"] .mascot-peeking {
   50% { transform: translate3d(0, -4px, 0) rotate(-1.2deg) scale(1.012); }
 }
 
-/* 彩蛋层：页角台词 —— 切到悠空后延迟浮现 */
+/* 悠空 · 首页底部台词（欢迎页最底下居中，不再漂浮覆盖内容） */
 .sky-quote {
-  position: absolute;
-  left: 1.4rem;
-  bottom: 2.6rem;
-  z-index: 3;
-  max-width: 70%;
-  font-size: 0.8rem;
+  max-width: 30rem;
+  margin: 2.75rem auto 0;
+  font-size: 0.85rem;
   letter-spacing: 0.08em;
+  line-height: 1.8;
+  text-align: center;
   color: var(--text-faint);
-  pointer-events: none;
   user-select: none;
   animation: sky-quote-in 2.4s ease 0.9s both;
 }
 @keyframes sky-quote-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* 左栏 Logo 区：作为容器查询基准，衡量悠空台词是否窄到放不下 */
+.side-logo-container {
+  container-type: inline-size;
+}
+/* 悠空台词：两级嵌套换行，保证断点优先级 = 逗号优先、其次“哪里”：
+   外层只有两段 —— “真正的天空，” + “广阔且无论到哪里都紧紧相连”，
+   放不下整句时先断在逗号后；
+   内层再把后段拆成 “广阔且无论到哪里” + “都紧紧相连”，
+   连 “广阔且无论到哪里” 都放不下时才断在“哪里”后。 */
+.sky-side-quote {
+  display: flex;
+  flex-wrap: wrap;
+}
+.sky-side-quote > span {
+  white-space: nowrap;
+}
+.sky-quote-rest {
+  display: inline-flex;
+  flex-wrap: wrap;
+}
+.sky-quote-rest > span {
+  white-space: nowrap;
+}
+/* 极窄兜底：文本可用宽度不足最宽段“广阔且无论到哪里”（8 个中文字宽 ≈ 88px）时整段隐藏。
+   固定占用：左右 padding 32px + 图标 36px + 两处间距 20px（<lg 还有关闭按钮 36px + 间距 10px），
+   故 88 + 124 = 212px 为最小可展示宽度；212px 以下一律不显示。 */
+@container (max-width: 211px) {
+  .sky-side-quote { display: none; }
 }
 
 /* 动效层：云扫转场（悠空独占） */

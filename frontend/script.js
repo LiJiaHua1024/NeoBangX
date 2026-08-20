@@ -36,6 +36,7 @@ const ICON_PATHS = {
 
   // —— UI 图标 ——
   "logo": '<path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2Z"/>',
+  "cloud": '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
   "menu": '<path d="M4 6.5h16M4 12h16M4 17.5h16"/>',
   "x": '<path d="M6 6l12 12M18 6 6 18"/>',
   "chevron-down": '<path d="m6 9 6 6 6-6"/>',
