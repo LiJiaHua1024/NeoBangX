@@ -19,6 +19,30 @@
 
 html, body { height: 100%; }
 
+/* 键盘高度：JS 写入 --kb，现代 Chrome 写入 env(keyboard-inset-height) */
+:root {
+  --kb: 0px;
+  --kbi: env(keyboard-inset-height, 0px);
+}
+
+/* 根容器：默认 100dvh，键盘弹出时扣除键盘高度，兼容 interactive-widget=resizes-content */
+.app-root {
+  min-height: -webkit-fill-available;
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+@supports (height: 100dvh) {
+  html.kb-open .app-root {
+    height: calc(100dvh - max(var(--kb), var(--kbi)));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+/* 窄屏下键盘收起过渡更平滑 */
+@media (max-width: 640px) {
+  .app-root {
+    transition: height 0.22s ease, padding-bottom 0.22s ease;
+  }
+}
+
 body {
   font-family: var(--font);
   color: var(--text);

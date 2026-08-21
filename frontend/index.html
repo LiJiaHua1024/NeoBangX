@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="obsidian">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>NeoBangX · Bang助教学，大有可AI</title>
   <meta name="description" content="NeoBangX：26 个中学英语教学 AI 工具，输入使用码即可开始。">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23e9a15b'/%3E%3Cstop offset='1' stop-color='%23cf7038'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
@@ -41,7 +41,7 @@
   <!-- 动态光影背景（粒子 + 鼠标光晕 + 工具选择光脉冲） -->
   <canvas id="bgfx" aria-hidden="true"></canvas>
 
-  <div x-data="nbx()" x-init="init()" x-cloak class="h-dvh w-full flex gap-3 p-3">
+  <div x-data="nbx()" x-init="init()" x-cloak class="app-root h-dvh w-full flex gap-3 p-3">
 
     <!-- 抽屉遮罩（移动端 / 窄屏） -->
     <div x-show="leftOpen || rightMobileOpen" class="drawer-mask"

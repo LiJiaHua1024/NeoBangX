@@ -1490,10 +1490,79 @@ function nbx() {
         this.repositionExportMenu();
         this.repositionMigrationExport();
         this.scheduleMascotCheck(80);
+        this._syncKB && this._syncKB();
       });
       if (window.visualViewport) {
-        window.visualViewport.addEventListener("resize", () => this.scheduleMascotCheck(80));
+        window.visualViewport.addEventListener("resize", () => {
+          this.scheduleMascotCheck(80);
+          this._syncKB && this._syncKB();
+        });
+        window.visualViewport.addEventListener("scroll", () => this._syncKB && this._syncKB());
       }
+
+      // 键盘高度同步：解决移动端输入法弹出时底部留白（interactive-widget 回退）
+      this._syncKB = () => {
+        const vv = window.visualViewport;
+        let kb = 0;
+        if (vv) {
+          // visualViewport.height 为可视区高度，offsetTop 处理 iOS 键盘顶部的偏移
+          const offsetTop = vv.offsetTop || 0;
+          kb = Math.max(0, window.innerHeight - vv.height - offsetTop);
+          // 部分安卓机 visualViewport.height 约等于 innerHeight 但键盘仍为 overlay，用 innerWidth 判断横屏不处理
+          if (kb < 40 && vv.height < window.innerHeight * 0.85) {
+            kb = Math.max(0, window.innerHeight - vv.height);
+          }
+        } else {
+          // 回退：比较 innerHeight 与 documentElement.clientHeight
+          kb = Math.max(0, window.innerHeight - document.documentElement.clientHeight);
+        }
+        // 过滤抖动：< 60px 视为无键盘（工具栏等）
+        const hasKB = kb > 60;
+        const kbPx = hasKB ? Math.round(kb) + "px" : "0px";
+        document.documentElement.style.setProperty("--kb", kbPx);
+        document.documentElement.classList.toggle("kb-open", hasKB);
+        // 同步给 mascot 布局重新计算
+        if (hasKB) this.scheduleMascotCheck(30);
+      };
+      // 初始化一次
+      this._syncKB();
+      // 额外监听：确保键盘动画期间多次同步
+      window.addEventListener("resize", this._syncKB, { passive: true });
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", this._syncKB, { passive: true });
+      }
+      // 输入框聚焦时确保可视：避免被键盘遮挡，主动滚入视口
+      window.addEventListener("focusin", (e) => {
+        const el = e.target;
+        if (!el || !el.matches || !el.matches("textarea, input, [contenteditable='true']")) return;
+        // 延迟等待键盘动画与 --kb 更新
+        setTimeout(() => this._syncKB(), 80);
+        setTimeout(() => {
+          try {
+            const vv = window.visualViewport;
+            const isMobile = window.innerWidth <= 640 || (vv && vv.width <= 640);
+            if (!isMobile) return;
+            // 优先让外层滚动容器把输入框带到可视区
+            const scrollEl = el.closest(".migration-shell, .vocab-shell, .composer, [x-ref='migrationScroll'], [x-ref='resultScroll']");
+            // 通用：scrollIntoView
+            el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            // 针对迁移表单：额外把父容器滚动到底部附近
+            const container = this.$refs.migrationScroll || this.$refs.resultScroll;
+            if (container && scrollEl) {
+              const rect = el.getBoundingClientRect();
+              const vH = (vv && vv.height) || window.innerHeight;
+              if (rect.bottom > vH - 24) {
+                container.scrollTo({ top: container.scrollTop + (rect.bottom - vH + 32), behavior: "smooth" });
+              }
+            }
+          } catch {}
+        }, 320);
+      }, true);
+      window.addEventListener("focusout", () => {
+        // 键盘收起有动画，延迟清除 kb 标记以免闪烁
+        setTimeout(() => this._syncKB(), 120);
+        setTimeout(() => this._syncKB(), 400);
+      }, true);
 
       this.$nextTick(() => {
         this.autoGrow();
