@@ -23,7 +23,41 @@ logger = logging.getLogger(__name__)
 WORD_RE = re.compile(r"[A-Za-z]+(?:['’-][A-Za-z]+)*")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+")
 
+# 部分课标词条(hi/I/oh/ad 等)的 word_keys 为空, 需从 word 字段回退提取核心词形
+_CORE_WORD_RE = re.compile(r"[A-Za-z]+")
+
+
+def _core_word(entry_word: str) -> str:
+    """从课标词条的 word 字段提取核心词形(小写)。
+
+    处理 "can1 (could)" -> can、"dream (dreamt...)" -> dream、
+    "ad (缩) =advertisement" -> ad、"I" -> i 等带括号/数字/符号的情况。
+    """
+    w = _CORE_WORD_RE.search(entry_word)
+    return w.group(0).lower() if w else ""
+
 _WORDLIST_DIR = Path(__file__).resolve().parent.parent / "data"
+
+# 课标补充词集: 词表文件缺失但属高考课标范围的高频基础词
+# (according/community/economic/source 等均高频出现在高考真题中, 词表漏收)
+# 优先补原子词根, 派生形式由预展开规则覆盖; 规则覆盖不到的派生词一并补入
+_EXTRA_WORDS = {
+    # 词根补充(其屈折/派生形式可被预展开覆盖)
+    "accord", "commune", "economy", "efficiency", "intellect", "involve", "maintain",
+    "recognize", "source", "essence", "item", "option", "region", "current", "overall",
+    "series", "enable", "ensure", "efficient", "economic", "essential", "social",
+    # 派生规则覆盖不到的课标词, 直接补入
+    "community", "intelligent", "intellectual", "responsible", "response",
+    "significant", "simply", "neighborhood", "ease", "modernization",
+    # 报告高频出现、属高考课标范围的常用词(词表漏收)
+    "cannot", "email", "confidence", "behavior", "individual", "financial",
+    "consumption", "recognition", "contact", "impact", "ceremony", "landscape",
+    "imagination", "passion", "curiosity", "journal", "issue", "infer", "transition",
+    "campus", "threat", "recovery", "probable", "hiking", "dining", "okay", "shown",
+    "details", "devices", "employees", "participants", "ingredients", "located",
+    "motivated", "historical", "humor", "genius", "polar", "gossip", "fully",
+    "workshop", "workout", "code", "individuals",
+}
 
 # 常见不规则动词/名词复数等,回退到词表词形
 _IRREGULAR: dict[str, str] = {
@@ -179,7 +213,8 @@ _DOUBLE_LETTERS = {
 
 
 # 常见头衔 / 缩写: 直接放行(Dr., Prof., St., No., a.m., p.m. 等)
-_TITLES = {"dr", "prof", "st", "mt", "jr", "sr", "no", "am", "pm", "ad", "bc", "etc", "vs", "ok"}
+# th/nd/rd 为序数词(5th/20th/2nd/3rd)分词后的残片, 非真实单词, 一并放行
+_TITLES = {"dr", "prof", "st", "mt", "jr", "sr", "no", "am", "pm", "ad", "bc", "etc", "vs", "ok", "th", "nd", "rd"}
 
 # 派生前缀: 词根在表即可放行(unhappy -> happy)
 _PREFIXES = ("un", "dis", "im", "in", "ir", "il", "re")
@@ -421,6 +456,7 @@ class VocabChecker:
         if words_file.exists():
             raw = json.loads(words_file.read_text(encoding="utf-8"))
             self._words = {w.lower() for w in raw}
+            self._words.update(_EXTRA_WORDS)
             self._words.add("i")
             self._words.add("whoever")
             logger.info("Loaded %d syllabus words from %s", len(self._words), words_file)
@@ -430,8 +466,14 @@ class VocabChecker:
         if meta_file.exists():
             raw = json.loads(meta_file.read_text(encoding="utf-8"))
             for entry in raw:
-                for key in entry.get("word_keys", []):
-                    kl = key.lower()
+                keys = [k.lower() for k in entry.get("word_keys", [])]
+                # 部分课标词条(hi/I/oh/ad 等) word_keys 为空, 从 word 字段回退提取核心词
+                if not keys:
+                    core = _core_word(entry.get("word", ""))
+                    if core:
+                        keys = [core]
+                        self._words.add(core)
+                for kl in keys:
                     if kl not in self._meta:
                         self._meta[kl] = {
                             "pos": entry.get("pos", ""),
