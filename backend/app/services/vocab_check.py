@@ -143,6 +143,12 @@ _IRREGULAR: dict[str, str] = {
     "sped": "speed", "speeded": "speed", "speeding": "speed",
     "smelt": "smell", "smelled": "smell", "smelling": "smell",
     "spilt": "spill", "spilled": "spill", "spilling": "spill",
+    # 常见否定缩写回退 (don't -> don -> do, didn't -> didn -> do)
+    "don": "do", "doesn": "do", "didn": "do",
+    "isn": "be", "aren": "be", "wasn": "be", "weren": "be",
+    "hasn": "have", "haven": "have", "hadn": "have",
+    "won": "will", "wouldn": "will", "shan": "shall", "shouldn": "shall",
+    "couldn": "can", "mustn": "must", "needn": "need", "daren": "dare",
     # 不规则复数
     "children": "child", "people": "person", "men": "man",
     "women": "woman", "mice": "mouse", "feet": "foot",
@@ -172,8 +178,8 @@ _DOUBLE_LETTERS = {
 }
 
 
-# 常见头衔 / 缩写: 直接放行(Dr., Prof., St., No. 等)
-_TITLES = {"dr", "prof", "st", "mt", "jr", "sr", "no"}
+# 常见头衔 / 缩写: 直接放行(Dr., Prof., St., No., a.m., p.m. 等)
+_TITLES = {"dr", "prof", "st", "mt", "jr", "sr", "no", "am", "pm", "ad", "bc", "etc", "vs", "ok"}
 
 # 派生前缀: 词根在表即可放行(unhappy -> happy)
 _PREFIXES = ("un", "dis", "im", "in", "ir", "il", "re")
@@ -415,6 +421,8 @@ class VocabChecker:
         if words_file.exists():
             raw = json.loads(words_file.read_text(encoding="utf-8"))
             self._words = {w.lower() for w in raw}
+            self._words.add("i")
+            self._words.add("whoever")
             logger.info("Loaded %d syllabus words from %s", len(self._words), words_file)
         else:
             logger.warning("Syllabus wordlist not found: %s", words_file)
@@ -453,8 +461,8 @@ class VocabChecker:
                     w = w.split("'")[0].split("’")[0]
                 if not w.isalpha():
                     continue
-                # 单字母大写视为选项标记/缩写(B. C. D. 等), 不参与排查
-                if len(w) == 1 and raw[0].isupper():
+                # 单字母仅 a 与 I 为合法单词，其余(选项标记/缩写/撇号残留等)不参与排查
+                if len(w) == 1 and w not in ("a", "i"):
                     continue
                 # 全大写视为缩写(USA、CEO 等), 不参与排查
                 if raw.isupper() and len(raw) > 1:
@@ -475,7 +483,7 @@ class VocabChecker:
         over_words = [
             {
                 "word": w,
-                "count": len(ctxs),
+                "count": total_seen.get(w, len(ctxs)),
                 # 仅当该词全部出现均为首字母大写时才标记为可能专有名词
                 "maybe_proper": cap_seen.get(w, 0) == total_seen.get(w, 0),
                 "sentences": ctxs,
