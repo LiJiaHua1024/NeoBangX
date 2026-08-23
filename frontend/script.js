@@ -182,13 +182,11 @@ function createBackground(canvas) {
   const ctx = canvas.getContext("2d");
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const coarse = matchMedia("(pointer: coarse)").matches;
-  const PARTICLES = coarse ? 45 : 100;
 
   let raf = null;
   let t = Math.random() * 100;
   const mouse = { x: innerWidth * 0.72, y: innerHeight * 0.3 };
   const halo = { x: mouse.x, y: mouse.y, tx: mouse.x, ty: mouse.y };
-  let particles = [];
   let pulses = [];
   let sparks = [];
   let clouds = [];
@@ -249,17 +247,6 @@ function createBackground(canvas) {
   resize();
 
   function spawn() {
-    particles = Array.from({ length: PARTICLES }, () => ({
-      x: Math.random() * innerWidth,
-      y: Math.random() * innerHeight,
-      r: 1 + Math.random() * 2.2,
-      vx: (Math.random() - 0.5) * 0.1,
-      vy: -(0.06 + Math.random() * 0.18),
-      ph: Math.random() * Math.PI * 2,
-      ps: 0.5 + Math.random() * 0.9,
-      a: 0.3 + Math.random() * 0.5,
-      ox: 0, oy: 0,
-    }));
     // 悠空主题的云絮：大团块、缓慢水平漂移，会被鼠标拨开、被光晕照亮
     clouds = Array.from({ length: coarse ? 6 : 10 }, () => ({
       x: Math.random() * innerWidth,
@@ -293,7 +280,12 @@ function createBackground(canvas) {
 
   function glowSpot(x, y, r, color, alpha) {
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    // 多段柔和衰减：减小相邻像素的色阶跳变，明显压制 radial-gradient 的色带
     g.addColorStop(0, rgba(color, alpha));
+    g.addColorStop(0.2, rgba(color, alpha * 0.82));
+    g.addColorStop(0.42, rgba(color, alpha * 0.56));
+    g.addColorStop(0.64, rgba(color, alpha * 0.34));
+    g.addColorStop(0.84, rgba(color, alpha * 0.16));
     g.addColorStop(1, rgba(color, 0));
     ctx.fillStyle = g;
     ctx.fillRect(x - r, y - r, r * 2, r * 2);
@@ -448,38 +440,6 @@ function createBackground(canvas) {
       }
     }
 
-    /* 粒子：常规主题为光尘；悠空·白昼下放大为漂浮光絮、星夜下变为繁星 */
-    const particleAlphaScale = cur.sky > 0.5 ? cur.stars : 1;
-    if (particleAlphaScale > 0.02) {
-      for (const pt of particles) {
-        if (!staticOnly) {
-          pt.ph += 0.012 * pt.ps;
-          pt.x += pt.vx + Math.sin(pt.ph * 0.6) * 0.06;
-          pt.y += pt.vy;
-          if (!coarse && cur.sky <= 0.5) {
-            const dx = pt.x + pt.ox - mouse.x, dy = pt.y + pt.oy - mouse.y;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < 16900) {
-              const d = Math.sqrt(d2) || 1;
-              const f = (130 - d) / 130;
-              pt.ox += (dx / d) * f * 1.1;
-              pt.oy += (dy / d) * f * 1.1;
-            }
-            pt.ox *= 0.92; pt.oy *= 0.92;
-          }
-          if (pt.y < -12) { pt.y = H + 12; pt.x = Math.random() * W; }
-          if (pt.x < -12) pt.x = W + 12;
-          if (pt.x > W + 12) pt.x = -12;
-        }
-        const tw = 0.55 + 0.45 * Math.sin(pt.ph);
-        // 悠空下粒子放大为漂浮的光絮（白昼）/ 繁星（星夜）
-        const pr = cur.sky > 0.5 ? pt.r * 1.9 : pt.r;
-        ctx.beginPath();
-        ctx.arc(pt.x + pt.ox, pt.y + pt.oy, pr, 0, Math.PI * 2);
-        ctx.fillStyle = rgba(cur.p, Math.min(0.9, pt.a * tw * 0.85 * particleAlphaScale));
-        ctx.fill();
-      }
-    }
   }
 
   function loop() {
@@ -1832,13 +1792,13 @@ function nbx() {
       this.updateSkyPeriod();
       this.updateFavicon();
     },
-    /* 悠空 · 两时段天空：白昼 6-18 / 星夜 18-6
+    /* 悠空 · 两时段天空：白昼 6-22 / 星夜 22-6
        调试可用 URL hash 强制锁定时段，如 #sky=day（改 hash 后一分钟内生效，重新点主题圆点立即生效） */
     skyPeriod() {
       const m = (location.hash || "").match(/sky=(day|night)/);
       if (m) return m[1];
       const h = new Date().getHours();
-      return h >= 6 && h < 18 ? "day" : "night";
+      return h >= 6 && h < 22 ? "day" : "night";
     },
     updateSkyPeriod() {
       const de = document.documentElement;
