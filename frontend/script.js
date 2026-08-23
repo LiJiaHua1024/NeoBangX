@@ -324,7 +324,7 @@ function createBackground(canvas) {
     ctx.restore();
   }
 
-  /* 悠空·黄昏：一只归鸟 = 两条二次曲线，翅膀上下扇动 */
+  /* 悠空·白昼：一只飞鸟 = 两条二次曲线，翅膀上下扇动 */
   function drawBird(b, color, alpha) {
     const w = Math.sin(b.ph) * b.s * 0.42;
     ctx.beginPath();
@@ -438,7 +438,7 @@ function createBackground(canvas) {
       }
     }
 
-    /* 粒子：常规主题为光尘；悠空·星夜下变为繁星（白昼/黄昏不绘制） */
+    /* 粒子：常规主题为光尘；悠空·白昼下放大为漂浮光絮、星夜下变为繁星 */
     const particleAlphaScale = cur.sky > 0.5 ? cur.stars : 1;
     if (particleAlphaScale > 0.02) {
       for (const pt of particles) {
@@ -462,7 +462,7 @@ function createBackground(canvas) {
           if (pt.x > W + 12) pt.x = -12;
         }
         const tw = 0.55 + 0.45 * Math.sin(pt.ph);
-        // 悠空下粒子放大为漂浮的光絮（白昼）/ 初星（黄昏）/ 繁星（星夜）
+        // 悠空下粒子放大为漂浮的光絮（白昼）/ 繁星（星夜）
         const pr = cur.sky > 0.5 ? pt.r * 1.9 : pt.r;
         ctx.beginPath();
         ctx.arc(pt.x + pt.ox, pt.y + pt.oy, pr, 0, Math.PI * 2);
@@ -1448,7 +1448,7 @@ function nbx() {
       if (savedTheme && THEMES.some((t) => t.id === savedTheme)) this.theme = savedTheme;
       this.applyTheme();
 
-      // 悠空 · 三时段天空：每分钟校准一次，回到前台时立即校准
+      // 悠空 · 两时段天空：每分钟校准一次，回到前台时立即校准
       this._skyTimer = setInterval(() => this.updateSkyPeriod(), 60000);
       document.addEventListener("visibilitychange", () => {
         if (!document.hidden) this.updateSkyPeriod();
@@ -1798,7 +1798,7 @@ function nbx() {
     /* ============ 主题 ============ */
     setTheme(id) {
       if (id === this.theme) {
-        // 重复点击当前主题：不转场，仅校准一次天空时段（便于调试三时段）
+        // 重复点击当前主题：不转场，仅校准一次天空时段（便于调试两时段）
         this.updateSkyPeriod();
         return;
       }
