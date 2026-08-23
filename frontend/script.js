@@ -210,6 +210,7 @@ function createBackground(canvas) {
       rays: parseFloat(cs.getPropertyValue("--c-sky-rays")) || 0,
       stars: parseFloat(cs.getPropertyValue("--c-sky-stars")) || 0,
       birds: parseFloat(cs.getPropertyValue("--c-sky-birds")) || 0,
+      bird: parse(cs.getPropertyValue("--c-sky-bird")),
       boost: parseFloat(cs.getPropertyValue("--c-glow-boost")) || 1,
     };
   }
@@ -268,11 +269,11 @@ function createBackground(canvas) {
       a: 0.14 + Math.random() * 0.14,
       ox: 0, oy: 0,
     }));
-    // 悠空·白昼的飞鸟：三两只，斜向缓缓掠过天际
+    // 悠空·白昼的飞鸟：一小群（一大两小，大的离“镜头”近），斜向缓缓掠过天际
     birds = Array.from({ length: 3 }, (_, i) => ({
       x: Math.random() * innerWidth,
-      y: innerHeight * (0.12 + Math.random() * 0.3),
-      s: 7 + Math.random() * 6,
+      y: innerHeight * (0.1 + Math.random() * 0.32),
+      s: i === 0 ? 28 + Math.random() * 5 : 17 + Math.random() * 4,
       vx: 0.35 + Math.random() * 0.25,
       vy: -(0.02 + Math.random() * 0.04),
       ph: i * 1.7 + Math.random(),
@@ -324,17 +325,25 @@ function createBackground(canvas) {
     ctx.restore();
   }
 
-  /* 悠空·白昼：一只飞鸟 = 两条二次曲线，翅膀上下扇动 */
+  /* 悠空·白昼：一只飞鸟 = 实心剪影（前缘双弧 + 后缘围出翼面），翅膀上下扇动。
+     翼面要有足够面积（后缘深压），尺寸、实心、深色都是为了隔着
+     液态玻璃的 backdrop-filter 模糊后，看到的仍是一只“在扇翅膀的鸟”，
+     而不是一团移动的黑点。 */
   function drawBird(b, color, alpha) {
-    const w = Math.sin(b.ph) * b.s * 0.42;
+    const f = Math.sin(b.ph);      // -1..1，翅膀上下扇动
+    const s = b.s;
+    const tipY = b.y - f * s * 0.62; // 翼尖高度随扇动摆动
     ctx.beginPath();
-    ctx.moveTo(b.x - b.s, b.y - w);
-    ctx.quadraticCurveTo(b.x - b.s * 0.45, b.y + b.s * 0.32, b.x, b.y);
-    ctx.quadraticCurveTo(b.x + b.s * 0.45, b.y + b.s * 0.32, b.x + b.s, b.y - w);
-    ctx.strokeStyle = rgba(color, alpha);
-    ctx.lineWidth = 1.6;
-    ctx.lineCap = "round";
-    ctx.stroke();
+    // 前缘：左翼尖 → 身体 → 右翼尖（经典海鸥“M”形）
+    ctx.moveTo(b.x - s, tipY);
+    ctx.quadraticCurveTo(b.x - s * 0.5, b.y + s * 0.02, b.x, b.y + s * 0.16);
+    ctx.quadraticCurveTo(b.x + s * 0.5, b.y + s * 0.02, b.x + s, tipY);
+    // 后缘：右翼尖 → 尾部 → 左翼尖（深压到 0.5s 以下，围出肥厚的实心翼面，向翼尖收窄）
+    ctx.quadraticCurveTo(b.x + s * 0.38, b.y + s * 0.66, b.x, b.y + s * 0.52);
+    ctx.quadraticCurveTo(b.x - s * 0.38, b.y + s * 0.66, b.x - s, tipY);
+    ctx.closePath();
+    ctx.fillStyle = rgba(color, alpha);
+    ctx.fill();
   }
 
   function frame(staticOnly) {
@@ -347,6 +356,7 @@ function createBackground(canvas) {
       rays: cur.rays + (tgt.rays - cur.rays) * 0.06,
       stars: cur.stars + (tgt.stars - cur.stars) * 0.06,
       birds: cur.birds + (tgt.birds - cur.birds) * 0.06,
+      bird: lerp3(cur.bird, tgt.bird, 0.06),
       boost: cur.boost + (tgt.boost - cur.boost) * 0.06,
     };
     ctx.clearRect(0, 0, W, H);
@@ -425,7 +435,7 @@ function createBackground(canvas) {
       if (cur.birds > 0.02) {
         for (const b of birds) {
           if (!staticOnly) {
-            b.ph += 0.09;
+            b.ph += 0.11;
             b.x += b.vx;
             b.y += b.vy;
             if (b.x - b.s * 2 > W || b.y < -20) {
@@ -433,7 +443,7 @@ function createBackground(canvas) {
               b.y = H * (0.12 + Math.random() * 0.3);
             }
           }
-          drawBird(b, cur.gm, 0.42 * cur.birds);
+          drawBird(b, cur.bird, 0.55 * cur.birds);
         }
       }
     }

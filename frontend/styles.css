@@ -206,6 +206,7 @@ html[data-theme="jade"] {
    白昼（6:00-18:00）/ 星夜（18:00-6:00）
    --bg 保持纯色（供 color-mix 计算），渐变由 --bg-grad 承担。
    --c-sky / --c-sky-rays / --c-sky-stars / --c-sky-birds / --c-glow-boost
+   --c-sky-bird：飞鸟剪影色（深色，保证隔着液态玻璃模糊仍可辨认）
    供 bgfx 引擎读取。
    ============================================================ */
 
@@ -253,6 +254,7 @@ html[data-theme="sora"] {
   --c-sky-rays: 1;
   --c-sky-stars: 0.45;
   --c-sky-birds: 1;
+  --c-sky-bird: 53, 112, 159;
   --c-glow-boost: 1.8;
 }
 
@@ -296,6 +298,7 @@ html[data-theme="sora"][data-sky="night"] {
   --c-sky-rays: 0;
   --c-sky-stars: 1;
   --c-sky-birds: 0;
+  --c-sky-bird: 143, 182, 230;
   --c-glow-boost: 1;
 }
 
