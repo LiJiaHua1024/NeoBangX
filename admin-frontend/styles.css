@@ -7,6 +7,13 @@
     "Microsoft YaHei UI", "Segoe UI", Roboto, sans-serif;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.45, 0.64, 1);
+
+  /* 液态玻璃（Liquid Glass）配方 */
+  --glass-blur: 14px;
+  --glass-blur-soft: 10px;
+  --glass-blur-deep: 20px;
+  --glass-sat: 150%;
+  --glass-contrast: 104%;
 }
 
 /* 默认：宣纸（亮色） */
@@ -18,9 +25,10 @@ html[data-theme="paper"] {
   --text: #1d1a15;
   --dim: #6f675a;
   --faint: #a29a8b;
-  --panel: rgba(255, 255, 255, 0.55);
-  --panel-soft: rgba(255, 255, 255, 0.4);
-  --panel-strong: rgba(255, 253, 249, 0.82);
+  --glass-spec: #fffdf8;
+  --panel: color-mix(in srgb, var(--glass-spec) 14%, transparent);
+  --panel-soft: color-mix(in srgb, var(--glass-spec) 10%, transparent);
+  --panel-strong: color-mix(in srgb, var(--glass-spec) 82%, var(--text) 5%);
   --border: rgba(29, 26, 21, 0.08);
   --border-strong: rgba(29, 26, 21, 0.15);
   --hover: rgba(29, 26, 21, 0.055);
@@ -48,9 +56,10 @@ html[data-theme="celadon"] {
   --text: #15211c;
   --dim: #5d6e66;
   --faint: #93a39b;
-  --panel: rgba(255, 255, 255, 0.55);
-  --panel-soft: rgba(255, 255, 255, 0.38);
-  --panel-strong: rgba(250, 253, 252, 0.82);
+  --glass-spec: #eaf7f1;
+  --panel: color-mix(in srgb, var(--glass-spec) 14%, transparent);
+  --panel-soft: color-mix(in srgb, var(--glass-spec) 10%, transparent);
+  --panel-strong: color-mix(in srgb, var(--glass-spec) 82%, var(--text) 5%);
   --border: rgba(21, 33, 28, 0.08);
   --border-strong: rgba(21, 33, 28, 0.15);
   --hover: rgba(21, 33, 28, 0.055);
@@ -78,9 +87,10 @@ html[data-theme="obsidian"] {
   --text: #edece7;
   --dim: #9b978c;
   --faint: #63605a;
-  --panel: rgba(255, 255, 255, 0.045);
-  --panel-soft: rgba(255, 255, 255, 0.032);
-  --panel-strong: rgba(16, 14, 17, 0.78);
+  --glass-spec: #f7e7cd;
+  --panel: color-mix(in srgb, var(--accent) 6%, transparent);
+  --panel-soft: color-mix(in srgb, var(--accent) 4%, transparent);
+  --panel-strong: color-mix(in srgb, #16100c 68%, transparent);
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.14);
   --hover: rgba(255, 255, 255, 0.07);
@@ -108,9 +118,10 @@ html[data-theme="jade"] {
   --text: #e4eee7;
   --dim: #7f948a;
   --faint: #557064;
-  --panel: rgba(255, 255, 255, 0.04);
-  --panel-soft: rgba(255, 255, 255, 0.03);
-  --panel-strong: rgba(11, 18, 14, 0.78);
+  --glass-spec: #d8f2e2;
+  --panel: color-mix(in srgb, var(--accent) 6%, transparent);
+  --panel-soft: color-mix(in srgb, var(--accent) 4%, transparent);
+  --panel-strong: color-mix(in srgb, #0e1a13 68%, transparent);
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.13);
   --hover: rgba(255, 255, 255, 0.065);
@@ -144,9 +155,10 @@ body {
 .bg-orbs {
   position: fixed; inset: 0; pointer-events: none; z-index: 0;
   background:
-    radial-gradient(ellipse 50% 40% at 15% 20%, rgba(var(--c-glow-1), 0.18), transparent 60%),
-    radial-gradient(ellipse 45% 35% at 85% 70%, rgba(var(--c-glow-2), 0.22), transparent 55%),
-    radial-gradient(ellipse 30% 30% at 60% 10%, rgba(var(--c-glow-mouse), 0.08), transparent 50%);
+    radial-gradient(ellipse 55% 45% at 12% 16%, rgba(var(--c-glow-1), 0.5), transparent 62%),
+    radial-gradient(ellipse 50% 42% at 88% 74%, rgba(var(--c-glow-2), 0.55), transparent 58%),
+    radial-gradient(ellipse 36% 34% at 62% 8%, rgba(var(--c-glow-mouse), 0.32), transparent 54%),
+    radial-gradient(ellipse 60% 60% at 50% 50%, rgba(var(--c-glow-1), 0.1), transparent 70%);
   transition: background 0.8s ease;
 }
 
@@ -160,11 +172,27 @@ body {
 }
 
 .glass {
-  background: var(--panel);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--glass-spec) 22%, transparent) 0%,
+      color-mix(in srgb, var(--glass-spec) 0%, transparent) 20%),
+    radial-gradient(140% 80% at 50% -14%,
+      color-mix(in srgb, var(--glass-spec) 16%, transparent),
+      transparent 58%),
+    var(--panel);
   border: 1px solid var(--border);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  box-shadow: var(--shadow);
+  backdrop-filter:
+    blur(var(--glass-blur))
+    saturate(var(--glass-sat))
+    contrast(var(--glass-contrast));
+  -webkit-backdrop-filter:
+    blur(var(--glass-blur))
+    saturate(var(--glass-sat))
+    contrast(var(--glass-contrast));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 40%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--glass-spec) 10%, transparent),
+    var(--shadow);
   transition: background 0.5s ease, border-color 0.5s ease;
 }
 
@@ -521,9 +549,12 @@ select option { background: var(--bg); color: var(--text); }
   padding: 0.75rem 1rem; border-radius: 0.75rem;
   background: var(--panel-strong);
   border: 1px solid var(--border-strong);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
   font-size: 0.85rem;
-  box-shadow: var(--shadow);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 10%, transparent),
+    var(--shadow);
   animation: toast-in 0.28s var(--ease);
 }
 .toast.error { border-color: color-mix(in srgb, var(--danger) 45%, transparent); color: color-mix(in srgb, var(--danger) 80%, var(--text)); }

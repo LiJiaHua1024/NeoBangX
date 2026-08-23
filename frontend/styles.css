@@ -15,6 +15,13 @@
   --ease-pop: cubic-bezier(0.22, 1.2, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* 液态玻璃（Liquid Glass）配方 */
+  --glass-blur: 14px;
+  --glass-blur-soft: 10px;
+  --glass-blur-deep: 20px;
+  --glass-sat: 150%;
+  --glass-contrast: 104%;
 }
 
 html, body { height: 100%; }
@@ -79,9 +86,10 @@ html[data-theme="obsidian"] {
   --text: #edece7;
   --text-dim: #9b978c;
   --text-faint: #63605a;
-  --panel: rgba(255, 255, 255, 0.045);
-  --panel-soft: rgba(255, 255, 255, 0.032);
-  --panel-strong: rgba(16, 14, 17, 0.78);
+  --glass-spec: #f7e7cd;
+  --panel: color-mix(in srgb, var(--accent) 6%, transparent);
+  --panel-soft: color-mix(in srgb, var(--accent) 4%, transparent);
+  --panel-strong: color-mix(in srgb, #16100c 68%, transparent);
   --border: rgba(255, 255, 255, 0.075);
   --border-strong: rgba(255, 255, 255, 0.14);
   --hover-bg: rgba(255, 255, 255, 0.07);
@@ -109,9 +117,10 @@ html[data-theme="paper"] {
   --text: #1d1a15;
   --text-dim: #6f675a;
   --text-faint: #a29a8b;
-  --panel: rgba(255, 255, 255, 0.55);
-  --panel-soft: rgba(255, 255, 255, 0.4);
-  --panel-strong: rgba(255, 253, 249, 0.82);
+  --glass-spec: #fffdf8;
+  --panel: color-mix(in srgb, var(--glass-spec) 14%, transparent);
+  --panel-soft: color-mix(in srgb, var(--glass-spec) 10%, transparent);
+  --panel-strong: color-mix(in srgb, var(--glass-spec) 82%, var(--text) 5%);
   --border: rgba(29, 26, 21, 0.08);
   --border-strong: rgba(29, 26, 21, 0.15);
   --hover-bg: rgba(255, 255, 255, 0.72);
@@ -139,9 +148,10 @@ html[data-theme="celadon"] {
   --text: #15211c;
   --text-dim: #5d6e66;
   --text-faint: #93a39b;
-  --panel: rgba(255, 255, 255, 0.55);
-  --panel-soft: rgba(255, 255, 255, 0.38);
-  --panel-strong: rgba(250, 253, 252, 0.82);
+  --glass-spec: #eaf7f1;
+  --panel: color-mix(in srgb, var(--glass-spec) 14%, transparent);
+  --panel-soft: color-mix(in srgb, var(--glass-spec) 10%, transparent);
+  --panel-strong: color-mix(in srgb, var(--glass-spec) 82%, var(--text) 5%);
   --border: rgba(21, 33, 28, 0.08);
   --border-strong: rgba(21, 33, 28, 0.15);
   --hover-bg: rgba(255, 255, 255, 0.72);
@@ -169,9 +179,10 @@ html[data-theme="jade"] {
   --text: #e4eee7;
   --text-dim: #7f948a;
   --text-faint: #557064;
-  --panel: rgba(255, 255, 255, 0.04);
-  --panel-soft: rgba(255, 255, 255, 0.03);
-  --panel-strong: rgba(11, 18, 14, 0.78);
+  --glass-spec: #d8f2e2;
+  --panel: color-mix(in srgb, var(--accent) 6%, transparent);
+  --panel-soft: color-mix(in srgb, var(--accent) 4%, transparent);
+  --panel-strong: color-mix(in srgb, #0e1a13 68%, transparent);
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.13);
   --hover-bg: rgba(255, 255, 255, 0.065);
@@ -219,9 +230,10 @@ html[data-theme="sora"] {
   --text: #1d2733;
   --text-dim: #5c6d7f;
   --text-faint: #93a3b3;
-  --panel: rgba(255, 255, 255, 0.42);
-  --panel-soft: rgba(255, 255, 255, 0.3);
-  --panel-strong: rgba(247, 251, 254, 0.72);
+  --glass-spec: #f2f8ff;
+  --panel: color-mix(in srgb, var(--glass-spec) 13%, transparent);
+  --panel-soft: color-mix(in srgb, var(--glass-spec) 9%, transparent);
+  --panel-strong: color-mix(in srgb, var(--glass-spec) 80%, var(--text) 4%);
   --border: rgba(45, 75, 105, 0.1);
   --border-strong: rgba(45, 75, 105, 0.18);
   --hover-bg: rgba(255, 255, 255, 0.6);
@@ -261,9 +273,10 @@ html[data-theme="sora"][data-sky="night"] {
   --text: #e3ecf7;
   --text-dim: #8ba0b8;
   --text-faint: #5b6f85;
-  --panel: rgba(160, 200, 255, 0.05);
-  --panel-soft: rgba(160, 200, 255, 0.035);
-  --panel-strong: rgba(10, 17, 32, 0.78);
+  --glass-spec: #cfe0ff;
+  --panel: color-mix(in srgb, var(--accent) 5%, transparent);
+  --panel-soft: color-mix(in srgb, var(--accent) 3%, transparent);
+  --panel-strong: color-mix(in srgb, #0b1424 68%, transparent);
   --border: rgba(180, 210, 255, 0.09);
   --border-strong: rgba(180, 210, 255, 0.16);
   --hover-bg: rgba(180, 210, 255, 0.08);
@@ -413,29 +426,74 @@ html[data-theme="sora"] .mascot-peeking {
 }
 
 /* ============================================================
-   毛玻璃表面
+   液态玻璃表面 —— 近透明本体 + 顶部高光 + 折射光晕，不叠白
    ============================================================ */
 .glass {
-  background: var(--panel);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--glass-spec) 22%, transparent) 0%,
+      color-mix(in srgb, var(--glass-spec) 0%, transparent) 20%),
+    radial-gradient(140% 80% at 50% -14%,
+      color-mix(in srgb, var(--glass-spec) 16%, transparent),
+      transparent 58%),
+    var(--panel);
   border: 1px solid var(--border);
-  backdrop-filter: blur(26px) saturate(150%);
-  -webkit-backdrop-filter: blur(26px) saturate(150%);
-  box-shadow: var(--shadow);
+  backdrop-filter:
+    blur(var(--glass-blur))
+    saturate(var(--glass-sat))
+    contrast(var(--glass-contrast));
+  -webkit-backdrop-filter:
+    blur(var(--glass-blur))
+    saturate(var(--glass-sat))
+    contrast(var(--glass-contrast));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 40%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--glass-spec) 10%, transparent),
+    var(--shadow);
   transition: background 0.6s ease, border-color 0.6s ease;
 }
 .glass-soft {
-  background: var(--panel-soft);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--glass-spec) 16%, transparent) 0%,
+      color-mix(in srgb, var(--glass-spec) 0%, transparent) 18%),
+    radial-gradient(140% 80% at 50% -14%,
+      color-mix(in srgb, var(--glass-spec) 12%, transparent),
+      transparent 58%),
+    var(--panel-soft);
   border: 1px solid var(--border);
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter:
+    blur(var(--glass-blur-soft))
+    saturate(var(--glass-sat))
+    contrast(var(--glass-contrast));
+  -webkit-backdrop-filter:
+    blur(var(--glass-blur-soft))
+    saturate(var(--glass-sat))
+    contrast(var(--glass-contrast));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 32%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--glass-spec) 8%, transparent);
   transition: background 0.6s ease, border-color 0.6s ease, box-shadow 0.3s ease;
 }
 .glass-deep {
-  background: var(--panel-strong);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--glass-spec) 12%, transparent) 0%,
+      color-mix(in srgb, var(--glass-spec) 0%, transparent) 14%),
+    var(--panel-strong);
   border: 1px solid var(--border);
-  backdrop-filter: blur(32px) saturate(160%);
-  -webkit-backdrop-filter: blur(32px) saturate(160%);
-  box-shadow: var(--shadow);
+  backdrop-filter:
+    blur(var(--glass-blur-deep))
+    saturate(var(--glass-sat))
+    contrast(var(--glass-contrast));
+  -webkit-backdrop-filter:
+    blur(var(--glass-blur-deep))
+    saturate(var(--glass-sat))
+    contrast(var(--glass-contrast));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 26%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--glass-spec) 8%, transparent),
+    var(--shadow);
   transition: background 0.6s ease, border-color 0.6s ease;
 }
 
@@ -572,8 +630,9 @@ html[data-theme="sora"] .mascot-peeking {
   color: var(--text);
   background: var(--panel-soft);
   border: 1px solid var(--border);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 8%, transparent);
   white-space: nowrap;
   transition: background 0.2s ease, transform 0.4s var(--ease-spring), border-color 0.2s;
 }
@@ -749,8 +808,9 @@ html[data-theme="sora"] .mascot-peeking {
   color: var(--text);
   background: var(--panel-soft);
   border: 1px solid var(--border);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 8%, transparent);
   transition: background 0.2s ease, border-color 0.2s ease, transform 0.35s var(--ease-spring), box-shadow 0.25s ease;
 }
 .ms-trigger:hover { background: var(--hover-bg); border-color: var(--border-strong); }
@@ -896,17 +956,17 @@ html[data-theme="sora"] .mascot-peeking {
   border-radius: 1rem;
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
   background: color-mix(in srgb, var(--panel) 72%, transparent);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
   box-shadow: 0 4px 24px -8px rgba(0, 0, 0, 0.15),
-    inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent);
+    inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 12%, transparent);
   overflow: hidden;
   transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 .submitted-card:hover {
   border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
   box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.2),
-    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
+    inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 14%, transparent);
 }
 .submitted-head {
   display: flex;
@@ -987,8 +1047,8 @@ html[data-theme="sora"] .mascot-peeking {
 .submitted-frost {
   position: absolute;
   inset: 0;
-  backdrop-filter: blur(5px) saturate(120%);
-  -webkit-backdrop-filter: blur(5px) saturate(120%);
+  backdrop-filter: blur(6px) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(6px) saturate(var(--glass-sat));
   background: color-mix(in srgb, var(--bg) 35%, transparent);
   border-radius: 0.7rem;
   pointer-events: none;
@@ -1006,8 +1066,9 @@ html[data-theme="sora"] .mascot-peeking {
   color: var(--text-dim);
   background: var(--panel-soft);
   border: 1px solid var(--border);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 8%, transparent);
   transition: all 0.35s var(--ease-spring);
 }
 .btn-new-topic:hover {
@@ -1388,9 +1449,11 @@ html[data-theme="sora"] .mascot-peeking {
   color: var(--text);
   background: var(--panel-strong);
   border: 1px solid var(--border-strong);
-  backdrop-filter: blur(20px) saturate(150%);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
-  box-shadow: var(--shadow);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 10%, transparent),
+    var(--shadow);
   animation: toast-in 0.45s var(--ease-spring) both;
 }
 @keyframes toast-in {
@@ -1862,8 +1925,8 @@ html[data-theme="sora"] .mascot-peeking {
   border-radius: 1rem;
   background: color-mix(in srgb, var(--panel) 75%, transparent);
   box-shadow: 0 6px 24px -14px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(var(--glass-sat));
   transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
 .migration-result-card:hover { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); }
