@@ -14,6 +14,7 @@ backend/.env
 *.log
 
 backend/data/
+data/
 
 .DS_Store
 Thumbs.db
@@ -25,3 +26,5 @@ analysis.md
 opencode.json
 
 .commandcode/
+
+.tmp-shots/
