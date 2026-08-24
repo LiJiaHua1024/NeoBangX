@@ -191,6 +191,8 @@ function createBackground(canvas) {
   let sparks = [];
   let clouds = [];
   let birds = [];
+  let meteor = null;
+  let meteorGap = 360 + Math.random() * 540;
 
   const parse = (s) => (s || "0,0,0").split(",").map((n) => parseFloat(n) || 0);
   const lerp3 = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
@@ -338,6 +340,56 @@ function createBackground(canvas) {
     ctx.fill();
   }
 
+  /* 悠空·星夜：不放常驻星星（隔着厚毛玻璃怎样都会糊脏），只留流星，
+     且流星做得比真实的大得多、亮得多——三层叠光（外柔光带 + 中层晕 +
+     暖白亮核）+ 头部大辉光，缓慢修长地划过，以美感为唯一目标。 */
+  function drawMeteor(strength, time, animate) {
+    if (!animate) return;
+    // 流星：等待 → 划过 → 消散；出场有淡入，寿命长、速度慢，看得尽兴
+    if (!meteor) {
+      meteorGap -= 1;
+      if (meteorGap <= 0) {
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        meteor = {
+          x: innerWidth * (0.25 + Math.random() * 0.55),
+          y: innerHeight * (0.04 + Math.random() * 0.18),
+          vx: dir * (2.6 + Math.random() * 1.4),
+          vy: 1.2 + Math.random() * 0.6,
+          life: 1,
+        };
+        meteorGap = 300 + Math.random() * 420;
+      }
+      return;
+    }
+    meteor.x += meteor.vx;
+    meteor.y += meteor.vy;
+    meteor.life -= 0.005;
+    if (meteor.life <= 0 || meteor.y > innerHeight * 0.78) { meteor = null; return; }
+    const fadeIn = Math.min(1, (1 - meteor.life) / 0.1);
+    const a = meteor.life * fadeIn * strength;
+    const tail = 46 + 26 * meteor.life;
+    const tx = meteor.x - meteor.vx * tail;
+    const ty = meteor.y - meteor.vy * tail;
+    const stroke = (w, c0, c1, la) => {
+      const g = ctx.createLinearGradient(meteor.x, meteor.y, tx, ty);
+      g.addColorStop(0, rgba(c0, la * a));
+      g.addColorStop(0.35, rgba(c1, la * 0.45 * a));
+      g.addColorStop(1, rgba(c1, 0));
+      ctx.strokeStyle = g;
+      ctx.lineWidth = w;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(meteor.x, meteor.y);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+    };
+    stroke(13, [178, 207, 252], [150, 185, 245], 0.16);   // 外层柔光带
+    stroke(5.2, [214, 231, 254], [180, 208, 250], 0.42);  // 中层晕
+    stroke(2.6, [255, 253, 246], [226, 237, 253], 0.97);  // 暖白亮核
+    glowSpot(meteor.x, meteor.y, 46, [232, 241, 254], 0.55 * a); // 头部大辉光
+    glowSpot(meteor.x, meteor.y, 16, [255, 252, 244], 0.8 * a);  // 头部亮芯
+  }
+
   function frame(staticOnly) {
     const W = innerWidth, H = innerHeight;
     cur = {
@@ -396,6 +448,7 @@ function createBackground(canvas) {
     /* 悠空：云隙光 + 云絮漂移（鼠标可拨开、光晕可照亮）+ 白昼飞鸟 */
     if (cur.sky > 0.02) {
       if (cur.rays > 0.02) drawSunRays(W, H, Math.min(cur.sky, cur.rays), t);
+      if (cur.stars > 0.02) drawMeteor(cur.stars, t, !staticOnly);
       for (const c of clouds) {
         if (!staticOnly) {
           c.x += c.v;

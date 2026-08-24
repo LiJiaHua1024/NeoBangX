@@ -268,17 +268,19 @@ html[data-theme="sora"] {
   --c-glow-boost: 1.8;
 }
 
-/* 悠空·星夜：同一轮明月下的夜空 */
+/* 悠空·星夜：同一轮明月下的夜空
+   夜色基调是“月光靛蓝”而非近黑：底色整体上提，避免玻璃面板叠上后
+   看起来一片死黑；光晕亮度与云层剪影同步增强，与星场/流星呼应。 */
 html[data-theme="sora"][data-sky="night"] {
   color-scheme: dark;
-  --bg: #0d1524;
+  --bg: #111c33;
   --bg-grad:
     radial-gradient(circle 3.2rem at 82% 14%, rgba(246, 248, 252, 0.92) 0%, rgba(246, 248, 252, 0.42) 40%, rgba(246, 248, 252, 0) 72%),
-    radial-gradient(circle 11rem at 82% 14%, rgba(190, 214, 246, 0.26) 0%, rgba(190, 214, 246, 0.1) 42%, rgba(190, 214, 246, 0) 70%),
-    radial-gradient(ellipse 36% 13% at 16% 104%, rgba(30, 46, 74, 0.9) 0%, rgba(30, 46, 74, 0) 70%),
-    radial-gradient(ellipse 44% 15% at 55% 107%, rgba(36, 54, 86, 0.9) 0%, rgba(36, 54, 86, 0) 70%),
-    radial-gradient(ellipse 30% 12% at 88% 105%, rgba(28, 42, 70, 0.85) 0%, rgba(28, 42, 70, 0) 70%),
-    linear-gradient(180deg, #080f1d 0%, #0d1730 55%, #132039 100%);
+    radial-gradient(circle 11rem at 82% 14%, rgba(190, 214, 246, 0.34) 0%, rgba(190, 214, 246, 0.13) 42%, rgba(190, 214, 246, 0) 70%),
+    radial-gradient(ellipse 36% 13% at 16% 104%, rgba(18, 32, 60, 0.92) 0%, rgba(18, 32, 60, 0) 70%),
+    radial-gradient(ellipse 44% 15% at 55% 107%, rgba(22, 38, 68, 0.92) 0%, rgba(22, 38, 68, 0) 70%),
+    radial-gradient(ellipse 30% 12% at 88% 105%, rgba(20, 34, 62, 0.88) 0%, rgba(20, 34, 62, 0) 70%),
+    linear-gradient(180deg, #0d1830 0%, #152442 55%, #1d3054 100%);
   --accent: #8fb6e6;
   --accent-2: #5d86c2;
   --title-grad: linear-gradient(112deg, #dcebff 0%, var(--accent) 55%, var(--accent-2) 100%);
@@ -286,12 +288,12 @@ html[data-theme="sora"][data-sky="night"] {
   --text-dim: #8ba0b8;
   --text-faint: #5b6f85;
   --glass-spec: #cfe0ff;
-  --panel: color-mix(in srgb, var(--accent) 5%, transparent);
-  --panel-soft: color-mix(in srgb, var(--accent) 3%, transparent);
-  --panel-strong: color-mix(in srgb, #0b1424 68%, transparent);
-  --border: rgba(180, 210, 255, 0.09);
-  --border-strong: rgba(180, 210, 255, 0.16);
-  --hover-bg: rgba(180, 210, 255, 0.08);
+  --panel: color-mix(in srgb, var(--accent) 7%, transparent);
+  --panel-soft: color-mix(in srgb, var(--accent) 4.5%, transparent);
+  --panel-strong: color-mix(in srgb, #0e1a30 70%, transparent);
+  --border: rgba(180, 210, 255, 0.11);
+  --border-strong: rgba(180, 210, 255, 0.18);
+  --hover-bg: rgba(180, 210, 255, 0.09);
   --active-bg: color-mix(in srgb, var(--accent) 12%, transparent);
   --btn-bg: #dceafb;
   --btn-text: #101a2c;
@@ -299,8 +301,8 @@ html[data-theme="sora"][data-sky="night"] {
   --code-bg: rgba(0, 0, 0, 0.35);
   --shadow: 0 20px 55px -14px rgba(0, 0, 0, 0.6);
   --glow: rgba(143, 182, 230, 0.25);
-  --c-glow-1: 60, 90, 140;
-  --c-glow-2: 40, 60, 105;
+  --c-glow-1: 92, 132, 196;
+  --c-glow-2: 66, 98, 158;
   --c-glow-mouse: 143, 182, 230;
   --c-particle: 235, 242, 252;
   --c-glow-blend: lighter;
@@ -309,7 +311,7 @@ html[data-theme="sora"][data-sky="night"] {
   --c-sky-stars: 1;
   --c-sky-birds: 0;
   --c-sky-bird: 143, 182, 230;
-  --c-glow-boost: 1;
+  --c-glow-boost: 1.45;
 }
 
 /* ============================================================
