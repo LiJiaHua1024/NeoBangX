@@ -164,6 +164,8 @@ const LS = {
   code: "nbx_code",
 };
 const HISTORY_LIMIT = 100;
+// 迁移收藏单条体积可观（内嵌全部卡片输出），同样需要上限防止 localStorage 溢出
+const FAVORITES_LIMIT = 100;
 
 const THEMES = [
   { id: "paper", name: "宣纸", dot: "linear-gradient(135deg,#b4502a,#8c3316)" },
@@ -527,6 +529,7 @@ function createBackground(canvas) {
 }
 
 /* ---------------- localStorage 工具 ---------------- */
+let _storageWarnShown = false;
 function lsGet(key, fallback) {
   try {
     const v = localStorage.getItem(key);
@@ -534,7 +537,30 @@ function lsGet(key, fallback) {
   } catch { return fallback; }
 }
 function lsSet(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 存储满时静默失败 */ }
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // 写入失败（多为存储配额已满）：全局提示一次，避免用户误以为内容已保存
+    if (!_storageWarnShown) {
+      _storageWarnShown = true;
+      window.dispatchEvent(new CustomEvent("nbx:storage-full"));
+    }
+  }
+}
+
+/* 把后端错误 detail 转成可读文案；无法识别时返回 null，由调用方回退默认提示 */
+function formatApiDetail(detail) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length) {
+    // FastAPI 参数校验失败（如输入超出长度上限）：detail 是错误对象数组
+    const first = detail[0] || {};
+    const fieldPath = Array.isArray(first.loc)
+      ? first.loc.filter((part) => part !== "body").join(".")
+      : "";
+    return [fieldPath, first.msg].filter(Boolean).join("：") || null;
+  }
+  if (detail && typeof detail === "object" && detail.message) return detail.message;
+  return null;
 }
 
 /* ---------------- Markdown 渲染 ---------------- */
@@ -1344,7 +1370,7 @@ function nbx() {
           let msg = "HTTP " + res.status;
           try {
             const j = await res.json();
-            if (j && j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+            if (j && j.detail != null) msg = formatApiDetail(j.detail) || JSON.stringify(j.detail);
           } catch {}
           throw new Error(msg);
         }
@@ -1386,7 +1412,7 @@ function nbx() {
       this.vocab.elapsed = "0.0";
       this.vocab.output = "";
       this.vocab.rendered = "";
-      this.vocab.requestId = "24_" + Date.now();
+      this.vocab.requestId = "24_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
       this._abortCtrl = new AbortController();
       this._startTs = performance.now();
       clearInterval(this._timer);
@@ -1470,6 +1496,11 @@ function nbx() {
       const savedTheme = localStorage.getItem(LS.theme);
       if (savedTheme && THEMES.some((t) => t.id === savedTheme)) this.theme = savedTheme;
       this.applyTheme();
+
+      // localStorage 写入失败（配额满）时提示，避免用户误以为内容已保存
+      window.addEventListener("nbx:storage-full", () => {
+        this.toast("本机存储空间不足，新内容可能未被保存", "warn");
+      });
 
       // 悠空 · 两时段天空：每分钟校准一次，回到前台时立即校准
       this._skyTimer = setInterval(() => this.updateSkyPeriod(), 60000);
@@ -1658,6 +1689,7 @@ function nbx() {
       return { "Authorization": "Bearer " + this.auth.token };
     },
     async activateCode() {
+      if (this.codeActivating) return; // 回车键不受按钮 disabled 拦截，需防重入
       const raw = (this.codeInput || "").trim();
       if (!raw) {
         this.codeError = "请输入使用码";
@@ -2044,10 +2076,8 @@ function nbx() {
       let message = fallback;
       try {
         const data = await res.json();
-        if (data && data.detail) {
-          message = typeof data.detail === "string"
-            ? data.detail
-            : (data.detail.message || JSON.stringify(data.detail));
+        if (data && data.detail != null) {
+          message = formatApiDetail(data.detail) || JSON.stringify(data.detail);
         }
       } catch {}
       return message;
@@ -2340,9 +2370,13 @@ function nbx() {
             } catch {}
             if (text) {
               card.output += text;
-              card.rendered = renderMd(card.output);
+              this.scheduleCardRender(card);
             }
           } else if (event === "done" || data === "[DONE]") {
+            // 收尾：取消挂起的节流渲染，直接渲染最终全文
+            if (card._renderTimer) { clearTimeout(card._renderTimer); card._renderTimer = null; }
+            card._renderPending = false;
+            card.rendered = renderMd(card.output);
             if (data === "[CANCELLED]") card.status = "stopped";
             else card.status = "done";
           }
@@ -2580,6 +2614,7 @@ function nbx() {
         },
       };
       this.favorites.unshift(favorite);
+      if (this.favorites.length > FAVORITES_LIMIT) this.favorites.length = FAVORITES_LIMIT;
       lsSet(LS.favorites, this.favorites);
       this.toast("已收藏整条迁移记录");
     },
@@ -2649,7 +2684,8 @@ function nbx() {
       this._stopRequested = false;
       this.status = "connecting";
       this._nearBottom = true;
-      this.requestId = `${this.currentTool.id}_${Date.now()}`;
+      // request_id 带随机熵：服务端按其校验停止请求属主，可预测的毫秒时间戳会被枚举滥用
+      this.requestId = `${this.currentTool.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this._abortCtrl = new AbortController();
       this.startTimer();
       this.startThinkTimer();
@@ -2711,7 +2747,7 @@ function nbx() {
         let msg = "HTTP " + res.status;
         try {
           const j = await res.json();
-          if (j && j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+          if (j && j.detail != null) msg = formatApiDetail(j.detail) || JSON.stringify(j.detail);
         } catch {}
         throw new Error(msg);
       }
@@ -2814,6 +2850,16 @@ function nbx() {
       setTimeout(() => {
         this._renderPending = false;
         this.doRender();
+      }, 60);
+    },
+    /* 迁移卡片的按卡片节流渲染（多卡并行时开销随累计长度二次增长，必须合并） */
+    scheduleCardRender(card) {
+      card._renderPending = true;
+      if (card._renderTimer) return;
+      card._renderTimer = setTimeout(() => {
+        card._renderTimer = null;
+        if (card._renderPending) card.rendered = renderMd(card.output);
+        card._renderPending = false;
       }, 60);
     },
     doRender() {
@@ -3080,10 +3126,17 @@ function nbx() {
       }
     },
     openHistory(item) {
-      if (this.streaming || (this.migration && this.migration.generating)) {
+      // 忙碌守卫需与 selectTool/goHome 一致：超标词的 AI 替换流不置 streaming，
+      // 漏判会在 resetVocab 重建状态后让在途 token 继续写入新对象、污染历史数据
+      const busy =
+        this.streaming ||
+        (this.migration && this.migration.generating) ||
+        (this.vocab && this.vocab.replacing);
+      if (busy) {
         if (!confirm("正在生成中，查看历史将停止本次生成。确定吗？")) return;
         if (this.streaming) this.stop();
         if (this.migration && this.migration.generating) this.stopMigration();
+        if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
       }
       if (item.migration) {
         this.openMigrationHistory(item);
@@ -3218,6 +3271,7 @@ function nbx() {
         createdAt: Date.now(),
       };
       this.favorites.unshift(fav);
+      if (this.favorites.length > FAVORITES_LIMIT) this.favorites.length = FAVORITES_LIMIT;
       lsSet(LS.favorites, this.favorites);
       this.toast("已收藏到笔记本");
     },

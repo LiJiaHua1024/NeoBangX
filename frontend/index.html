@@ -9,7 +9,7 @@
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=sora260824b">
+  <link rel="stylesheet" href="/static/styles.css?v=sora260824d">
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -33,7 +33,7 @@
   <script defer src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.15.12/dist/cdn.min.js"></script>
-  <script defer src="/static/script.js?v=sora260824c"></script>
+  <script defer src="/static/script.js?v=sora260824d"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
 </head>
 
@@ -41,7 +41,8 @@
   <!-- 动态光影背景（粒子 + 鼠标光晕 + 工具选择光脉冲） -->
   <canvas id="bgfx" aria-hidden="true"></canvas>
 
-  <div x-data="nbx()" x-init="init()" x-cloak class="app-root h-dvh w-full flex gap-3 p-3">
+  <!-- Alpine v3 会自动调用 x-data 对象中的 init()，不要再写 x-init="init()"（会执行两次） -->
+  <div x-data="nbx()" x-cloak class="app-root h-dvh w-full flex gap-3 p-3">
 
     <!-- 抽屉遮罩（移动端 / 窄屏） -->
     <div x-show="leftOpen || rightMobileOpen" class="drawer-mask"
@@ -151,7 +152,7 @@
       <section x-ref="mainPanel" class="glass rounded-[1.4rem] flex-1 min-h-0 flex flex-col overflow-hidden relative">
         <div class="stream-bar" x-show="streaming"></div>
 
-        <!-- 穹妹布玩具：单实例，按当前页面状态和可用空间探出 / 收回（两秒内两次双击 = 悠空暗线开关） -->
+        <!-- 穹妹布玩具：单实例，按当前页面状态和可用空间探出 / 收回（双击切换悠空主题） -->
         <div x-ref="mascotLayer" class="mascot-layer mascot-hidden"
              :class="['mascot-' + mascotState, 'mascot-anchor-' + mascotAnchorName]"
              @dblclick="mascotSecretTap()"
