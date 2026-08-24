@@ -574,3 +574,52 @@ select option { background: var(--bg); color: var(--text); }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- 安全警告横幅（JWT 默认密钥检测） ---------- */
+.security-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 13px 16px;
+  border-radius: 12px;
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(220, 38, 38, 0.45);
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.security-banner-text { flex: 1; min-width: 0; }
+.security-banner-text strong { font-weight: 700; }
+.security-banner-text code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(220, 38, 38, 0.12);
+  font-size: 12px;
+}
+.security-banner-close {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(220, 38, 38, 0.45);
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.security-banner-close:hover { background: rgba(220, 38, 38, 0.12); }
+.security-banner-action {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: none;
+  background: #dc2626;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.security-banner-action:hover { background: #b91c1c; }
+.security-banner-action:disabled { opacity: 0.55; cursor: wait; }

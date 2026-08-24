@@ -46,6 +46,9 @@ function adminApp() {
     tab: "dashboard",
     loading: false,
     stats: {},
+    securityWarning: false,
+    securityBannerDismissed: false,
+    rotatingSecret: false,
     codes: [],
     codesTotal: 0,
     codesPage: 1,
@@ -156,7 +159,35 @@ function adminApp() {
       const saved = localStorage.getItem("nbx_admin_theme");
       if (saved && ADMIN_THEMES.some((t) => t.id === saved)) this.theme = saved;
       this.applyTheme();
+      try {
+        this.securityBannerDismissed = sessionStorage.getItem("nbx_jwt_warn_dismissed") === "1";
+      } catch {}
       await this.refreshAll();
+    },
+
+    dismissSecurityBanner() {
+      this.securityBannerDismissed = true;
+      try { sessionStorage.setItem("nbx_jwt_warn_dismissed", "1"); } catch {}
+    },
+
+    async rotateJwtSecret() {
+      const confirmed = confirm(
+        "将生成新的随机 JWT 密钥并保存到数据卷：\n\n" +
+        "· 本管理后台立即生效\n" +
+        "· 主站(8000)需重启后生效（docker-compose restart）\n" +
+        "· 主站重启后所有老师需重新输入使用码\n\n确定继续吗？"
+      );
+      if (!confirmed) return;
+      this.rotatingSecret = true;
+      try {
+        await this.api("/api/admin/jwt-secret/rotate", { method: "POST" });
+        this.toast("已生成新密钥并保存；重启主站(8000)后全部生效", "ok");
+        await this.loadStats();
+      } catch (e) {
+        this.toast(e.message || "生成失败，请检查数据卷写入权限", "error");
+      } finally {
+        this.rotatingSecret = false;
+      }
     },
 
     setTheme(id) {
@@ -190,9 +221,17 @@ function adminApp() {
         data = null;
       }
       if (!res.ok) {
-        const msg =
+        let msg =
           (data && (data.detail || data.message)) ||
           `请求失败 HTTP ${res.status}`;
+        if (Array.isArray(msg)) {
+          // FastAPI 参数校验失败时 detail 是错误对象数组，转成可读文案而非原始 JSON
+          const first = msg[0] || {};
+          const fieldPath = Array.isArray(first.loc)
+            ? first.loc.filter((part) => part !== "body").join(".")
+            : "";
+          msg = [fieldPath, first.msg].filter(Boolean).join("：") || "提交的参数不合法";
+        }
         throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
       }
       return data;
@@ -227,6 +266,9 @@ function adminApp() {
     async loadStats() {
       try {
         this.stats = await this.api("/api/admin/stats");
+        this.securityWarning = !!(
+          this.stats.security && this.stats.security.jwt_secret_is_default
+        );
       } catch (e) {
         this.toast(e.message || "加载统计失败", "error");
       }
@@ -245,6 +287,12 @@ function adminApp() {
         const data = await this.api(`/api/admin/codes?${params}`);
         this.codes = data.items || [];
         this.codesTotal = data.total || 0;
+        // 删除/禁用后当前页可能已超出末页（返回空列表但 total 正常），收敛页码重查
+        const maxPage = Math.max(1, Math.ceil(this.codesTotal / this.codesPageSize));
+        if (this.codesPage > maxPage) {
+          this.codesPage = maxPage;
+          return this.loadCodes();
+        }
       } catch (e) {
         this.toast(e.message || "加载使用码失败", "error");
       }
