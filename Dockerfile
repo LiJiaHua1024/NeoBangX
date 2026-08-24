@@ -10,10 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends supervisor \
 WORKDIR /app
 
 # 复制项目文件
+# 注意：不 COPY backend/.env——密钥经 docker-compose 的 env_file 在运行时注入，
+# 烘焙进镜像层会随镜像分发泄露（push 到 Registry 即可被有拉取权的人提取）。
 COPY backend/pyproject.toml /app/pyproject.toml
 COPY backend/uv.lock /app/uv.lock
 COPY backend/app /app/app
-COPY backend/.env /app/.env
 COPY prompts /app/prompts
 COPY frontend /app/frontend
 COPY admin-frontend /app/admin-frontend

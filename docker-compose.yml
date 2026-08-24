@@ -4,8 +4,22 @@ services:
   neobangx:
     build: .
     container_name: neobangx
+    # 密钥与配置在运行时注入（pydantic-settings 优先级：环境变量 > .env 文件），
+    # 不再把 backend/.env 烘焙进镜像层
+    env_file:
+      - ./backend/.env
+    # .env 里面向本地开发的相对路径（如 STATIC_DIR=../frontend）会经 env_file
+    # 进入容器并覆盖镜像内的绝对路径 ENV，导致前端/Prompt 全部丢失。
+    # 这里按 compose「environment 优先于 env_file」的规则显式钉死容器路径。
+    environment:
+      PROMPTS_DIR: /app/prompts
+      STATIC_DIR: /app/frontend
+      ADMIN_STATIC_DIR: /app/admin-frontend
+      DATA_DIR: /app/data
     ports:
       - "8000:8000"
+      # 管理后台供局域网内其他设备（如个人电脑）直接访问。
+      # 该端口零鉴权，仅限可信内网使用，切勿映射到公网
       - "8001:8001"
     volumes:
       - neobangx_data:/app/data

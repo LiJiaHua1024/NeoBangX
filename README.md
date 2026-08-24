@@ -141,19 +141,21 @@ git pull
 docker-compose up --build -d
 ```
 
-> 注意：Docker 构建时会将 `backend/.env` 写入镜像，因此**修改 `.env` 后需重新构建**（`--build`）才生效。管理后台中修改的配置（模型、API Key 等）存储在 SQLite 数据卷中，重建容器不会丢失。
+> 配置由 docker-compose 的 `env_file` 在**运行时**注入容器（`.env` 不会被打进镜像层，镜像可安全分发）。修改 `.env` 后执行 `docker-compose up --build -d` 重建生效。管理后台中修改的配置（模型、API Key 等）存储在 SQLite 数据卷中，重建容器不会丢失。
+>
+> ⚠️ **首次部署务必修改 `JWT_SECRET`**（默认值公开写在源码里，可被用来伪造登录票据；未修改时管理后台会持续显示安全警告）。最简单的方式是在管理后台安全警告横幅上点「**一键生成新密钥**」——密钥自动写入数据卷并在重启后生效；也可手动生成：`python -c "import secrets; print(secrets.token_urlsafe(48))"` 后填入 `.env`（环境配置优先于数据卷文件）。
 
 ### 5.3 端口说明
 
 | 端口 | 用途 | 公网暴露 |
 |------|------|----------|
-| 8000 | 主站服务 + 前端 | 通过 FRP/Nginx 暴露 |
-| 8001 | 管理后台 | **仅内网访问，不映射到公网** |
+| 8000 | 主站服务 + 前端 | 通过 FRP/Nginx/Cloudflare Tunnel 暴露 |
+| 8001 | 管理后台 | 局域网内直接访问（零鉴权，仅限可信内网，勿映射公网）|
 
 ### 5.4 访问服务
 
 - 主站：http://localhost:8000/
-- 管理后台：http://localhost:8001/
+- 管理后台：从局域网其他电脑访问 `http://<服务器内网IP>:8001/`（本机调试用 localhost）
 
 ### 5.5 停止服务
 
@@ -165,7 +167,9 @@ docker-compose down
 
 ## 6. 配置项说明
 
-配置统一由 `backend/.env` 提供（本地开发与 Docker 部署共用）。读取优先级：环境变量 > `.env` 文件 > 默认值；Docker 部署时无额外环境变量注入，直接读取构建进镜像的 `backend/.env`。
+配置统一由 `backend/.env` 提供（本地开发与 Docker 部署共用）。读取优先级：环境变量 > `.env` 文件 > 默认值；Docker 部署时由 docker-compose 的 `env_file` 在运行时注入为环境变量，`.env` 不进入镜像层。
+
+> ⚠️ 路径类配置（`PROMPTS_DIR` 等）的相对路径只对本地开发有意义。Docker 容器内的路径已由镜像 ENV 与 compose `environment` 钉死为 `/app/...` 绝对路径，`.env` 中的相对路径在容器内会被忽略，请勿参照修改。
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -173,10 +177,10 @@ docker-compose down
 | `APP_PORT` | `8000` | 主站监听端口 |
 | `ADMIN_HOST` | `0.0.0.0` | 管理后台监听地址 |
 | `ADMIN_PORT` | `8001` | 管理后台监听端口 |
-| `PROMPTS_DIR` | `../prompts` | Prompt 文件目录 |
-| `STATIC_DIR` | `../frontend` | 主站静态文件目录 |
-| `ADMIN_STATIC_DIR` | `../admin-frontend` | 管理后台静态文件目录 |
-| `DATA_DIR` | `./data` | SQLite 数据目录 |
+| `PROMPTS_DIR` | `../prompts` | Prompt 文件目录（仅本地开发；容器内固定 `/app/prompts`）|
+| `STATIC_DIR` | `../frontend` | 主站静态文件目录（仅本地开发；容器内固定 `/app/frontend`）|
+| `ADMIN_STATIC_DIR` | `../admin-frontend` | 管理后台静态文件目录（仅本地开发；容器内固定 `/app/admin-frontend`）|
+| `DATA_DIR` | `./data` | SQLite 数据目录（容器内固定挂载卷 `/app/data`）|
 | `JWT_SECRET` | `neobangx-dev-secret-change-me` | JWT 密钥（生产务必修改） |
 | `JWT_EXPIRE_DAYS` | `365` | JWT 有效期 |
 | `OPENROUTER_API_KEY` | 空 | 兼容旧版的 OpenRouter API Key |
