@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import jwt
 from fastapi import HTTPException, status
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import UsageCode, UsageLog
+
+logger = logging.getLogger(__name__)
 
 ALPHABET = string.ascii_uppercase + string.digits
 # 去掉易混淆字符
@@ -161,19 +166,31 @@ def consume_quota(
     request_id: str = "",
     units: int = 1,
 ) -> UsageCode:
-    """生成成功后扣减额度并写日志。管理员码不扣额度但仍记日志。"""
+    """生成成功后扣减额度并写日志。管理员码不扣额度但仍记日志。
+
+    扣减使用单条条件 UPDATE（used_count + units <= quota 才生效），
+    并发提交下也不会把 used_count 写超 quota；额度不足时抛 403。
+    """
     if units < 1:
         raise ValueError("扣减次数必须至少为 1")
 
-    # 重新加载，避免并发脏写
+    # 重新加载，拿到 code 值与类型用于写日志
     row = db.get(UsageCode, code.id)
     if row is None:
         raise HTTPException(status_code=401, detail="使用码不存在")
 
     if row.code_type != "admin" and row.quota >= 0:
-        if row.used_count + units > row.quota:
+        result = db.execute(
+            update(UsageCode)
+            .where(
+                UsageCode.id == row.id,
+                UsageCode.used_count + units <= UsageCode.quota,
+            )
+            .values(used_count=UsageCode.used_count + units)
+        )
+        if result.rowcount == 0:
+            db.rollback()
             raise HTTPException(status_code=403, detail="额度已用尽")
-        row.used_count += units
 
     log = UsageLog(
         code_id=row.id,
@@ -190,9 +207,60 @@ def consume_quota(
 
 
 def ensure_bootstrap_admin(db: Session) -> UsageCode | None:
-    """若库中没有任何使用码，自动创建一把管理员码。"""
+    """若库中没有任何使用码，自动创建一把管理员码。
+
+    管理员码不写入日志（容器日志可能被集中采集），改为落到数据目录下的
+    bootstrap_admin.txt，由运维查看后妥善保存。
+    """
     count = db.query(UsageCode).count()
     if count > 0:
         return None
     codes = create_codes(db, code_type="admin", quota=-1, count=1, note="系统初始化管理员码")
-    return codes[0]
+    admin = codes[0]
+    _write_bootstrap_secret(admin.code)
+    return admin
+
+
+def _write_bootstrap_secret(code_value: str) -> None:
+    path = Path(settings.data_dir) / "bootstrap_admin.txt"
+    try:
+        path.write_text(f"{code_value}\n（初始管理员使用码，请妥善保存；此文件可手动删除。）\n", encoding="utf-8")
+        logger.info("初始管理员使用码已写入 %s（请查看后妥善保存）", path.resolve())
+    except OSError as exc:
+        logger.error("初始管理员使用码写入文件失败（%s），请直接查询 usage_codes 表获取", exc)
+
+
+# ---------------- JWT 密钥一键轮换 ----------------
+# 约定：数据卷中的 jwt_secret.txt 由管理后台「一键生成」写入；
+# 仅当配置仍为源码默认值时，启动过程才会加载它——显式设置的环境变量 /
+# .env 始终优先，不会被该文件覆盖。
+
+JWT_SECRET_FILENAME = "jwt_secret.txt"
+
+
+def write_jwt_secret_file(value: str) -> Path:
+    path = Path(settings.data_dir) / JWT_SECRET_FILENAME
+    try:
+        path.write_text(value + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"密钥文件写入失败：{exc}") from exc
+    return path
+
+
+def apply_jwt_secret_override() -> bool:
+    """密钥仍为默认值时应用数据卷中的轮换密钥；返回是否已生效。
+
+    在两个应用的 lifespan 最先调用，保证后续签发/验票用同一把密钥。
+    """
+    if not settings.jwt_secret_is_default:
+        return False
+    path = Path(settings.data_dir) / JWT_SECRET_FILENAME
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    if not value:
+        return False
+    settings.jwt_secret = value
+    logger.info("已从 %s 加载轮换后的 JWT 密钥", path)
+    return True

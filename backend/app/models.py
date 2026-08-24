@@ -4,12 +4,36 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import TypeDecorator
 
 from app.database import Base
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UTCDateTime(TypeDecorator):
+    """带时区语义的 DateTime。
+
+    SQLite 不保存时区偏移，原生 DateTime(timezone=True) 读回是 naive 值，
+    isoformat() 无 Z/+00:00 后缀，前端 new Date() 会按浏览器本地时区
+    解析导致整体时间偏移。这里写入时统一转 naive UTC 存储（兼容既有数据），
+    读回时补回 UTC 时区。
+    """
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is not None and value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is not None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value
 
 
 class UsageCode(Base):
@@ -24,7 +48,7 @@ class UsageCode(Base):
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     note: Mapped[str] = mapped_column(String(255), nullable=False, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(timezone=True), default=utcnow)
 
     @property
     def remaining(self) -> int | None:
@@ -76,7 +100,7 @@ class UsageLog(Base):
     model: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     request_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, index=True
+        UTCDateTime(timezone=True), default=utcnow, index=True
     )
 
     def to_dict(self) -> dict:
@@ -100,5 +124,5 @@ class AppConfig(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False, default="")
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+        UTCDateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

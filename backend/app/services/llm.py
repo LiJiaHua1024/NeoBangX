@@ -119,6 +119,10 @@ class LLMService:
         try:
             response = await acompletion(**kwargs)
             async for chunk in response:
+                # 部分网关（OpenRouter / one-api 类）会发空 choices 的
+                # keep-alive 或 usage 分块，直接跳过避免 IndexError 打断整条流
+                if not getattr(chunk, "choices", None):
+                    continue
                 delta = chunk.choices[0].delta
                 if delta and delta.content:
                     yield delta.content
@@ -157,6 +161,9 @@ class LLMService:
                 if stop_event and stop_event.is_set():
                     logger.info("LLM stream stopped by stop_event")
                     break
+                # 同上：跳过空 choices 的 keep-alive / usage 分块
+                if not getattr(chunk, "choices", None):
+                    continue
                 delta = chunk.choices[0].delta
                 if delta and delta.content:
                     yield delta.content

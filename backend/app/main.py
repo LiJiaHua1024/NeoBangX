@@ -3,15 +3,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.database import SessionLocal, init_db
+from app.database import SessionLocal, bootstrap_lock, init_db
 from app.routers import auth, chat, tools
 from app.services.runtime_config import seed_config_from_env
-from app.services.usage_code import ensure_bootstrap_admin
+from app.services.usage_code import apply_jwt_secret_override, ensure_bootstrap_admin
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,22 +23,41 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("NeoBangX backend starting...")
     init_db()
-    db = SessionLocal()
-    try:
-        seed_config_from_env(db)
-        admin = ensure_bootstrap_admin(db)
-        if admin:
-            logger.warning(
-                "已自动创建初始管理员使用码（请妥善保存）：%s",
-                admin.code,
-            )
-    finally:
-        db.close()
+    apply_jwt_secret_override()  # 密钥仍为默认值时，加载管理后台一键轮换生成的密钥文件
+    if settings.jwt_secret_is_default:
+        logger.warning(
+            "JWT 密钥仍为源码默认值，任何知道源码的人都能伪造登录票据！"
+            "请在 backend/.env 设置 JWT_SECRET 并重启服务。"
+        )
+    # 双进程可能同时首启：用文件锁串行化引导，避免 seed 冲突 / 重复管理员码
+    with bootstrap_lock():
+        db = SessionLocal()
+        try:
+            seed_config_from_env(db)
+            admin = ensure_bootstrap_admin(db)
+            if admin:
+                logger.info(
+                    "已自动创建初始管理员使用码，内容见数据目录下 bootstrap_admin.txt"
+                )
+        finally:
+            db.close()
 
     logger.info(f"Prompts dir: {settings.prompts_dir.resolve()}")
     logger.info(f"Static dir: {settings.static_dir.resolve()}")
     logger.info(f"Data dir: {settings.data_dir.resolve()}")
     logger.info(f"Default model: {settings.default_model}")
+    if not Path(settings.static_dir).exists():
+        logger.warning(
+            "主站静态目录不存在：%s —— 访问 / 将只返回提示 JSON，前端页面不可用。"
+            "容器部署请检查 STATIC_DIR 是否被 .env 中的相对路径覆盖",
+            Path(settings.static_dir).resolve(),
+        )
+    if not Path(settings.prompts_dir).exists():
+        logger.warning(
+            "Prompt 目录不存在：%s —— 所有工具将无法生成。"
+            "容器部署请检查 PROMPTS_DIR 是否被 .env 中的相对路径覆盖",
+            Path(settings.prompts_dir).resolve(),
+        )
     yield
     logger.info("NeoBangX backend shutting down...")
 
@@ -51,13 +69,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 前端由本应用同源静态托管，无需跨域；通配 CORS 只会放大 CSRF/DNS rebinding 风险
 
 app.include_router(tools.router)
 app.include_router(chat.router)

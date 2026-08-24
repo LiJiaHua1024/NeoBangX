@@ -1,17 +1,17 @@
 import asyncio
 import json
 import logging
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field, StringConstraints
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
-from app.database import SessionLocal, get_db
+from app.database import SessionLocal
 from app.deps import get_current_code
 from app.models import UsageCode
 from app.routers.tools import _resolve_prompt_filename, get_prompt_loader
@@ -33,8 +33,37 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 # 用于支持 SSE 请求中止的全局事件字典
-# key: request_id, value: asyncio.Event
-_stop_events: dict[str, asyncio.Event] = {}
+# key: request_id, value: (asyncio.Event, 发起该流的 code.id)
+# 停止请求必须校验属主，否则任何持码者都能掐断他人生成。
+_stop_events: dict[str, tuple[asyncio.Event, int]] = {}
+
+# 不扣额度端点的进程内滑动窗口限速：bucket -> (最大次数, 窗口秒)
+_RATE_LIMITS = {"analyze": (10, 60), "title": (30, 60), "vocab": (60, 60)}
+_rate_buckets: dict[tuple[int, str], deque] = defaultdict(deque)
+
+
+def _enforce_rate_limit(code_id: int, bucket: str) -> None:
+    limit, window = _RATE_LIMITS[bucket]
+    now = monotonic()
+    hits = _rate_buckets[(code_id, bucket)]
+    while hits and now - hits[0] > window:
+        hits.popleft()
+    if len(hits) >= limit:
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+    hits.append(now)
+
+
+def _load_cfg() -> dict:
+    """在独立短会话中解析 LLM 配置。同步函数，供 to_thread 调用，
+    避免阻塞 IO 占住事件循环；会话即用即关，不随 SSE 流存续。"""
+    with SessionLocal() as db:
+        return resolve_llm_settings(db)
+
+
+def _validate_model(cfg: dict, model: Optional[str]) -> None:
+    """客户端指定的模型必须在配置的模型列表内，防止任意模型串直达计费上游。"""
+    if model and find_model_entry(cfg["models"], model) is None:
+        raise HTTPException(status_code=400, detail=f"模型不可用：{model}")
 
 
 @dataclass
@@ -73,22 +102,23 @@ def _build_llm(cfg: dict, chores: bool = False) -> LLMService:
 
 
 class ChatRequest(BaseModel):
-    tool_id: str = Field(..., description="工具 ID，对应 /api/tools/ 返回的工具 id")
-    input: str = Field(..., min_length=1, description="用户输入文本")
-    model: Optional[str] = Field(None, description="模型 ID，为空则使用默认模型")
-    request_id: Optional[str] = Field(None, description="客户端生成的请求 ID，用于停止生成")
+    tool_id: str = Field(..., max_length=64, description="工具 ID，对应 /api/tools/ 返回的工具 id")
+    input: str = Field(..., min_length=1, max_length=50000, description="用户输入文本（上限按整卷 + 解析版的粘贴体量放宽）")
+    model: Optional[str] = Field(None, max_length=128, description="模型 ID，为空则使用默认模型")
+    request_id: Optional[str] = Field(None, max_length=128, description="客户端生成的请求 ID，用于停止生成")
     batch_id: Optional[str] = Field(None, max_length=128, description="智能错题迁移批次 ID")
     batch_size: Optional[int] = Field(None, ge=1, description="批次内错因卡片总数")
     batch_index: Optional[int] = Field(None, ge=0, description="当前错因在批次中的序号")
 
 
 class MigrationAnalyzeRequest(BaseModel):
-    question: str = Field(..., min_length=1, description="题干")
-    standard_answer: str = Field(default="", description="标准答案")
-    student_answers: str = Field(default="", description="学生错误作答或错误选项分布")
-    error_cause: str = Field(default="", description="老师填写的错因，可为空")
-    feedback_history: list[str] = Field(
+    question: str = Field(..., min_length=1, max_length=5000, description="题干")
+    standard_answer: str = Field(default="", max_length=5000, description="标准答案")
+    student_answers: str = Field(default="", max_length=10000, description="学生错误作答或错误选项分布")
+    error_cause: str = Field(default="", max_length=2000, description="老师填写的错因，可为空")
+    feedback_history: list[Annotated[str, StringConstraints(min_length=1, max_length=2000)]] = Field(
         default_factory=list,
+        max_length=20,
         description="历次再讨论反馈，必须完整传递",
     )
     analysis_history: list["MigrationAnalysisMessage"] = Field(
@@ -100,12 +130,12 @@ class MigrationAnalyzeRequest(BaseModel):
         default=False,
         description="是否基于 analysis_history 继续生成更多错因",
     )
-    model: Optional[str] = Field(None, description="模型 ID")
+    model: Optional[str] = Field(None, max_length=128, description="模型 ID")
 
 
 class MigrationAnalysisMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1, max_length=10000)
 
 
 class MigrationQuotaRequest(BaseModel):
@@ -113,19 +143,19 @@ class MigrationQuotaRequest(BaseModel):
 
 
 class ChatPreviewRequest(BaseModel):
-    tool_id: str
-    input: str
+    tool_id: str = Field(..., max_length=64)
+    input: str = Field(..., min_length=1, max_length=50000)
 
 
 class StopRequest(BaseModel):
-    request_id: str
+    request_id: str = Field(..., min_length=1, max_length=160)
 
 
 class TitleRequest(BaseModel):
-    tool_id: str = Field(..., description="工具 ID")
-    input: str = Field(..., description="用户输入文本")
-    output: str = Field(default="", description="模型已生成的输出，用于辅助生成更准确的标题")
-    model: Optional[str] = Field(None, description="Chores AI 模型 ID，为空则使用后端配置")
+    tool_id: str = Field(..., max_length=64, description="工具 ID")
+    input: str = Field(..., min_length=1, max_length=20000, description="用户输入文本")
+    output: str = Field(default="", max_length=40000, description="模型已生成的输出，用于辅助生成更准确的标题")
+    model: Optional[str] = Field(None, max_length=128, description="Chores AI 模型 ID，为空则使用后端配置")
 
 
 TITLE_SYSTEM_PROMPT = (
@@ -268,31 +298,33 @@ def _migration_analysis_messages(
 
 
 class VocabCheckRequest(BaseModel):
-    text: str = Field(..., min_length=1, description="待排查的英语文本")
+    text: str = Field(..., min_length=1, max_length=50000, description="待排查的英语文本")
 
 
 @router.post("/vocab/check")
 async def check_vocabulary(
     req: VocabCheckRequest,
-    _code: Annotated[UsageCode, Depends(get_current_code)],
+    code: Annotated[UsageCode, Depends(get_current_code)],
 ):
     """机械排查超标词:分词 + 课标词表集合匹配,毫秒级返回,不扣减额度。"""
+    _enforce_rate_limit(code.id, "vocab")
     try:
-        result = check_over_words(req.text)
+        # 正则分词是纯 CPU 计算，放线程池执行，避免大文本阻塞事件循环
+        result = await asyncio.to_thread(check_over_words, req.text)
     except Exception as exc:
         logger.error("Vocabulary check error: %s", exc)
-        raise HTTPException(status_code=500, detail=f"词汇排查失败: {exc}") from exc
+        raise HTTPException(status_code=500, detail="词汇排查失败，请稍后重试") from exc
     return result
 
 
 @router.post("/migration/analyze")
 async def analyze_migration_causes(
     req: MigrationAnalyzeRequest,
-    _code: Annotated[UsageCode, Depends(get_current_code)],
-    db: Annotated[Session, Depends(get_db)],
+    code: Annotated[UsageCode, Depends(get_current_code)],
     loader: PromptLoader = Depends(get_prompt_loader),
 ):
     """非流式分析智能错题迁移的错因，不扣减额度。"""
+    _enforce_rate_limit(code.id, "analyze")
     prompt = loader.render(
         MIGRATION_ANALYSIS_PROMPT_NAME,
         _migration_prompt_input(req),
@@ -301,13 +333,14 @@ async def analyze_migration_causes(
         raise HTTPException(status_code=404, detail="智能错题迁移错因分析 Prompt 不存在")
 
     messages = _migration_analysis_messages(req, prompt, loader)
-    cfg = resolve_llm_settings(db)
+    cfg = await asyncio.to_thread(_load_cfg)
+    _validate_model(cfg, req.model)
     llm = _build_llm(cfg, chores=False)
     try:
         raw = await llm.chat(user_prompt=prompt, messages=messages, model=req.model)
     except Exception as exc:
         logger.error("Migration cause analysis error: %s", exc)
-        raise HTTPException(status_code=500, detail=f"错因分析失败: {exc}") from exc
+        raise HTTPException(status_code=500, detail="错因分析失败，请稍后重试") from exc
 
     causes = parse_error_causes(raw)
     if not causes and not req.continue_generation:
@@ -379,7 +412,6 @@ async def chat_stream(
     req: ChatRequest,
     request: Request,
     code: Annotated[UsageCode, Depends(get_current_code)],
-    db: Annotated[Session, Depends(get_db)],
     loader: PromptLoader = Depends(get_prompt_loader),
 ):
     """流式调用工具，返回 SSE 事件流。"""
@@ -398,13 +430,20 @@ async def chat_stream(
 
     migration_batch = _register_migration_batch(req, code)
 
-    cfg = resolve_llm_settings(db)
+    # 配置读取走短会话 + 线程池：不随 SSE 流占住连接池会话，也不阻塞事件循环
+    cfg = await asyncio.to_thread(_load_cfg)
+    _validate_model(cfg, req.model)
     llm = _build_llm(cfg, chores=False)
     tool_name = prompt_filename
     code_id = code.id
-    request_id = req.request_id or f"{req.tool_id}_{id(request)}"
+    base_request_id = req.request_id or f"{req.tool_id}_{id(request)}"
+    request_id = base_request_id
+    existing = _stop_events.get(base_request_id)
+    if existing is not None and existing[1] != code_id:
+        # 同毫秒撞名时不覆盖他人注册（属主校验收口在 /stop）
+        request_id = f"{base_request_id}_{code_id}"
     stop_event = asyncio.Event()
-    _stop_events[request_id] = stop_event
+    _stop_events[request_id] = (stop_event, code_id)
     model_used = req.model or cfg["llm_model"]
     # 从模型列表中查找该模型的 thinking 配置；未配置则交由供应商默认
     model_entry = find_model_entry(cfg["models"], model_used)
@@ -442,7 +481,8 @@ async def chat_stream(
                 )
                 migration_finished = True
                 if should_charge and success:
-                    _charge_usage(
+                    await asyncio.to_thread(
+                        _charge_usage,
                         code_id=code_id,
                         tool_id=req.tool_id,
                         tool_name=MIGRATION_TOOL_NAME,
@@ -457,7 +497,8 @@ async def chat_stream(
             else:
                 # 保持现有工具的计费行为：流正常收尾（包括用户停止）后扣 1 次。
                 if not charged:
-                    _charge_usage(
+                    await asyncio.to_thread(
+                        _charge_usage,
                         code_id=code_id,
                         tool_id=req.tool_id,
                         tool_name=tool_name,
@@ -480,7 +521,8 @@ async def chat_stream(
                 yield {"event": "done", "data": "[CANCELLED]"}
             else:
                 if not charged:
-                    _charge_usage(
+                    await asyncio.to_thread(
+                        _charge_usage,
                         code_id=code_id,
                         tool_id=req.tool_id,
                         tool_name=tool_name,
@@ -491,9 +533,10 @@ async def chat_stream(
                 yield {"event": "done", "data": "[CANCELLED]"}
         except Exception as e:
             logger.error(f"Stream error for {request_id}: {e}")
+            # 原始异常可能内嵌上游网关地址/供应商报错，不回传给终端用户
             yield {
                 "event": "error",
-                "data": json.dumps({"message": str(e)}, ensure_ascii=False),
+                "data": json.dumps({"message": "生成失败，请稍后重试"}, ensure_ascii=False),
             }
         finally:
             if migration_batch and not migration_finished:
@@ -508,7 +551,8 @@ async def chat_stream(
     return EventSourceResponse(
         event_generator(),
         media_type="text/event-stream",
-        ping=settings.sse_retry_timeout,
+        # sse-starlette 的 ping 单位是「秒」；配置值为毫秒，需换算
+        ping=max(1, settings.sse_retry_timeout // 1000),
     )
 
 
@@ -521,7 +565,7 @@ def _charge_usage(
     request_id: str,
     units: int = 1,
 ) -> None:
-    """在独立会话中扣减额度，避免生成器生命周期问题。"""
+    """在独立会话中扣减额度，避免生成器生命周期问题。同步函数，经 to_thread 调用。"""
     db = SessionLocal()
     try:
         row = db.get(UsageCode, code_id)
@@ -536,8 +580,14 @@ def _charge_usage(
             request_id=request_id,
             units=units,
         )
-    except Exception as e:
-        logger.error(f"Failed to charge usage for {request_id}: {e}")
+    except HTTPException as e:
+        # 原子扣减拦截了并发超发：内容已交付无法回收，但必须显式留痕而非静默吞掉
+        logger.warning(
+            "额度扣减被拒绝(%s)：code=%s tool=%s units=%s request=%s —— 本次生成未计费",
+            e.detail, code_id, tool_id, units, request_id,
+        )
+    except Exception:
+        logger.exception("Failed to charge usage for %s", request_id)
     finally:
         db.close()
 
@@ -545,23 +595,24 @@ def _charge_usage(
 @router.post("/stop")
 async def stop_stream(
     req: StopRequest,
-    _code: Annotated[UsageCode, Depends(get_current_code)],
+    code: Annotated[UsageCode, Depends(get_current_code)],
 ):
-    """中止指定 request_id 的 SSE 流。"""
-    event = _stop_events.get(req.request_id)
-    if event:
-        event.set()
+    """中止当前使用码自己发起的 SSE 流。"""
+    entry = _stop_events.get(req.request_id)
+    if entry is not None and entry[1] == code.id:
+        entry[0].set()
         return {"status": "stopped", "request_id": req.request_id}
+    # 不存在或不属于本人：统一返回 not_found，不泄露他人流的存在性
     return {"status": "not_found", "request_id": req.request_id}
 
 
 @router.post("/title")
 async def generate_title(
     req: TitleRequest,
-    _code: Annotated[UsageCode, Depends(get_current_code)],
-    db: Annotated[Session, Depends(get_db)],
+    code: Annotated[UsageCode, Depends(get_current_code)],
 ):
     """为一次生成结果生成简短标题。不扣减额度。"""
+    _enforce_rate_limit(code.id, "title")
     tool_name = _resolve_prompt_filename(req.tool_id)
     if not tool_name:
         raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")
@@ -573,7 +624,9 @@ async def generate_title(
         "请生成标题："
     )
 
-    llm = _build_llm(resolve_llm_settings(db), chores=True)
+    cfg = await asyncio.to_thread(_load_cfg)
+    _validate_model(cfg, req.model)
+    llm = _build_llm(cfg, chores=True)
     try:
         raw = await llm.chat(
             system_prompt=TITLE_SYSTEM_PROMPT,
@@ -583,7 +636,7 @@ async def generate_title(
         )
     except Exception as e:
         logger.error(f"Title generation error: {e}")
-        raise HTTPException(status_code=500, detail=f"标题生成失败: {e}")
+        raise HTTPException(status_code=500, detail="标题生成失败，请稍后重试")
 
     title = raw.strip().strip('"').strip("'").split("\n")[0][:40]
     return {"title": title}

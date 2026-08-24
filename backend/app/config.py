@@ -3,6 +3,10 @@ from typing import List
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 公开在源码与 .env.example 中的默认密钥。运行时若仍为该值，
+# 任何人都能离线伪造合法登录票据（见管理后台的安全警告）。
+DEFAULT_JWT_SECRET = "neobangx-dev-secret-change-me"
+
 
 class Settings(BaseSettings):
     """NeoBangX 后端配置类
@@ -30,8 +34,13 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
 
     # JWT / 使用码
-    jwt_secret: str = "neobangx-dev-secret-change-me"
+    jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_expire_days: int = 365
+
+    @property
+    def jwt_secret_is_default(self) -> bool:
+        """密钥仍为公开默认值时为 True，管理后台据此显示安全警告。"""
+        return self.jwt_secret == DEFAULT_JWT_SECRET
 
     # LLM 配置
     # 兼容旧版：OpenRouter API Key（未配置 llm_api_key 时使用）

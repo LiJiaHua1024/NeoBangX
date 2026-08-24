@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,8 @@ SENSITIVE_KEYS = {"llm_api_key", "chores_api_key", "openrouter_api_key"}
 
 # LiteLLM reasoning_effort 合法取值（none = 关闭思考）
 REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high"}
+
+logger = logging.getLogger(__name__)
 
 
 def _clamp_score(score) -> float | None:
@@ -118,16 +121,31 @@ def _env_defaults() -> dict[str, str]:
 
 
 def seed_config_from_env(db: Session) -> None:
-    """首次启动时用环境变量填充空配置表。"""
+    """首次启动时用环境变量填充空配置表。
+
+    main 与 admin 两个进程可能几乎同时启动并对同一个空库执行种入，
+    后提交方会撞 UNIQUE 约束；这里捕获冲突后重查补齐剩余键即可。
+    """
+    from sqlalchemy.exc import IntegrityError
+
     defaults = _env_defaults()
-    existing = {row.key for row in db.query(AppConfig).all()}
-    changed = False
-    for key, value in defaults.items():
-        if key not in existing:
-            db.add(AppConfig(key=key, value=value or ""))
-            changed = True
-    if changed:
-        db.commit()
+    for _attempt in range(3):
+        existing = {row.key for row in db.query(AppConfig).all()}
+        missing = [
+            (key, value)
+            for key, value in defaults.items()
+            if key not in existing
+        ]
+        if not missing:
+            return
+        try:
+            db.add_all(AppConfig(key=key, value=value or "") for key, value in missing)
+            db.commit()
+            return
+        except IntegrityError:
+            # 另一进程抢先插入了部分键，回滚后重查剩余缺失项
+            db.rollback()
+    logger.warning("seed_config_from_env 多次遇到并发冲突，剩余键将由另一进程完成种入")
 
 
 def get_config_map(db: Session) -> dict[str, str]:

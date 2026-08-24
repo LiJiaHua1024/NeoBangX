@@ -491,36 +491,7 @@ class VocabChecker:
         total = 0
         for sentence in sentences:
             for token in WORD_RE.findall(sentence):
-                raw = token
-                w = token.lower()
-                # 快速路径: 词表(含预展开形式)直接放行, 不关心大小写/撇号等
-                if w in self._lookup:
-                    total += 1
-                    continue
-                # 慢路径: 特殊形态处理
-                # 去掉撇号变形: don't -> don, it's -> it, teachers' -> teachers
-                if "'" in w or "’" in w:
-                    w = w.split("'")[0].split("’")[0]
-                if not w.isalpha():
-                    continue
-                # 单字母仅 a 与 I 为合法单词，其余(选项标记/缩写/撇号残留等)不参与排查
-                if len(w) == 1 and w not in ("a", "i"):
-                    continue
-                # 全大写视为缩写(USA、CEO 等), 不参与排查
-                if raw.isupper() and len(raw) > 1:
-                    continue
-                # 常见头衔/缩写直接放行
-                if w in _TITLES:
-                    continue
-                total += 1
-                if self._in_syllabus(w):
-                    continue
-                contexts = seen.setdefault(w, [])
-                if len(contexts) < 3:
-                    contexts.append(sentence[:220])
-                total_seen[w] = total_seen.get(w, 0) + 1
-                if raw and raw[0].isupper():
-                    cap_seen[w] = cap_seen.get(w, 0) + 1
+                total += self._process_token(token, sentence, seen, cap_seen, total_seen)
 
         over_words = [
             {
@@ -535,6 +506,52 @@ class VocabChecker:
         ]
         over_words.sort(key=lambda item: (-item["count"], item["word"]))
         return {"total_words": total, "over_words": over_words}
+
+    def _process_token(
+        self,
+        raw: str,
+        sentence: str,
+        seen: dict[str, list],
+        cap_seen: dict[str, int],
+        total_seen: dict[str, int],
+    ) -> int:
+        """处理单个词元，返回其计入 total_words 的数量（0 或 1；连字符词为段数）。"""
+        w = raw.lower()
+        # 快速路径: 词表(含预展开形式, 含 e-mail 等自带连字符的词条)直接放行
+        if w in self._lookup:
+            return 1
+        # 连字符复合词: 词表精确匹配未命中时拆段逐一排查计数
+        # (cyber-bullying -> cyber / bullying), 避免整词逃过排查
+        if "-" in w:
+            count = 0
+            for part in w.split("-"):
+                if part:
+                    count += self._process_token(part, sentence, seen, cap_seen, total_seen)
+            return count
+        # 慢路径: 特殊形态处理
+        # 去掉撇号变形: don't -> don, it's -> it, teachers' -> teachers
+        if "'" in w or "’" in w:
+            w = w.split("'")[0].split("’")[0]
+        if not w.isalpha():
+            return 0
+        # 单字母仅 a 与 I 为合法单词，其余(选项标记/缩写/撇号残留等)不参与排查
+        if len(w) == 1 and w not in ("a", "i"):
+            return 0
+        # 全大写视为缩写(USA、CEO 等), 不参与排查
+        if raw.isupper() and len(raw) > 1:
+            return 0
+        # 常见头衔/缩写直接放行
+        if w in _TITLES:
+            return 0
+        if self._in_syllabus(w):
+            return 1
+        contexts = seen.setdefault(w, [])
+        if len(contexts) < 3:
+            contexts.append(sentence[:220])
+        total_seen[w] = total_seen.get(w, 0) + 1
+        if raw and raw[0].isupper():
+            cap_seen[w] = cap_seen.get(w, 0) + 1
+        return 1
 
     @lru_cache(maxsize=262144)
     def _in_syllabus(self, word: str) -> bool:

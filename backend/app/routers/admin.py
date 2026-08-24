@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import secrets as secrets_lib
+
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.models import UsageCode, UsageLog
 from app.services.runtime_config import (
@@ -20,7 +23,7 @@ from app.services.runtime_config import (
     serialize_models,
     set_config_values,
 )
-from app.services.usage_code import create_codes
+from app.services.usage_code import create_codes, write_jwt_secret_file
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -78,6 +81,27 @@ async def stats(db: Annotated[Session, Depends(get_db)]):
         "enabled_codes": enabled_codes,
         "total_logs": total_logs,
         "total_used": int(total_used),
+        "security": {
+            "jwt_secret_is_default": settings.jwt_secret_is_default,
+        },
+    }
+
+
+@router.post("/jwt-secret/rotate")
+async def rotate_jwt_secret():
+    """一键生成新的 JWT 随机密钥：写入数据卷 jwt_secret.txt 并在本进程立即生效。
+
+    主站(8000)进程需重启后才会加载新密钥（重启前仍用旧密钥验票，
+    重启后旧登录态全部失效，老师需重新输入使用码）。若之后在 .env /
+    环境变量中显式设置了 JWT_SECRET，环境配置优先，此文件自动失效。
+    """
+    value = secrets_lib.token_urlsafe(48)
+    path = write_jwt_secret_file(value)
+    settings.jwt_secret = value  # 管理后台进程立即生效
+    return {
+        "status": "rotated",
+        "file": str(path),
+        "requires_restart": True,
     }
 
 

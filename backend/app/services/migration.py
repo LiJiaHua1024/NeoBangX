@@ -52,13 +52,26 @@ def _json_values(raw: str) -> Any | None:
 
 
 def _items_from_json(value: Any) -> list[Any]:
+    """从解析出的 JSON 中提取错因条目。
+
+    先认已知键名；都不命中时兜底收集第一个「字符串或对象列表」值，
+    兼容 error_cause_list / errorCauses 等模型自行发挥的变体键名。
+    """
     if isinstance(value, list):
         return value
     if not isinstance(value, dict):
         return []
-    for key in ("causes", "error_causes", "items", "diagnoses", "options"):
+    for key in ("causes", "error_causes", "errorCauseList", "errorCauses",
+                "items", "diagnoses", "options"):
         items = value.get(key)
         if isinstance(items, list):
+            return items
+    for items in value.values():
+        if (
+            isinstance(items, list)
+            and items
+            and all(isinstance(item, (str, dict)) for item in items)
+        ):
             return items
     return []
 
@@ -76,24 +89,21 @@ def _clean_cause(value: Any) -> str:
     else:
         text = ""
 
-    text = re.sub(r"^[\s\-*_•·\d.、)）]+", "", text).strip()
+    # 行首的 Markdown 加粗/序号/符号与行尾的闭合 ** 一并剥离（LLM 常输出 "**1. 审题不清**"）
+    text = re.sub(r"^[\s\-*_•·\d.、)）]+", "", text)
+    text = re.sub(r"[\s\-*_•·、]+$", "", text).strip()
     text = text.strip("`\"'“”‘’")
     return re.sub(r"\s+", " ", text)
 
 
 def parse_error_causes(raw: str) -> list[str]:
-    """解析错因分析结果，优先使用 JSON，失败时兼容逐行文本。"""
+    """解析错因分析结果，优先使用 JSON，仅在完全不是 JSON 时回退逐行文本。"""
     parsed = _json_values(raw)
-    values = _items_from_json(parsed)
-    if not values:
-        # 模型明确返回空数组时，不应把 "[]" 当成一个错因。
-        if isinstance(parsed, list) and not parsed:
-            return []
-        if isinstance(parsed, dict) and any(
-            isinstance(parsed.get(key), list) and not parsed.get(key)
-            for key in ("causes", "error_causes", "items", "diagnoses", "options")
-        ):
-            return []
+    if parsed is not None:
+        # JSON 解析成功但没取到条目（空数组 / 结构未识别）时直接返回空，
+        # 让上层走「请重试」路径；绝不能把整段原始 JSON 当成一条错因。
+        values = _items_from_json(parsed)
+    else:
         values = (raw or "").splitlines()
 
     causes: list[str] = []
@@ -108,5 +118,8 @@ def parse_error_causes(raw: str) -> list[str]:
     if causes:
         return causes
 
-    fallback = _clean_cause(raw)
-    return [fallback] if fallback else []
+    # 仅当原始输出本身不是结构化 JSON 时，才把整段文本兜底为单条错因
+    if parsed is None:
+        fallback = _clean_cause(raw)
+        return [fallback] if fallback else []
+    return []
