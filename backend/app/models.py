@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
@@ -88,7 +88,11 @@ class UsageCode(Base):
 
 
 class UsageLog(Base):
-    """使用日志。"""
+    """使用日志。
+
+    元数据（状态、耗时、tokens、客户端信息）始终记录；
+    原始输入 / 渲染 Prompt / 输出存于 LogPayload，受 log_payload 开关控制。
+    """
 
     __tablename__ = "usage_logs"
 
@@ -102,8 +106,24 @@ class UsageLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(timezone=True), default=utcnow, index=True
     )
+    # 请求结果：success | cancelled | error
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    user_agent: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    # 本次请求实际扣减的额度次数（辅助类调用 / 迁移单卡为 0）。
+    # 旧库经 ALTER 补列后存量为 NULL，语义是「未保存」而非「未扣费」，
+    # 因此 to_dict 保留 None 交给前端显示为「—」，不能收敛成 0。
+    units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     def to_dict(self) -> dict:
+        # 旧库经自动迁移补列后，存量行的可空列读回为 None，统一收敛为展示默认值；
+        # status 的收敛规则与 request_log.status_matches 保持一致，
+        # duration_ms / tokens / units 属于「当时没记录」，保持 None
         return {
             "id": self.id,
             "code_id": self.code_id,
@@ -113,7 +133,31 @@ class UsageLog(Base):
             "model": self.model,
             "request_id": self.request_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "status": self.status or "success",
+            "error_message": self.error_message or "",
+            "duration_ms": self.duration_ms,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "ip": self.ip or "",
+            "user_agent": self.user_agent or "",
+            "units": self.units,
         }
+
+
+class LogPayload(Base):
+    """使用日志的原始数据（1:1，受「记录原始输入/输出」开关控制写入）。"""
+
+    __tablename__ = "log_payloads"
+
+    log_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("usage_logs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    input: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    output: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
 class AppConfig(Base):

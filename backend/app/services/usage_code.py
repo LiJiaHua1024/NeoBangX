@@ -14,7 +14,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import UsageCode, UsageLog
+from app.models import UsageCode
 
 logger = logging.getLogger(__name__)
 
@@ -160,21 +160,17 @@ def consume_quota(
     db: Session,
     code: UsageCode,
     *,
-    tool_id: str = "",
-    tool_name: str = "",
-    model: str = "",
-    request_id: str = "",
     units: int = 1,
 ) -> UsageCode:
-    """生成成功后扣减额度并写日志。管理员码不扣额度但仍记日志。
+    """生成成功后扣减额度（日志由 services.request_log 统一记录）。
 
     扣减使用单条条件 UPDATE（used_count + units <= quota 才生效），
     并发提交下也不会把 used_count 写超 quota；额度不足时抛 403。
+    管理员码与无限额度码不扣减。
     """
     if units < 1:
         raise ValueError("扣减次数必须至少为 1")
 
-    # 重新加载，拿到 code 值与类型用于写日志
     row = db.get(UsageCode, code.id)
     if row is None:
         raise HTTPException(status_code=401, detail="使用码不存在")
@@ -192,15 +188,6 @@ def consume_quota(
             db.rollback()
             raise HTTPException(status_code=403, detail="额度已用尽")
 
-    log = UsageLog(
-        code_id=row.id,
-        code=row.code,
-        tool_id=tool_id or "",
-        tool_name=tool_name or "",
-        model=model or "",
-        request_id=request_id or "",
-    )
-    db.add(log)
     db.commit()
     db.refresh(row)
     return row

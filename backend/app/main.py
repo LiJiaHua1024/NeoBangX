@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,6 +10,10 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import SessionLocal, bootstrap_lock, init_db
 from app.routers import auth, chat, tools
+from app.services.request_log import (
+    current_retention_days,
+    purge_expired_logs_standalone,
+)
 from app.services.runtime_config import seed_config_from_env
 from app.services.usage_code import apply_jwt_secret_override, ensure_bootstrap_admin
 
@@ -17,6 +22,30 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+async def _log_retention_loop() -> None:
+    """每日按 log_retention_days 清理过期使用日志（0 = 永久保留）。"""
+    while True:
+        await asyncio.sleep(24 * 3600)
+        try:
+            days = await asyncio.to_thread(_current_retention_days)
+            if days > 0:
+                deleted = await asyncio.to_thread(purge_expired_logs_standalone, days)
+                if deleted:
+                    logger.info("日志保留清理：已删除 %s 条超过 %s 天的日志", deleted, days)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("每日日志保留清理任务失败")
+
+
+def _current_retention_days() -> int:
+    db = SessionLocal()
+    try:
+        return current_retention_days(db)
+    finally:
+        db.close()
 
 
 @asynccontextmanager
@@ -42,6 +71,17 @@ async def lifespan(app: FastAPI):
         finally:
             db.close()
 
+    # 日志保留策略：启动时清一次过期日志，并注册每日后台清理任务
+    try:
+        days = await asyncio.to_thread(_current_retention_days)
+        if days > 0:
+            deleted = await asyncio.to_thread(purge_expired_logs_standalone, days)
+            if deleted:
+                logger.info("日志保留清理：已删除 %s 条超过 %s 天的日志", deleted, days)
+    except Exception:
+        logger.exception("启动时执行日志保留清理失败")
+    retention_task = asyncio.create_task(_log_retention_loop())
+
     logger.info(f"Prompts dir: {settings.prompts_dir.resolve()}")
     logger.info(f"Static dir: {settings.static_dir.resolve()}")
     logger.info(f"Data dir: {settings.data_dir.resolve()}")
@@ -59,6 +99,7 @@ async def lifespan(app: FastAPI):
             Path(settings.prompts_dir).resolve(),
         )
     yield
+    retention_task.cancel()
     logger.info("NeoBangX backend shutting down...")
 
 

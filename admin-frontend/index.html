@@ -7,8 +7,8 @@
   <meta name="description" content="NeoBangX 使用码与配置管理后台">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23b4502a'/%3E%3Cstop offset='1' stop-color='%238c3316'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=admin260824b">
-  <script defer src="/static/script.js?v=admin260824b"></script>
+  <link rel="stylesheet" href="/static/styles.css?v=admin260830g">
+  <script defer src="/static/script.js?v=admin260830g"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
   <!-- 首屏防闪烁 -->
   <script>
@@ -37,8 +37,11 @@
         <button class="nav-item" :class="{ on: tab === 'codes' }" @click="tab = 'codes'; loadCodes()">
           <span>使用码</span>
         </button>
-        <button class="nav-item" :class="{ on: tab === 'logs' }" @click="tab = 'logs'; loadLogs()">
+        <button class="nav-item" :class="{ on: tab === 'logs' }" @click="tab = 'logs'; openLogsTab()">
           <span>使用日志</span>
+        </button>
+        <button class="nav-item" :class="{ on: tab === 'logsettings' }" @click="tab = 'logsettings'; loadConfig()">
+          <span>日志设置</span>
         </button>
         <button class="nav-item" :class="{ on: tab === 'config' }" @click="tab = 'config'; loadConfig()">
           <span>API 配置</span>
@@ -223,49 +226,134 @@
 
       <!-- 日志 -->
       <section x-show="tab === 'logs'" class="panel-stack">
+        <!-- 统计卡：随筛选条件联动 -->
+        <div class="stat-grid">
+          <div class="stat-card glass">
+            <div class="stat-label">请求次数</div>
+            <div class="stat-value" x-text="fmtNum(logSummary.total)"></div>
+            <div class="stat-foot"
+                 x-text="`成功 ${logSummary.success || 0} · 停止 ${logSummary.cancelled || 0} · 异常 ${logSummary.error || 0}`"></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-label">总 Tokens</div>
+            <div class="stat-value" x-text="fmtNum(logSummary.total_tokens)"></div>
+            <div class="stat-foot">输入 + 输出；供应商未回传时不计</div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-label">平均耗时</div>
+            <div class="stat-value" x-text="fmtDuration(logSummary.avg_duration_ms)"></div>
+            <div class="stat-foot">从发起到流结束的墙钟时间</div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-label">异常请求</div>
+            <div class="stat-value" :class="{ 'stat-value-bad': (logSummary.error || 0) > 0 }"
+                 x-text="fmtNum(logSummary.error)"></div>
+            <div class="stat-foot">
+              <button class="link-btn" @click="logsStatusFilter = 'error'; logsPage = 1; loadLogs()">只看异常</button>
+            </div>
+          </div>
+        </div>
+
         <div class="glass card toolbar">
-          <div class="filters">
-            <input type="search" x-model="logCode" @keydown.enter="logsPage = 1; loadLogs()" placeholder="按使用码筛选">
+          <div class="filters log-filters">
+            <input type="search" x-model="logCode" @keydown.enter="logsPage = 1; loadLogs()" placeholder="使用码">
             <input type="text" x-model="logToolId" @keydown.enter="logsPage = 1; loadLogs()" placeholder="工具 ID">
+            <input type="text" x-model="logModel" @keydown.enter="logsPage = 1; loadLogs()" placeholder="模型（模糊）">
+
+            <div class="custom-select" @click.outside="logsStatusMenuOpen = false">
+              <button class="custom-select-trigger" :class="{ open: logsStatusMenuOpen }"
+                      @click="logsStatusMenuOpen = !logsStatusMenuOpen">
+                <span x-text="logsStatusFilterLabel"></span>
+                <span class="chev">▼</span>
+              </button>
+              <div class="custom-select-menu" x-show="logsStatusMenuOpen" x-cloak>
+                <template x-for="opt in logStatusOptions" :key="opt.id">
+                  <button class="custom-select-item" :class="{ on: logsStatusFilter === opt.id }"
+                          @click="logsStatusFilter = opt.id; logsStatusMenuOpen = false; logsPage = 1; loadLogs()"
+                          x-text="opt.label"></button>
+                </template>
+              </div>
+            </div>
+
+            <input type="date" x-model="logStart" class="date-input" title="起始日期（含）">
+            <span class="dim">—</span>
+            <input type="date" x-model="logEnd" class="date-input" title="结束日期（含当天）">
+
             <button class="btn-ghost" @click="logsPage = 1; loadLogs()">查询</button>
+            <button class="btn-ghost" @click="resetLogFilters()" x-show="hasLogFilters">重置</button>
           </div>
         </div>
 
         <div class="glass card table-wrap">
-          <table class="data-table">
+          <table class="data-table log-table">
             <thead>
               <tr>
                 <th>时间</th>
                 <th>使用码</th>
                 <th>工具</th>
                 <th>模型</th>
-                <th>请求 ID</th>
+                <th>状态</th>
+                <th class="num">耗时</th>
+                <th class="num">Tokens</th>
+                <th>IP</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
               <tr x-show="!logs.length">
-                <td colspan="5" class="empty">暂无日志</td>
+                <td colspan="9" class="empty">暂无日志</td>
               </tr>
               <template x-for="l in logs" :key="l.id">
-                <tr>
+                <tr class="log-row" @click="openLogDetail(l.id)">
                   <td class="mono dim" x-text="fmtTime(l.created_at)"></td>
                   <td class="mono" x-text="l.code"></td>
-                  <td>
-                    <span x-text="l.tool_name || l.tool_id"></span>
+                  <td class="truncate-cell" :title="`${l.tool_name || ''} #${l.tool_id || ''}`">
+                    <span x-text="l.tool_name || l.tool_id || '—'"></span>
                     <span class="dim" x-show="l.tool_id"> (#<span x-text="l.tool_id"></span>)</span>
                   </td>
-                  <td class="dim mono truncate-cell" x-text="l.model || '—'"></td>
-                  <td class="dim mono truncate-cell" x-text="l.request_id || '—'"></td>
+                  <td class="dim mono truncate-cell" :title="l.model" x-text="l.model || '—'"></td>
+                  <td>
+                    <span class="status-badge" :class="'st-' + (l.status || 'success')"
+                          x-text="logStatusLabel(l.status)"></span>
+                  </td>
+                  <td class="num mono" x-text="fmtDuration(l.duration_ms)"></td>
+                  <td class="num mono" x-text="l.total_tokens != null ? fmtNum(l.total_tokens) : '—'"
+                      :title="l.total_tokens != null ? `输入 ${l.prompt_tokens ?? '—'} / 输出 ${l.completion_tokens ?? '—'}` : ''"></td>
+                  <td class="mono dim" x-text="l.ip || '—'"></td>
+                  <td class="actions">
+                    <button class="link-btn" @click.stop="openLogDetail(l.id)">详情</button>
+                  </td>
                 </tr>
               </template>
             </tbody>
           </table>
-          <div class="pager" x-show="logsTotal > logsPageSize">
+        </div>
+
+        <!-- 分页器独立成卡：避免被困在表格的内部滚动区里，翻到底才能操作 -->
+        <div class="glass card pager-card">
+          <div class="pager">
             <button class="btn-ghost" :disabled="logsPage <= 1" @click="logsPage--; loadLogs()">上一页</button>
-            <span class="dim" x-text="`第 ${logsPage} 页 · 共 ${logsTotal} 条`"></span>
-            <button class="btn-ghost" :disabled="logsPage * logsPageSize >= logsTotal" @click="logsPage++; loadLogs()">下一页</button>
+            <span class="dim" x-text="`第 ${logsPage} / ${logsPageCount} 页 · 共 ${logsTotal} 条`"></span>
+            <button class="btn-ghost" :disabled="logsPage >= logsPageCount" @click="logsPage++; loadLogs()">下一页</button>
+            <div class="custom-select page-size-select" @click.outside="logsSizeMenuOpen = false">
+              <button class="custom-select-trigger" :class="{ open: logsSizeMenuOpen }"
+                      @click="logsSizeMenuOpen = !logsSizeMenuOpen">
+                <span x-text="`每页 ${logsPageSize} 条`"></span>
+                <span class="chev">▼</span>
+              </button>
+              <div class="custom-select-menu" x-show="logsSizeMenuOpen" x-cloak>
+                <template x-for="size in logsPageSizeOptions" :key="size">
+                  <button class="custom-select-item" :class="{ on: logsPageSize === size }"
+                          @click="logsPageSize = size; logsPage = 1; logsSizeMenuOpen = false; loadLogs()"
+                          x-text="`每页 ${size} 条`"></button>
+                </template>
+              </div>
+            </div>
           </div>
         </div>
+        <p class="muted" x-show="payloadRecording === false" x-cloak>
+          ⓘ 当前未开启「记录原始输入 / 输出」，日志详情只显示元数据。可到「日志设置」中开启。
+        </p>
       </section>
 
       <!-- 配置 -->
@@ -411,6 +499,50 @@
           <div class="form-actions">
             <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存配置</button>
             <button class="btn-ghost" @click="loadConfig()">重新加载</button>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- 日志设置 -->
+      <section x-show="tab === 'logsettings'" class="panel-stack">
+        <div class="glass card">
+          <h2 class="card-title">日志设置</h2>
+          <p class="muted mb-4">控制使用日志记录哪些内容、保留多久。保存后对之后的每次请求即时生效，无需重启服务。</p>
+
+          <div class="switch-row">
+            <label class="switch" :class="{ disabled: savingConfig }">
+              <input type="checkbox" x-model="configForm.log_payload" :disabled="savingConfig">
+              <span class="switch-slider"></span>
+            </label>
+            <div class="switch-copy">
+              <div class="switch-title">记录原始输入 / 输出</div>
+              <div class="field-hint">
+                开启后，每次请求的「用户输入」「渲染后的完整 Prompt」「模型输出」会单独入库，可在日志详情中查看与复制。
+                关闭时仅保留时间、状态、耗时、Tokens、IP 等元数据。默认关闭——原始内容可能包含学生信息，且会显著增大数据库体积。
+              </div>
+            </div>
+          </div>
+
+          <div class="form-grid mt-4">
+            <label class="field">
+              <span>日志保留天数</span>
+              <input type="number" x-model.number="configForm.log_retention_days" min="0" max="36500" step="1">
+              <span class="field-hint">0 表示永久保留；超过该天数的日志（含原始数据）每天自动清理一次</span>
+            </label>
+            <label class="field">
+              <span>立即清理</span>
+              <input type="number" x-model.number="purgeDays" min="0" max="36500" step="1"
+                     :placeholder="`留空按保留天数（${configForm.log_retention_days}）`">
+              <span class="field-hint">删除早于该天数的日志；填 0 不会删除任何记录</span>
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存日志设置</button>
+            <button class="btn-danger" @click="purgeLogs()" :disabled="purging">
+              <span x-text="purging ? '清理中…' : '立即清理过期日志'"></span>
+            </button>
           </div>
         </div>
       </section>
@@ -572,6 +704,114 @@
           <button class="btn-primary" @click="saveModelModal()">确定</button>
         </div>
       </div>
+    </div>
+
+    <!-- 日志详情抽屉 -->
+    <div class="drawer-mask" x-show="logDetailOpen" x-transition.opacity @click.self="closeLogDetail()"
+         @keydown.window.escape="closeLogDetail()" x-cloak>
+      <aside class="drawer glass" x-show="logDetailOpen">
+        <div class="drawer-head">
+          <div>
+            <h3>日志详情 <span class="mono dim" x-text="logDetail ? '#' + logDetail.id : ''"></span></h3>
+            <p class="field-hint" x-show="logDetail" x-text="fmtTime(logDetail.created_at)"></p>
+          </div>
+          <button class="icon-x" @click="closeLogDetail()" title="关闭（Esc）">×</button>
+        </div>
+
+        <div class="drawer-body">
+          <template x-if="logDetail">
+            <div>
+              <div class="meta-grid">
+                <div class="meta-item">
+                  <span class="meta-label">状态</span>
+                  <span class="meta-value">
+                    <span class="status-badge" :class="'st-' + (logDetail.status || 'success')"
+                          x-text="logStatusLabel(logDetail.status)"></span>
+                  </span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">耗时</span>
+                  <span class="meta-value mono" x-text="fmtDuration(logDetail.duration_ms)"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">总 Tokens</span>
+                  <span class="meta-value mono" x-text="fmtNum(logDetail.total_tokens)"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">输入 / 输出</span>
+                  <span class="meta-value mono"
+                        x-text="`${logDetail.prompt_tokens ?? '—'} / ${logDetail.completion_tokens ?? '—'}`"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">扣费次数</span>
+                  <span class="meta-value mono" x-text="fmtUnits(logDetail.units)"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">使用码</span>
+                  <span class="meta-value mono" x-text="logDetail.code"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">工具</span>
+                  <span class="meta-value" x-text="logDetail.tool_name || '—'"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">工具 ID</span>
+                  <span class="meta-value mono" x-text="logDetail.tool_id || '—'"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">模型</span>
+                  <span class="meta-value mono" x-text="logDetail.model || '—'"></span>
+                </div>
+                <div class="meta-item meta-item-wide">
+                  <span class="meta-label">请求 ID</span>
+                  <span class="meta-value mono" x-text="logDetail.request_id || '—'"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">IP</span>
+                  <span class="meta-value mono" x-text="logDetail.ip || '—'"></span>
+                </div>
+                <div class="meta-item meta-item-wide">
+                  <span class="meta-label">客户端 UA</span>
+                  <span class="meta-value mono break-any" x-text="logDetail.user_agent || '—'"></span>
+                </div>
+              </div>
+
+              <div class="drawer-error" x-show="logDetail.error_message" x-cloak>
+                <span class="meta-label">错误信息</span>
+                <div class="break-any" x-text="logDetail.error_message"></div>
+              </div>
+
+              <!-- 原始数据：仅在开启记录时入库 -->
+              <template x-if="logDetail.payload">
+                <div class="payload-list">
+                  <template x-for="part in payloadParts" :key="part.key">
+                    <details class="payload-block" :open="part.open">
+                      <summary>
+                        <span class="payload-title" x-text="part.label"></span>
+                        <span class="payload-size mono"
+                              x-text="`${(logDetail.payload[part.key] || '').length} 字`"></span>
+                        <button class="link-btn" @click.prevent.stop="copyText(logDetail.payload[part.key] || '')">复制</button>
+                      </summary>
+                      <pre class="payload-pre mono" x-text="logDetail.payload[part.key] || '（空）'"></pre>
+                    </details>
+                  </template>
+                </div>
+              </template>
+
+              <div class="payload-empty" x-show="!logDetail.payload" x-cloak>
+                本次请求未记录原始输入 / 输出（记录开关处于关闭状态）。
+                如需查看内容，请到「日志设置」开启后重新发起请求。
+              </div>
+            </div>
+          </template>
+          <div class="drawer-loading" x-show="!logDetail" x-text="logDetailError || '加载中…'"></div>
+        </div>
+
+        <div class="drawer-foot" x-show="logDetail && !logDetailLoading">
+          <button class="btn-ghost" @click="filterByLogCode()" x-show="logDetail">查看该码的全部日志</button>
+          <button class="btn-ghost" @click="copyLogSummaryText()" x-show="logDetail">复制元数据</button>
+        </div>
+      </aside>
     </div>
 
     <!-- Toast -->

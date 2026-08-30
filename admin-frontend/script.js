@@ -62,8 +62,36 @@ function adminApp() {
     logsTotal: 0,
     logsPage: 1,
     logsPageSize: 30,
+    logsPageSizeOptions: [30, 50, 100],
+    logsSizeMenuOpen: false,
     logCode: "",
     logToolId: "",
+    logModel: "",
+    logStart: "",
+    logEnd: "",
+    logsStatusFilter: "",
+    logsStatusMenuOpen: false,
+    logStatusOptions: [
+      { id: "", label: "全部状态" },
+      { id: "success", label: "成功" },
+      { id: "cancelled", label: "用户停止" },
+      { id: "error", label: "异常" },
+    ],
+    logSummary: {},
+    // 详情抽屉
+    logDetailOpen: false,
+    logDetail: null,
+    logDetailLoading: false,
+    logDetailError: "",
+    payloadParts: [
+      { key: "input", label: "用户输入", open: true },
+      { key: "prompt", label: "渲染后的完整 Prompt", open: false },
+      { key: "output", label: "模型输出", open: true },
+    ],
+    // null = 尚未读取；决定日志页「未开启记录」提示是否展示
+    payloadRecording: null,
+    purgeDays: null,
+    purging: false,
     configForm: {
       default_model: "",
       models: [],
@@ -75,6 +103,8 @@ function adminApp() {
       chores_api_key: "",
       max_tokens: 4096,
       timeout: 120,
+      log_payload: false,
+      log_retention_days: 0,
     },
     hasLlmKey: false,
     hasChoresKey: false,
@@ -120,6 +150,7 @@ function adminApp() {
           dashboard: "概览",
           codes: "使用码管理",
           logs: "使用日志",
+          logsettings: "日志设置",
           config: "API 配置",
         }[this.tab] || "管理后台"
       );
@@ -130,6 +161,7 @@ function adminApp() {
           dashboard: "查看整体使用情况与快捷入口",
           codes: "生成、启用/禁用/删除使用码，查看额度",
           logs: "查看每次工具调用的详细记录",
+          logsettings: "配置原始数据记录开关与日志保留策略",
           config: "管理 LLM 密钥、模型与调用参数",
         }[this.tab] || ""
       );
@@ -141,6 +173,23 @@ function adminApp() {
     get codeEnabledFilterLabel() {
       const map = { "": "全部状态", true: "已启用", false: "已禁用" };
       return map[this.codeEnabledFilter] || "全部状态";
+    },
+    get logsStatusFilterLabel() {
+      const opt = this.logStatusOptions.find((o) => o.id === this.logsStatusFilter);
+      return opt ? opt.label : "全部状态";
+    },
+    get hasLogFilters() {
+      return !!(
+        this.logCode.trim() ||
+        this.logToolId.trim() ||
+        this.logModel.trim() ||
+        this.logsStatusFilter ||
+        this.logStart ||
+        this.logEnd
+      );
+    },
+    get logsPageCount() {
+      return Math.max(1, Math.ceil(this.logsTotal / this.logsPageSize));
     },
     get defaultModelLabel() {
       const m = this.configForm.models.find((x) => x.id === this.configForm.default_model);
@@ -203,7 +252,7 @@ function adminApp() {
       this.loading = true;
       try {
         await Promise.all([this.loadStats(), this.loadCodes(), this.loadLogs()]);
-        if (this.tab === "config") await this.loadConfig();
+        if (this.tab === "config" || this.tab === "logsettings") await this.loadConfig();
       } finally {
         this.loading = false;
       }
@@ -407,19 +456,179 @@ function adminApp() {
       }
     },
 
+    /* ============ 使用日志 ============ */
+    logStatusLabel(status) {
+      const map = { success: "成功", cancelled: "用户停止", error: "异常" };
+      return map[status] || "成功";
+    },
+
+    fmtNum(value) {
+      if (value == null || value === "" || !Number.isFinite(Number(value))) return "—";
+      return Number(value).toLocaleString("zh-CN");
+    },
+
+    /* 扣费次数：null = 旧记录升级前未保存该字段，与「本次未扣费」(0) 不是一回事 */
+    fmtUnits(units) {
+      if (units == null || !Number.isFinite(Number(units))) return "—";
+      return Number(units) > 0 ? `${units} 次` : "未扣费";
+    },
+
+    fmtDuration(ms) {
+      if (ms == null || ms === "" || !Number.isFinite(Number(ms))) return "—";
+      const v = Number(ms);
+      if (v < 1000) return `${Math.round(v)} ms`;
+      if (v < 60000) return `${(v / 1000).toFixed(1)} s`;
+      const total = Math.round(v / 1000);
+      return `${Math.floor(total / 60)} 分 ${String(total % 60).padStart(2, "0")} 秒`;
+    },
+
+    /* 日期按管理员本地日历日换算成 UTC 瞬时：结束日期取次日零点（后端上界开区间） */
+    _logFilterParams() {
+      const params = new URLSearchParams();
+      if (this.logCode.trim()) params.set("code", this.logCode.trim());
+      if (this.logToolId.trim()) params.set("tool_id", this.logToolId.trim());
+      if (this.logModel.trim()) params.set("model", this.logModel.trim());
+      if (this.logsStatusFilter) params.set("status", this.logsStatusFilter);
+      const start = this.logStart ? new Date(`${this.logStart}T00:00:00`) : null;
+      if (start && !Number.isNaN(start.getTime())) params.set("start", start.toISOString());
+      if (this.logEnd) {
+        const end = new Date(`${this.logEnd}T00:00:00`);
+        if (!Number.isNaN(end.getTime())) {
+          end.setDate(end.getDate() + 1);
+          params.set("end", end.toISOString());
+        }
+      }
+      return params;
+    },
+
+    openLogsTab() {
+      this.loadLogs();
+      this.loadPayloadFlag();
+    },
+
     async loadLogs() {
       try {
-        const params = new URLSearchParams({
-          page: String(this.logsPage),
-          page_size: String(this.logsPageSize),
-        });
-        if (this.logCode.trim()) params.set("code", this.logCode.trim());
-        if (this.logToolId.trim()) params.set("tool_id", this.logToolId.trim());
+        const params = this._logFilterParams();
+        params.set("page", String(this.logsPage));
+        params.set("page_size", String(this.logsPageSize));
         const data = await this.api(`/api/admin/logs?${params}`);
         this.logs = data.items || [];
         this.logsTotal = data.total || 0;
+        // 清理后当前页可能已超出末页（返回空列表但 total 正常），收敛页码重查
+        const maxPage = Math.max(1, Math.ceil(this.logsTotal / this.logsPageSize));
+        if (this.logsPage > maxPage) {
+          this.logsPage = maxPage;
+          return this.loadLogs();
+        }
       } catch (e) {
         this.toast(e.message || "加载日志失败", "error");
+      }
+      await this.loadLogSummary();
+    },
+
+    async loadLogSummary() {
+      try {
+        const params = this._logFilterParams();
+        this.logSummary = await this.api(`/api/admin/logs/summary?${params}`);
+      } catch (e) {
+        this.logSummary = {};
+      }
+    },
+
+    async loadPayloadFlag() {
+      try {
+        const data = await this.api("/api/admin/config");
+        this.payloadRecording = /^(1|true|yes|on)$/i.test(String(data.config?.log_payload ?? ""));
+      } catch {
+        this.payloadRecording = null;
+      }
+    },
+
+    resetLogFilters() {
+      this.logCode = "";
+      this.logToolId = "";
+      this.logModel = "";
+      this.logsStatusFilter = "";
+      this.logStart = "";
+      this.logEnd = "";
+      this.logsPage = 1;
+      this.loadLogs();
+    },
+
+    async openLogDetail(id) {
+      this.logDetail = null;
+      this.logDetailError = "";
+      this.logDetailLoading = true;
+      this.logDetailOpen = true;
+      try {
+        this.logDetail = await this.api(`/api/admin/logs/${id}`);
+      } catch (e) {
+        this.logDetailError = e.message || "加载详情失败";
+        this.toast(this.logDetailError, "error");
+      } finally {
+        this.logDetailLoading = false;
+      }
+    },
+
+    closeLogDetail() {
+      this.logDetailOpen = false;
+      this.logDetail = null;
+      this.logDetailError = "";
+    },
+
+    filterByLogCode() {
+      if (!this.logDetail) return;
+      this.logCode = this.logDetail.code || "";
+      this.logsPage = 1;
+      this.loadLogs();
+    },
+
+    async copyLogSummaryText() {
+      const l = this.logDetail;
+      if (!l) return;
+      const text = [
+        `日志 #${l.id}`,
+        `时间：${this.fmtTime(l.created_at)}`,
+        `使用码：${l.code}`,
+        `工具：${l.tool_name || "—"}（ID ${l.tool_id || "—"}）`,
+        `模型：${l.model || "—"}`,
+        `状态：${this.logStatusLabel(l.status)}`,
+        `耗时：${this.fmtDuration(l.duration_ms)}`,
+        `Tokens：输入 ${l.prompt_tokens ?? "—"} / 输出 ${l.completion_tokens ?? "—"} / 合计 ${l.total_tokens ?? "—"}`,
+        `扣费：${this.fmtUnits(l.units)}`,
+        `IP：${l.ip || "—"}`,
+        `UA：${l.user_agent || "—"}`,
+        `请求 ID：${l.request_id || "—"}`,
+        l.error_message ? `错误信息：${l.error_message}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      await this.copyText(text);
+    },
+
+    async purgeLogs() {
+      const input = Number(this.purgeDays);
+      const useConfig = this.purgeDays === null || this.purgeDays === "" || !Number.isFinite(input);
+      const days = Math.max(0, Math.floor(useConfig ? Number(this.configForm.log_retention_days) || 0 : input));
+      if (days <= 0) {
+        this.toast("保留天数为 0 表示永久保留，不会删除任何日志", "error");
+        return;
+      }
+      if (!confirm(`将永久删除 ${days} 天之前的全部使用日志（含原始输入/输出），此操作不可恢复。\n\n确定继续吗？`)) {
+        return;
+      }
+      this.purging = true;
+      try {
+        const data = await this.api("/api/admin/logs/purge", {
+          method: "POST",
+          body: JSON.stringify({ days }),
+        });
+        this.toast(`已清理 ${data.deleted} 条日志`);
+        await Promise.all([this.loadLogs(), this.loadStats()]);
+      } catch (e) {
+        this.toast(e.message || "清理失败", "error");
+      } finally {
+        this.purging = false;
       }
     },
 
@@ -447,9 +656,12 @@ function adminApp() {
           chores_api_key: cfg.chores_api_key || "",
           max_tokens: Number(cfg.max_tokens) || 4096,
           timeout: Number(cfg.timeout) || 120,
+          log_payload: /^(1|true|yes|on)$/i.test(String(cfg.log_payload ?? "")),
+          log_retention_days: Number(cfg.log_retention_days) || 0,
         };
         this.hasLlmKey = !!data.has_llm_api_key;
         this.hasChoresKey = !!data.has_chores_api_key;
+        this.payloadRecording = this.configForm.log_payload;
       } catch (e) {
         this.toast(e.message || "加载配置失败", "error");
       }
@@ -632,6 +844,8 @@ function adminApp() {
             reasoning_effort: m.reasoning_effort || null,
             thinking_budget: m.thinking_budget || null,
           })),
+          log_payload: !!this.configForm.log_payload,
+          log_retention_days: Math.max(0, Math.floor(Number(this.configForm.log_retention_days) || 0)),
         };
         if (typeof body.llm_api_key === "string" && body.llm_api_key.includes("****")) {
           delete body.llm_api_key;

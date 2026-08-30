@@ -48,9 +48,12 @@
 | GET | `/api/admin/codes` | 使用码列表 |
 | POST | `/api/admin/codes` | 生成使用码 |
 | PATCH | `/api/admin/codes/{id}` | 更新使用码（启用/禁用/备注/额度） |
-| GET | `/api/admin/logs` | 使用日志列表 |
+| GET | `/api/admin/logs` | 使用日志列表（可按状态 / 模型 / 时间筛选） |
+| GET | `/api/admin/logs/summary` | 使用日志聚合统计（随筛选联动） |
+| GET | `/api/admin/logs/{id}` | 单条日志详情（含原始输入 / Prompt / 输出） |
+| POST | `/api/admin/logs/purge` | 手动清理过期日志 |
 | GET | `/api/admin/config` | 查看运行时配置 |
-| PUT | `/api/admin/config` | 更新运行时配置 |
+| PUT | `/api/admin/config` | 更新运行时配置（含日志开关与保留天数） |
 
 ---
 
@@ -383,6 +386,8 @@ data: [DONE]
 
 智能错题迁移的同一批请求共享 `batch_id`。后端只有在 `batch_size` 张卡片全部自然完成后，才按 `max(1, floor(batch_size / 2))` 扣减一次额度；任一卡片失败或被停止时不扣减。
 
+**日志留痕：** 无论成功、用户停止还是异常，每次 `/api/chat/stream` 调用都会在服务端留下**一条**使用日志（见 11.5）。智能错题迁移的每张卡片各记一条日志，其 `units` 为 0；整批的扣费次数记在最后一卡的日志上。
+
 ---
 
 ## 9. 停止流式生成
@@ -536,16 +541,25 @@ data: [DONE]
 
 ### 11.5 使用日志
 
+每次 LLM 调用（主聊天流、标题生成、错因分析）都会留下**一条**日志。元数据
+（状态、耗时、token 用量、客户端 IP / UA、实际扣费次数）**始终记录**；原始内容
+（用户输入、渲染后的完整 Prompt、模型输出）是否入库由配置项 `log_payload`
+控制，**默认关闭**。
+
 #### GET `/api/admin/logs`
 
 **查询参数：**
 
 | 参数 | 说明 |
 |------|------|
-| `code` | 按使用码筛选 |
-| `tool_id` | 按工具 ID 筛选 |
-| `page` | 页码 |
-| `page_size` | 每页数量 |
+| `code` | 按使用码筛选（模糊匹配） |
+| `tool_id` | 按工具 ID 精确筛选（`title` / `migration_analyze` / 数字 ID） |
+| `model` | 按模型筛选（模糊匹配） |
+| `status` | `success` \| `cancelled` \| `error`，非法值返回 400 |
+| `start` | 起始时间（含）。接受 `YYYY-MM-DD` 或 ISO 时间串；纯日期按零点处理，带时区的值统一换算为 UTC |
+| `end` | 结束时间（**不含**），格式同上 |
+| `page` | 页码，默认 1 |
+| `page_size` | 每页数量，默认 30，最大 100 |
 
 **响应：**
 
@@ -563,11 +577,102 @@ data: [DONE]
       "tool_name": "语篇深度分析",
       "model": "openrouter/google/gemini-2.0-flash",
       "request_id": "1_1690123456789",
-      "created_at": "2026-07-28T12:00:00+00:00"
+      "created_at": "2026-07-28T12:00:00+00:00",
+      "status": "success",
+      "error_message": "",
+      "duration_ms": 8421,
+      "prompt_tokens": 2959,
+      "completion_tokens": 2060,
+      "total_tokens": 5019,
+      "ip": "192.168.1.66",
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...",
+      "units": 1
     }
   ]
 }
 ```
+
+**字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `status` | `success` 正常完成 / `cancelled` 用户停止或客户端断开 / `error` 上游或内部异常 |
+| `error_message` | 异常摘要，最长 500 字（超出截断）；正常为空串 |
+| `duration_ms` | 从发起到流结束的墙钟耗时；旧数据为 `null` |
+| `prompt_tokens` 等 | 供应商回传的 token 用量；未开启流式 usage 或供应商不支持时为 `null` |
+| `ip` | 客户端 IP，反代后按 `X-Real-IP` > `X-Forwarded-For` 首跳 > 直连地址取值 |
+| `units` | 本次请求**实际扣减**的额度次数。普通工具成功/停止 = 1；标题生成、错因分析、迁移单卡 = 0；迁移整批的最后一卡 = 整批次数 |
+
+**旧数据兼容：** 本次增强之前写入的日志行没有这些新字段（`_add_missing_columns()`
+以可空、无默认值的方式 ALTER 加列，存量行读回为 `NULL`）。统一口径是：
+
+- `status` 为 `NULL` / 空串 → 一律按 `success` 归档。列表筛选（`status=success`）、
+  `/logs/summary` 聚合与详情展示三处共用同一条规则（`request_log.status_matches`），
+  因此「详情写着成功」与「筛成功能查到」必然一致，且
+  `success + cancelled + error == total` 恒成立。旧版本只在生成收尾并扣费后写日志，
+  异常与用户停止当时不留痕，故不存在被误归类的旧行。
+- `duration_ms` / `prompt_tokens` / `completion_tokens` / `total_tokens` / `units`
+  为 `NULL` → 表示**当时未记录**，接口原样返回 `null`，前端显示 `—`。
+  注意 `units` 不会收敛成 `0`：`0` 的含义是「本次未扣费」，与「不知道」是两回事。
+- `ip` / `user_agent` / `error_message` 为 `NULL` → 返回空串，前端显示 `—`。
+- `payload` 为 `null` → 该次请求未开启原始数据记录（旧数据一律如此）。
+
+#### GET `/api/admin/logs/summary`
+
+接受与 `/api/admin/logs` 完全相同的筛选参数（分页参数除外），返回聚合结果，
+用于日志页顶部统计卡。
+
+```json
+{
+  "total": 156,
+  "success": 140,
+  "cancelled": 6,
+  "error": 10,
+  "total_tokens": 411240,
+  "avg_duration_ms": 8421
+}
+```
+
+`avg_duration_ms` 在没有可用耗时数据时为 `null`。
+
+#### GET `/api/admin/logs/{log_id}`
+
+返回单条日志的全部元数据字段，外加 `payload`：
+
+```json
+{
+  "id": 1,
+  "...": "同列表字段",
+  "payload": {
+    "input": "用户原始输入",
+    "prompt": "渲染后发给模型的完整 Prompt",
+    "output": "模型完整输出"
+  }
+}
+```
+
+`payload` 为 `null` 表示该次请求未开启原始数据记录（或记录功能当时处于关闭状态）。
+单段内容最长 60000 字，超出部分截断。
+
+#### POST `/api/admin/logs/purge`
+
+**请求体（可省略）：**
+
+```json
+{ "days": 30 }
+```
+
+`days` 缺省时使用配置项 `log_retention_days`；`days <= 0` 表示不清理（永久保留语义）。
+原始数据随日志一并删除。
+
+**响应：**
+
+```json
+{ "status": "purged", "days": 30, "deleted": 128 }
+```
+
+> 保留策略：`log_retention_days > 0` 时，主站进程在启动时清理一次，之后每 24 小时
+> 自动清理一次过期日志。
 
 ### 11.6 查看配置
 
@@ -587,13 +692,18 @@ data: [DONE]
     "chores_base_url": "",
     "chores_api_key": "",
     "max_tokens": "4096",
-    "timeout": "120"
+    "timeout": "120",
+    "log_payload": "false",
+    "log_retention_days": "0"
   },
   "keys": [ ... ],
   "has_llm_api_key": true,
   "has_chores_api_key": false
 }
 ```
+
+`log_payload` 以字符串 `"true"` / `"false"` 存储；`log_retention_days` 为
+天数字符串，`"0"` 表示永久保留。
 
 ### 11.7 更新配置
 
@@ -606,11 +716,15 @@ data: [DONE]
   "default_model": "openrouter/google/gemini-2.0-flash",
   "models": "model1,model2",
   "llm_api_key": "sk-...",
-  "max_tokens": 4096
+  "max_tokens": 4096,
+  "log_payload": true,
+  "log_retention_days": 30
 }
 ```
 
 说明：API Key 字段若含 `****` 则视为未修改；留空字符串则清除密钥。
+`log_retention_days` 取值范围 `0 ~ 36500`，越界返回 422。
+两项日志配置**保存后即时生效**（主站在每次请求时读取），无需重启。
 
 ---
 
@@ -682,3 +796,4 @@ openrouter/deepseek/deepseek-chat
 | 1.1.0 | 2026-07-28 | v1.1：新增使用码认证（`/api/auth/*`）、管理后台 API（`/api/admin/*`）、移除前端 API 设置字段、更新配置管理说明 |
 | 1.2.0 | 2026-08-07 | 新增智能错题迁移错因分析、额度预检查与批量并行流式生成 |
 | 1.3.0 | 2026-08-10 | 超标词排查改为机械实现（新增 `/api/chat/vocab/check`），替换独立为 `超标词替换.md` Prompt |
+| 1.4.0 | 2026-08-30 | 使用日志增强：新增状态 / 耗时 / token 用量 / IP / UA / 扣费次数字段，原始输入与输出按 `log_payload` 开关入库，新增 `/api/admin/logs/summary`、`/api/admin/logs/{id}`、`/api/admin/logs/purge` 与 `log_retention_days` 保留策略 |

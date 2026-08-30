@@ -8,6 +8,16 @@ from litellm import acompletion
 logger = logging.getLogger(__name__)
 
 
+def extract_usage(usage, out: dict) -> None:
+    """从 litellm 的 usage 对象提取 token 计数到 out；字段缺失时静默跳过。"""
+    if usage is None:
+        return
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = getattr(usage, key, None)
+        if isinstance(value, (int, float)):
+            out[key] = int(value)
+
+
 class LLMService:
     """LiteLLM 调用封装
 
@@ -78,6 +88,10 @@ class LLMService:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
         elif reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
+        if stream:
+            # 请求供应商在流末尾返回 token 用量；不支持的供应商由
+            # litellm.drop_params 自动丢弃该参数，不会引发报错
+            kwargs["stream_options"] = {"include_usage": True}
         return kwargs
 
     async def chat(
@@ -89,8 +103,9 @@ class LLMService:
         base_url: Optional[str] = None,
         max_tokens: Optional[int] = None,
         messages: Optional[list[dict]] = None,
+        usage_out: Optional[dict] = None,
     ) -> str:
-        """非流式调用，返回完整字符串"""
+        """非流式调用，返回完整字符串；传入 usage_out 时回填 token 用量。"""
         request_messages = messages or self._get_messages(system_prompt, user_prompt)
         kwargs = self._build_kwargs(
             model, request_messages, api_key, base_url, max_tokens, stream=False,
@@ -98,6 +113,8 @@ class LLMService:
 
         try:
             response = await acompletion(**kwargs)
+            if usage_out is not None:
+                extract_usage(getattr(response, "usage", None), usage_out)
             return response.choices[0].message.content or ""
         except Exception as e:
             logger.error(f"LLM chat error: {e}")
@@ -144,10 +161,12 @@ class LLMService:
         stop_event: Optional[asyncio.Event] = None,
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
+        usage_out: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
         """支持中止的流式调用
 
         当 stop_event 被 set 时，停止生成并退出。
+        传入 usage_out 时，流末尾的 usage 分块（空 choices）会被提取而非丢弃。
         """
         messages = self._get_messages(system_prompt, user_prompt)
         kwargs = self._build_kwargs(
@@ -161,8 +180,10 @@ class LLMService:
                 if stop_event and stop_event.is_set():
                     logger.info("LLM stream stopped by stop_event")
                     break
-                # 同上：跳过空 choices 的 keep-alive / usage 分块
                 if not getattr(chunk, "choices", None):
+                    # keep-alive / usage 分块：提取 token 用量后跳过
+                    if usage_out is not None and getattr(chunk, "usage", None):
+                        extract_usage(chunk.usage, usage_out)
                     continue
                 delta = chunk.choices[0].delta
                 if delta and delta.content:

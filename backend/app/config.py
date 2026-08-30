@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     max_tokens: int = 4096
     timeout: int = 120
 
+    # 使用日志
+    # 是否记录每次请求的原始输入 / 渲染 Prompt / 模型输出（元数据始终记录）
+    log_payload: bool = False
+    # 日志保留天数，超过后自动清理；0 = 永久保留
+    log_retention_days: int = 0
+
     # SSE 配置
     sse_retry_timeout: int = 30000  # 客户端重连时间（毫秒）
 

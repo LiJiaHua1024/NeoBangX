@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import secrets as secrets_lib
+from datetime import datetime, timezone
 
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func
+from sqlalchemy import case, desc, func
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import UsageCode, UsageLog
+from app.models import LogPayload, UsageCode, UsageLog
+from app.services.request_log import (
+    current_retention_days,
+    purge_expired_logs,
+    status_matches,
+)
 from app.services.runtime_config import (
     CONFIG_KEYS,
     REASONING_EFFORTS,
@@ -65,6 +71,8 @@ class ConfigUpdateRequest(BaseModel):
     chores_api_key: Optional[str] = None
     max_tokens: Optional[int] = None
     timeout: Optional[int] = None
+    log_payload: Optional[bool] = Field(None, description="是否记录原始输入/输出数据")
+    log_retention_days: Optional[int] = Field(None, ge=0, le=36500, description="日志保留天数，0=永久")
 
 
 @router.get("/stats")
@@ -203,19 +211,114 @@ async def delete_code(
     return {"status": "deleted", "id": code_id}
 
 
+LOG_STATUSES = ("success", "cancelled", "error")
+
+
+def _parse_log_date(value: str, name: str) -> datetime:
+    """解析筛选日期为 naive UTC。接受 ISO 时间串或 YYYY-MM-DD；纯日期按零点处理。"""
+    raw = value.strip()
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"日期参数 {name} 格式不合法：{value}") from None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _apply_log_filters(
+    query,
+    *,
+    code: str,
+    tool_id: str,
+    model: str,
+    status: str,
+    start: Optional[str],
+    end: Optional[str],
+):
+    if code:
+        query = query.filter(UsageLog.code.ilike(f"%{code.strip()}%"))
+    if tool_id:
+        query = query.filter(UsageLog.tool_id == tool_id.strip())
+    if model:
+        query = query.filter(UsageLog.model.ilike(f"%{model.strip()}%"))
+    if status:
+        if status not in LOG_STATUSES:
+            raise HTTPException(status_code=400, detail=f"非法状态筛选：{status}")
+        query = query.filter(status_matches(status))
+    if start:
+        query = query.filter(UsageLog.created_at >= _parse_log_date(start, "start"))
+    if end:
+        query = query.filter(UsageLog.created_at < _parse_log_date(end, "end"))
+    return query
+
+
+# 注意：/logs/summary 与 /logs/purge 必须先于 /logs/{log_id} 声明，
+# 否则会被路径参数吞掉。
+@router.get("/logs/summary")
+async def logs_summary(
+    db: Annotated[Session, Depends(get_db)],
+    code: str = Query("", description="按使用码筛选"),
+    tool_id: str = Query("", description="按工具 ID 筛选"),
+    model: str = Query("", description="按模型筛选（模糊）"),
+    status: str = Query("", description="success | cancelled | error，空为全部"),
+    start: Optional[str] = Query(None, description="起始时间（ISO，含）"),
+    end: Optional[str] = Query(None, description="结束时间（ISO，不含）"),
+):
+    query = _apply_log_filters(
+        db.query(UsageLog),
+        code=code, tool_id=tool_id, model=model, status=status, start=start, end=end,
+    )
+    row = query.with_entities(
+        func.count(UsageLog.id).label("total"),
+        func.coalesce(func.sum(case((status_matches("success"), 1), else_=0)), 0).label("success"),
+        func.coalesce(func.sum(case((status_matches("cancelled"), 1), else_=0)), 0).label("cancelled"),
+        func.coalesce(func.sum(case((status_matches("error"), 1), else_=0)), 0).label("error"),
+        func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+        func.avg(UsageLog.duration_ms).label("avg_duration_ms"),
+    ).one()
+    return {
+        "total": int(row.total),
+        "success": int(row.success),
+        "cancelled": int(row.cancelled),
+        "error": int(row.error),
+        "total_tokens": int(row.total_tokens),
+        "avg_duration_ms": round(float(row.avg_duration_ms)) if row.avg_duration_ms is not None else None,
+    }
+
+
+class PurgeLogsRequest(BaseModel):
+    days: Optional[int] = Field(
+        None, ge=0, description="覆盖保留天数；缺省使用 log_retention_days 配置，0=不清理",
+    )
+
+
+@router.post("/logs/purge")
+async def purge_logs(
+    req: PurgeLogsRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    days = req.days if req.days is not None else current_retention_days(db)
+    deleted = purge_expired_logs(db, days)
+    return {"status": "purged", "days": days, "deleted": deleted}
+
+
 @router.get("/logs")
 async def list_logs(
     db: Annotated[Session, Depends(get_db)],
     code: str = Query("", description="按使用码筛选"),
     tool_id: str = Query("", description="按工具 ID 筛选"),
+    model: str = Query("", description="按模型筛选（模糊）"),
+    status: str = Query("", description="success | cancelled | error，空为全部"),
+    start: Optional[str] = Query(None, description="起始时间（ISO，含）"),
+    end: Optional[str] = Query(None, description="结束时间（ISO，不含）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
 ):
-    query = db.query(UsageLog)
-    if code:
-        query = query.filter(UsageLog.code.ilike(f"%{code.strip()}%"))
-    if tool_id:
-        query = query.filter(UsageLog.tool_id == tool_id.strip())
+    query = _apply_log_filters(
+        db.query(UsageLog),
+        code=code, tool_id=tool_id, model=model, status=status, start=start, end=end,
+    )
 
     total = query.count()
     rows = (
@@ -230,6 +333,24 @@ async def list_logs(
         "page_size": page_size,
         "items": [r.to_dict() for r in rows],
     }
+
+
+@router.get("/logs/{log_id}")
+async def log_detail(
+    log_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    row = db.get(UsageLog, log_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="日志不存在")
+    data = row.to_dict()
+    payload = db.get(LogPayload, log_id)
+    data["payload"] = (
+        {"input": payload.input, "prompt": payload.prompt, "output": payload.output}
+        if payload is not None
+        else None
+    )
+    return data
 
 
 @router.get("/config")
@@ -256,6 +377,10 @@ async def update_admin_config(
     updates: dict[str, str] = {}
     for key, value in raw.items():
         if value is None:
+            continue
+        # 布尔开关统一存小写字符串，parse_log_settings 按此解析
+        if key == "log_payload":
+            updates[key] = "true" if value else "false"
             continue
         # 模型列表：校验 thinking 取值后序列化为 JSON 存储
         if key == "models":

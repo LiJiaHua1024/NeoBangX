@@ -25,6 +25,13 @@ from app.services.migration import (
     parse_error_causes,
 )
 from app.services.prompt_loader import PromptLoader
+from app.services.request_log import (
+    STATUS_CANCELLED,
+    STATUS_ERROR,
+    STATUS_SUCCESS,
+    get_client_info,
+    record_usage_log,
+)
 from app.services.runtime_config import find_model_entry, resolve_llm_settings
 from app.services.usage_code import assert_can_generate, consume_quota
 from app.services.vocab_check import check_over_words
@@ -98,6 +105,49 @@ def _build_llm(cfg: dict, chores: bool = False) -> LLMService:
         base_url=cfg["llm_base_url"],
         max_tokens=cfg["max_tokens"],
         timeout=cfg["timeout"],
+    )
+
+
+def _log_llm_call(
+    *,
+    code: UsageCode,
+    tool_id: str,
+    tool_name: str,
+    model: str,
+    status: str,
+    started: float,
+    usage: dict | None,
+    client: tuple[str, str],
+    log_payload: bool,
+    request_id: str = "",
+    error_message: str = "",
+    units: int = 0,
+    input_text: str = "",
+    rendered_prompt: str = "",
+    output_text: str = "",
+) -> None:
+    """统一落一条 LLM 调用日志。同步函数，供 asyncio.to_thread 调用。
+
+    元数据始终记录；原始输入 / 渲染 Prompt / 输出仅在 log_payload 开启时落库。
+    """
+    record_usage_log(
+        code_id=code.id,
+        code=code.code,
+        tool_id=tool_id or "",
+        tool_name=tool_name or "",
+        model=model or "",
+        request_id=request_id or "",
+        status=status,
+        error_message=error_message,
+        duration_ms=int((monotonic() - started) * 1000),
+        usage=usage or {},
+        ip=client[0],
+        user_agent=client[1],
+        units=units,
+        input_text=input_text,
+        rendered_prompt=rendered_prompt,
+        output_text=output_text,
+        log_payload=log_payload,
     )
 
 
@@ -320,6 +370,7 @@ async def check_vocabulary(
 @router.post("/migration/analyze")
 async def analyze_migration_causes(
     req: MigrationAnalyzeRequest,
+    request: Request,
     code: Annotated[UsageCode, Depends(get_current_code)],
     loader: PromptLoader = Depends(get_prompt_loader),
 ):
@@ -336,15 +387,42 @@ async def analyze_migration_causes(
     cfg = await asyncio.to_thread(_load_cfg)
     _validate_model(cfg, req.model)
     llm = _build_llm(cfg, chores=False)
+    model_used = req.model or cfg["llm_model"]
+    client_ip, user_agent = get_client_info(request)
+    started = monotonic()
+    usage: dict = {}
+    log_payload_enabled = bool(cfg.get("log_payload"))
+
+    async def _record(status: str, output_text: str, error_message: str = "") -> None:
+        await asyncio.to_thread(
+            _log_llm_call,
+            code=code,
+            tool_id="migration_analyze",
+            tool_name="错因分析",
+            model=model_used,
+            status=status,
+            started=started,
+            usage=usage,
+            client=(client_ip, user_agent),
+            log_payload=log_payload_enabled,
+            error_message=error_message,
+            input_text=_migration_prompt_input(req),
+            rendered_prompt=prompt,
+            output_text=output_text,
+        )
+
     try:
-        raw = await llm.chat(user_prompt=prompt, messages=messages, model=req.model)
+        raw = await llm.chat(user_prompt=prompt, messages=messages, model=req.model, usage_out=usage)
     except Exception as exc:
         logger.error("Migration cause analysis error: %s", exc)
+        await _record(STATUS_ERROR, "", str(exc))
         raise HTTPException(status_code=500, detail="错因分析失败，请稍后重试") from exc
 
     causes = parse_error_causes(raw)
     if not causes and not req.continue_generation:
+        await _record(STATUS_ERROR, raw, "模型未返回可确认的错因")
         raise HTTPException(status_code=502, detail="模型未返回可确认的错因，请重试")
+    await _record(STATUS_SUCCESS, raw)
     return {
         "causes": [
             {"id": f"cause_{index}", "label": cause}
@@ -435,6 +513,9 @@ async def chat_stream(
     _validate_model(cfg, req.model)
     llm = _build_llm(cfg, chores=False)
     tool_name = prompt_filename
+    if req.tool_id == MIGRATION_TOOL_ID:
+        # 日志展示用名称：迁移请求统一显示工具名而非底层 prompt 文件名
+        tool_name = MIGRATION_TOOL_NAME
     code_id = code.id
     base_request_id = req.request_id or f"{req.tool_id}_{id(request)}"
     request_id = base_request_id
@@ -449,11 +530,20 @@ async def chat_stream(
     model_entry = find_model_entry(cfg["models"], model_used)
     reasoning_effort = model_entry.get("reasoning_effort") if model_entry else None
     thinking_budget = model_entry.get("thinking_budget") if model_entry else None
+    # 日志元数据：客户端信息与原始数据开关（开关随请求读取，改配置即时生效）
+    client_ip, user_agent = get_client_info(request)
+    log_payload_enabled = bool(cfg.get("log_payload"))
 
     async def event_generator():
         charged = False
         migration_finished = False
         client_disconnected = False
+        status = STATUS_SUCCESS
+        error_message = ""
+        units = 0
+        output_parts: list[str] = []
+        usage: dict = {}
+        started = monotonic()
         try:
             async for token in llm.chat_stream_with_stop(
                 user_prompt=prompt,
@@ -461,7 +551,9 @@ async def chat_stream(
                 stop_event=stop_event,
                 reasoning_effort=reasoning_effort,
                 thinking_budget=thinking_budget,
+                usage_out=usage,
             ):
+                output_parts.append(token)
                 if await request.is_disconnected():
                     logger.info(f"Client disconnected: {request_id}")
                     client_disconnected = True
@@ -480,35 +572,36 @@ async def chat_stream(
                     success=success,
                 )
                 migration_finished = True
+                # 额度在整批最后一卡完成时一次性扣减；单卡日志不扣费（units=0）
                 if should_charge and success:
-                    await asyncio.to_thread(
+                    units = await asyncio.to_thread(
                         _charge_usage,
                         code_id=code_id,
-                        tool_id=req.tool_id,
-                        tool_name=MIGRATION_TOOL_NAME,
-                        model=model_used,
-                        request_id=req.batch_id or request_id,
                         units=migration_batch.charge_units,
+                        request_id=req.batch_id or request_id,
                     )
+                if not success:
+                    status = STATUS_CANCELLED
                 yield {
                     "event": "done",
                     "data": "[DONE]" if success else "[CANCELLED]",
                 }
             else:
-                # 保持现有工具的计费行为：流正常收尾（包括用户停止）后扣 1 次。
+                # 保持现有工具的计费行为：流正常收尾（包括用户停止/断开）后扣 1 次。
+                if client_disconnected or stop_event.is_set():
+                    status = STATUS_CANCELLED
                 if not charged:
-                    await asyncio.to_thread(
+                    units = await asyncio.to_thread(
                         _charge_usage,
                         code_id=code_id,
-                        tool_id=req.tool_id,
-                        tool_name=tool_name,
-                        model=model_used,
+                        units=1,
                         request_id=request_id,
                     )
                     charged = True
                 yield {"event": "done", "data": "[DONE]"}
         except asyncio.CancelledError:
             logger.info(f"Stream cancelled: {request_id}")
+            status = STATUS_CANCELLED
             if migration_batch:
                 if not migration_finished:
                     _finish_migration_stream(
@@ -521,18 +614,18 @@ async def chat_stream(
                 yield {"event": "done", "data": "[CANCELLED]"}
             else:
                 if not charged:
-                    await asyncio.to_thread(
+                    units = await asyncio.to_thread(
                         _charge_usage,
                         code_id=code_id,
-                        tool_id=req.tool_id,
-                        tool_name=tool_name,
-                        model=model_used,
+                        units=1,
                         request_id=request_id,
                     )
                     charged = True
                 yield {"event": "done", "data": "[CANCELLED]"}
         except Exception as e:
             logger.error(f"Stream error for {request_id}: {e}")
+            status = STATUS_ERROR
+            error_message = str(e)
             # 原始异常可能内嵌上游网关地址/供应商报错，不回传给终端用户
             yield {
                 "event": "error",
@@ -547,6 +640,25 @@ async def chat_stream(
                     success=False,
                 )
             _stop_events.pop(request_id, None)
+            # 成功、停止、异常统一留痕：元数据始终记录，原始数据受开关控制
+            await asyncio.to_thread(
+                _log_llm_call,
+                code=code,
+                tool_id=req.tool_id,
+                tool_name=tool_name,
+                model=model_used,
+                request_id=request_id,
+                status=status,
+                started=started,
+                usage=usage,
+                client=(client_ip, user_agent),
+                log_payload=log_payload_enabled,
+                error_message=error_message,
+                units=units,
+                input_text=req.input,
+                rendered_prompt=prompt,
+                output_text="".join(output_parts),
+            )
 
     return EventSourceResponse(
         event_generator(),
@@ -556,38 +668,29 @@ async def chat_stream(
     )
 
 
-def _charge_usage(
-    *,
-    code_id: int,
-    tool_id: str,
-    tool_name: str,
-    model: str,
-    request_id: str,
-    units: int = 1,
-) -> None:
-    """在独立会话中扣减额度，避免生成器生命周期问题。同步函数，经 to_thread 调用。"""
+def _charge_usage(*, code_id: int, units: int = 1, request_id: str = "") -> int:
+    """在独立会话中扣减额度（日志由 _log_llm_call 统一记录）。
+
+    同步函数，经 to_thread 调用。返回实际扣减的次数；
+    并发超发被拒或写库失败时返回 0——内容已交付无法回收，
+    但必须显式留痕而非静默吞掉。
+    """
     db = SessionLocal()
     try:
         row = db.get(UsageCode, code_id)
         if row is None:
-            return
-        consume_quota(
-            db,
-            row,
-            tool_id=tool_id,
-            tool_name=tool_name,
-            model=model,
-            request_id=request_id,
-            units=units,
-        )
+            return 0
+        consume_quota(db, row, units=units)
+        return units
     except HTTPException as e:
-        # 原子扣减拦截了并发超发：内容已交付无法回收，但必须显式留痕而非静默吞掉
         logger.warning(
-            "额度扣减被拒绝(%s)：code=%s tool=%s units=%s request=%s —— 本次生成未计费",
-            e.detail, code_id, tool_id, units, request_id,
+            "额度扣减被拒绝(%s)：code_id=%s units=%s request=%s —— 本次生成未计费",
+            e.detail, code_id, units, request_id,
         )
+        return 0
     except Exception:
         logger.exception("Failed to charge usage for %s", request_id)
+        return 0
     finally:
         db.close()
 
@@ -609,6 +712,7 @@ async def stop_stream(
 @router.post("/title")
 async def generate_title(
     req: TitleRequest,
+    request: Request,
     code: Annotated[UsageCode, Depends(get_current_code)],
 ):
     """为一次生成结果生成简短标题。不扣减额度。"""
@@ -627,16 +731,43 @@ async def generate_title(
     cfg = await asyncio.to_thread(_load_cfg)
     _validate_model(cfg, req.model)
     llm = _build_llm(cfg, chores=True)
+    model_used = req.model or cfg["chores_model"]
+    client_ip, user_agent = get_client_info(request)
+    started = monotonic()
+    usage: dict = {}
+    log_payload_enabled = bool(cfg.get("log_payload"))
+
+    async def _record(status: str, output_text: str, error_message: str = "") -> None:
+        await asyncio.to_thread(
+            _log_llm_call,
+            code=code,
+            tool_id="title",
+            tool_name="标题生成",
+            model=model_used,
+            status=status,
+            started=started,
+            usage=usage,
+            client=(client_ip, user_agent),
+            log_payload=log_payload_enabled,
+            error_message=error_message,
+            input_text=req.input,
+            rendered_prompt=user_prompt,
+            output_text=output_text,
+        )
+
     try:
         raw = await llm.chat(
             system_prompt=TITLE_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             model=req.model,
             max_tokens=64,
+            usage_out=usage,
         )
     except Exception as e:
         logger.error(f"Title generation error: {e}")
+        await _record(STATUS_ERROR, "", str(e))
         raise HTTPException(status_code=500, detail="标题生成失败，请稍后重试")
 
     title = raw.strip().strip('"').strip("'").split("\n")[0][:40]
+    await _record(STATUS_SUCCESS, raw)
     return {"title": title}

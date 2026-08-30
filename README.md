@@ -195,6 +195,8 @@ docker-compose down
 | `MAX_TOKENS` | `4096` | 最大输出 token 数 |
 | `TIMEOUT` | `120` | LLM 调用超时时间（秒） |
 | `SSE_RETRY_TIMEOUT` | `30000` | SSE 客户端重连时间（毫秒） |
+| `LOG_PAYLOAD` | `false` | 是否记录每次请求的原始输入 / 渲染 Prompt / 输出（元数据始终记录） |
+| `LOG_RETENTION_DAYS` | `0` | 使用日志保留天数，超期每日自动清理；`0` 表示永久保留 |
 
 ---
 
@@ -248,9 +250,12 @@ NBXU-3XXX-XXXX-XXXX
 - `GET /api/admin/codes` — 使用码列表
 - `POST /api/admin/codes` — 生成使用码
 - `PATCH /api/admin/codes/{id}` — 启用/禁用/修改额度
-- `GET /api/admin/logs` — 使用日志
+- `GET /api/admin/logs` — 使用日志列表（支持使用码 / 工具 / 模型 / 状态 / 时间范围筛选）
+- `GET /api/admin/logs/summary` — 日志聚合统计（请求数、成功/停止/异常、总 Tokens、平均耗时）
+- `GET /api/admin/logs/{id}` — 单条日志详情（含原始输入 / 渲染 Prompt / 输出，受记录开关控制）
+- `POST /api/admin/logs/purge` — 手动清理过期日志
 - `GET /api/admin/config` — 查看配置
-- `PUT /api/admin/config` — 更新配置
+- `PUT /api/admin/config` — 更新配置（含日志记录开关与保留天数）
 
 ---
 
@@ -259,7 +264,7 @@ NBXU-3XXX-XXXX-XXXX
 | 数据 | 存储位置 |
 |------|----------|
 | 使用码信息 | 后端 SQLite |
-| 使用日志 | 后端 SQLite |
+| 使用日志 | 后端 SQLite（元数据 `usage_logs`；原始输入/输出 `log_payloads`，按开关记录） |
 | LLM / API 配置 | 后端 SQLite（管理后台维护） |
 | 历史记录 | 浏览器 localStorage |
 | 收藏 | 浏览器 localStorage |

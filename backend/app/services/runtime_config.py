@@ -22,6 +22,8 @@ CONFIG_KEYS = [
     "chores_api_key",
     "max_tokens",
     "timeout",
+    "log_payload",
+    "log_retention_days",
 ]
 
 # 敏感字段：列表接口可脱敏
@@ -117,6 +119,8 @@ def _env_defaults() -> dict[str, str]:
         "chores_api_key": settings.chores_api_key,
         "max_tokens": str(settings.max_tokens),
         "timeout": str(settings.timeout),
+        "log_payload": "true" if settings.log_payload else "false",
+        "log_retention_days": str(settings.log_retention_days),
     }
 
 
@@ -192,6 +196,16 @@ def mask_config(cfg: dict[str, str]) -> dict[str, str]:
     return out
 
 
+def parse_log_settings(cfg: dict[str, str]) -> tuple[bool, int]:
+    """解析日志相关配置：（是否记录原始数据，保留天数）。"""
+    log_payload = (cfg.get("log_payload") or "").strip().lower() in ("1", "true", "yes", "on")
+    try:
+        log_retention_days = int(cfg.get("log_retention_days") or 0)
+    except ValueError:
+        log_retention_days = 0
+    return log_payload, max(0, log_retention_days)
+
+
 def resolve_llm_settings(db: Session) -> dict:
     """解析当前生效的 LLM 连接参数。"""
     cfg = get_config_map(db)
@@ -222,6 +236,8 @@ def resolve_llm_settings(db: Session) -> dict:
             "thinking_budget": None,
         }]
 
+    log_payload, log_retention_days = parse_log_settings(cfg)
+
     return {
         "models": model_list,
         "default_model": default_model,
@@ -233,4 +249,6 @@ def resolve_llm_settings(db: Session) -> dict:
         "chores_api_key": chores_api_key,
         "max_tokens": max_tokens,
         "timeout": timeout,
+        "log_payload": log_payload,
+        "log_retention_days": log_retention_days,
     }
