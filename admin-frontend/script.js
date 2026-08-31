@@ -101,22 +101,14 @@ function adminApp() {
     configForm: {
       default_model: "",
       models: [],
-      llm_base_url: "",
-      llm_api_key: "",
-      llm_model: "",
       chores_model: "",
-      chores_base_url: "",
-      chores_api_key: "",
       max_tokens: 4096,
       timeout: 120,
       log_payload: false,
       log_retention_days: 0,
     },
-    hasLlmKey: false,
-    hasChoresKey: false,
     savingConfig: false,
-    defaultModelMenuOpen: false,
-    legacyConfigOpen: false,
+    choresModelMenuOpen: false,
     // 多 Provider 聚合
     providers: [],
     modelProviderMap: {},
@@ -149,7 +141,7 @@ function adminApp() {
     // 模型添加/编辑弹窗
     modelModalOpen: false,
     modelModalIndex: null,
-    modelForm: { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null },
+    modelForm: { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null, chores_only: false },
     thinkingMenuOpen: false,
     // 模型拖拽排序
     dragIndex: null,
@@ -233,11 +225,17 @@ function adminApp() {
       if (m) return m.name || m.id;
       return this.configForm.default_model || "请选择默认模型";
     },
+    get choresModelLabel() {
+      if (!this.configForm.chores_model) return `跟随默认（${this.defaultModelLabel}）`;
+      const m = this.configForm.models.find((x) => x.id === this.configForm.chores_model);
+      if (m) return m.name || m.id;
+      return this.configForm.chores_model;
+    },
     get defaultModelMissing() {
       return (
         !!this.configForm.default_model &&
         this.configForm.models.length > 0 &&
-        !this.configForm.models.some((m) => m.id === this.configForm.default_model)
+        !this.configForm.models.some((m) => m.id === this.configForm.default_model && !m.chores_only)
       );
     },
     get providersById() {
@@ -856,21 +854,15 @@ function adminApp() {
                 score: m.score ?? null,
                 reasoning_effort: m.reasoning_effort || null,
                 thinking_budget: m.thinking_budget || null,
+                chores_only: !!m.chores_only,
               }))
             : [],
-          llm_base_url: cfg.llm_base_url || "",
-          llm_api_key: cfg.llm_api_key || "",
-          llm_model: cfg.llm_model || "",
           chores_model: cfg.chores_model || "",
-          chores_base_url: cfg.chores_base_url || "",
-          chores_api_key: cfg.chores_api_key || "",
           max_tokens: Number(cfg.max_tokens) || 4096,
           timeout: Number(cfg.timeout) || 120,
           log_payload: /^(1|true|yes|on)$/i.test(String(cfg.log_payload ?? "")),
           log_retention_days: Number(cfg.log_retention_days) || 0,
         };
-        this.hasLlmKey = !!data.has_llm_api_key;
-        this.hasChoresKey = !!data.has_chores_api_key;
         this.payloadRecording = this.configForm.log_payload;
         // 多 Provider 聚合
         this.providers = Array.isArray(data.providers) ? data.providers : [];
@@ -918,7 +910,7 @@ function adminApp() {
 
     openAddModel() {
       this.modelModalIndex = null;
-      this.modelForm = { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null };
+      this.modelForm = { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null, chores_only: false };
       this.thinkingMenuOpen = false;
       this.modelModalOpen = true;
     },
@@ -934,6 +926,7 @@ function adminApp() {
         score: m.score ?? null,
         mode: m.thinking_budget ? "budget" : m.reasoning_effort || "default",
         thinking_budget: m.thinking_budget || null,
+        chores_only: !!m.chores_only,
       };
       this.thinkingMenuOpen = false;
       this.modelModalOpen = true;
@@ -963,6 +956,20 @@ function adminApp() {
         this.toast("推荐评分需为 0 到 10 之间的数字，留空则不展示", "error");
         return;
       }
+      const chordsOnly = !!this.modelForm.chores_only;
+      // 默认模型不可设为仅 Chores
+      const editingOldId = this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
+      const targetId = id;
+      const isDefault = this.configForm.default_model === (editingOldId || targetId) || (this.modelModalIndex === null && !this.configForm.default_model);
+      // 若新增且无默认，首个模型会成为默认，需校验 chores_only
+      if (chordsOnly && targetId && this.configForm.default_model === targetId) {
+        this.toast("默认模型不可设为仅 Chores，请先切换默认模型", "error");
+        return;
+      }
+      if (chordsOnly && this.modelModalIndex === null && !this.configForm.default_model) {
+        // 首个模型若为仅 Chores，则暂不设默认，允许但需提示
+        // 允许创建，但不自动设为默认
+      }
       const entry = {
         id,
         name: (this.modelForm.name || "").trim(),
@@ -970,6 +977,7 @@ function adminApp() {
         score: this.modelForm.score,
         reasoning_effort: mode !== "default" && mode !== "budget" ? mode : null,
         thinking_budget: mode === "budget" ? parseInt(this.modelForm.thinking_budget, 10) : null,
+        chores_only: chordsOnly,
       };
       const oldId =
         this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
@@ -982,7 +990,7 @@ function adminApp() {
           this.configForm.default_model = id;
         }
       }
-      if (!this.configForm.default_model) this.configForm.default_model = id;
+      if (!this.configForm.default_model && !chordsOnly) this.configForm.default_model = id;
       this.modelModalOpen = false;
       this.toast("已更新列表，记得点击“保存配置”生效");
     },
@@ -993,7 +1001,11 @@ function adminApp() {
       if (!confirm(`确定从列表移除模型「${m.name || m.id}」？`)) return;
       this.configForm.models.splice(i, 1);
       if (this.configForm.default_model === m.id) {
-        this.configForm.default_model = this.configForm.models[0]?.id || "";
+        const next = this.configForm.models.find(x => !x.chores_only) || this.configForm.models[0];
+        this.configForm.default_model = next?.id || "";
+      }
+      if (this.configForm.chores_model === m.id) {
+        this.configForm.chores_model = "";
       }
     },
 
@@ -1049,6 +1061,11 @@ function adminApp() {
     },
 
     setDefaultModel(id) {
+      const m = this.configForm.models.find(x => x.id === id);
+      if (m && m.chores_only) {
+        this.toast("仅 Chores 模型不可设为默认", "error");
+        return;
+      }
       this.configForm.default_model = id;
     },
 
@@ -1061,10 +1078,27 @@ function adminApp() {
         this.toast("请从模型列表中选择默认模型", "error");
         return;
       }
+      const defaultHit = this.configForm.models.find(m => m.id === this.configForm.default_model);
+      if (defaultHit && defaultHit.chores_only) {
+        this.toast("默认模型不可为仅 Chores 模型", "error");
+        return;
+      }
+      if (this.configForm.chores_model) {
+        const cm = this.configForm.models.find(m => m.id === this.configForm.chores_model);
+        if (!cm) {
+          this.toast("Chores 模型不存在于模型列表", "error");
+          return;
+        }
+      }
       this.savingConfig = true;
       try {
         const body = {
-          ...this.configForm,
+          default_model: this.configForm.default_model,
+          chores_model: this.configForm.chores_model || "",
+          max_tokens: this.configForm.max_tokens,
+          timeout: this.configForm.timeout,
+          log_payload: !!this.configForm.log_payload,
+          log_retention_days: Math.max(0, Math.floor(Number(this.configForm.log_retention_days) || 0)),
           models: this.configForm.models.map((m) => ({
             id: m.id,
             name: m.name || "",
@@ -1072,16 +1106,9 @@ function adminApp() {
             score: m.score ?? null,
             reasoning_effort: m.reasoning_effort || null,
             thinking_budget: m.thinking_budget || null,
+            chores_only: !!m.chores_only,
           })),
-          log_payload: !!this.configForm.log_payload,
-          log_retention_days: Math.max(0, Math.floor(Number(this.configForm.log_retention_days) || 0)),
         };
-        if (typeof body.llm_api_key === "string" && body.llm_api_key.includes("****")) {
-          delete body.llm_api_key;
-        }
-        if (typeof body.chores_api_key === "string" && body.chores_api_key.includes("****")) {
-          delete body.chores_api_key;
-        }
         await this.api("/api/admin/config", {
           method: "PUT",
           body: JSON.stringify(body),

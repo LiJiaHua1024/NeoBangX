@@ -10,23 +10,18 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import AppConfig
 
-# 允许管理后台读写的配置键
+# 允许管理后台读写的配置键（已移除旧 llm_*/chores_base_url/api_key，整卡删除后不再可写）
 CONFIG_KEYS = [
     "default_model",
     "models",
-    "llm_base_url",
-    "llm_api_key",
-    "llm_model",
     "chores_model",
-    "chores_base_url",
-    "chores_api_key",
     "max_tokens",
     "timeout",
     "log_payload",
     "log_retention_days",
 ]
 
-# 敏感字段：列表接口可脱敏
+# 敏感字段：列表接口可脱敏（旧键保留仅为兼容读取，不再写入）
 SENSITIVE_KEYS = {"llm_api_key", "chores_api_key", "openrouter_api_key"}
 
 # LiteLLM reasoning_effort 合法取值（none = 关闭思考）
@@ -45,7 +40,7 @@ def _clamp_score(score) -> float | None:
 def parse_models(raw: str) -> list[dict]:
     """解析模型配置。
 
-    新格式：JSON 数组，每项含 id / name / description / score / reasoning_effort / thinking_budget；
+    新格式：JSON 数组，每项含 id / name / description / score / reasoning_effort / thinking_budget / chores_only；
     旧格式：逗号分隔的模型 ID 字符串，自动升级为结构化条目。
     """
     raw = (raw or "").strip()
@@ -69,6 +64,13 @@ def parse_models(raw: str) -> list[dict]:
                 continue
             effort = item.get("reasoning_effort")
             budget = item.get("thinking_budget")
+            # 仅 Chores 标记：兼容 chores_only / only_chores / choresOnly
+            chores_only_raw = item.get("chores_only")
+            if chores_only_raw is None:
+                chores_only_raw = item.get("only_chores")
+            if chores_only_raw is None:
+                chores_only_raw = item.get("choresOnly")
+            chores_only = bool(chores_only_raw) if isinstance(chores_only_raw, bool) else str(chores_only_raw).lower() in ("1", "true", "yes", "on") if chores_only_raw is not None else False
             out.append({
                 "id": model_id,
                 "name": str(item.get("name") or "").strip() or model_id,
@@ -76,6 +78,7 @@ def parse_models(raw: str) -> list[dict]:
                 "score": _clamp_score(item.get("score")),
                 "reasoning_effort": effort if effort in REASONING_EFFORTS else None,
                 "thinking_budget": int(budget) if isinstance(budget, (int, float)) and int(budget) > 0 else None,
+                "chores_only": chores_only,
             })
         return out
     # 旧版逗号分隔格式
@@ -87,6 +90,7 @@ def parse_models(raw: str) -> list[dict]:
             "score": None,
             "reasoning_effort": None,
             "thinking_budget": None,
+            "chores_only": False,
         }
         for m in raw.split(",")
         if m.strip()
@@ -111,12 +115,7 @@ def _env_defaults() -> dict[str, str]:
     return {
         "default_model": settings.default_model,
         "models": settings.models,
-        "llm_base_url": settings.llm_base_url,
-        "llm_api_key": settings.main_api_key,
-        "llm_model": settings.llm_model,
         "chores_model": settings.chores_model,
-        "chores_base_url": settings.chores_base_url,
-        "chores_api_key": settings.chores_api_key,
         "max_tokens": str(settings.max_tokens),
         "timeout": str(settings.timeout),
         "log_payload": "true" if settings.log_payload else "false",
@@ -256,17 +255,12 @@ def parse_log_settings(cfg: dict[str, str]) -> tuple[bool, int]:
 
 
 def resolve_llm_settings(db: Session) -> dict:
-    """解析当前生效的 LLM 连接参数（含多 Provider 聚合）。"""
+    """解析当前生效的 LLM 连接参数（含多 Provider 聚合，已移除旧 llm_*/chores_base_url 链路）。"""
     cfg = get_config_map(db)
     models_raw = cfg.get("models") or settings.models
     model_list = parse_models(models_raw)
     default_model = (cfg.get("default_model") or settings.default_model).strip()
-    llm_model = (cfg.get("llm_model") or "").strip() or default_model
-    llm_api_key = (cfg.get("llm_api_key") or settings.main_api_key or "").strip()
-    llm_base_url = (cfg.get("llm_base_url") or "").strip()
-    chores_model = (cfg.get("chores_model") or "").strip() or llm_model
-    chores_base_url = (cfg.get("chores_base_url") or "").strip() or llm_base_url
-    chores_api_key = (cfg.get("chores_api_key") or "").strip() or llm_api_key
+    chores_model = (cfg.get("chores_model") or "").strip() or default_model
 
     try:
         max_tokens = int(cfg.get("max_tokens") or settings.max_tokens)
@@ -281,8 +275,11 @@ def resolve_llm_settings(db: Session) -> dict:
         model_list = [{
             "id": default_model,
             "name": default_model,
+            "description": "",
+            "score": None,
             "reasoning_effort": None,
             "thinking_budget": None,
+            "chores_only": False,
         }]
 
     log_payload, log_retention_days = parse_log_settings(cfg)
@@ -303,51 +300,73 @@ def resolve_llm_settings(db: Session) -> dict:
         model_provider_details = {}
         providers_masked = []
 
-    # 兼容：若 providers 为空但旧 llm_* 配置非空，构造临时单 Provider 视图
-    if not providers and (llm_base_url or llm_api_key):
-        providers = [{
-            "id": "prov_legacy",
-            "name": "主服务（兼容）",
-            "base_url": llm_base_url,
-            "api_key": llm_api_key,
-            "enabled": True,
-            "has_api_key": bool(llm_api_key),
-        }]
-        providers_masked = [{
-            "id": "prov_legacy",
-            "name": "主服务（兼容）",
-            "base_url": llm_base_url,
-            "api_key": mask_config({"llm_api_key": llm_api_key}).get("llm_api_key", ""),
-            "enabled": True,
-            "has_api_key": bool(llm_api_key),
-        }]
-        # 兼容的 map：所有模型都指向该临时 provider
-        if not model_provider_map:
-            model_provider_map = {m["id"]: ["prov_legacy"] for m in model_list}
+    # 兼容：若 providers 为空，尝试用旧 llm_* 构造临时 Provider（已整卡删除后仅极端空库兜底）
+    if not providers:
+        legacy_base = ""
+        legacy_key = ""
+        try:
+            from app.models import AppConfig
 
-    # 计算可用模型（至少有一个 enabled Provider 绑定的模型）
+            row_base = db.get(AppConfig, "llm_base_url")
+            row_key = db.get(AppConfig, "llm_api_key")
+            if row_base and row_base.value:
+                legacy_base = row_base.value.strip()
+            if row_key and row_key.value:
+                legacy_key = row_key.value.strip()
+            if not legacy_base:
+                legacy_base = (getattr(settings, "llm_base_url", "") or "").strip()
+            if not legacy_key:
+                legacy_key = (getattr(settings, "main_api_key", "") or "").strip()
+        except Exception:
+            legacy_base = (getattr(settings, "llm_base_url", "") or "").strip()
+            legacy_key = (getattr(settings, "main_api_key", "") or "").strip()
+        if legacy_base or legacy_key:
+            providers = [{
+                "id": "prov_legacy",
+                "name": "主服务（兼容）",
+                "base_url": legacy_base,
+                "api_key": legacy_key,
+                "enabled": True,
+                "has_api_key": bool(legacy_key),
+            }]
+            providers_masked = [{
+                "id": "prov_legacy",
+                "name": "主服务（兼容）",
+                "base_url": legacy_base,
+                "api_key": mask_config({"llm_api_key": legacy_key}).get("llm_api_key", ""),
+                "enabled": True,
+                "has_api_key": bool(legacy_key),
+            }]
+            if not model_provider_map:
+                model_provider_map = {m["id"]: ["prov_legacy"] for m in model_list}
+            if not model_provider_details:
+                model_provider_details = {m["id"]: [{"provider_id": "prov_legacy", "provider_model_id": m["id"], "priority": 0}] for m in model_list}
+
+    # 计算可用模型（至少有一个 enabled Provider 绑定的模型，且非仅 Chores）
     providers_by_id = {p["id"]: p for p in providers}
-    # enabled 过滤后的 map 用于判断可用性
+    chores_only_ids = {m["id"] for m in model_list if m.get("chores_only")}
     available_model_ids = set()
     for mid, pids in model_provider_map.items():
+        if mid in chores_only_ids:
+            continue
         for pid in pids:
             prov = providers_by_id.get(pid)
             if prov and prov.get("enabled"):
                 available_model_ids.add(mid)
                 break
-    # 若没有 model_provider_map 配置（新库未迁移），则视为所有模型可用（兼容旧逻辑）
+    # 若没有 model_provider_map 配置（新库未迁移），则视为所有非仅 Chores 模型可用
     if not model_provider_map and providers:
-        available_model_ids = {m["id"] for m in model_list}
+        available_model_ids = {m["id"] for m in model_list if not m.get("chores_only")}
 
     return {
         "models": model_list,
         "default_model": default_model,
-        "llm_model": llm_model,
-        "llm_api_key": llm_api_key,
-        "llm_base_url": llm_base_url,
+        "llm_model": default_model,
+        "llm_api_key": "",
+        "llm_base_url": "",
         "chores_model": chores_model,
-        "chores_base_url": chores_base_url,
-        "chores_api_key": chores_api_key,
+        "chores_base_url": "",
+        "chores_api_key": "",
         "max_tokens": max_tokens,
         "timeout": timeout,
         "log_payload": log_payload,

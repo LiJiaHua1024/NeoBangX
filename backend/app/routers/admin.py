@@ -69,17 +69,13 @@ class ModelEntry(BaseModel):
     thinking_budget: Optional[int] = Field(
         None, ge=1, description="思考 token 预算，优先于 reasoning_effort"
     )
+    chores_only: bool = Field(False, description="仅用于 Chores，不在 8000 用户端展示")
 
 
 class ConfigUpdateRequest(BaseModel):
     default_model: Optional[str] = None
     models: Optional[List[ModelEntry]] = None
-    llm_base_url: Optional[str] = None
-    llm_api_key: Optional[str] = None
-    llm_model: Optional[str] = None
     chores_model: Optional[str] = None
-    chores_base_url: Optional[str] = None
-    chores_api_key: Optional[str] = None
     max_tokens: Optional[int] = None
     timeout: Optional[int] = None
     log_payload: Optional[bool] = Field(None, description="是否记录原始输入/输出数据")
@@ -410,7 +406,7 @@ async def log_detail(
 async def get_admin_config(db: Annotated[Session, Depends(get_db)]):
     cfg = get_config_map(db)
     masked = mask_config(cfg)
-    # 模型列表以结构化形式返回（兼容旧逗号格式自动升级）
+    # 模型列表以结构化形式返回（兼容旧逗号格式自动升级，含 chores_only）
     masked["models"] = parse_models(cfg.get("models", ""))
     # 多 Provider 聚合信息
     try:
@@ -430,8 +426,8 @@ async def get_admin_config(db: Annotated[Session, Depends(get_db)]):
         "config": masked,
         "keys": CONFIG_KEYS,
         "reasoning_efforts": sorted(REASONING_EFFORTS),
-        "has_llm_api_key": bool(cfg.get("llm_api_key")),
-        "has_chores_api_key": bool(cfg.get("chores_api_key")),
+        "has_llm_api_key": False,
+        "has_chores_api_key": False,
         "providers": providers,
         "model_provider_map": model_provider_map,
         "model_provider_details": model_provider_details,
@@ -446,30 +442,47 @@ async def update_admin_config(
 ):
     raw = req.model_dump(exclude_unset=True)
     updates: dict[str, str] = {}
+    # 预解析 models 供 default/chores 校验（若本次同时提交 models）
+    pending_models = None
+    if "models" in raw and raw["models"] is not None:
+        # 校验 thinking 取值后序列化
+        for item in raw["models"]:
+            effort = item.get("reasoning_effort")
+            if effort and effort not in REASONING_EFFORTS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"非法思考强度：{effort}",
+                )
+        pending_models = parse_models(serialize_models([m.model_dump() if hasattr(m, "model_dump") else m for m in raw["models"]]))
     for key, value in raw.items():
         if value is None:
             continue
-        # 布尔开关统一存小写字符串，parse_log_settings 按此解析
         if key == "log_payload":
             updates[key] = "true" if value else "false"
             continue
-        # 模型列表：校验 thinking 取值后序列化为 JSON 存储
         if key == "models":
-            for item in value:
-                effort = item.get("reasoning_effort")
-                if effort and effort not in REASONING_EFFORTS:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"非法思考强度：{effort}",
-                    )
-            updates[key] = serialize_models(value)
+            updates[key] = serialize_models([m.model_dump() if hasattr(m, "model_dump") else m for m in value])
             continue
-        # 脱敏占位符不覆盖真实密钥
-        if key in ("llm_api_key", "chores_api_key") and isinstance(value, str):
-            if "****" in value or value.strip() == "":
-                # 空字符串允许清除；含 **** 的视为未修改
-                if "****" in value:
-                    continue
+        if key == "default_model":
+            dm = str(value or "").strip()
+            if dm:
+                # 校验 default_model 不可为仅 Chores 模型
+                check_models = pending_models if pending_models is not None else parse_models(get_config_map(db).get("models", ""))
+                hit = next((m for m in check_models if m["id"] == dm), None)
+                if not hit:
+                    raise HTTPException(status_code=400, detail=f"默认模型不存在：{dm}")
+                if hit.get("chores_only"):
+                    raise HTTPException(status_code=400, detail="默认模型不可为仅 Chores 模型")
+            updates[key] = str(value)
+            continue
+        if key == "chores_model":
+            cm = str(value or "").strip()
+            if cm:
+                check_models = pending_models if pending_models is not None else parse_models(get_config_map(db).get("models", ""))
+                if not any(m["id"] == cm for m in check_models):
+                    raise HTTPException(status_code=400, detail=f"Chores 模型不存在：{cm}")
+            updates[key] = str(value)
+            continue
         updates[key] = str(value)
 
     if not updates:

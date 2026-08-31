@@ -503,6 +503,18 @@ select option { background: var(--bg); color: var(--text); }
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
 }
+.form-grid--compact {
+  grid-template-columns: 180px 180px;
+  gap: 1rem 1.2rem;
+  max-width: 380px;
+}
+.form-grid--compact .field {
+  max-width: 180px;
+}
+.form-grid--compact .field--full {
+  grid-column: 1 / -1;
+  max-width: 320px;
+}
 .field { display: flex; flex-direction: column; gap: 0.4rem; }
 .field > span:first-child { font-size: 0.78rem; color: var(--dim); font-weight: 600; }
 .field-hint { font-size: 0.72rem; color: var(--faint); }
@@ -618,6 +630,16 @@ body.modal-open .panel-stack {
   .sidebar-foot { display: none; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid { grid-template-columns: 1fr; }
+  .form-grid--compact {
+    grid-template-columns: 1fr;
+    max-width: 100%;
+  }
+  .form-grid--compact .field {
+    max-width: 200px;
+  }
+  .form-grid--compact .field--full {
+    max-width: 280px;
+  }
   /* 平板宽度仍是表格布局：限高让 .table-wrap 自己纵向滚动，
      否则滚的是 .panel-stack，position:sticky 的表头会跟着卡片一起滚走 */
   .table-wrap { max-height: 62dvh; }
@@ -1441,6 +1463,17 @@ body.modal-open .panel-stack {
   .model-providers-empty .link-btn:active,
   .model-providers-list > .link-btn:active {
     transform: scale(0.98);
+  }
+}
+
+@media (max-width: 640px) {
+  .form-grid--compact .custom-select-menu {
+    top: auto;
+    bottom: calc(100% + 0.4rem);
+    transform-origin: bottom;
+    animation: select-pop-up 0.25s var(--ease-spring);
+    max-height: min(42dvh, 320px);
+    overflow: auto;
   }
 }
 

@@ -509,6 +509,7 @@
                   <td data-label="显示名称" data-span="full">
                     <span x-text="m.name || m.id"></span>
                     <span class="badge badge-admin ml-1.5" x-show="m.id === configForm.default_model">默认</span>
+                    <span class="badge badge-user ml-1.5" x-show="m.chores_only">仅 Chores</span>
                     <div class="mono dim" style="font-size:0.7rem; margin-top:2px;" x-text="m.id"></div>
                   </td>
                   <td data-label="可用 Provider" data-span="full" style="min-width: 260px;">
@@ -551,7 +552,7 @@
                   </td>
                   <td data-label="思考控制"><span class="badge badge-user" x-text="thinkingLabel(m)"></span></td>
                   <td class="actions" data-label="操作" data-span="full">
-                    <button class="link-btn" x-show="m.id !== configForm.default_model" @click="setDefaultModel(m.id)">设为默认</button>
+                    <button class="link-btn" x-show="m.id !== configForm.default_model && !m.chores_only" @click="setDefaultModel(m.id)">设为默认</button>
                     <button class="link-btn" @click="openEditModel(i)">编辑</button>
                     <button class="link-btn" @click="openModelProviders(m.id)">绑定</button>
                     <button class="link-btn" :disabled="i === 0" @click="moveModel(i, -1)" title="上移">↑</button>
@@ -623,82 +624,44 @@
         </div>
 
         <div class="glass card">
-          <div class="card-head-row" @click="legacyConfigOpen = !legacyConfigOpen" style="cursor:pointer">
-            <div>
-              <h2 class="card-title">LLM / API 兼容配置 <span class="badge badge-user" x-show="!legacyConfigOpen">已折叠</span></h2>
-              <p class="muted" x-show="legacyConfigOpen">兼容旧单 Provider 配置，已自动迁移为 Provider 聚合。仅在未配置 Provider 时生效；已配置 Provider 后此区域可忽略。</p>
-              <p class="muted" x-show="!legacyConfigOpen">已迁移至 Provider 聚合，点击展开查看兼容字段</p>
-            </div>
-            <span class="chev" :style="legacyConfigOpen ? 'transform:rotate(180deg)' : ''">▼</span>
+          <div>
+            <h2 class="card-title">高级设置</h2>
+            <p class="muted">全局调用参数与 Chores 模型。Chores 复用上方 Provider 聚合，按所选模型的 Provider 优先级自动 fallback，无需单独配置 endpoint。</p>
           </div>
-
-          <div x-show="legacyConfigOpen" x-transition>
-            <datalist id="nbx-model-ids">
-              <template x-for="m in configForm.models" :key="'dl-' + m.id">
-                <option :value="m.id"></option>
-              </template>
-            </datalist>
-
-            <div class="form-grid mt-3">
-              <label class="field">
-                <span>默认模型</span>
-                <div class="custom-select" @click.outside="defaultModelMenuOpen = false">
-                  <button class="custom-select-trigger" :class="{ open: defaultModelMenuOpen }"
-                          @click="defaultModelMenuOpen = !defaultModelMenuOpen">
-                    <span class="truncate" x-text="defaultModelLabel"></span>
-                    <span class="chev">▼</span>
-                  </button>
-                  <div class="custom-select-menu" x-show="defaultModelMenuOpen" x-cloak>
-                    <template x-for="m in configForm.models" :key="'dm-' + m.id">
-                      <button class="custom-select-item" :class="{ on: configForm.default_model === m.id }"
-                              @click="configForm.default_model = m.id; defaultModelMenuOpen = false"
-                              x-text="m.name || m.id"></button>
-                    </template>
-                    <div class="custom-select-item" x-show="!configForm.models.length" style="cursor:default">请先在上方添加模型</div>
-                  </div>
+          <div class="form-grid form-grid--compact mt-3">
+            <label class="field">
+              <span>Max Tokens</span>
+              <input type="number" x-model.number="configForm.max_tokens" min="256" max="128000">
+              <span class="field-hint">推理模型的思考 token 也计入此预算，建议适当调大</span>
+            </label>
+            <label class="field">
+              <span>Timeout（秒）</span>
+              <input type="number" x-model.number="configForm.timeout" min="10" max="600">
+            </label>
+            <label class="field field--full">
+              <span>Chores 模型</span>
+              <div class="custom-select" @click.outside="choresModelMenuOpen = false" style="max-width: 360px;">
+                <button class="custom-select-trigger" :class="{ open: choresModelMenuOpen }" @click="choresModelMenuOpen = !choresModelMenuOpen">
+                  <span class="truncate" x-text="choresModelLabel"></span>
+                  <span class="chev">▼</span>
+                </button>
+                <div class="custom-select-menu" x-show="choresModelMenuOpen" x-cloak>
+                  <button class="custom-select-item" :class="{ on: !configForm.chores_model }" @click="configForm.chores_model = ''; choresModelMenuOpen = false" x-text="`跟随默认（${defaultModelLabel}）`"></button>
+                  <template x-for="m in configForm.models" :key="'chores-'+m.id">
+                    <button class="custom-select-item" :class="{ on: configForm.chores_model === m.id }" @click="configForm.chores_model = m.id; choresModelMenuOpen = false" style="justify-content: flex-start; gap: 0.5rem;">
+                      <span x-text="m.name || m.id"></span>
+                      <span class="badge badge-user" x-show="m.chores_only">仅 Chores</span>
+                    </button>
+                  </template>
+                  <div class="custom-select-item" x-show="!configForm.models.length" style="cursor:default; justify-content: flex-start;">请先在上方添加模型</div>
                 </div>
-                <span class="field-hint">用户端未选择模型时使用</span>
-              </label>
-              <label class="field">
-                <span>主 AI 模型</span>
-                <input type="text" x-model="configForm.llm_model" list="nbx-model-ids" placeholder="留空则用默认模型">
-              </label>
-              <label class="field">
-                <span>主 AI Base URL</span>
-                <input type="text" x-model="configForm.llm_base_url" placeholder="可留空">
-              </label>
-              <label class="field">
-                <span>主 AI API Key</span>
-                <input type="password" x-model="configForm.llm_api_key" placeholder="sk-... 或留空不改/清除">
-                <span class="field-hint" x-show="hasLlmKey">当前已配置密钥（脱敏显示）</span>
-              </label>
-              <label class="field">
-                <span>Chores AI 模型</span>
-                <input type="text" x-model="configForm.chores_model" list="nbx-model-ids" placeholder="标题生成等轻量任务">
-              </label>
-              <label class="field">
-                <span>Chores AI Base URL</span>
-                <input type="text" x-model="configForm.chores_base_url" placeholder="留空回退主 AI">
-              </label>
-              <label class="field">
-                <span>Chores AI API Key</span>
-                <input type="password" x-model="configForm.chores_api_key" placeholder="留空回退主 AI">
-              </label>
-              <label class="field">
-                <span>Max Tokens</span>
-                <input type="number" x-model.number="configForm.max_tokens" min="256" max="128000">
-                <span class="field-hint">推理模型的思考 token 也计入此预算，建议适当调大</span>
-              </label>
-              <label class="field">
-                <span>Timeout（秒）</span>
-                <input type="number" x-model.number="configForm.timeout" min="10" max="600">
-              </label>
-            </div>
+              </div>
+              <span class="field-hint">标题生成等轻量任务所用模型；留空则跟随默认模型</span>
+            </label>
           </div>
           <div class="form-actions" style="margin-top:1rem; border-top:1px solid var(--border); padding-top:1rem">
             <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存配置</button>
             <button class="btn-ghost" @click="loadConfig()">重新加载</button>
-            <span class="field-hint" style="margin-left:0.5rem; align-self:center">保存上方模型管理、Provider 聚合及兼容配置</span>
           </div>
         </div>
 
@@ -871,6 +834,17 @@
           <label class="field mb-3">
             <span>描述</span>
             <textarea x-model="modelForm.description" rows="2" maxlength="200" placeholder="用户端模型列表展示的描述，替代模型 ID 显示，如：速度快、性价比高，适合日常使用"></textarea>
+          </label>
+          <label class="field mb-3">
+            <span>可见性</span>
+            <div class="switch-row" style="align-items:center">
+              <label class="switch">
+                <input type="checkbox" x-model="modelForm.chores_only">
+                <span class="switch-slider"></span>
+              </label>
+              <span class="dim" x-text="modelForm.chores_only ? '仅用于 Chores' : '用户可选'"></span>
+            </div>
+            <span class="field-hint">勾选后该模型仅用于 Chores</span>
           </label>
           <label class="field mb-3">
             <span>推荐评分（0-10）</span>
