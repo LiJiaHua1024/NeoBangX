@@ -1324,9 +1324,9 @@ function nbx() {
       }, 1220);
     },
     retreatMascot() {
+      if (this.mascotState === "hidden" || this.mascotState === "retreating") return;
       clearTimeout(this._mascotAnimationTimer);
       this._mascotAnimationTimer = null;
-      if (this.mascotState === "hidden" || this.mascotState === "retreating") return;
       this.mascotState = "retreating";
       this._mascotAnimationTimer = setTimeout(() => {
         this._mascotAnimationTimer = null;
