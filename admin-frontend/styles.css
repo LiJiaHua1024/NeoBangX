@@ -648,7 +648,178 @@ select option { background: var(--bg); color: var(--text); }
 .log-filters input[type="search"] { width: 8.5rem; }
 .log-filters input[type="text"] { width: 7rem; }
 .log-filters .custom-select { min-width: 7rem; }
-.date-input { min-width: 8.2rem; width: 8.6rem; }
+
+/* 自定义日期选择：与 .custom-select 同族（触发器 + 弹出层 + 主题色） */
+.date-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  position: relative;
+  flex-shrink: 0;
+}
+.date-range-sep { user-select: none; }
+.date-picker-trigger {
+  min-width: 9.2rem;
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 0.45rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: 0.65rem;
+  padding: 0.55rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.85rem; font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.date-picker-trigger.open {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.date-picker-value { min-width: 0; text-align: left; }
+.date-picker-value.placeholder { color: var(--faint); }
+.date-picker-trigger.filled .date-picker-value {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem; font-weight: 600;
+}
+.date-picker-icon { color: var(--faint); flex-shrink: 0; transition: color 0.2s ease; }
+.date-picker-trigger.open .date-picker-icon { color: var(--accent); }
+
+.date-picker-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  width: 17.75rem;
+  background: var(--panel-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.85rem;
+  padding: 0.7rem 0.7rem 0.55rem;
+  z-index: 60;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 28%, transparent),
+    var(--shadow);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  transform-origin: top left;
+  animation: select-pop 0.25s var(--ease-spring);
+  user-select: none;
+}
+.date-picker-menu.end {
+  left: auto; right: 0;
+  transform-origin: top right;
+}
+
+.cal-head {
+  display: flex; align-items: center; gap: 0.25rem;
+  margin-bottom: 0.4rem;
+}
+.cal-nav, .cal-caption, .cal-period, .cal-day {
+  appearance: none; border: 0; background: transparent;
+  color: inherit; font-family: inherit; cursor: pointer;
+}
+.cal-nav {
+  width: 1.9rem; height: 1.9rem; flex-shrink: 0;
+  display: grid; place-items: center;
+  border-radius: 0.5rem; color: var(--dim);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.cal-caption {
+  flex: 1; min-width: 0;
+  padding: 0.35rem 0.4rem;
+  border-radius: 0.5rem;
+  font-size: 0.86rem; font-weight: 750;
+  letter-spacing: -0.01em;
+  transition: background 0.15s ease;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.cal-dows {
+  margin-bottom: 0.15rem;
+}
+.cal-dows span {
+  text-align: center;
+  font-size: 0.68rem; font-weight: 650;
+  color: var(--faint);
+  padding: 0.3rem 0 0.15rem;
+  letter-spacing: 0.04em;
+}
+.cal-day {
+  aspect-ratio: 1;
+  border-radius: 0.5rem;
+  font-size: 0.8rem; font-weight: 550;
+  color: var(--text);
+  transition: background 0.15s ease, color 0.15s ease, border-radius 0.15s ease;
+}
+.cal-day.outside { color: var(--faint); }
+.cal-day.today:not(.selected) {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent); font-weight: 700;
+}
+.cal-day.in-range {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 0;
+}
+.cal-day.range-start { border-radius: 0.5rem 0 0 0.5rem; }
+.cal-day.range-end { border-radius: 0 0.5rem 0.5rem 0; }
+.cal-day.selected {
+  background: var(--accent);
+  color: var(--btn-text);
+  font-weight: 750;
+  box-shadow: 0 4px 10px -4px var(--glow);
+}
+.cal-day.selected.range-start { border-radius: 0.5rem 0 0 0.5rem; }
+.cal-day.selected.range-end { border-radius: 0 0.5rem 0.5rem 0; }
+.cal-day.selected.range-start.range-end,
+.cal-day.selected:not(.range-start):not(.range-end) { border-radius: 0.5rem; }
+
+.cal-period-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.3rem;
+  padding: 0.35rem 0 0.15rem;
+}
+.cal-period {
+  padding: 0.7rem 0.35rem;
+  border-radius: 0.55rem;
+  font-size: 0.82rem;
+  color: var(--text);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.cal-period.on {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-weight: 750;
+}
+
+.cal-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.45rem; padding-top: 0.45rem;
+  border-top: 1px solid var(--border);
+}
+.cal-foot-hint { font-size: 0.72rem; color: var(--faint); }
+.cal-foot-actions { display: flex; gap: 0.75rem; }
+
+/* 悬停反馈仅限支持 hover 的指针设备，避免触屏点击后样式粘滞 */
+@media (hover: hover) {
+  .date-picker-trigger:hover { background: var(--hover-bg); }
+  .cal-nav:hover { background: var(--hover); color: var(--text); }
+  .cal-caption:hover { background: var(--hover); }
+  .cal-day:hover { background: var(--hover); }
+  .cal-period:hover { background: var(--hover); }
+}
+
+@media (max-width: 960px) {
+  .date-range { width: 100%; }
+  .date-picker-trigger { flex: 1; min-width: 0; }
+  .date-picker-menu, .date-picker-menu.end {
+    left: 0; right: 0; width: auto;
+  }
+}
 .pager .page-size-select { min-width: 7.6rem; }
 .pager-card { padding: 0.55rem 1rem; }
 .pager-card .pager { border-top: 0; padding: 0; }

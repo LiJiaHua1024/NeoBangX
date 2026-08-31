@@ -69,6 +69,12 @@ function adminApp() {
     logModel: "",
     logStart: "",
     logEnd: "",
+    datePickerOpen: null,
+    datePickerMode: "days",
+    calYear: new Date().getFullYear(),
+    calMonth: new Date().getMonth(),
+    calHoverIso: "",
+    calMonthNames: ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"],
     logsStatusFilter: "",
     logsStatusMenuOpen: false,
     logStatusOptions: [
@@ -482,6 +488,164 @@ function adminApp() {
       return `${Math.floor(total / 60)} 分 ${String(total % 60).padStart(2, "0")} 秒`;
     },
 
+    _toIso(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    },
+    _parseIso(iso) {
+      if (!iso || typeof iso !== "string") return null;
+      const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return null;
+      const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      return Number.isNaN(d.getTime()) ? null : d;
+    },
+    _todayIso() {
+      return this._toIso(new Date());
+    },
+    fmtDateLabel(iso, placeholder) {
+      return this._parseIso(iso) ? iso : placeholder;
+    },
+
+    get calCaption() {
+      if (this.datePickerMode === "years") {
+        const start = Math.floor(this.calYear / 12) * 12;
+        return `${start} – ${start + 11}`;
+      }
+      if (this.datePickerMode === "months") return `${this.calYear} 年`;
+      return `${this.calYear} 年 ${this.calMonth + 1} 月`;
+    },
+    get calYears() {
+      const start = Math.floor(this.calYear / 12) * 12;
+      return Array.from({ length: 12 }, (_, i) => start + i);
+    },
+    get calendarCells() {
+      const y = this.calYear;
+      const m = this.calMonth;
+      const first = new Date(y, m, 1);
+      const startPad = (first.getDay() + 6) % 7;
+      const daysInMonth = new Date(y, m + 1, 0).getDate();
+      const prevDays = new Date(y, m, 0).getDate();
+      const today = this._todayIso();
+      const cells = [];
+      for (let i = 0; i < 42; i++) {
+        let day;
+        let monthOffset;
+        if (i < startPad) {
+          day = prevDays - startPad + i + 1;
+          monthOffset = -1;
+        } else if (i < startPad + daysInMonth) {
+          day = i - startPad + 1;
+          monthOffset = 0;
+        } else {
+          day = i - startPad - daysInMonth + 1;
+          monthOffset = 1;
+        }
+        const date = new Date(y, m + monthOffset, day);
+        const iso = this._toIso(date);
+        cells.push({ iso, day, outside: monthOffset !== 0, today: iso === today });
+      }
+      return cells;
+    },
+
+    toggleDatePicker(key) {
+      if (this.datePickerOpen === key) {
+        this.closeDatePicker();
+        return;
+      }
+      this.logsStatusMenuOpen = false;
+      this.datePickerOpen = key;
+      this.datePickerMode = "days";
+      this.calHoverIso = "";
+      const iso = key === "start" ? this.logStart : this.logEnd;
+      const base = this._parseIso(iso) || new Date();
+      this.calYear = base.getFullYear();
+      this.calMonth = base.getMonth();
+    },
+    closeDatePicker() {
+      this.datePickerOpen = null;
+      this.datePickerMode = "days";
+      this.calHoverIso = "";
+    },
+    calStep(dir) {
+      if (this.datePickerMode === "days") {
+        const d = new Date(this.calYear, this.calMonth + dir, 1);
+        this.calYear = d.getFullYear();
+        this.calMonth = d.getMonth();
+      } else if (this.datePickerMode === "months") {
+        this.calYear += dir;
+      } else {
+        this.calYear += dir * 12;
+      }
+    },
+    calDrill() {
+      if (this.datePickerMode === "days") this.datePickerMode = "months";
+      else if (this.datePickerMode === "months") this.datePickerMode = "years";
+    },
+    calPickMonth(idx) {
+      this.calMonth = idx;
+      this.datePickerMode = "days";
+    },
+    calPickYear(y) {
+      this.calYear = y;
+      this.datePickerMode = "months";
+    },
+    calDayClass(cell) {
+      const iso = cell.iso;
+      const start = this.logStart;
+      const end = this.logEnd;
+      let from = start;
+      let to = end;
+      let previewing = false;
+      const hover = this.calHoverIso;
+      if (hover) {
+        if (this.datePickerOpen === "end" && start) { to = hover; previewing = true; }
+        if (this.datePickerOpen === "start" && end) { from = hover; previewing = true; }
+      }
+      const lo = from && to && from > to ? to : from;
+      const hi = from && to && from > to ? from : to;
+      const selected = previewing ? iso === lo || iso === hi : iso === start || iso === end;
+      return {
+        outside: cell.outside,
+        today: cell.today,
+        selected,
+        "in-range": !!(lo && hi && iso > lo && iso < hi),
+        "range-start": !!(lo && hi && iso === lo && lo !== hi),
+        "range-end": !!(lo && hi && iso === hi && lo !== hi),
+      };
+    },
+    pickDate(iso) {
+      if (this.datePickerOpen === "start") {
+        this.logStart = iso;
+        if (this.logStart && this.logEnd && this.logStart > this.logEnd) {
+          const tmp = this.logStart;
+          this.logStart = this.logEnd;
+          this.logEnd = tmp;
+        }
+        if (!this.logEnd) {
+          this.datePickerOpen = "end";
+          this.calHoverIso = "";
+          return;
+        }
+      } else if (this.datePickerOpen === "end") {
+        this.logEnd = iso;
+        if (this.logStart && this.logEnd && this.logStart > this.logEnd) {
+          const tmp = this.logStart;
+          this.logStart = this.logEnd;
+          this.logEnd = tmp;
+        }
+      }
+      this.closeDatePicker();
+    },
+    calPickToday() {
+      this.pickDate(this._todayIso());
+    },
+    calClear() {
+      if (this.datePickerOpen === "start") this.logStart = "";
+      else if (this.datePickerOpen === "end") this.logEnd = "";
+    },
+
     /* 日期按管理员本地日历日换算成 UTC 瞬时：结束日期取次日零点（后端上界开区间） */
     _logFilterParams() {
       const params = new URLSearchParams();
@@ -551,6 +715,7 @@ function adminApp() {
       this.logsStatusFilter = "";
       this.logStart = "";
       this.logEnd = "";
+      this.closeDatePicker();
       this.logsPage = 1;
       this.loadLogs();
     },

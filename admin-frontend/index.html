@@ -7,8 +7,8 @@
   <meta name="description" content="NeoBangX 使用码与配置管理后台">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23b4502a'/%3E%3Cstop offset='1' stop-color='%238c3316'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=admin260830g">
-  <script defer src="/static/script.js?v=admin260830g"></script>
+  <link rel="stylesheet" href="/static/styles.css?v=admin260831b">
+  <script defer src="/static/script.js?v=admin260831b"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
   <!-- 首屏防闪烁 -->
   <script>
@@ -262,7 +262,7 @@
 
             <div class="custom-select" @click.outside="logsStatusMenuOpen = false">
               <button class="custom-select-trigger" :class="{ open: logsStatusMenuOpen }"
-                      @click="logsStatusMenuOpen = !logsStatusMenuOpen">
+                      @click="logsStatusMenuOpen = !logsStatusMenuOpen; closeDatePicker()">
                 <span x-text="logsStatusFilterLabel"></span>
                 <span class="chev">▼</span>
               </button>
@@ -275,9 +275,96 @@
               </div>
             </div>
 
-            <input type="date" x-model="logStart" class="date-input" title="起始日期（含）">
-            <span class="dim">—</span>
-            <input type="date" x-model="logEnd" class="date-input" title="结束日期（含当天）">
+            <div class="date-range" @click.outside="closeDatePicker()" @keydown.window.escape="closeDatePicker()">
+              <button type="button" class="date-picker-trigger"
+                      :class="{ open: datePickerOpen === 'start', filled: !!logStart }"
+                      title="起始日期（含）"
+                      aria-haspopup="dialog"
+                      :aria-expanded="datePickerOpen === 'start'"
+                      @click="toggleDatePicker('start')">
+                <span class="date-picker-value" :class="{ placeholder: !logStart }"
+                      x-text="fmtDateLabel(logStart, '起始日期')"></span>
+                <svg class="date-picker-icon" viewBox="0 0 24 24" width="14" height="14" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3.5" y="5.5" width="17" height="15" rx="2.5"></rect>
+                  <path d="M8 3.5v4M16 3.5v4M3.5 10h17"></path>
+                </svg>
+              </button>
+              <span class="dim date-range-sep">—</span>
+              <button type="button" class="date-picker-trigger"
+                      :class="{ open: datePickerOpen === 'end', filled: !!logEnd }"
+                      title="结束日期（含当天）"
+                      aria-haspopup="dialog"
+                      :aria-expanded="datePickerOpen === 'end'"
+                      @click="toggleDatePicker('end')">
+                <span class="date-picker-value" :class="{ placeholder: !logEnd }"
+                      x-text="fmtDateLabel(logEnd, '结束日期')"></span>
+                <svg class="date-picker-icon" viewBox="0 0 24 24" width="14" height="14" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3.5" y="5.5" width="17" height="15" rx="2.5"></rect>
+                  <path d="M8 3.5v4M16 3.5v4M3.5 10h17"></path>
+                </svg>
+              </button>
+
+              <div class="date-picker-menu" x-show="datePickerOpen" x-cloak
+                   :class="{ end: datePickerOpen === 'end' }" @click.stop>
+                <div class="cal-head">
+                  <button type="button" class="cal-nav" @click="calStep(-1)" aria-label="上一段">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                         stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M14.5 5.5 8 12l6.5 6.5"></path>
+                    </svg>
+                  </button>
+                  <button type="button" class="cal-caption" @click="calDrill()" x-text="calCaption"></button>
+                  <button type="button" class="cal-nav" @click="calStep(1)" aria-label="下一段">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                         stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M9.5 5.5 16 12l-6.5 6.5"></path>
+                    </svg>
+                  </button>
+                </div>
+
+                <div x-show="datePickerMode === 'days'">
+                  <div class="cal-grid cal-dows">
+                    <span>一</span><span>二</span><span>三</span><span>四</span>
+                    <span>五</span><span>六</span><span>日</span>
+                  </div>
+                  <div class="cal-grid">
+                    <template x-for="cell in calendarCells" :key="cell.iso">
+                      <button type="button" class="cal-day"
+                              :class="calDayClass(cell)"
+                              @click="pickDate(cell.iso)"
+                              @mouseenter="calHoverIso = cell.iso"
+                              @mouseleave="calHoverIso = ''"
+                              x-text="cell.day"></button>
+                    </template>
+                  </div>
+                </div>
+
+                <div class="cal-period-grid" x-show="datePickerMode === 'months'">
+                  <template x-for="(name, idx) in calMonthNames" :key="name">
+                    <button type="button" class="cal-period" :class="{ on: idx === calMonth }"
+                            @click="calPickMonth(idx)" x-text="name"></button>
+                  </template>
+                </div>
+
+                <div class="cal-period-grid" x-show="datePickerMode === 'years'">
+                  <template x-for="y in calYears" :key="y">
+                    <button type="button" class="cal-period" :class="{ on: y === calYear }"
+                            @click="calPickYear(y)" x-text="y"></button>
+                  </template>
+                </div>
+
+                <div class="cal-foot">
+                  <span class="cal-foot-hint"
+                        x-text="datePickerOpen === 'start' ? '起始（含）' : '结束（含当天）'"></span>
+                  <div class="cal-foot-actions">
+                    <button type="button" class="link-btn" @click="calPickToday()">今天</button>
+                    <button type="button" class="link-btn" @click="calClear()">清除</button>
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <button class="btn-ghost" @click="logsPage = 1; loadLogs()">查询</button>
             <button class="btn-ghost" @click="resetLogFilters()" x-show="hasLogFilters">重置</button>
