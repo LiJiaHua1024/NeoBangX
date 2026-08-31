@@ -207,8 +207,9 @@ def set_model_provider_map(db: Session, model_provider_map: dict[str, list[str]]
         mid = (model_id or "").strip()
         if not mid:
             continue
-        if mid not in valid_model_ids:
-            raise ValueError(f"模型不存在于全局目录：{mid}")
+        # 允许为尚未保存的新模型预绑定（前端新增后未保存场景），不强制校验
+        # if mid not in valid_model_ids:
+        #     raise ValueError(f"模型不存在于全局目录：{mid}")
         if not isinstance(pids, list):
             raise ValueError(f"模型 {mid} 的 Provider 列表必须为数组")
         # 去重保序
@@ -249,17 +250,11 @@ def set_providers_for_single_model(
     ordered_provider_ids 可为：
     - list[str] 仅 provider_id（兼容旧调用，provider_model_id 回退为 model_id）
     - list[dict] 每项 {provider_id, provider_model_id}
+    允许为尚未保存到全局目录的新模型预绑定（前端新增后未点保存配置的场景），由后续 models 保存后自动一致。
     """
-    from app.services.runtime_config import parse_models, get_config_map
-
     model_id = (model_id or "").strip()
     if not model_id:
         raise ValueError("model_id 不能为空")
-    cfg_map = get_config_map(db)
-    models = parse_models(cfg_map.get("models", ""))
-    valid_model_ids = {m["id"] for m in models}
-    if model_id not in valid_model_ids:
-        raise ValueError(f"模型不存在于全局目录：{model_id}")
     provider_ids = {r.id for r in db.execute(select(LlmProvider)).scalars().all()}
     seen = set()
     normalized: list[tuple[str, str]] = []  # (provider_id, provider_model_id)

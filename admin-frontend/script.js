@@ -932,7 +932,7 @@ function adminApp() {
       this.modelModalOpen = true;
     },
 
-    saveModelModal() {
+    async saveModelModal() {
       const id = (this.modelForm.id || "").trim();
       if (!id) {
         this.toast("模型 ID 不能为空", "error");
@@ -957,18 +957,11 @@ function adminApp() {
         return;
       }
       const chordsOnly = !!this.modelForm.chores_only;
-      // 默认模型不可设为仅 Chores
       const editingOldId = this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
       const targetId = id;
-      const isDefault = this.configForm.default_model === (editingOldId || targetId) || (this.modelModalIndex === null && !this.configForm.default_model);
-      // 若新增且无默认，首个模型会成为默认，需校验 chores_only
       if (chordsOnly && targetId && this.configForm.default_model === targetId) {
         this.toast("默认模型不可设为仅 Chores，请先切换默认模型", "error");
         return;
-      }
-      if (chordsOnly && this.modelModalIndex === null && !this.configForm.default_model) {
-        // 首个模型若为仅 Chores，则暂不设默认，允许但需提示
-        // 允许创建，但不自动设为默认
       }
       const entry = {
         id,
@@ -985,14 +978,21 @@ function adminApp() {
         this.configForm.models.push(entry);
       } else {
         this.configForm.models.splice(this.modelModalIndex, 1, entry);
-        // 同步更新引用了旧 ID 的默认模型
         if (oldId && this.configForm.default_model === oldId) {
           this.configForm.default_model = id;
+        }
+        if (oldId && this.configForm.chores_model === oldId) {
+          this.configForm.chores_model = id;
         }
       }
       if (!this.configForm.default_model && !chordsOnly) this.configForm.default_model = id;
       this.modelModalOpen = false;
-      this.toast("已更新列表，记得点击“保存配置”生效");
+      // 自动保存，无需用户再点保存配置即可绑定 Provider
+      try {
+        await this.saveConfig();
+      } catch (e) {
+        // saveConfig 已 toast
+      }
     },
 
     removeModel(i) {
