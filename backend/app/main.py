@@ -134,8 +134,15 @@ async def get_config():
     finally:
         db.close()
 
+    available = llm_cfg.get("available_model_ids")
+    if available:
+        models = [m for m in llm_cfg["models"] if m["id"] in available]
+        if not models:
+            models = llm_cfg["models"]
+    else:
+        models = llm_cfg["models"]
     return {
-        "models": llm_cfg["models"],
+        "models": models,
         "default_model": llm_cfg["default_model"],
         "app_name": "NeoBangX",
         "version": "1.2.0",

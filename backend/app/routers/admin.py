@@ -15,6 +15,16 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models import LogPayload, UsageCode, UsageLog
+from app.services.provider_config import (
+    create_provider,
+    delete_provider,
+    get_model_provider_map,
+    get_providers_for_model,
+    list_providers,
+    set_model_provider_map,
+    set_providers_for_single_model,
+    update_provider,
+)
 from app.services.request_log import (
     current_retention_days,
     purge_expired_logs,
@@ -26,6 +36,7 @@ from app.services.runtime_config import (
     get_config_map,
     mask_config,
     parse_models,
+    resolve_llm_settings,
     serialize_models,
     set_config_values,
 )
@@ -73,6 +84,33 @@ class ConfigUpdateRequest(BaseModel):
     timeout: Optional[int] = None
     log_payload: Optional[bool] = Field(None, description="是否记录原始输入/输出数据")
     log_retention_days: Optional[int] = Field(None, ge=0, le=36500, description="日志保留天数，0=永久")
+
+
+class ProviderCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    base_url: str = Field("", max_length=512, description="OpenAI 兼容 Base URL，可留空")
+    api_key: str = Field("", max_length=2048, description="API Key")
+    enabled: bool = Field(True)
+
+
+class ProviderUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    base_url: Optional[str] = Field(None, max_length=512)
+    api_key: Optional[str] = Field(None, max_length=2048)
+    enabled: Optional[bool] = None
+
+
+class ModelProvidersUpdateRequest(BaseModel):
+    map: dict[str, List[str]] = Field(..., description="model_id -> 有序 provider_id 列表")
+
+
+class SingleModelProvidersRequest(BaseModel):
+    ordered_provider_ids: List[str] = Field(default_factory=list, description="该模型的有序 Provider 列表，首位优先")
+
+
+class ProviderTestRequest(BaseModel):
+    model: Optional[str] = Field(None, max_length=128, description="用于测试的模型，不填则用该 Provider 绑定的首个模型")
+    prompt: Optional[str] = Field(None, max_length=2000, description="测试 prompt")
 
 
 @router.get("/stats")
@@ -235,6 +273,7 @@ def _apply_log_filters(
     status: str,
     start: Optional[str],
     end: Optional[str],
+    provider: str = "",
 ):
     if code:
         query = query.filter(UsageLog.code.ilike(f"%{code.strip()}%"))
@@ -242,6 +281,11 @@ def _apply_log_filters(
         query = query.filter(UsageLog.tool_id == tool_id.strip())
     if model:
         query = query.filter(UsageLog.model.ilike(f"%{model.strip()}%"))
+    if provider:
+        like = f"%{provider.strip()}%"
+        query = query.filter(
+            (UsageLog.provider_id.ilike(like)) | (UsageLog.provider_name.ilike(like))
+        )
     if status:
         if status not in LOG_STATUSES:
             raise HTTPException(status_code=400, detail=f"非法状态筛选：{status}")
@@ -264,10 +308,11 @@ async def logs_summary(
     status: str = Query("", description="success | cancelled | error，空为全部"),
     start: Optional[str] = Query(None, description="起始时间（ISO，含）"),
     end: Optional[str] = Query(None, description="结束时间（ISO，不含）"),
+    provider: str = Query("", description="按 Provider 筛选（模糊，匹配 id 或名称）"),
 ):
     query = _apply_log_filters(
         db.query(UsageLog),
-        code=code, tool_id=tool_id, model=model, status=status, start=start, end=end,
+        code=code, tool_id=tool_id, model=model, status=status, start=start, end=end, provider=provider,
     )
     row = query.with_entities(
         func.count(UsageLog.id).label("total"),
@@ -312,12 +357,13 @@ async def list_logs(
     status: str = Query("", description="success | cancelled | error，空为全部"),
     start: Optional[str] = Query(None, description="起始时间（ISO，含）"),
     end: Optional[str] = Query(None, description="结束时间（ISO，不含）"),
+    provider: str = Query("", description="按 Provider 筛选（模糊）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
 ):
     query = _apply_log_filters(
         db.query(UsageLog),
-        code=code, tool_id=tool_id, model=model, status=status, start=start, end=end,
+        code=code, tool_id=tool_id, model=model, status=status, start=start, end=end, provider=provider,
     )
 
     total = query.count()
@@ -359,12 +405,25 @@ async def get_admin_config(db: Annotated[Session, Depends(get_db)]):
     masked = mask_config(cfg)
     # 模型列表以结构化形式返回（兼容旧逗号格式自动升级）
     masked["models"] = parse_models(cfg.get("models", ""))
+    # 多 Provider 聚合信息
+    try:
+        providers = list_providers(db, mask=True)
+        model_provider_map = get_model_provider_map(db)
+        llm_cfg = resolve_llm_settings(db)
+        available_model_ids = list(llm_cfg.get("available_model_ids") or [])
+    except Exception:
+        providers = []
+        model_provider_map = {}
+        available_model_ids = []
     return {
         "config": masked,
         "keys": CONFIG_KEYS,
         "reasoning_efforts": sorted(REASONING_EFFORTS),
         "has_llm_api_key": bool(cfg.get("llm_api_key")),
         "has_chores_api_key": bool(cfg.get("chores_api_key")),
+        "providers": providers,
+        "model_provider_map": model_provider_map,
+        "available_model_ids": available_model_ids,
     }
 
 
@@ -405,12 +464,168 @@ async def update_admin_config(
         cfg = get_config_map(db)
         masked = mask_config(cfg)
         masked["models"] = parse_models(cfg.get("models", ""))
-        return {"config": masked, "updated": []}
+        try:
+            providers = list_providers(db, mask=True)
+            model_provider_map = get_model_provider_map(db)
+        except Exception:
+            providers = []
+            model_provider_map = {}
+        return {"config": masked, "providers": providers, "model_provider_map": model_provider_map, "updated": []}
 
     cfg = set_config_values(db, updates)
+    # 若 models 发生变更，清理悬空的 model_provider 绑定
+    if "models" in updates:
+        try:
+            from app.services.provider_config import ensure_model_provider_consistency
+
+            ensure_model_provider_consistency(db)
+        except Exception:
+            pass
     masked = mask_config(cfg)
     masked["models"] = parse_models(cfg.get("models", ""))
+    try:
+        providers = list_providers(db, mask=True)
+        model_provider_map = get_model_provider_map(db)
+    except Exception:
+        providers = []
+        model_provider_map = {}
     return {
         "config": masked,
+        "providers": providers,
+        "model_provider_map": model_provider_map,
         "updated": list(updates.keys()),
     }
+
+
+# ---- 多 Provider 聚合：Provider CRUD ----
+
+@router.get("/providers")
+async def list_providers_api(db: Annotated[Session, Depends(get_db)]):
+    return {"providers": list_providers(db, mask=True)}
+
+
+@router.post("/providers")
+async def create_provider_api(req: ProviderCreateRequest, db: Annotated[Session, Depends(get_db)]):
+    try:
+        # 处理脱敏占位不覆盖
+        api_key = req.api_key
+        if "****" in api_key:
+            api_key = ""
+        prov = create_provider(db, name=req.name, base_url=req.base_url, api_key=api_key, enabled=req.enabled)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return prov.to_dict(mask_key=True)
+
+
+@router.patch("/providers/{provider_id}")
+async def patch_provider_api(provider_id: str, req: ProviderUpdateRequest, db: Annotated[Session, Depends(get_db)]):
+    try:
+        # api_key 含 **** 视为未修改，由 provider_config 处理
+        prov = update_provider(
+            db,
+            provider_id,
+            name=req.name,
+            base_url=req.base_url,
+            api_key=req.api_key,
+            enabled=req.enabled,
+        )
+    except ValueError as e:
+        msg = str(e)
+        code = 404 if "不存在" in msg else 400
+        raise HTTPException(status_code=code, detail=msg) from None
+    return prov.to_dict(mask_key=True)
+
+
+@router.delete("/providers/{provider_id}")
+async def delete_provider_api(provider_id: str, db: Annotated[Session, Depends(get_db)]):
+    try:
+        delete_provider(db, provider_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    return {"status": "deleted", "id": provider_id}
+
+
+@router.post("/providers/{provider_id}/test")
+async def test_provider_api(provider_id: str, req: ProviderTestRequest, db: Annotated[Session, Depends(get_db)]):
+    from time import monotonic
+
+    from app.models import LlmProvider
+    from app.services.llm import LLMService
+
+    prov = db.get(LlmProvider, provider_id)
+    if not prov:
+        raise HTTPException(status_code=404, detail="Provider 不存在")
+    # 选取测试模型
+    model = (req.model or "").strip()
+    if not model:
+        # 取该 Provider 绑定的首个模型
+        mp_map = get_model_provider_map(db)
+        # 逆查：找到第一个包含该 provider 的模型
+        for mid, pids in mp_map.items():
+            if provider_id in pids:
+                model = mid
+                break
+        if not model:
+            # 回退：取全局默认模型
+            from app.services.runtime_config import get_config_map, parse_models
+
+            cfg = get_config_map(db)
+            models = parse_models(cfg.get("models", ""))
+            if models:
+                model = models[0]["id"]
+    if not model:
+        raise HTTPException(status_code=400, detail="无可用测试模型，请先为该 Provider 绑定模型")
+    prompt = (req.prompt or "Hello").strip() or "Hello"
+    llm = LLMService(
+        api_key=prov.api_key or "",
+        default_model=model,
+        base_url=prov.base_url or "",
+        max_tokens=16,
+        timeout=15,
+    )
+    started = monotonic()
+    try:
+        out = await llm.chat(user_prompt=prompt, model=model, max_tokens=16)
+        latency = int((monotonic() - started) * 1000)
+        return {"status": "ok", "model": model, "latency_ms": latency, "output": out[:200]}
+    except Exception as e:
+        latency = int((monotonic() - started) * 1000)
+        raise HTTPException(status_code=502, detail=f"测试失败（{latency}ms）：{e}") from e
+
+
+# ---- 多 Provider 聚合：Model → Provider 优先级 ----
+
+@router.get("/model-providers")
+async def get_model_providers_api(db: Annotated[Session, Depends(get_db)]):
+    return {"map": get_model_provider_map(db), "providers": list_providers(db, mask=True)}
+
+
+@router.put("/model-providers")
+async def put_model_providers_api(req: ModelProvidersUpdateRequest, db: Annotated[Session, Depends(get_db)]):
+    try:
+        updated = set_model_provider_map(db, req.map)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return {"map": updated}
+
+
+@router.get("/models/{model_id:path}/providers")
+async def get_single_model_providers_api(model_id: str, db: Annotated[Session, Depends(get_db)]):
+    # 返回该模型的有序 provider 列表（model_id 含 /，需用 :path）
+    mp_map = get_model_provider_map(db)
+    pids = mp_map.get(model_id, [])
+    providers = list_providers(db, mask=True)
+    by_id = {p["id"]: p for p in providers}
+    ordered = [by_id[pid] for pid in pids if pid in by_id]
+    return {"model_id": model_id, "ordered_provider_ids": pids, "providers": ordered}
+
+
+@router.put("/models/{model_id:path}/providers")
+async def put_single_model_providers_api(model_id: str, req: SingleModelProvidersRequest, db: Annotated[Session, Depends(get_db)]):
+    try:
+        ordered = set_providers_for_single_model(db, model_id, req.ordered_provider_ids)
+    except ValueError as e:
+        msg = str(e)
+        code = 404 if "不存在" in msg else 400
+        raise HTTPException(status_code=code, detail=msg) from None
+    return {"model_id": model_id, "ordered_provider_ids": ordered}

@@ -1,4 +1,4 @@
-"""运行时配置：环境变量默认值 + SQLite 覆盖。"""
+"""运行时配置：环境变量默认值 + SQLite 覆盖（含多 Provider 聚合）。"""
 
 from __future__ import annotations
 
@@ -141,15 +141,64 @@ def seed_config_from_env(db: Session) -> None:
             if key not in existing
         ]
         if not missing:
-            return
+            break
         try:
             db.add_all(AppConfig(key=key, value=value or "") for key, value in missing)
             db.commit()
-            return
+            break
         except IntegrityError:
             # 另一进程抢先插入了部分键，回滚后重查剩余缺失项
             db.rollback()
-    logger.warning("seed_config_from_env 多次遇到并发冲突，剩余键将由另一进程完成种入")
+    else:
+        logger.warning("seed_config_from_env 多次遇到并发冲突，剩余键将由另一进程完成种入")
+
+    # 多 Provider 聚合的自动迁移：若 providers 表空但旧单 URL 配置非空，则生成首个 Provider 并全量绑定
+    try:
+        _seed_providers_from_legacy(db)
+    except Exception as e:
+        logger.warning("seed providers from legacy failed: %s", e)
+
+
+def _seed_providers_from_legacy(db: Session) -> None:
+    """检测旧单 URL 配置并迁移为首个 Provider + 全量 model_provider_map。"""
+    from sqlalchemy import select
+
+    from app.models import LlmModelProvider, LlmProvider
+
+    # 若已存在任何 Provider，则不自动种入
+    existing_count = db.execute(select(LlmProvider)).scalars().first()
+    if existing_count is not None:
+        return
+
+    cfg = get_config_map(db)
+    legacy_base = (cfg.get("llm_base_url") or "").strip()
+    legacy_key = (cfg.get("llm_api_key") or settings.main_api_key or "").strip()
+    # 若 legacy 完全为空，也按 models 生成一个 provider 占位（便于新部署直接可用）
+    models = parse_models(cfg.get("models") or settings.models)
+    if not models:
+        return
+    # 仅当至少有一个非空 legacy 字段或 models 非空时才种入
+    # 无 legacy key 且 base_url 为空时，仍创建一个空 key 的 provider 占位，保证模型可用性检查能通过
+    provider_name = "主服务（自动迁移）"
+    # 若 legacy_key 为空，仍创建 provider，key 留空（允许后续在后台填）
+    prov_id = "prov_migrated_main"
+    # 检查是否已存在该 id
+    if db.get(LlmProvider, prov_id) is not None:
+        return
+    prov = LlmProvider(
+        id=prov_id,
+        name=provider_name,
+        base_url=legacy_base,
+        api_key=legacy_key,
+        enabled=True,
+    )
+    db.add(prov)
+    db.flush()
+    # 全量绑定：每个模型都绑定到该 Provider，priority 0
+    for m in models:
+        db.add(LlmModelProvider(model_id=m["id"], provider_id=prov_id, priority=0))
+    db.commit()
+    logger.info("已自动迁移旧单 URL 配置为 Provider %s，绑定 %s 个模型", prov_id, len(models))
 
 
 def get_config_map(db: Session) -> dict[str, str]:
@@ -207,7 +256,7 @@ def parse_log_settings(cfg: dict[str, str]) -> tuple[bool, int]:
 
 
 def resolve_llm_settings(db: Session) -> dict:
-    """解析当前生效的 LLM 连接参数。"""
+    """解析当前生效的 LLM 连接参数（含多 Provider 聚合）。"""
     cfg = get_config_map(db)
     models_raw = cfg.get("models") or settings.models
     model_list = parse_models(models_raw)
@@ -238,6 +287,56 @@ def resolve_llm_settings(db: Session) -> dict:
 
     log_payload, log_retention_days = parse_log_settings(cfg)
 
+    # 多 Provider 聚合：加载 providers 与 model_provider_map
+    try:
+        from app.services.provider_config import get_model_provider_map, list_providers
+
+        providers = list_providers(db, mask=False)  # 原始 key 供内部使用
+        model_provider_map = get_model_provider_map(db)
+        # 同时提供脱敏版供外部展示
+        providers_masked = list_providers(db, mask=True)
+    except Exception as e:
+        logger.warning("加载 providers 失败，回退为单 Provider 兼容模式: %s", e)
+        providers = []
+        model_provider_map = {}
+        providers_masked = []
+
+    # 兼容：若 providers 为空但旧 llm_* 配置非空，构造临时单 Provider 视图
+    if not providers and (llm_base_url or llm_api_key):
+        providers = [{
+            "id": "prov_legacy",
+            "name": "主服务（兼容）",
+            "base_url": llm_base_url,
+            "api_key": llm_api_key,
+            "enabled": True,
+            "has_api_key": bool(llm_api_key),
+        }]
+        providers_masked = [{
+            "id": "prov_legacy",
+            "name": "主服务（兼容）",
+            "base_url": llm_base_url,
+            "api_key": mask_config({"llm_api_key": llm_api_key}).get("llm_api_key", ""),
+            "enabled": True,
+            "has_api_key": bool(llm_api_key),
+        }]
+        # 兼容的 map：所有模型都指向该临时 provider
+        if not model_provider_map:
+            model_provider_map = {m["id"]: ["prov_legacy"] for m in model_list}
+
+    # 计算可用模型（至少有一个 enabled Provider 绑定的模型）
+    providers_by_id = {p["id"]: p for p in providers}
+    # enabled 过滤后的 map 用于判断可用性
+    available_model_ids = set()
+    for mid, pids in model_provider_map.items():
+        for pid in pids:
+            prov = providers_by_id.get(pid)
+            if prov and prov.get("enabled"):
+                available_model_ids.add(mid)
+                break
+    # 若没有 model_provider_map 配置（新库未迁移），则视为所有模型可用（兼容旧逻辑）
+    if not model_provider_map and providers:
+        available_model_ids = {m["id"] for m in model_list}
+
     return {
         "models": model_list,
         "default_model": default_model,
@@ -251,4 +350,8 @@ def resolve_llm_settings(db: Session) -> dict:
         "timeout": timeout,
         "log_payload": log_payload,
         "log_retention_days": log_retention_days,
+        "providers": providers,
+        "providers_masked": providers_masked,
+        "model_provider_map": model_provider_map,
+        "available_model_ids": available_model_ids,
     }

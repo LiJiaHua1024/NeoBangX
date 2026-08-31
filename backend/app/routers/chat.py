@@ -16,6 +16,7 @@ from app.deps import get_current_code
 from app.models import UsageCode
 from app.routers.tools import _resolve_prompt_filename, get_prompt_loader
 from app.services.llm import LLMService
+from app.services.llm_router import LLMRouter
 from app.services.migration import (
     MIGRATION_ANALYSIS_PROMPT_NAME,
     MIGRATION_MORE_ANALYSIS_PROMPT_NAME,
@@ -25,6 +26,7 @@ from app.services.migration import (
     parse_error_causes,
 )
 from app.services.prompt_loader import PromptLoader
+from app.services.provider_config import get_model_provider_map, get_providers_for_model
 from app.services.request_log import (
     STATUS_CANCELLED,
     STATUS_ERROR,
@@ -68,9 +70,17 @@ def _load_cfg() -> dict:
 
 
 def _validate_model(cfg: dict, model: Optional[str]) -> None:
-    """客户端指定的模型必须在配置的模型列表内，防止任意模型串直达计费上游。"""
-    if model and find_model_entry(cfg["models"], model) is None:
+    """客户端指定的模型必须已绑定可用 Provider，防止任意模型直达上游。"""
+    if not model:
+        return
+    # 先校验模型是否在全局目录
+    if find_model_entry(cfg["models"], model) is None:
         raise HTTPException(status_code=400, detail=f"模型不可用：{model}")
+    # 再校验该模型是否至少有一个 enabled Provider 绑定
+    available = cfg.get("available_model_ids")
+    if available is not None and model not in available:
+        raise HTTPException(status_code=400, detail=f"模型不可用：{model} 未绑定可用 Provider")
+    # 兜底：若没有 available 集合（旧逻辑），则按旧方式已通过 find_model_entry
 
 
 @dataclass
@@ -90,22 +100,76 @@ _migration_reserved: dict[int, int] = {}
 _MIGRATION_BATCH_TTL = 30 * 60
 
 
-def _build_llm(cfg: dict, chores: bool = False) -> LLMService:
-    if chores:
+def _get_providers_for_model_sync(cfg: dict, model_id: str) -> list[dict]:
+    """基于 cfg 中的 providers 与 model_provider_map 计算该模型可用 Provider 链。"""
+    # cfg 来自 resolve_llm_settings，已含 providers 与 model_provider_map
+    providers = cfg.get("providers") or []
+    mp_map = cfg.get("model_provider_map") or {}
+    if not providers:
+        # 兼容旧单 Provider 配置
+        if cfg.get("llm_api_key") or cfg.get("llm_base_url"):
+            return [{
+                "id": "prov_legacy",
+                "name": "主服务（兼容）",
+                "base_url": cfg.get("llm_base_url") or "",
+                "api_key": cfg.get("llm_api_key") or "",
+                "enabled": True,
+            }]
+        return []
+    providers_by_id = {p["id"]: p for p in providers}
+    ordered_ids = mp_map.get(model_id) or []
+    # 若该模型未在 map 中配置，且为旧数据兼容，则返回所有 enabled providers（全量可用）
+    if not ordered_ids and not mp_map:
+        return [p for p in providers if p.get("enabled")]
+    chain: list[dict] = []
+    for pid in ordered_ids:
+        p = providers_by_id.get(pid)
+        if p and p.get("enabled"):
+            chain.append(p)
+    return chain
+
+
+def _build_llm(cfg: dict, model: Optional[str] = None, chores: bool = False) -> LLMRouter | LLMService:
+    """根据模型与 chores 标志构建聚合 Router（优先）或回退单 LLMService。"""
+    # 若没有多 Provider 配置，回退旧单 LLMService 行为
+    providers = cfg.get("providers") or []
+    mp_map = cfg.get("model_provider_map") or {}
+    # 兼容：providers 为空时走旧单 Provider
+    if not providers and not mp_map:
+        if chores:
+            return LLMService(
+                api_key=cfg["chores_api_key"],
+                default_model=cfg["chores_model"],
+                base_url=cfg["chores_base_url"],
+                max_tokens=min(cfg["max_tokens"], 256),
+                timeout=cfg["timeout"],
+            )
         return LLMService(
-            api_key=cfg["chores_api_key"],
-            default_model=cfg["chores_model"],
-            base_url=cfg["chores_base_url"],
-            max_tokens=min(cfg["max_tokens"], 256),
+            api_key=cfg["llm_api_key"],
+            default_model=cfg["llm_model"],
+            base_url=cfg["llm_base_url"],
+            max_tokens=cfg["max_tokens"],
             timeout=cfg["timeout"],
         )
-    return LLMService(
-        api_key=cfg["llm_api_key"],
-        default_model=cfg["llm_model"],
-        base_url=cfg["llm_base_url"],
-        max_tokens=cfg["max_tokens"],
+
+    # 多 Provider 聚合路径
+    # chores 与非 chores 复用同一模型优先级链，仅 max_tokens 不同
+    target_model = model or (cfg["chores_model"] if chores else cfg["llm_model"])
+    if not target_model:
+        target_model = cfg.get("default_model") or ""
+    chain = _get_providers_for_model_sync(cfg, target_model)
+    if not chain:
+        # 若该模型未绑定，尝试对 chores 用默认模型的链兜底？此处直接返回空 Router，上层会校验 400
+        chain = []
+    max_tokens = min(cfg["max_tokens"], 256) if chores else cfg["max_tokens"]
+    # 即使 chain 为空也构造 Router，上层 _validate_model 会拦截；构造时允许空以便错误提示更精准
+    router = LLMRouter(
+        providers_for_model=chain,
+        default_model=target_model,
+        max_tokens=max_tokens,
         timeout=cfg["timeout"],
     )
+    return router
 
 
 def _log_llm_call(
@@ -125,6 +189,9 @@ def _log_llm_call(
     input_text: str = "",
     rendered_prompt: str = "",
     output_text: str = "",
+    provider_id: str = "",
+    provider_name: str = "",
+    fallback_attempts: int | None = None,
 ) -> None:
     """统一落一条 LLM 调用日志。同步函数，供 asyncio.to_thread 调用。
 
@@ -148,6 +215,9 @@ def _log_llm_call(
         rendered_prompt=rendered_prompt,
         output_text=output_text,
         log_payload=log_payload,
+        provider_id=provider_id or "",
+        provider_name=provider_name or "",
+        fallback_attempts=fallback_attempts,
     )
 
 
@@ -386,7 +456,7 @@ async def analyze_migration_causes(
     messages = _migration_analysis_messages(req, prompt, loader)
     cfg = await asyncio.to_thread(_load_cfg)
     _validate_model(cfg, req.model)
-    llm = _build_llm(cfg, chores=False)
+    llm = _build_llm(cfg, model=req.model, chores=False)
     model_used = req.model or cfg["llm_model"]
     client_ip, user_agent = get_client_info(request)
     started = monotonic()
@@ -394,6 +464,16 @@ async def analyze_migration_causes(
     log_payload_enabled = bool(cfg.get("log_payload"))
 
     async def _record(status: str, output_text: str, error_message: str = "") -> None:
+        prov_id = ""
+        prov_name = ""
+        attempts = None
+        try:
+            if isinstance(llm, LLMRouter) and llm.provider_used:
+                prov_id = llm.provider_used.get("id", "")
+                prov_name = llm.provider_used.get("name", "")
+                attempts = llm.attempts
+        except Exception:
+            pass
         await asyncio.to_thread(
             _log_llm_call,
             code=code,
@@ -409,6 +489,9 @@ async def analyze_migration_causes(
             input_text=_migration_prompt_input(req),
             rendered_prompt=prompt,
             output_text=output_text,
+            provider_id=prov_id,
+            provider_name=prov_name,
+            fallback_attempts=attempts,
         )
 
     try:
@@ -511,7 +594,7 @@ async def chat_stream(
     # 配置读取走短会话 + 线程池：不随 SSE 流占住连接池会话，也不阻塞事件循环
     cfg = await asyncio.to_thread(_load_cfg)
     _validate_model(cfg, req.model)
-    llm = _build_llm(cfg, chores=False)
+    llm = _build_llm(cfg, model=req.model, chores=False)
     tool_name = prompt_filename
     if req.tool_id == MIGRATION_TOOL_ID:
         # 日志展示用名称：迁移请求统一显示工具名而非底层 prompt 文件名
@@ -641,6 +724,16 @@ async def chat_stream(
                 )
             _stop_events.pop(request_id, None)
             # 成功、停止、异常统一留痕：元数据始终记录，原始数据受开关控制
+            prov_id = ""
+            prov_name = ""
+            attempts = None
+            try:
+                if isinstance(llm, LLMRouter) and llm.provider_used:
+                    prov_id = llm.provider_used.get("id", "")
+                    prov_name = llm.provider_used.get("name", "")
+                    attempts = llm.attempts
+            except Exception:
+                pass
             await asyncio.to_thread(
                 _log_llm_call,
                 code=code,
@@ -658,6 +751,9 @@ async def chat_stream(
                 input_text=req.input,
                 rendered_prompt=prompt,
                 output_text="".join(output_parts),
+                provider_id=prov_id,
+                provider_name=prov_name,
+                fallback_attempts=attempts,
             )
 
     return EventSourceResponse(
@@ -730,7 +826,7 @@ async def generate_title(
 
     cfg = await asyncio.to_thread(_load_cfg)
     _validate_model(cfg, req.model)
-    llm = _build_llm(cfg, chores=True)
+    llm = _build_llm(cfg, model=req.model, chores=True)
     model_used = req.model or cfg["chores_model"]
     client_ip, user_agent = get_client_info(request)
     started = monotonic()
@@ -738,6 +834,16 @@ async def generate_title(
     log_payload_enabled = bool(cfg.get("log_payload"))
 
     async def _record(status: str, output_text: str, error_message: str = "") -> None:
+        prov_id = ""
+        prov_name = ""
+        attempts = None
+        try:
+            if isinstance(llm, LLMRouter) and llm.provider_used:
+                prov_id = llm.provider_used.get("id", "")
+                prov_name = llm.provider_used.get("name", "")
+                attempts = llm.attempts
+        except Exception:
+            pass
         await asyncio.to_thread(
             _log_llm_call,
             code=code,
@@ -753,6 +859,9 @@ async def generate_title(
             input_text=req.input,
             rendered_prompt=user_prompt,
             output_text=output_text,
+            provider_id=prov_id,
+            provider_name=prov_name,
+            fallback_attempts=attempts,
         )
 
     try:

@@ -268,6 +268,7 @@
             <input type="search" x-model="logCode" @keydown.enter="logsPage = 1; loadLogs()" placeholder="使用码">
             <input type="text" x-model="logToolId" @keydown.enter="logsPage = 1; loadLogs()" placeholder="工具 ID">
             <input type="text" x-model="logModel" @keydown.enter="logsPage = 1; loadLogs()" placeholder="模型（模糊）">
+            <input type="text" x-model="logProvider" @keydown.enter="logsPage = 1; loadLogs()" placeholder="Provider（模糊）">
 
             <div class="custom-select" @click.outside="logsStatusMenuOpen = false">
               <button class="custom-select-trigger" :class="{ open: logsStatusMenuOpen }"
@@ -388,6 +389,7 @@
                 <th>使用码</th>
                 <th>工具</th>
                 <th>模型</th>
+                <th>Provider</th>
                 <th>状态</th>
                 <th class="num">耗时</th>
                 <th class="num">Tokens</th>
@@ -397,7 +399,7 @@
             </thead>
             <tbody>
               <tr x-show="!logs.length">
-                <td colspan="9" class="empty">暂无日志</td>
+                <td colspan="10" class="empty">暂无日志</td>
               </tr>
               <template x-for="l in logs" :key="l.id">
                 <tr class="log-row" @click="openLogDetail(l.id)">
@@ -408,6 +410,7 @@
                     <span class="dim" x-show="l.tool_id"> (#<span x-text="l.tool_id"></span>)</span>
                   </td>
                   <td class="dim mono truncate-cell" data-label="模型" data-span="full" :title="l.model" x-text="l.model || '—'"></td>
+                  <td class="dim mono truncate-cell" data-label="Provider" data-span="full" :title="l.provider_name ? `${l.provider_name} (${l.provider_id})` : (l.provider_id || '')" x-text="l.provider_name || l.provider_id || '—'"></td>
                   <td data-label="状态">
                     <span class="status-badge" :class="'st-' + (l.status || 'success')"
                           x-text="logStatusLabel(l.status)"></span>
@@ -455,22 +458,22 @@
 
       <!-- 配置 -->
       <section x-show="tab === 'config'" class="panel-stack">
-        <!-- 模型管理 -->
+        <!-- 模型管理（每模型独立 Provider 优先级） -->
         <div class="glass card">
           <div class="card-head-row">
             <div>
               <h2 class="card-title">模型管理</h2>
-              <p class="muted">用户可选的模型列表；拖动行首手柄可调整顺序，每个模型可单独设置显示名称、描述、推荐评分与思考（Thinking）控制。修改后需点击下方“保存配置”生效。</p>
+              <p class="muted">用户可选的模型列表；拖动行首手柄可调整模型顺序。每个模型可独立拖拽排序其可用 Provider（首位优先，失败自动 fallback 到下一位）。独占模型仅单 Provider，共享模型可多 Provider。修改后需点击下方“保存配置”生效；Provider 优先级调整即时生效。</p>
             </div>
             <button class="btn-primary" @click="openAddModel()">+ 添加模型</button>
           </div>
 
-          <table class="data-table mt-3">
+          <table class="data-table mt-3 model-table">
             <thead>
               <tr>
                 <th></th>
                 <th>显示名称</th>
-                <th>描述</th>
+                <th>可用 Provider<span class="hint-th">（首位优先 · 拖拽排序）</span></th>
                 <th>推荐评分</th>
                 <th>思考控制</th>
                 <th>操作</th>
@@ -495,7 +498,7 @@
                     <span class="drag-handle" draggable="true"
                           @dragstart="startModelDrag(i, $event)"
                           @dragend="endModelDrag()"
-                          title="拖动调整顺序">
+                          title="拖动调整模型顺序">
                       <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                         <circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle>
                         <circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle>
@@ -506,8 +509,38 @@
                   <td data-label="显示名称" data-span="full">
                     <span x-text="m.name || m.id"></span>
                     <span class="badge badge-admin ml-1.5" x-show="m.id === configForm.default_model">默认</span>
+                    <div class="mono dim" style="font-size:0.7rem; margin-top:2px;" x-text="m.id"></div>
                   </td>
-                  <td class="dim truncate-cell" data-label="描述" data-span="full" x-text="m.description || '—'"></td>
+                  <td data-label="可用 Provider" data-span="full" style="min-width: 260px;">
+                    <div class="model-providers-cell">
+                      <template x-if="(modelProviderMap[m.id] || []).length === 0">
+                        <div class="model-providers-empty">
+                          <span>⚠ 未绑定</span>
+                          <button class="link-btn" @click="openModelProviders(m.id)">去绑定</button>
+                        </div>
+                      </template>
+                      <template x-if="(modelProviderMap[m.id] || []).length > 0">
+                        <div class="model-providers-list">
+                          <template x-for="(pid, pIdx) in (modelProviderMap[m.id] || [])" :key="m.id + '-' + pid">
+                            <span class="provider-chip"
+                                  :class="{ 'disabled': !(providersById[pid] && providersById[pid].enabled), 'dragging': providerDragModelId === m.id && providerDragIndex === pIdx, 'drag-over': providerDragModelId === m.id && providerDragOverIndex === pIdx && providerDragIndex !== pIdx }"
+                                  draggable="true"
+                                  @dragstart="startProviderDrag(m.id, pIdx, $event)"
+                                  @dragend="endProviderDrag()"
+                                  @dragover.prevent="dragProviderOver(m.id, pIdx, $event)"
+                                  @dragleave="dragLeaveProvider()"
+                                  @drop.prevent="dropProvider(m.id)"
+                                  :title="(providersById[pid] ? providersById[pid].name : pid) + (providersById[pid] && !providersById[pid].enabled ? '（已禁用）' : '（拖动调整优先级）')">
+                              <span class="provider-chip-handle">⋮⋮</span>
+                              <span class="provider-chip-name" x-text="providersById[pid] ? providersById[pid].name : pid"></span>
+                              <span class="provider-chip-order" x-text="pIdx === 0 ? '· 首选' : '· #' + (pIdx+1)"></span>
+                            </span>
+                          </template>
+                          <button class="link-btn" @click="openModelProviders(m.id)" title="编辑绑定与优先级">编辑</button>
+                        </div>
+                      </template>
+                    </div>
+                  </td>
                   <td data-label="推荐评分">
                     <span class="badge" :style="m.score != null ? 'color:' + scoreColor(m.score) + ';border-color:' + scoreColor(m.score) + '66;background:' + scoreColor(m.score) + '1a' : ''"
                           x-text="m.score != null ? m.score + ' / 10' : '—'"></span>
@@ -516,6 +549,7 @@
                   <td class="actions" data-label="操作" data-span="full">
                     <button class="link-btn" x-show="m.id !== configForm.default_model" @click="setDefaultModel(m.id)">设为默认</button>
                     <button class="link-btn" @click="openEditModel(i)">编辑</button>
+                    <button class="link-btn" @click="openModelProviders(m.id)">绑定</button>
                     <button class="link-btn" :disabled="i === 0" @click="moveModel(i, -1)" title="上移">↑</button>
                     <button class="link-btn" :disabled="i === configForm.models.length - 1" @click="moveModel(i, 1)" title="下移">↓</button>
                     <button class="link-btn danger" @click="removeModel(i)">删除</button>
@@ -525,77 +559,142 @@
             </tbody>
           </table>
           <p class="field-hint mt-2" x-show="defaultModelMissing">⚠ 当前默认模型不在列表中，请重新选择或添加。</p>
+          <p class="field-hint mt-2" x-show="hasUnboundModels">⚠ 有 <span x-text="unboundModelCount"></span> 个模型未绑定可用 Provider，教师端将无法选择这些模型。请在“可用 Provider”列点击“去绑定/编辑”进行配置。</p>
+        </div>
+
+        <!-- Provider 聚合 -->
+        <div class="glass card">
+          <div class="card-head-row">
+            <div>
+              <h2 class="card-title">Provider 聚合</h2>
+              <p class="muted">接入多个 OpenAI 兼容网关（OpenRouter / 官方 / 自建网关等），每个 Provider 独立配置 Base URL 与 API Key。模型的可用 Provider 与优先级在上方“模型管理”中按模型独立拖拽排序（首位优先，失败自动 fallback）。Chores 复用同一池。</p>
+            </div>
+            <button class="btn-primary" @click="openAddProvider()">+ 添加 Provider</button>
+          </div>
+
+          <div class="provider-stats" x-show="providers.length">
+            <span class="dim" x-text="`共 ${providers.length} 个 Provider · ${providers.filter(p=>p.enabled).length} 个已启用 · ${Object.keys(modelProviderMap).length} 个模型已配置优先级`"></span>
+          </div>
+
+          <table class="data-table mt-3">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>Base URL</th>
+                <th>API Key</th>
+                <th>启用</th>
+                <th>已绑定模型数</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr x-show="!providers.length">
+                <td colspan="6" class="empty">暂无 Provider，点击右上角“添加 Provider”</td>
+              </tr>
+              <template x-for="p in providers" :key="p.id">
+                <tr>
+                  <td data-label="名称" data-span="full">
+                    <span class="mono" style="font-weight:700" x-text="p.name"></span>
+                    <div class="mono dim" style="font-size:0.68rem" x-text="p.id"></div>
+                  </td>
+                  <td class="dim mono truncate-cell" data-label="Base URL" data-span="full" :title="p.base_url" x-text="p.base_url || '（默认）'"></td>
+                  <td class="mono dim" data-label="API Key" :title="p.api_key" x-text="p.api_key || '—'"></td>
+                  <td data-label="启用">
+                    <label class="switch switch-sm" :class="{ disabled: savingProvider }">
+                      <input type="checkbox" :checked="p.enabled" @change="toggleProviderEnabled(p)">
+                      <span class="switch-slider"></span>
+                    </label>
+                  </td>
+                  <td class="dim" data-label="已绑定模型数" x-text="providerBoundCount(p.id)"></td>
+                  <td class="actions" data-label="操作" data-span="full">
+                    <button class="link-btn" @click="openEditProvider(p)">编辑</button>
+                    <button class="link-btn" @click="testProvider(p)" :disabled="testingProviderId === p.id" x-text="testingProviderId === p.id ? '测试中…' : '测试'"></button>
+                    <button class="link-btn danger" @click="removeProvider(p)">删除</button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <p class="field-hint mt-2" x-show="providers.length && Object.keys(modelProviderMap).length === 0">提示：已创建 Provider，但尚未为任何模型绑定优先级。请在上方模型表格的“可用 Provider”列点击“去绑定”完成配置。</p>
         </div>
 
         <div class="glass card">
-          <h2 class="card-title">LLM / API 配置</h2>
-          <p class="muted mb-4">配置保存在后端 SQLite，主站立即生效。API Key 展示已脱敏；留空可清除密钥。</p>
-
-          <datalist id="nbx-model-ids">
-            <template x-for="m in configForm.models" :key="'dl-' + m.id">
-              <option :value="m.id"></option>
-            </template>
-          </datalist>
-
-          <div class="form-grid">
-            <label class="field">
-              <span>默认模型</span>
-              <div class="custom-select" @click.outside="defaultModelMenuOpen = false">
-                <button class="custom-select-trigger" :class="{ open: defaultModelMenuOpen }"
-                        @click="defaultModelMenuOpen = !defaultModelMenuOpen">
-                  <span class="truncate" x-text="defaultModelLabel"></span>
-                  <span class="chev">▼</span>
-                </button>
-                <div class="custom-select-menu" x-show="defaultModelMenuOpen" x-cloak>
-                  <template x-for="m in configForm.models" :key="'dm-' + m.id">
-                    <button class="custom-select-item" :class="{ on: configForm.default_model === m.id }"
-                            @click="configForm.default_model = m.id; defaultModelMenuOpen = false"
-                            x-text="m.name || m.id"></button>
-                  </template>
-                  <div class="custom-select-item" x-show="!configForm.models.length" style="cursor:default">请先在上方添加模型</div>
-                </div>
-              </div>
-              <span class="field-hint">用户端未选择模型时使用</span>
-            </label>
-            <label class="field">
-              <span>主 AI 模型</span>
-              <input type="text" x-model="configForm.llm_model" list="nbx-model-ids" placeholder="留空则用默认模型">
-            </label>
-            <label class="field">
-              <span>主 AI Base URL</span>
-              <input type="text" x-model="configForm.llm_base_url" placeholder="可留空">
-            </label>
-            <label class="field">
-              <span>主 AI API Key</span>
-              <input type="password" x-model="configForm.llm_api_key" placeholder="sk-... 或留空不改/清除">
-              <span class="field-hint" x-show="hasLlmKey">当前已配置密钥（脱敏显示）</span>
-            </label>
-            <label class="field">
-              <span>Chores AI 模型</span>
-              <input type="text" x-model="configForm.chores_model" list="nbx-model-ids" placeholder="标题生成等轻量任务">
-            </label>
-            <label class="field">
-              <span>Chores AI Base URL</span>
-              <input type="text" x-model="configForm.chores_base_url" placeholder="留空回退主 AI">
-            </label>
-            <label class="field">
-              <span>Chores AI API Key</span>
-              <input type="password" x-model="configForm.chores_api_key" placeholder="留空回退主 AI">
-            </label>
-            <label class="field">
-              <span>Max Tokens</span>
-              <input type="number" x-model.number="configForm.max_tokens" min="256" max="128000">
-              <span class="field-hint">推理模型的思考 token 也计入此预算，建议适当调大</span>
-            </label>
-            <label class="field">
-              <span>Timeout（秒）</span>
-              <input type="number" x-model.number="configForm.timeout" min="10" max="600">
-            </label>
+          <div class="card-head-row" @click="legacyConfigOpen = !legacyConfigOpen" style="cursor:pointer">
+            <div>
+              <h2 class="card-title">LLM / API 兼容配置 <span class="badge badge-user" x-show="!legacyConfigOpen">已折叠</span></h2>
+              <p class="muted" x-show="legacyConfigOpen">兼容旧单 Provider 配置，已自动迁移为 Provider 聚合。仅在未配置 Provider 时生效；已配置 Provider 后此区域可忽略。</p>
+              <p class="muted" x-show="!legacyConfigOpen">已迁移至 Provider 聚合，点击展开查看兼容字段</p>
+            </div>
+            <span class="chev" :style="legacyConfigOpen ? 'transform:rotate(180deg)' : ''">▼</span>
           </div>
 
-          <div class="form-actions">
-            <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存配置</button>
-            <button class="btn-ghost" @click="loadConfig()">重新加载</button>
+          <div x-show="legacyConfigOpen" x-transition>
+            <datalist id="nbx-model-ids">
+              <template x-for="m in configForm.models" :key="'dl-' + m.id">
+                <option :value="m.id"></option>
+              </template>
+            </datalist>
+
+            <div class="form-grid mt-3">
+              <label class="field">
+                <span>默认模型</span>
+                <div class="custom-select" @click.outside="defaultModelMenuOpen = false">
+                  <button class="custom-select-trigger" :class="{ open: defaultModelMenuOpen }"
+                          @click="defaultModelMenuOpen = !defaultModelMenuOpen">
+                    <span class="truncate" x-text="defaultModelLabel"></span>
+                    <span class="chev">▼</span>
+                  </button>
+                  <div class="custom-select-menu" x-show="defaultModelMenuOpen" x-cloak>
+                    <template x-for="m in configForm.models" :key="'dm-' + m.id">
+                      <button class="custom-select-item" :class="{ on: configForm.default_model === m.id }"
+                              @click="configForm.default_model = m.id; defaultModelMenuOpen = false"
+                              x-text="m.name || m.id"></button>
+                    </template>
+                    <div class="custom-select-item" x-show="!configForm.models.length" style="cursor:default">请先在上方添加模型</div>
+                  </div>
+                </div>
+                <span class="field-hint">用户端未选择模型时使用</span>
+              </label>
+              <label class="field">
+                <span>主 AI 模型</span>
+                <input type="text" x-model="configForm.llm_model" list="nbx-model-ids" placeholder="留空则用默认模型">
+              </label>
+              <label class="field">
+                <span>主 AI Base URL</span>
+                <input type="text" x-model="configForm.llm_base_url" placeholder="可留空">
+              </label>
+              <label class="field">
+                <span>主 AI API Key</span>
+                <input type="password" x-model="configForm.llm_api_key" placeholder="sk-... 或留空不改/清除">
+                <span class="field-hint" x-show="hasLlmKey">当前已配置密钥（脱敏显示）</span>
+              </label>
+              <label class="field">
+                <span>Chores AI 模型</span>
+                <input type="text" x-model="configForm.chores_model" list="nbx-model-ids" placeholder="标题生成等轻量任务">
+              </label>
+              <label class="field">
+                <span>Chores AI Base URL</span>
+                <input type="text" x-model="configForm.chores_base_url" placeholder="留空回退主 AI">
+              </label>
+              <label class="field">
+                <span>Chores AI API Key</span>
+                <input type="password" x-model="configForm.chores_api_key" placeholder="留空回退主 AI">
+              </label>
+              <label class="field">
+                <span>Max Tokens</span>
+                <input type="number" x-model.number="configForm.max_tokens" min="256" max="128000">
+                <span class="field-hint">推理模型的思考 token 也计入此预算，建议适当调大</span>
+              </label>
+              <label class="field">
+                <span>Timeout（秒）</span>
+                <input type="number" x-model.number="configForm.timeout" min="10" max="600">
+              </label>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存配置</button>
+              <button class="btn-ghost" @click="loadConfig()">重新加载</button>
+            </div>
           </div>
         </div>
 
@@ -803,6 +902,113 @@
       </div>
     </div>
 
+    <!-- Provider 添加/编辑弹窗 -->
+    <div class="modal-mask" x-show="providerModalOpen" x-transition.opacity @click.self="providerModalOpen = false">
+      <div class="modal glass modal-wide" @click.stop>
+        <div class="modal-head">
+          <h3 x-text="providerForm.id ? '编辑 Provider' : '添加 Provider'"></h3>
+          <button class="icon-x" @click="providerModalOpen = false">×</button>
+        </div>
+        <div class="modal-body">
+          <label class="field mb-3">
+            <span>Provider 名称 *</span>
+            <input type="text" x-model="providerForm.name" placeholder="如：OpenRouter 主、官方直连、硅基流动">
+          </label>
+          <label class="field mb-3">
+            <span>Base URL</span>
+            <input type="text" class="mono" x-model="providerForm.base_url" placeholder="https://api.openai.com/v1  可留空走默认">
+            <span class="field-hint">OpenAI 兼容网关地址，留空则走 LiteLLM 默认 endpoint</span>
+          </label>
+          <label class="field mb-3">
+            <span>API Key</span>
+            <input type="password" x-model="providerForm.api_key" placeholder="sk-...  含 **** 则不修改">
+            <span class="field-hint" x-show="providerForm.id && providerHasKey(providerForm.id)">当前已配置密钥（脱敏显示），留空或含 **** 视为不修改</span>
+          </label>
+          <label class="field">
+            <span>是否启用</span>
+            <div class="switch-row" style="align-items:center">
+              <label class="switch">
+                <input type="checkbox" x-model="providerForm.enabled">
+                <span class="switch-slider"></span>
+              </label>
+              <span class="dim" x-text="providerForm.enabled ? '已启用（参与该模型的 fallback 链）' : '已禁用（不参与任何模型的 fallback）'"></span>
+            </div>
+          </label>
+        </div>
+        <div class="modal-foot">
+          <button class="btn-ghost" @click="providerModalOpen = false">取消</button>
+          <button class="btn-primary" @click="saveProviderModal()" :disabled="savingProvider">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模型 Provider 绑定与优先级弹窗（每模型独立） -->
+    <div class="modal-mask" x-show="modelProvidersModalOpen" x-transition.opacity @click.self="modelProvidersModalOpen = false">
+      <div class="modal glass modal-wide" @click.stop style="width:min(560px,100%)">
+        <div class="modal-head">
+          <div>
+            <h3 x-text="`绑定 Provider — ${modelProvidersModelName}`"></h3>
+            <p class="field-hint" x-text="modelProvidersModelId"></p>
+          </div>
+          <button class="icon-x" @click="modelProvidersModalOpen = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="muted mb-3">勾选该模型可用的 Provider，右侧已选列表可拖拽排序（首位优先，失败自动 fallback 到下一位）。未勾选表示该 Provider 不支持此模型。</p>
+
+          <div class="provider-binding-grid">
+            <!-- 可选列表 -->
+            <div class="provider-binding-col">
+              <div class="provider-binding-title">可选 Provider（点击勾选）</div>
+              <div class="provider-binding-list">
+                <template x-for="p in providers" :key="'avail-' + p.id">
+                  <label class="provider-binding-item" :class="{ on: modelProvidersOrdered.includes(p.id), disabled: !p.enabled }">
+                    <input type="checkbox" :checked="modelProvidersOrdered.includes(p.id)" @change="toggleModelProvider(p.id)">
+                    <span class="provider-binding-name" x-text="p.name"></span>
+                    <span class="mono dim" style="font-size:0.7rem" x-text="p.id"></span>
+                    <span class="badge" :class="p.enabled ? 'badge-admin' : 'badge-user'" x-text="p.enabled ? '启用' : '禁用'"></span>
+                  </label>
+                </template>
+                <div class="empty" x-show="!providers.length" style="padding:1rem">暂无 Provider，请先添加</div>
+              </div>
+            </div>
+
+            <!-- 已选有序列表 -->
+            <div class="provider-binding-col">
+              <div class="provider-binding-title">
+                已选（拖拽排序 · 首位优先）
+                <span class="dim" x-text="`· ${modelProvidersOrdered.length} 个`"></span>
+              </div>
+              <div class="provider-binding-ordered" x-show="modelProvidersOrdered.length">
+                <template x-for="(pid, idx) in modelProvidersOrdered" :key="'ordered-' + pid">
+                  <div class="provider-ordered-item"
+                       :class="{ 'dragging': modelProvidersDragIndex === idx, 'drag-over': modelProvidersDragOverIndex === idx && modelProvidersDragIndex !== idx }"
+                       draggable="true"
+                       @dragstart="startModelProvidersDrag(idx, $event)"
+                       @dragend="endModelProvidersDrag()"
+                       @dragover.prevent="dragModelProvidersOver(idx, $event)"
+                       @drop.prevent="dropModelProviders()">
+                    <span class="drag-handle" style="opacity:1">⋮⋮</span>
+                    <span class="mono" style="font-weight:700; flex:1" x-text="(providersById[pid] ? providersById[pid].name : pid)"></span>
+                    <span class="badge badge-user" x-text="idx===0 ? '首选' : '#' + (idx+1)"></span>
+                    <button class="link-btn danger" @click="toggleModelProvider(pid)" style="min-height:auto; padding:0 0.4rem">移除</button>
+                  </div>
+                </template>
+              </div>
+              <div class="empty" x-show="!modelProvidersOrdered.length" style="padding:1rem; border:1px dashed var(--border); border-radius:8px; text-align:center">未绑定任何 Provider，模型将不可用</div>
+              <div class="form-actions" style="margin-top:0.6rem">
+                <button class="btn-ghost" @click="modelProvidersOrdered = providers.filter(p=>p.enabled).map(p=>p.id)" :disabled="!providers.length">全选启用</button>
+                <button class="btn-ghost" @click="modelProvidersOrdered = []">清空</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn-ghost" @click="modelProvidersModalOpen = false">取消</button>
+          <button class="btn-primary" @click="saveModelProvidersModal()" :disabled="savingModelProviders">保存优先级</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 日志详情抽屉 -->
     <div class="drawer-mask" x-show="logDetailOpen" x-transition.opacity @click.self="closeLogDetail()"
          @keydown.window.escape="closeLogDetail()" x-cloak>
@@ -859,6 +1065,14 @@
                 <div class="meta-item">
                   <span class="meta-label">模型</span>
                   <span class="meta-value mono" x-text="logDetail.model || '—'"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">命中 Provider</span>
+                  <span class="meta-value mono" x-text="logDetail.provider_name ? `${logDetail.provider_name} (${logDetail.provider_id})` : (logDetail.provider_id || '—')"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">Fallback 尝试</span>
+                  <span class="meta-value mono" x-text="logDetail.fallback_attempts != null ? `${logDetail.fallback_attempts} 次` : '—'"></span>
                 </div>
                 <div class="meta-item meta-item-wide">
                   <span class="meta-label">请求 ID</span>

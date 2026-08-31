@@ -116,6 +116,29 @@ function adminApp() {
     hasChoresKey: false,
     savingConfig: false,
     defaultModelMenuOpen: false,
+    legacyConfigOpen: false,
+    // 多 Provider 聚合
+    providers: [],
+    modelProviderMap: {},
+    savingProvider: false,
+    testingProviderId: null,
+    // Provider 弹窗
+    providerModalOpen: false,
+    providerForm: { id: "", name: "", base_url: "", api_key: "", enabled: true },
+    // 模型 Provider 绑定弹窗（每模型独立优先级）
+    modelProvidersModalOpen: false,
+    modelProvidersModelId: "",
+    modelProvidersModelName: "",
+    modelProvidersOrdered: [],
+    savingModelProviders: false,
+    modelProvidersDragIndex: null,
+    modelProvidersDragOverIndex: null,
+    // 模型表格内 Provider 拖拽
+    providerDragModelId: null,
+    providerDragIndex: null,
+    providerDragOverIndex: null,
+    // 日志 Provider 筛选
+    logProvider: "",
     // 模型添加/编辑弹窗
     modelModalOpen: false,
     modelModalIndex: null,
@@ -189,6 +212,7 @@ function adminApp() {
         this.logCode.trim() ||
         this.logToolId.trim() ||
         this.logModel.trim() ||
+        this.logProvider.trim() ||
         this.logsStatusFilter ||
         this.logStart ||
         this.logEnd
@@ -208,6 +232,17 @@ function adminApp() {
         this.configForm.models.length > 0 &&
         !this.configForm.models.some((m) => m.id === this.configForm.default_model)
       );
+    },
+    get providersById() {
+      const map = {};
+      for (const p of this.providers) map[p.id] = p;
+      return map;
+    },
+    get hasUnboundModels() {
+      return this.configForm.models.some((m) => !(this.modelProviderMap[m.id] && this.modelProviderMap[m.id].length));
+    },
+    get unboundModelCount() {
+      return this.configForm.models.filter((m) => !(this.modelProviderMap[m.id] && this.modelProviderMap[m.id].length)).length;
     },
 
     async init() {
@@ -652,6 +687,7 @@ function adminApp() {
       if (this.logCode.trim()) params.set("code", this.logCode.trim());
       if (this.logToolId.trim()) params.set("tool_id", this.logToolId.trim());
       if (this.logModel.trim()) params.set("model", this.logModel.trim());
+      if (this.logProvider.trim()) params.set("provider", this.logProvider.trim());
       if (this.logsStatusFilter) params.set("status", this.logsStatusFilter);
       const start = this.logStart ? new Date(`${this.logStart}T00:00:00`) : null;
       if (start && !Number.isNaN(start.getTime())) params.set("start", start.toISOString());
@@ -712,6 +748,7 @@ function adminApp() {
       this.logCode = "";
       this.logToolId = "";
       this.logModel = "";
+      this.logProvider = "";
       this.logsStatusFilter = "";
       this.logStart = "";
       this.logEnd = "";
@@ -757,6 +794,7 @@ function adminApp() {
         `使用码：${l.code}`,
         `工具：${l.tool_name || "—"}（ID ${l.tool_id || "—"}）`,
         `模型：${l.model || "—"}`,
+        `Provider：${l.provider_name ? `${l.provider_name} (${l.provider_id})` : (l.provider_id || "—")}  尝试 ${l.fallback_attempts ?? "—"} 次`,
         `状态：${this.logStatusLabel(l.status)}`,
         `耗时：${this.fmtDuration(l.duration_ms)}`,
         `Tokens：输入 ${l.prompt_tokens ?? "—"} / 输出 ${l.completion_tokens ?? "—"} / 合计 ${l.total_tokens ?? "—"}${l.tokens_estimated ? "（估算值）" : ""}`,
@@ -827,6 +865,17 @@ function adminApp() {
         this.hasLlmKey = !!data.has_llm_api_key;
         this.hasChoresKey = !!data.has_chores_api_key;
         this.payloadRecording = this.configForm.log_payload;
+        // 多 Provider 聚合
+        this.providers = Array.isArray(data.providers) ? data.providers : [];
+        this.modelProviderMap = data.model_provider_map && typeof data.model_provider_map === 'object' ? data.model_provider_map : {};
+        // 兼容旧接口：若没有 providers 则尝试从 /model-providers 拉取
+        if (!this.providers.length || !Object.keys(this.modelProviderMap).length) {
+          try {
+            const mp = await this.api("/api/admin/model-providers");
+            if (!this.providers.length && Array.isArray(mp.providers)) this.providers = mp.providers;
+            if (!Object.keys(this.modelProviderMap).length && mp.map) this.modelProviderMap = mp.map;
+          } catch {}
+        }
       } catch (e) {
         this.toast(e.message || "加载配置失败", "error");
       }
@@ -1028,6 +1077,184 @@ function adminApp() {
         this.toast(e.message || "保存失败", "error");
       } finally {
         this.savingConfig = false;
+      }
+    },
+
+    /* ============ Provider 聚合 ============ */
+    providerHasKey(id) {
+      const p = this.providersById[id];
+      return !!(p && p.has_api_key);
+    },
+    providerBoundCount(providerId) {
+      let n = 0;
+      for (const mid in this.modelProviderMap) {
+        if ((this.modelProviderMap[mid] || []).includes(providerId)) n++;
+      }
+      return n;
+    },
+    openAddProvider() {
+      this.providerForm = { id: "", name: "", base_url: "", api_key: "", enabled: true };
+      this.providerModalOpen = true;
+    },
+    openEditProvider(p) {
+      this.providerForm = { id: p.id, name: p.name || "", base_url: p.base_url || "", api_key: p.api_key || "", enabled: !!p.enabled };
+      this.providerModalOpen = true;
+    },
+    async saveProviderModal() {
+      const name = (this.providerForm.name || "").trim();
+      if (!name) { this.toast("Provider 名称不能为空", "error"); return; }
+      const baseUrl = (this.providerForm.base_url || "").trim();
+      if (baseUrl && !/^https?:\/\//.test(baseUrl)) { this.toast("Base URL 必须以 http:// 或 https:// 开头", "error"); return; }
+      this.savingProvider = true;
+      try {
+        if (this.providerForm.id) {
+          const body = { name, base_url: baseUrl, enabled: !!this.providerForm.enabled };
+          if (this.providerForm.api_key && !this.providerForm.api_key.includes("****")) body.api_key = this.providerForm.api_key;
+          else if (!this.providerForm.api_key) body.api_key = "";
+          // 若包含 **** 则不传 api_key，保持原密钥
+          if (body.api_key === undefined || (typeof this.providerForm.api_key === 'string' && this.providerForm.api_key.includes("****"))) {
+            delete body.api_key;
+          }
+          await this.api(`/api/admin/providers/${this.providerForm.id}`, { method: "PATCH", body: JSON.stringify(body) });
+          this.toast("Provider 已更新");
+        } else {
+          await this.api("/api/admin/providers", { method: "POST", body: JSON.stringify({ name, base_url: baseUrl, api_key: (this.providerForm.api_key || "").trim(), enabled: !!this.providerForm.enabled }) });
+          this.toast("Provider 已添加");
+        }
+        this.providerModalOpen = false;
+        await this.loadConfig();
+      } catch (e) { this.toast(e.message || "保存失败", "error"); }
+      finally { this.savingProvider = false; }
+    },
+    async removeProvider(p) {
+      if (!confirm(`确定删除 Provider「${p.name}」(${p.id})？该 Provider 在所有模型的绑定将被同步移除。`)) return;
+      try {
+        await this.api(`/api/admin/providers/${p.id}`, { method: "DELETE" });
+        this.toast("已删除");
+        await this.loadConfig();
+      } catch (e) { this.toast(e.message || "删除失败", "error"); }
+    },
+    async toggleProviderEnabled(p) {
+      try {
+        await this.api(`/api/admin/providers/${p.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !p.enabled }) });
+        p.enabled = !p.enabled;
+        this.toast(p.enabled ? "已启用" : "已禁用");
+      } catch (e) { this.toast(e.message || "更新失败", "error"); }
+    },
+    async testProvider(p) {
+      this.testingProviderId = p.id;
+      try {
+        const data = await this.api(`/api/admin/providers/${p.id}/test`, { method: "POST", body: JSON.stringify({}) });
+        this.toast(`测试成功（${data.latency_ms}ms）：${(data.output || "").slice(0,80)}`, "ok");
+      } catch (e) { this.toast(e.message || "测试失败", "error"); }
+      finally { this.testingProviderId = null; }
+    },
+
+    /* ============ 模型 Provider 绑定（每模型独立优先级） ============ */
+    openModelProviders(modelId) {
+      const m = this.configForm.models.find(x => x.id === modelId);
+      this.modelProvidersModelId = modelId;
+      this.modelProvidersModelName = m ? (m.name || m.id) : modelId;
+      this.modelProvidersOrdered = [...(this.modelProviderMap[modelId] || [])];
+      this.modelProvidersDragIndex = null;
+      this.modelProvidersDragOverIndex = null;
+      this.modelProvidersModalOpen = true;
+    },
+    toggleModelProvider(pid) {
+      const idx = this.modelProvidersOrdered.indexOf(pid);
+      if (idx === -1) this.modelProvidersOrdered.push(pid);
+      else this.modelProvidersOrdered.splice(idx, 1);
+    },
+    async saveModelProvidersModal() {
+      if (!this.modelProvidersModelId) return;
+      this.savingModelProviders = true;
+      try {
+        await this.api(`/api/admin/models/${encodeURIComponent(this.modelProvidersModelId)}/providers`, {
+          method: "PUT",
+          body: JSON.stringify({ ordered_provider_ids: this.modelProvidersOrdered }),
+        });
+        // 本地更新
+        this.modelProviderMap[this.modelProvidersModelId] = [...this.modelProvidersOrdered];
+        // 触发响应式（Alpine 需重新赋值对象）
+        this.modelProviderMap = { ...this.modelProviderMap };
+        this.modelProvidersModalOpen = false;
+        this.toast("优先级已保存");
+      } catch (e) { this.toast(e.message || "保存失败", "error"); }
+      finally { this.savingModelProviders = false; }
+    },
+    startModelProvidersDrag(idx, e) {
+      this.modelProvidersDragIndex = idx;
+      this.modelProvidersDragOverIndex = null;
+      if (e && e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(idx)); }
+    },
+    endModelProvidersDrag() {
+      this.modelProvidersDragIndex = null;
+      this.modelProvidersDragOverIndex = null;
+    },
+    dragModelProvidersOver(idx, e) {
+      if (this.modelProvidersDragIndex === null || idx === this.modelProvidersDragIndex) return;
+      this.modelProvidersDragOverIndex = idx;
+      if (e && e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    },
+    dropModelProviders() {
+      const from = this.modelProvidersDragIndex;
+      const to = this.modelProvidersDragOverIndex;
+      if (from === null || to === null || from === to) { this.endModelProvidersDrag(); return; }
+      const arr = this.modelProvidersOrdered;
+      const [moved] = arr.splice(from, 1);
+      const insertAt = to > from ? to : to;
+      // 根据拖拽方向决定插入前后：简化为插入到目标位置之前
+      // 若拖动时从上往下，目标索引已因 splice 前移一位，处理与模型拖拽一致
+      const shifted = to > from ? to - 1 : to;
+      arr.splice(shifted, 0, moved);
+      // 若是直接 drop 到目标项上（未计算 before/after），上面 shifted 逻辑已处理
+      // 为兼容未精确 before/after 的情况，若 from<to 则把 moved 放到 shifted+1
+      // 这里保持简单：若 from<to 则已在 shifted，符合前移预期
+      this.endModelProvidersDrag();
+    },
+
+    /* 模型表格内 Provider 拖拽（每模型独立） */
+    startProviderDrag(modelId, idx, e) {
+      this.providerDragModelId = modelId;
+      this.providerDragIndex = idx;
+      this.providerDragOverIndex = null;
+      if (e && e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(idx)); }
+    },
+    endProviderDrag() {
+      this.providerDragModelId = null;
+      this.providerDragIndex = null;
+      this.providerDragOverIndex = null;
+    },
+    dragProviderOver(modelId, idx, e) {
+      if (this.providerDragModelId !== modelId || this.providerDragIndex === null || idx === this.providerDragIndex) return;
+      this.providerDragOverIndex = idx;
+      if (e && e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    },
+    dragLeaveProvider() {
+      if (this.providerDragModelId !== null) this.providerDragOverIndex = null;
+    },
+    async dropProvider(modelId) {
+      const from = this.providerDragIndex;
+      const to = this.providerDragOverIndex;
+      const mid = this.providerDragModelId;
+      if (from === null || to === null || mid !== modelId || from === to) { this.endProviderDrag(); return; }
+      const arr = [...(this.modelProviderMap[modelId] || [])];
+      const [moved] = arr.splice(from, 1);
+      const shifted = to > from ? to - 1 : to;
+      arr.splice(shifted, 0, moved);
+      // 乐观更新 UI
+      this.modelProviderMap[modelId] = arr;
+      this.modelProviderMap = { ...this.modelProviderMap };
+      this.endProviderDrag();
+      try {
+        await this.api(`/api/admin/models/${encodeURIComponent(modelId)}/providers`, {
+          method: "PUT",
+          body: JSON.stringify({ ordered_provider_ids: arr }),
+        });
+        this.toast("优先级已更新");
+      } catch (e) {
+        this.toast(e.message || "保存优先级失败", "error");
+        await this.loadConfig();
       }
     },
   };

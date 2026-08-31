@@ -161,11 +161,20 @@ async def list_tools(
     ]
 
     llm_cfg = resolve_llm_settings(db)
+    available = llm_cfg.get("available_model_ids")
+    # 若没有可用集合（旧库未迁移或无 Provider），则回退为全量模型
+    if available:
+        filtered_models = [m for m in llm_cfg["models"] if m["id"] in available]
+        # 若过滤后为空（配置异常，模型均未绑定），则仍返回全量以免前端无模型可选
+        if not filtered_models:
+            filtered_models = llm_cfg["models"]
+    else:
+        filtered_models = llm_cfg["models"]
     return {
         "groups": groups,
         "models": [
             {"id": m["id"], "name": m["name"], "description": m["description"], "score": m["score"]}
-            for m in llm_cfg["models"]
+            for m in filtered_models
         ],
         "default_model": llm_cfg["default_model"],
     }
@@ -175,6 +184,13 @@ async def list_tools(
 async def list_models(db: Annotated[Session, Depends(get_db)]):
     """返回可用模型列表"""
     llm_cfg = resolve_llm_settings(db)
+    available = llm_cfg.get("available_model_ids")
+    if available:
+        filtered_models = [m for m in llm_cfg["models"] if m["id"] in available]
+        if not filtered_models:
+            filtered_models = llm_cfg["models"]
+    else:
+        filtered_models = llm_cfg["models"]
     return {
         "models": [
             {
@@ -183,7 +199,7 @@ async def list_models(db: Annotated[Session, Depends(get_db)]):
                 "description": m["description"],
                 "score": m["score"],
             }
-            for m in llm_cfg["models"]
+            for m in filtered_models
         ],
         "default_model": llm_cfg["default_model"],
     }

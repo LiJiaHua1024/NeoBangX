@@ -95,6 +95,9 @@ def record_usage_log(
     rendered_prompt: str | None = None,
     output_text: str | None = None,
     log_payload: bool = False,
+    provider_id: str = "",
+    provider_name: str = "",
+    fallback_attempts: int | None = None,
 ) -> int | None:
     """写一条使用日志（含开关控制的原始数据）。
 
@@ -122,6 +125,9 @@ def record_usage_log(
                 ip=ip or "",
                 user_agent=user_agent or "",
                 units=max(0, int(units or 0)),
+                provider_id=(provider_id or "")[:64],
+                provider_name=(provider_name or "")[:128],
+                fallback_attempts=fallback_attempts,
             )
             db.add(log)
             db.flush()  # 先取 log.id 再挂 1:1 原始数据

@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
@@ -122,6 +122,10 @@ class UsageLog(Base):
     # 旧库经 ALTER 补列后存量为 NULL，语义是「未保存」而非「未扣费」，
     # 因此 to_dict 保留 None 交给前端显示为「—」，不能收敛成 0。
     units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 多 Provider 聚合：实际命中 Provider 信息与 fallback 尝试次数
+    provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    provider_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    fallback_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     def to_dict(self) -> dict:
         # 旧库经自动迁移补列后，存量行的可空列读回为 None，统一收敛为展示默认值；
@@ -146,6 +150,9 @@ class UsageLog(Base):
             "ip": self.ip or "",
             "user_agent": self.user_agent or "",
             "units": self.units,
+            "provider_id": self.provider_id or "",
+            "provider_name": self.provider_name or "",
+            "fallback_attempts": self.fallback_attempts,
         }
 
 
@@ -162,6 +169,63 @@ class LogPayload(Base):
     input: Mapped[str] = mapped_column(Text, nullable=False, default="")
     prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
     output: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class LlmProvider(Base):
+    """LLM Provider 聚合实体（多 Provider 聚合，不含全局优先级）。
+
+    优先级下沉到 LlmModelProvider 的 model_id 维度，每模型独立有序。
+    """
+
+    __tablename__ = "llm_providers"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    base_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    api_key: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    def to_dict(self, *, mask_key: bool = False) -> dict:
+        key = self.api_key or ""
+        if mask_key and key:
+            if len(key) <= 8:
+                key = "****"
+            else:
+                key = key[:4] + "****" + key[-4:]
+        return {
+            "id": self.id,
+            "name": self.name or "",
+            "base_url": self.base_url or "",
+            "api_key": key,
+            "enabled": bool(self.enabled),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "has_api_key": bool(self.api_key),
+        }
+
+
+class LlmModelProvider(Base):
+    """Model → Provider 有序映射（每模型独立优先级）。
+
+    行存在 = 该 Provider 支持该模型；priority 越小越优先，0..n-1 连续。
+    """
+
+    __tablename__ = "llm_model_providers"
+    __table_args__ = (
+        UniqueConstraint("model_id", "provider_id", name="uq_model_provider"),
+        Index("ix_llm_model_providers_model_priority", "model_id", "priority"),
+        Index("ix_llm_model_providers_provider", "provider_id"),
+    )
+
+    model_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("llm_providers.id", ondelete="CASCADE"), primary_key=True
+    )
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class AppConfig(Base):
