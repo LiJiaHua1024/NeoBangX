@@ -1383,6 +1383,47 @@ select option { background: var(--bg); color: var(--text); }
   .provider-ordered-item .drag-handle { display: none; }
   .provider-binding-list, .provider-binding-ordered { max-height: min(44dvh, 340px); }
   .provider-chip-name { max-width: none; flex: 1; }
+
+  /* 模型管理：手机端卡片化 — 每模型一张卡，边框显眼且与桌面表格互不影响 */
+  .model-table.data-table { display: block; }
+  .model-table.data-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+  .model-table.data-table tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem 0.85rem;
+    padding: 0.85rem 0.95rem;
+    border: 1.5px solid var(--border-strong);
+    border-radius: 0.95rem;
+    background: var(--panel-strong);
+    box-shadow: 0 6px 20px -14px var(--shadow);
+    white-space: normal;
+  }
+  .model-table.data-table tr:last-child { border-bottom: 1.5px solid var(--border-strong); }
+  .model-table.data-table td { padding: 0; border: 0; }
+  /* 可用 Provider 一行的“去绑定/编辑”在手机上做成实按钮（桌面保持 link 样式） */
+  .model-providers-empty .link-btn,
+  .model-providers-list > .link-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    align-self: flex-start;
+    min-height: 36px;
+    padding: 0 0.85rem;
+    background: var(--panel-strong);
+    border: 1px solid var(--border-strong);
+    border-radius: 0.6rem;
+    box-shadow: 0 1px 6px -2px var(--shadow);
+    font-weight: 700;
+    text-decoration: none !important;
+  }
+  .model-providers-empty .link-btn:active,
+  .model-providers-list > .link-btn:active {
+    transform: scale(0.98);
+  }
 }
 
 /* 触屏没有 hover，行高亮会在点击后粘在最后一行的位置 */
