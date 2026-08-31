@@ -2,13 +2,13 @@
 <html lang="zh-CN" data-theme="paper">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>NeoBangX 管理后台</title>
   <meta name="description" content="NeoBangX 使用码与配置管理后台">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23b4502a'/%3E%3Cstop offset='1' stop-color='%238c3316'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=admin260831b">
-  <script defer src="/static/script.js?v=admin260831b"></script>
+  <link rel="stylesheet" href="/static/styles.css?v=admin260831c">
+  <script defer src="/static/script.js?v=admin260831c"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
   <!-- 首屏防闪烁 -->
   <script>
@@ -70,9 +70,18 @@
           <h1 class="page-title" x-text="pageTitle"></h1>
           <p class="page-desc" x-text="pageDesc"></p>
         </div>
-        <button class="btn-ghost" @click="refreshAll()" :disabled="loading">
-          刷新
-        </button>
+        <div class="topbar-actions">
+          <!-- 窄屏下侧栏页脚被收起，主题入口移到顶栏，保证手机上仍可切换 -->
+          <div class="theme-dots theme-dots-top" aria-label="主题">
+            <template x-for="th in themes" :key="'top-' + th.id">
+              <button class="theme-dot" :class="{ 'on': theme === th.id }" :style="'background:' + th.dot"
+                      @click="setTheme(th.id)" :title="th.name" :aria-label="th.name"></button>
+            </template>
+          </div>
+          <button class="btn-ghost" @click="refreshAll()" :disabled="loading">
+            刷新
+          </button>
+        </div>
       </header>
 
       <!-- 安全警告：JWT 密钥仍为源码默认值（后端 /api/admin/stats 返回标记） -->
@@ -188,24 +197,24 @@
               </tr>
               <template x-for="c in codes" :key="c.id">
                 <tr>
-                  <td class="mono code-cell">
+                  <td class="mono code-cell" data-label="使用码" data-span="full">
                     <span x-text="c.code"></span>
                     <button class="link-btn" @click="copyText(c.code)" title="复制">复制</button>
                   </td>
-                  <td>
+                  <td data-label="类型">
                     <span class="badge" :class="c.code_type === 'admin' ? 'badge-admin' : 'badge-user'"
                           x-text="c.code_type === 'admin' ? '管理员' : '用户'"></span>
                   </td>
-                  <td x-text="c.is_unlimited ? '∞' : c.quota"></td>
-                  <td x-text="c.used_count"></td>
-                  <td x-text="c.is_unlimited ? '∞' : c.remaining"></td>
-                  <td>
+                  <td data-label="额度" x-text="c.is_unlimited ? '∞' : c.quota"></td>
+                  <td data-label="已用" x-text="c.used_count"></td>
+                  <td data-label="剩余" x-text="c.is_unlimited ? '∞' : c.remaining"></td>
+                  <td data-label="状态">
                     <span class="dot" :class="c.is_enabled ? 'on' : 'off'"></span>
                     <span x-text="c.is_enabled ? '启用' : '禁用'"></span>
                   </td>
-                  <td class="dim" x-text="c.note || '—'"></td>
-                  <td class="dim mono" x-text="fmtTime(c.created_at)"></td>
-                  <td class="actions">
+                  <td class="dim" data-label="备注" data-span="full" x-text="c.note || '—'"></td>
+                  <td class="dim mono" data-label="创建时间" data-span="full" x-text="fmtTime(c.created_at)"></td>
+                  <td class="actions" data-label="操作" data-span="full">
                     <button class="link-btn" @click="toggleCode(c)" x-text="c.is_enabled ? '禁用' : '启用'"></button>
                     <button class="link-btn" @click="editNote(c)">备注</button>
                     <button class="link-btn" x-show="c.code_type === 'user'" @click="openEditQuota(c)">改额度</button>
@@ -254,7 +263,7 @@
           </div>
         </div>
 
-        <div class="glass card toolbar">
+        <div class="glass card toolbar" :class="{ 'picker-open': !!datePickerOpen }">
           <div class="filters log-filters">
             <input type="search" x-model="logCode" @keydown.enter="logsPage = 1; loadLogs()" placeholder="使用码">
             <input type="text" x-model="logToolId" @keydown.enter="logsPage = 1; loadLogs()" placeholder="工具 ID">
@@ -392,22 +401,23 @@
               </tr>
               <template x-for="l in logs" :key="l.id">
                 <tr class="log-row" @click="openLogDetail(l.id)">
-                  <td class="mono dim" x-text="fmtTime(l.created_at)"></td>
-                  <td class="mono" x-text="l.code"></td>
-                  <td class="truncate-cell" :title="`${l.tool_name || ''} #${l.tool_id || ''}`">
+                  <td class="mono dim" data-label="时间" data-span="full" x-text="fmtTime(l.created_at)"></td>
+                  <td class="mono" data-label="使用码" data-span="full" x-text="l.code"></td>
+                  <td class="truncate-cell" data-label="工具" data-span="full" :title="`${l.tool_name || ''} #${l.tool_id || ''}`">
                     <span x-text="l.tool_name || l.tool_id || '—'"></span>
                     <span class="dim" x-show="l.tool_id"> (#<span x-text="l.tool_id"></span>)</span>
                   </td>
-                  <td class="dim mono truncate-cell" :title="l.model" x-text="l.model || '—'"></td>
-                  <td>
+                  <td class="dim mono truncate-cell" data-label="模型" data-span="full" :title="l.model" x-text="l.model || '—'"></td>
+                  <td data-label="状态">
                     <span class="status-badge" :class="'st-' + (l.status || 'success')"
                           x-text="logStatusLabel(l.status)"></span>
                   </td>
-                  <td class="num mono" x-text="fmtDuration(l.duration_ms)"></td>
-                  <td class="num mono" x-text="l.total_tokens != null ? (l.tokens_estimated ? '≈' : '') + fmtNum(l.total_tokens) : '—'"
+                  <td class="num mono" data-label="耗时" x-text="fmtDuration(l.duration_ms)"></td>
+                  <td class="num mono" data-label="Tokens"
+                      x-text="l.total_tokens != null ? (l.tokens_estimated ? '≈' : '') + fmtNum(l.total_tokens) : '—'"
                       :title="l.total_tokens != null ? `输入 ${l.prompt_tokens ?? '—'} / 输出 ${l.completion_tokens ?? '—'}${l.tokens_estimated ? '（估算值）' : ''}` : ''"></td>
-                  <td class="mono dim" x-text="l.ip || '—'"></td>
-                  <td class="actions">
+                  <td class="mono dim" data-label="IP" x-text="l.ip || '—'"></td>
+                  <td class="actions" data-label="操作">
                     <button class="link-btn" @click.stop="openLogDetail(l.id)">详情</button>
                   </td>
                 </tr>
@@ -493,17 +503,17 @@
                       </svg>
                     </span>
                   </td>
-                  <td>
+                  <td data-label="显示名称" data-span="full">
                     <span x-text="m.name || m.id"></span>
                     <span class="badge badge-admin ml-1.5" x-show="m.id === configForm.default_model">默认</span>
                   </td>
-                  <td class="dim truncate-cell" x-text="m.description || '—'"></td>
-                  <td>
+                  <td class="dim truncate-cell" data-label="描述" data-span="full" x-text="m.description || '—'"></td>
+                  <td data-label="推荐评分">
                     <span class="badge" :style="m.score != null ? 'color:' + scoreColor(m.score) + ';border-color:' + scoreColor(m.score) + '66;background:' + scoreColor(m.score) + '1a' : ''"
                           x-text="m.score != null ? m.score + ' / 10' : '—'"></span>
                   </td>
-                  <td><span class="badge badge-user" x-text="thinkingLabel(m)"></span></td>
-                  <td class="actions">
+                  <td data-label="思考控制"><span class="badge badge-user" x-text="thinkingLabel(m)"></span></td>
+                  <td class="actions" data-label="操作" data-span="full">
                     <button class="link-btn" x-show="m.id !== configForm.default_model" @click="setDefaultModel(m.id)">设为默认</button>
                     <button class="link-btn" @click="openEditModel(i)">编辑</button>
                     <button class="link-btn" :disabled="i === 0" @click="moveModel(i, -1)" title="上移">↑</button>
@@ -705,7 +715,7 @@
 
     <!-- 改额度弹窗 -->
     <div class="modal-mask" x-show="quotaModalOpen" x-transition.opacity @click.self="quotaModalOpen = false">
-      <div class="modal glass" style="max-width: 360px" @click.stop>
+      <div class="modal glass modal-narrow" @click.stop>
         <div class="modal-head">
           <h3>修改额度</h3>
           <button class="icon-x" @click="quotaModalOpen = false">×</button>
@@ -740,7 +750,7 @@
 
     <!-- 模型添加/编辑弹窗 -->
     <div class="modal-mask" x-show="modelModalOpen" x-transition.opacity @click.self="modelModalOpen = false">
-      <div class="modal glass" style="max-width: 460px" @click.stop>
+      <div class="modal glass modal-wide" @click.stop>
         <div class="modal-head">
           <h3 x-text="modelModalIndex === null ? '添加模型' : '编辑模型'"></h3>
           <button class="icon-x" @click="modelModalOpen = false">×</button>
