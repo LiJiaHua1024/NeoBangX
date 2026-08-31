@@ -530,10 +530,14 @@
                                   @dragover.prevent="dragProviderOver(m.id, pIdx, $event)"
                                   @dragleave="dragLeaveProvider()"
                                   @drop.prevent="dropProvider(m.id)"
-                                  :title="(providersById[pid] ? providersById[pid].name : pid) + (providersById[pid] && !providersById[pid].enabled ? '（已禁用）' : '（拖动调整优先级）')">
+                                  :title="(providersById[pid] ? providersById[pid].name : pid) + (providersById[pid] && !providersById[pid].enabled ? '（已禁用）' : '（拖动或用 ↑↓ 调整优先级）')">
                               <span class="provider-chip-handle">⋮⋮</span>
                               <span class="provider-chip-name" x-text="providersById[pid] ? providersById[pid].name : pid"></span>
                               <span class="provider-chip-order" x-text="pIdx === 0 ? '· 首选' : '· #' + (pIdx+1)"></span>
+                              <span class="provider-chip-moves">
+                                <button class="provider-chip-move" @click.stop="moveProviderInModel(m.id, pIdx, -1)" :disabled="pIdx===0" title="上移">↑</button>
+                                <button class="provider-chip-move" @click.stop="moveProviderInModel(m.id, pIdx, 1)" :disabled="pIdx===(modelProviderMap[m.id]||[]).length-1" title="下移">↓</button>
+                              </span>
                             </span>
                           </template>
                           <button class="link-btn" @click="openModelProviders(m.id)" title="编辑绑定与优先级">编辑</button>
@@ -988,8 +992,12 @@
                        @dragover.prevent="dragModelProvidersOver(idx, $event)"
                        @drop.prevent="dropModelProviders()">
                     <span class="drag-handle" style="opacity:1">⋮⋮</span>
-                    <span class="mono" style="font-weight:700; flex:1" x-text="(providersById[pid] ? providersById[pid].name : pid)"></span>
+                    <span class="mono" style="font-weight:700; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis" x-text="(providersById[pid] ? providersById[pid].name : pid)"></span>
                     <span class="badge badge-user" x-text="idx===0 ? '首选' : '#' + (idx+1)"></span>
+                    <span class="provider-ordered-moves">
+                      <button class="provider-chip-move" @click.stop="moveModelProviderOrdered(idx, -1)" :disabled="idx===0" title="上移">↑</button>
+                      <button class="provider-chip-move" @click.stop="moveModelProviderOrdered(idx, 1)" :disabled="idx===modelProvidersOrdered.length-1" title="下移">↓</button>
+                    </span>
                     <button class="link-btn danger" @click="toggleModelProvider(pid)" style="min-height:auto; padding:0 0.4rem">移除</button>
                   </div>
                 </template>

@@ -1316,13 +1316,39 @@ select option { background: var(--bg); color: var(--text); }
 .model-table .data-table td { vertical-align: middle; }
 .model-table .provider-chip { font-size: 0.7rem; padding: 0.25rem 0.5rem; }
 
+.provider-chip-moves {
+  display: inline-flex; gap: 0.15rem; margin-left: 0.25rem;
+}
+.provider-chip-move {
+  width: 1.45rem; height: 1.45rem;
+  display: grid; place-items: center;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-strong);
+  color: var(--dim);
+  border-radius: 0.35rem;
+  font-size: 0.65rem; line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.provider-chip-move:hover:not(:disabled) { background: var(--hover); color: var(--text); border-color: var(--accent); }
+.provider-chip-move:disabled { opacity: 0.35; cursor: default; }
+.provider-ordered-moves { display: inline-flex; gap: 0.2rem; }
+.provider-ordered-moves .provider-chip-move { width: 1.6rem; height: 1.6rem; }
+
 @media (max-width: 960px) {
   .provider-binding-grid { grid-template-columns: 1fr; }
   .model-providers-list { gap: 0.35rem; }
 }
 @media (max-width: 640px) {
-  .model-providers-list { flex-direction: column; align-items: stretch; }
-  .provider-chip { width: 100%; justify-content: space-between; }
+  .model-providers-list { flex-direction: column; align-items: stretch; gap: 0.4rem; }
+  .provider-chip { width: 100%; justify-content: space-between; padding: 0.45rem 0.6rem; }
+  .provider-chip-handle { display: none; }
+  .provider-chip-move { width: 1.9rem; height: 1.9rem; font-size: 0.75rem; }
+  .model-table .data-table td[data-label="可用 Provider"] { padding-top: 0.5rem; }
+  .provider-ordered-item { padding: 0.7rem 0.6rem; }
+  .provider-ordered-item .drag-handle { display: none; }
+  .provider-binding-list, .provider-binding-ordered { max-height: min(44dvh, 340px); }
+  .provider-chip-name { max-width: none; flex: 1; }
 }
 
 /* 触屏没有 hover，行高亮会在点击后粘在最后一行的位置 */

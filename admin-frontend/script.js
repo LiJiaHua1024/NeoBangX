@@ -1257,5 +1257,29 @@ function adminApp() {
         await this.loadConfig();
       }
     },
+    async moveProviderInModel(modelId, idx, dir) {
+      const arr = [...(this.modelProviderMap[modelId] || [])];
+      const j = idx + dir;
+      if (j < 0 || j >= arr.length) return;
+      [arr[idx], arr[j]] = [arr[j], arr[idx]];
+      this.modelProviderMap[modelId] = arr;
+      this.modelProviderMap = { ...this.modelProviderMap };
+      try {
+        await this.api(`/api/admin/models/${encodeURIComponent(modelId)}/providers`, {
+          method: "PUT",
+          body: JSON.stringify({ ordered_provider_ids: arr }),
+        });
+        this.toast("优先级已更新");
+      } catch (e) {
+        this.toast(e.message || "保存失败", "error");
+        await this.loadConfig();
+      }
+    },
+    moveModelProviderOrdered(idx, dir) {
+      const j = idx + dir;
+      if (j < 0 || j >= this.modelProvidersOrdered.length) return;
+      const arr = this.modelProvidersOrdered;
+      [arr[idx], arr[j]] = [arr[j], arr[idx]];
+    },
   };
 }
