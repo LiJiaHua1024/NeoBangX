@@ -123,6 +123,10 @@ function adminApp() {
     modelProviderDetails: {},
     savingProvider: false,
     testingProviderId: null,
+    // Provider 测试弹窗（弹窗选模型，自动预填 provider_model_id + prompt）
+    providerTestModalOpen: false,
+    providerTestForm: { providerId: "", model: "", provider_model_id: "", prompt: "Hello" },
+    providerTestModelMenuOpen: false,
     // Provider 弹窗
     providerModalOpen: false,
     providerForm: { id: "", name: "", base_url: "", api_key: "", enabled: true },
@@ -1152,14 +1156,69 @@ function adminApp() {
         this.toast(p.enabled ? "已启用" : "已禁用");
       } catch (e) { this.toast(e.message || "更新失败", "error"); }
     },
-    async testProvider(p) {
-      this.testingProviderId = p.id;
+    openTestProvider(p) {
+      const pid = p.id;
+      const bound = [];
+      for (const mid in this.modelProviderDetails) {
+        const arr = this.modelProviderDetails[mid] || [];
+        const hit = arr.find(b => b.provider_id === pid);
+        if (hit) {
+          const m = this.configForm.models.find(x => x.id === mid);
+          bound.push({ id: mid, name: m ? (m.name || m.id) : mid, provider_model_id: hit.provider_model_id || mid });
+        }
+      }
+      let defaultModel = "";
+      let defaultProviderModelId = "";
+      if (bound.length) {
+        defaultModel = bound[0].id;
+        defaultProviderModelId = bound[0].provider_model_id;
+      } else if (this.configForm.models.length) {
+        defaultModel = this.configForm.models[0].id;
+        defaultProviderModelId = defaultModel;
+      }
+      this.providerTestForm = { providerId: pid, model: defaultModel, provider_model_id: defaultProviderModelId, prompt: "Hello" };
+      this.providerTestModelMenuOpen = false;
+      this.providerTestModalOpen = true;
+    },
+    onProviderTestModelChange(modelId) {
+      this.providerTestForm.model = modelId;
+      const pid = this.providerTestForm.providerId;
+      const details = this.modelProviderDetails[modelId] || [];
+      const hit = details.find(b => b.provider_id === pid);
+      this.providerTestForm.provider_model_id = hit ? (hit.provider_model_id || modelId) : modelId;
+      this.providerTestModelMenuOpen = false;
+    },
+    get providerTestModels() {
+      const pid = this.providerTestForm.providerId;
+      if (!pid) return [];
+      const bound = [];
+      for (const mid in this.modelProviderDetails) {
+        const arr = this.modelProviderDetails[mid] || [];
+        const hit = arr.find(b => b.provider_id === pid);
+        if (hit) {
+          const m = this.configForm.models.find(x => x.id === mid);
+          bound.push({ id: mid, name: m ? (m.name || m.id) : mid, provider_model_id: hit.provider_model_id || mid });
+        }
+      }
+      if (bound.length) return bound;
+      return this.configForm.models.map(m => ({ id: m.id, name: m.name || m.id, provider_model_id: m.id }));
+    },
+    async confirmTestProvider() {
+      const f = this.providerTestForm;
+      if (!f.providerId) return;
+      const model = (f.model || "").trim();
+      if (!model) { this.toast("请选择测试模型", "error"); return; }
+      const provider_model_id = (f.provider_model_id || "").trim() || model;
+      const prompt = (f.prompt || "").trim() || "Hello";
+      this.testingProviderId = f.providerId;
       try {
-        const data = await this.api(`/api/admin/providers/${p.id}/test`, { method: "POST", body: JSON.stringify({}) });
-        this.toast(`测试成功（${data.latency_ms}ms）：${(data.output || "").slice(0,80)}`, "ok");
+        const data = await this.api(`/api/admin/providers/${f.providerId}/test`, { method: "POST", body: JSON.stringify({ model, provider_model_id, prompt }) });
+        this.toast(`测试成功（${data.latency_ms}ms）[${data.provider_model_id}]: ${(data.output || "").slice(0,80)}`, "ok");
       } catch (e) { this.toast(e.message || "测试失败", "error"); }
       finally { this.testingProviderId = null; }
     },
+    // 兼容旧调用（若有外部直接调 testProvider）
+    async testProvider(p) { this.openTestProvider(p); },
 
     /* ============ 模型 Provider 绑定（每模型独立优先级 + per-provider model id） ============ */
     openModelProviders(modelId) {
