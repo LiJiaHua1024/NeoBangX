@@ -594,7 +594,7 @@ function adminApp() {
         `模型：${l.model || "—"}`,
         `状态：${this.logStatusLabel(l.status)}`,
         `耗时：${this.fmtDuration(l.duration_ms)}`,
-        `Tokens：输入 ${l.prompt_tokens ?? "—"} / 输出 ${l.completion_tokens ?? "—"} / 合计 ${l.total_tokens ?? "—"}`,
+        `Tokens：输入 ${l.prompt_tokens ?? "—"} / 输出 ${l.completion_tokens ?? "—"} / 合计 ${l.total_tokens ?? "—"}${l.tokens_estimated ? "（估算值）" : ""}`,
         `扣费：${this.fmtUnits(l.units)}`,
         `IP：${l.ip || "—"}`,
         `UA：${l.user_agent || "—"}`,

@@ -317,8 +317,8 @@
                           x-text="logStatusLabel(l.status)"></span>
                   </td>
                   <td class="num mono" x-text="fmtDuration(l.duration_ms)"></td>
-                  <td class="num mono" x-text="l.total_tokens != null ? fmtNum(l.total_tokens) : '—'"
-                      :title="l.total_tokens != null ? `输入 ${l.prompt_tokens ?? '—'} / 输出 ${l.completion_tokens ?? '—'}` : ''"></td>
+                  <td class="num mono" x-text="l.total_tokens != null ? (l.tokens_estimated ? '≈' : '') + fmtNum(l.total_tokens) : '—'"
+                      :title="l.total_tokens != null ? `输入 ${l.prompt_tokens ?? '—'} / 输出 ${l.completion_tokens ?? '—'}${l.tokens_estimated ? '（估算值）' : ''}` : ''"></td>
                   <td class="mono dim" x-text="l.ip || '—'"></td>
                   <td class="actions">
                     <button class="link-btn" @click.stop="openLogDetail(l.id)">详情</button>
@@ -735,7 +735,8 @@
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">总 Tokens</span>
-                  <span class="meta-value mono" x-text="fmtNum(logDetail.total_tokens)"></span>
+                  <span class="meta-value mono"
+                        x-text="(logDetail.tokens_estimated ? '≈' : '') + fmtNum(logDetail.total_tokens)"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">输入 / 输出</span>

@@ -22,7 +22,7 @@ from app.routers import chat as chat_router
 from app.routers import tools as tools_router
 from app.routers.admin import _apply_log_filters
 from app.services import llm as llm_module
-from app.services.llm import LLMService, extract_usage
+from app.services.llm import LLMService, estimate_missing_usage, extract_usage
 from app.services.migration import MIGRATION_TOOL_ID, MIGRATION_TOOL_NAME
 from app.services.prompt_loader import PromptLoader
 from app.services.request_log import (
@@ -182,6 +182,136 @@ def test_chat_stream_with_stop_keeps_trailing_usage_chunk(monkeypatch):
     assert usage == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
 
 
+# ---------------- 未回传 usage 时的本地估算 ----------------
+
+ESTIMATE_MESSAGES = [
+    {"role": "user", "content": "请把这段话改写成一般过去时：She goes to school by bus."},
+]
+
+
+def test_estimate_missing_usage_fills_only_missing_fields():
+    out: dict = {}
+    estimate_missing_usage(ESTIMATE_MESSAGES, "She went to school by bus.", "test-model", out)
+    assert out["estimated"] is True
+    assert out["prompt_tokens"] > 0
+    assert out["completion_tokens"] > 0
+    assert out["total_tokens"] == out["prompt_tokens"] + out["completion_tokens"]
+
+    # 供应商部分回传：只补缺失字段，已有值原样保留
+    partial = {"completion_tokens": 7}
+    estimate_missing_usage(ESTIMATE_MESSAGES, "She went to school by bus.", "test-model", partial)
+    assert partial["completion_tokens"] == 7
+    assert partial["total_tokens"] == partial["prompt_tokens"] + 7
+    assert partial["estimated"] is True
+
+    # 三个字段齐全时不做任何事，也不打估算标记
+    full = {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+    estimate_missing_usage(ESTIMATE_MESSAGES, "x", "test-model", full)
+    assert full == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+
+
+def test_estimate_missing_usage_swallows_errors(monkeypatch):
+    """估算只是日志的兜底，自身失败绝不能外抛影响主请求。"""
+
+    def _boom(**_kwargs):
+        raise RuntimeError("tokenizer unavailable")
+
+    monkeypatch.setattr(llm_module.litellm, "token_counter", _boom)
+    out: dict = {}
+    estimate_missing_usage(ESTIMATE_MESSAGES, "ok", "m", out)
+    assert out == {}
+
+
+def test_chat_estimates_usage_when_provider_sends_none(monkeypatch):
+    async def fake_acompletion(**_kwargs):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="Hello there."))],
+            usage=None,
+        )
+
+    monkeypatch.setattr(llm_module, "acompletion", fake_acompletion)
+
+    async def scenario():
+        service = LLMService(api_key="k", default_model="m")
+        usage: dict = {}
+        await service.chat(user_prompt="说声你好", usage_out=usage)
+        return usage
+
+    usage = asyncio.run(scenario())
+    assert usage["estimated"] is True
+    assert usage["completion_tokens"] > 0
+    assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
+
+
+def test_chat_stream_estimates_when_usage_chunk_missing(monkeypatch):
+    """网关全程不回传 usage 分块：按实际流出的文本估算，日志不缺数。"""
+
+    def _chunk(content=None):
+        choices = (
+            [] if content is None else [SimpleNamespace(delta=SimpleNamespace(content=content))]
+        )
+        return SimpleNamespace(choices=choices, usage=None)
+
+    async def _stream():
+        yield _chunk("你好")
+        yield _chunk("，世界")
+
+    async def fake_acompletion(**_kwargs):
+        return _stream()
+
+    monkeypatch.setattr(llm_module, "acompletion", fake_acompletion)
+
+    async def scenario():
+        service = LLMService(api_key="k", default_model="m")
+        usage: dict = {}
+        tokens = [
+            t async for t in service.chat_stream_with_stop(user_prompt="p", usage_out=usage)
+        ]
+        return tokens, usage
+
+    tokens, usage = asyncio.run(scenario())
+    assert tokens == ["你好", "，世界"]
+    assert usage["estimated"] is True
+    assert usage["completion_tokens"] > 0
+    assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
+
+
+def test_chat_stream_estimates_after_mid_stream_stop(monkeypatch):
+    """用户中途停止时同样收不到 usage 分块，估算覆盖到已流出部分。"""
+
+    def _chunk(content):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content=content))], usage=None
+        )
+
+    async def _stream():
+        yield _chunk("你好")
+        yield _chunk("，世界")
+
+    async def fake_acompletion(**_kwargs):
+        return _stream()
+
+    monkeypatch.setattr(llm_module, "acompletion", fake_acompletion)
+
+    async def scenario():
+        service = LLMService(api_key="k", default_model="m")
+        stop_event = asyncio.Event()
+        usage: dict = {}
+        received = []
+        async for token in service.chat_stream_with_stop(
+            user_prompt="p", stop_event=stop_event, usage_out=usage
+        ):
+            received.append(token)
+            stop_event.set()  # 第一片到达后立即停止
+        return received, usage
+
+    received, usage = asyncio.run(scenario())
+    assert received == ["你好"]
+    assert usage["estimated"] is True
+    assert usage["completion_tokens"] > 0
+    assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
+
+
 # ---------------- 日志写入 ----------------
 
 def test_record_usage_log_writes_metadata_without_payload():
@@ -264,6 +394,34 @@ def test_record_usage_log_persists_and_clips_payload():
 def test_record_usage_log_swallows_write_failures():
     """写库异常必须被吞掉：日志绝不能拖垮正在生成的主请求。"""
     assert record_usage_log(code_id=1, code="x", units="不是数字") is None
+
+
+def test_record_usage_log_persists_estimated_flag():
+    db = SessionLocal()
+    try:
+        code = _make_code(db, "NBXU-LOG-EST0-0010")
+    finally:
+        db.close()
+
+    estimated_id = record_usage_log(
+        code_id=code.id,
+        code=code.code,
+        model="test/model",
+        usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8, "estimated": True},
+    )
+    exact_id = record_usage_log(
+        code_id=code.id,
+        code=code.code,
+        model="test/model",
+        usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+    )
+
+    db = SessionLocal()
+    try:
+        assert db.get(UsageLog, estimated_id).tokens_estimated is True
+        assert db.get(UsageLog, exact_id).tokens_estimated is False
+    finally:
+        db.close()
 
 
 def test_parse_log_settings_accepts_common_truthy_forms():

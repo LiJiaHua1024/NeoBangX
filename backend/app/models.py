@@ -113,6 +113,9 @@ class UsageLog(Base):
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # tokens 是否为本地估算（供应商未回传 usage 时按 tokenizer 近似补齐）。
+    # 旧库补列后的存量行读回 NULL，语义是「当时无从判断」，前端不显示估算标记
+    tokens_estimated: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     user_agent: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     # 本次请求实际扣减的额度次数（辅助类调用 / 迁移单卡为 0）。
@@ -139,6 +142,7 @@ class UsageLog(Base):
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
+            "tokens_estimated": self.tokens_estimated,
             "ip": self.ip or "",
             "user_agent": self.user_agent or "",
             "units": self.units,

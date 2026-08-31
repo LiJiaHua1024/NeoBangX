@@ -18,6 +18,34 @@ def extract_usage(usage, out: dict) -> None:
             out[key] = int(value)
 
 
+def estimate_missing_usage(
+    messages: list, completion_text: str, model: str, out: dict | None
+) -> None:
+    """供应商未回传（或部分回传）usage 时，按本地 tokenizer 估算补齐缺失字段。
+
+    采用 litellm.token_counter（底层 tiktoken cl100k，词表随 litellm 内置、
+    完全离线）：对 OpenAI 系模型精确，对其它模型（Qwen/GLM/DeepSeek 等）
+    是同量级近似，用于用量统计足够。已在流中途停止、网关不回传 usage 等
+    场景下保证 token 数不缺数；补齐过的 dict 会带上 estimated=True 供
+    管理台区分精确值与估算值。任何估算失败都不应影响主请求。
+    """
+    if out is None:
+        return
+    missing = [key for key in ("prompt_tokens", "completion_tokens", "total_tokens") if key not in out]
+    if not missing:
+        return
+    try:
+        if "prompt_tokens" in missing:
+            out["prompt_tokens"] = litellm.token_counter(model=model, messages=messages)
+        if "completion_tokens" in missing:
+            out["completion_tokens"] = litellm.token_counter(model=model, text=completion_text or "")
+        if "total_tokens" in missing:
+            out["total_tokens"] = out.get("prompt_tokens", 0) + out.get("completion_tokens", 0)
+        out["estimated"] = True
+    except Exception as e:
+        logger.warning("Token usage estimation failed: %s", e)
+
+
 class LLMService:
     """LiteLLM 调用封装
 
@@ -113,9 +141,12 @@ class LLMService:
 
         try:
             response = await acompletion(**kwargs)
+            content = response.choices[0].message.content or ""
             if usage_out is not None:
                 extract_usage(getattr(response, "usage", None), usage_out)
-            return response.choices[0].message.content or ""
+                # 供应商没回传 usage 时按实际请求 / 响应估算，保证日志不缺数
+                estimate_missing_usage(request_messages, content, kwargs["model"], usage_out)
+            return content
         except Exception as e:
             logger.error(f"LLM chat error: {e}")
             raise
@@ -174,6 +205,7 @@ class LLMService:
             reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
         )
 
+        streamed_parts: list[str] = []
         try:
             response = await acompletion(**kwargs)
             async for chunk in response:
@@ -187,6 +219,7 @@ class LLMService:
                     continue
                 delta = chunk.choices[0].delta
                 if delta and delta.content:
+                    streamed_parts.append(delta.content)
                     yield delta.content
         except asyncio.CancelledError:
             logger.info("LLM stream cancelled by client")
@@ -194,3 +227,8 @@ class LLMService:
         except Exception as e:
             logger.error(f"LLM stream error: {e}")
             raise
+        finally:
+            if usage_out is not None:
+                # 中途停止 / 断开 / 异常时收不到末尾 usage 分块，
+                # 用已实际流出的文本估算，cancelled 的请求同样不缺数
+                estimate_missing_usage(messages, "".join(streamed_parts), kwargs["model"], usage_out)

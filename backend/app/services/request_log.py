@@ -118,6 +118,7 @@ def record_usage_log(
                 prompt_tokens=usage.get("prompt_tokens"),
                 completion_tokens=usage.get("completion_tokens"),
                 total_tokens=usage.get("total_tokens"),
+                tokens_estimated=bool(usage.get("estimated")),
                 ip=ip or "",
                 user_agent=user_agent or "",
                 units=max(0, int(units or 0)),
