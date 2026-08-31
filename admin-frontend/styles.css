@@ -529,9 +529,27 @@ select option { background: var(--bg); color: var(--text); }
 }
 .modal-foot { border-bottom: 0; border-top: 1px solid var(--border); justify-content: flex-end; gap: 0.5rem; }
 .modal-head h3 { margin: 0; font-size: 0.95rem; }
-.modal-body { padding: 1.15rem; overflow: auto; }
+.modal-body { padding: 1.15rem; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .modal-narrow { width: min(360px, 100%); }
 .modal-wide { width: min(460px, 100%); }
+
+/* 弹窗/抽屉打开时锁定背景滚动，弹窗内滚动到边界不再带动背后页面 */
+html.modal-open, body.modal-open {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+html.modal-open .panel-stack,
+body.modal-open .panel-stack {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+.modal-mask, .drawer-mask {
+  overscroll-behavior: contain;
+}
+.modal, .drawer {
+  overscroll-behavior: contain;
+}
+.drawer-body { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .icon-x {
   background: transparent; border: 0; color: var(--dim);
   font-size: 1.4rem; line-height: 1; cursor: pointer;

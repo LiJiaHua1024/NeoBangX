@@ -19,7 +19,7 @@
 <body>
   <div class="bg-orbs" aria-hidden="true"></div>
 
-  <div x-data="adminApp()" x-init="init()" x-cloak class="layout">
+  <div x-data="adminApp()" x-init="init()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen)">
     <!-- 侧栏 -->
     <aside class="sidebar glass">
       <div class="brand">
