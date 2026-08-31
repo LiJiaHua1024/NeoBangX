@@ -194,9 +194,9 @@ def _seed_providers_from_legacy(db: Session) -> None:
     )
     db.add(prov)
     db.flush()
-    # 全量绑定：每个模型都绑定到该 Provider，priority 0
+    # 全量绑定：每个模型都绑定到该 Provider，priority 0，provider_model_id 默认为逻辑 id
     for m in models:
-        db.add(LlmModelProvider(model_id=m["id"], provider_id=prov_id, priority=0))
+        db.add(LlmModelProvider(model_id=m["id"], provider_id=prov_id, priority=0, provider_model_id=m["id"]))
     db.commit()
     logger.info("已自动迁移旧单 URL 配置为 Provider %s，绑定 %s 个模型", prov_id, len(models))
 
@@ -289,16 +289,18 @@ def resolve_llm_settings(db: Session) -> dict:
 
     # 多 Provider 聚合：加载 providers 与 model_provider_map
     try:
-        from app.services.provider_config import get_model_provider_map, list_providers
+        from app.services.provider_config import get_model_provider_details, get_model_provider_map, list_providers
 
         providers = list_providers(db, mask=False)  # 原始 key 供内部使用
         model_provider_map = get_model_provider_map(db)
+        model_provider_details = get_model_provider_details(db)
         # 同时提供脱敏版供外部展示
         providers_masked = list_providers(db, mask=True)
     except Exception as e:
         logger.warning("加载 providers 失败，回退为单 Provider 兼容模式: %s", e)
         providers = []
         model_provider_map = {}
+        model_provider_details = {}
         providers_masked = []
 
     # 兼容：若 providers 为空但旧 llm_* 配置非空，构造临时单 Provider 视图
@@ -353,5 +355,6 @@ def resolve_llm_settings(db: Session) -> dict:
         "providers": providers,
         "providers_masked": providers_masked,
         "model_provider_map": model_provider_map,
+        "model_provider_details": model_provider_details,
         "available_model_ids": available_model_ids,
     }

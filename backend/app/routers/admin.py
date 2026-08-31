@@ -100,17 +100,24 @@ class ProviderUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
 
 
+class ProviderBinding(BaseModel):
+    provider_id: str = Field(..., min_length=1, max_length=64)
+    provider_model_id: str = Field("", max_length=256, description="该 Provider 下实际的 LiteLLM 模型 ID，留空回退逻辑 model_id")
+
+
 class ModelProvidersUpdateRequest(BaseModel):
-    map: dict[str, List[str]] = Field(..., description="model_id -> 有序 provider_id 列表")
+    map: dict[str, List[str]] = Field(..., description="model_id -> 有序 provider_id 列表（兼容）")
 
 
 class SingleModelProvidersRequest(BaseModel):
-    ordered_provider_ids: List[str] = Field(default_factory=list, description="该模型的有序 Provider 列表，首位优先")
+    ordered_provider_ids: List[str] = Field(default_factory=list, description="该模型的有序 Provider 列表，首位优先（兼容）")
+    bindings: Optional[List[ProviderBinding]] = Field(None, description="该模型的有序绑定（含 provider_model_id），优先于 ordered_provider_ids")
 
 
 class ProviderTestRequest(BaseModel):
     model: Optional[str] = Field(None, max_length=128, description="用于测试的模型，不填则用该 Provider 绑定的首个模型")
     prompt: Optional[str] = Field(None, max_length=2000, description="测试 prompt")
+    provider_model_id: Optional[str] = Field(None, max_length=256, description="指定测试时使用的 provider_model_id")
 
 
 @router.get("/stats")
@@ -407,13 +414,17 @@ async def get_admin_config(db: Annotated[Session, Depends(get_db)]):
     masked["models"] = parse_models(cfg.get("models", ""))
     # 多 Provider 聚合信息
     try:
+        from app.services.provider_config import get_model_provider_details
+
         providers = list_providers(db, mask=True)
         model_provider_map = get_model_provider_map(db)
+        model_provider_details = get_model_provider_details(db)
         llm_cfg = resolve_llm_settings(db)
         available_model_ids = list(llm_cfg.get("available_model_ids") or [])
     except Exception:
         providers = []
         model_provider_map = {}
+        model_provider_details = {}
         available_model_ids = []
     return {
         "config": masked,
@@ -423,6 +434,7 @@ async def get_admin_config(db: Annotated[Session, Depends(get_db)]):
         "has_chores_api_key": bool(cfg.get("chores_api_key")),
         "providers": providers,
         "model_provider_map": model_provider_map,
+        "model_provider_details": model_provider_details,
         "available_model_ids": available_model_ids,
     }
 
@@ -551,22 +563,22 @@ async def test_provider_api(provider_id: str, req: ProviderTestRequest, db: Anno
 
     from app.models import LlmProvider
     from app.services.llm import LLMService
+    from app.services.provider_config import get_model_provider_details
 
     prov = db.get(LlmProvider, provider_id)
     if not prov:
         raise HTTPException(status_code=404, detail="Provider 不存在")
     # 选取测试模型
     model = (req.model or "").strip()
+    provider_model_id = (req.provider_model_id or "").strip()
     if not model:
         # 取该 Provider 绑定的首个模型
         mp_map = get_model_provider_map(db)
-        # 逆查：找到第一个包含该 provider 的模型
         for mid, pids in mp_map.items():
             if provider_id in pids:
                 model = mid
                 break
         if not model:
-            # 回退：取全局默认模型
             from app.services.runtime_config import get_config_map, parse_models
 
             cfg = get_config_map(db)
@@ -575,19 +587,30 @@ async def test_provider_api(provider_id: str, req: ProviderTestRequest, db: Anno
                 model = models[0]["id"]
     if not model:
         raise HTTPException(status_code=400, detail="无可用测试模型，请先为该 Provider 绑定模型")
+    # 若未指定 provider_model_id，尝试从绑定细节中取
+    if not provider_model_id:
+        try:
+            details = get_model_provider_details(db)
+            for item in details.get(model, []):
+                if item.get("provider_id") == provider_id:
+                    provider_model_id = item.get("provider_model_id") or model
+                    break
+        except Exception:
+            pass
+    actual_model = provider_model_id or model
     prompt = (req.prompt or "Hello").strip() or "Hello"
     llm = LLMService(
         api_key=prov.api_key or "",
-        default_model=model,
+        default_model=actual_model,
         base_url=prov.base_url or "",
         max_tokens=16,
         timeout=15,
     )
     started = monotonic()
     try:
-        out = await llm.chat(user_prompt=prompt, model=model, max_tokens=16)
+        out = await llm.chat(user_prompt=prompt, model=actual_model, max_tokens=16)
         latency = int((monotonic() - started) * 1000)
-        return {"status": "ok", "model": model, "latency_ms": latency, "output": out[:200]}
+        return {"status": "ok", "model": model, "provider_model_id": actual_model, "latency_ms": latency, "output": out[:200]}
     except Exception as e:
         latency = int((monotonic() - started) * 1000)
         raise HTTPException(status_code=502, detail=f"测试失败（{latency}ms）：{e}") from e
@@ -597,7 +620,13 @@ async def test_provider_api(provider_id: str, req: ProviderTestRequest, db: Anno
 
 @router.get("/model-providers")
 async def get_model_providers_api(db: Annotated[Session, Depends(get_db)]):
-    return {"map": get_model_provider_map(db), "providers": list_providers(db, mask=True)}
+    from app.services.provider_config import get_model_provider_details
+
+    return {
+        "map": get_model_provider_map(db),
+        "details": get_model_provider_details(db),
+        "providers": list_providers(db, mask=True),
+    }
 
 
 @router.put("/model-providers")
@@ -611,19 +640,47 @@ async def put_model_providers_api(req: ModelProvidersUpdateRequest, db: Annotate
 
 @router.get("/models/{model_id:path}/providers")
 async def get_single_model_providers_api(model_id: str, db: Annotated[Session, Depends(get_db)]):
-    # 返回该模型的有序 provider 列表（model_id 含 /，需用 :path）
-    mp_map = get_model_provider_map(db)
-    pids = mp_map.get(model_id, [])
+    # 返回该模型的有序 provider 列表（model_id 含 /，需用 :path），含 provider_model_id
+    from app.services.provider_config import get_model_provider_details
+
+    details = get_model_provider_details(db)
+    bindings = details.get(model_id, [])
     providers = list_providers(db, mask=True)
     by_id = {p["id"]: p for p in providers}
-    ordered = [by_id[pid] for pid in pids if pid in by_id]
-    return {"model_id": model_id, "ordered_provider_ids": pids, "providers": ordered}
+    ordered = []
+    pids = []
+    for item in bindings:
+        pid = item.get("provider_id")
+        pids.append(pid)
+        if pid in by_id:
+            entry = dict(by_id[pid])
+            entry["provider_model_id"] = item.get("provider_model_id") or model_id
+            ordered.append(entry)
+    # 兼容：若 details 为空但 map 有，用 map 回退
+    if not bindings:
+        mp_map = get_model_provider_map(db)
+        pids = mp_map.get(model_id, [])
+        ordered = [by_id[pid] for pid in pids if pid in by_id]
+        # 为兼容补充 provider_model_id
+        for o in ordered:
+            o["provider_model_id"] = model_id
+    return {"model_id": model_id, "ordered_provider_ids": pids, "providers": ordered, "bindings": bindings}
 
 
 @router.put("/models/{model_id:path}/providers")
 async def put_single_model_providers_api(model_id: str, req: SingleModelProvidersRequest, db: Annotated[Session, Depends(get_db)]):
     try:
-        ordered = set_providers_for_single_model(db, model_id, req.ordered_provider_ids)
+        # 优先使用 bindings（含 provider_model_id），兼容旧 ordered_provider_ids
+        if req.bindings is not None:
+            payload = [{"provider_id": b.provider_id, "provider_model_id": b.provider_model_id or model_id} for b in req.bindings]
+            ordered = set_providers_for_single_model(db, model_id, payload)
+            # 返回细节
+            from app.services.provider_config import get_model_provider_details
+
+            details = get_model_provider_details(db).get(model_id, [])
+            return {"model_id": model_id, "ordered_provider_ids": ordered, "bindings": details}
+        else:
+            ordered = set_providers_for_single_model(db, model_id, req.ordered_provider_ids)
     except ValueError as e:
         msg = str(e)
         code = 404 if "不存在" in msg else 400

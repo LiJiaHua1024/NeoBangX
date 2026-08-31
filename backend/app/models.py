@@ -212,6 +212,8 @@ class LlmModelProvider(Base):
     """Model → Provider 有序映射（每模型独立优先级）。
 
     行存在 = 该 Provider 支持该模型；priority 越小越优先，0..n-1 连续。
+    provider_model_id 为该 Provider 下实际的 LiteLLM model ID（可与逻辑 model_id 不同）；
+    为空时回退使用逻辑 model_id。
     """
 
     __tablename__ = "llm_model_providers"
@@ -226,6 +228,7 @@ class LlmModelProvider(Base):
         String(64), ForeignKey("llm_providers.id", ondelete="CASCADE"), primary_key=True
     )
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    provider_model_id: Mapped[str] = mapped_column(String(256), nullable=False, default="")
 
 
 class AppConfig(Base):

@@ -130,10 +130,25 @@ def get_model_provider_map(db: Session) -> dict[str, list[str]]:
     return out
 
 
+def get_model_provider_details(db: Session) -> dict[str, list[dict]]:
+    """读取全量细节：model_id -> [{provider_id, provider_model_id, priority}]"""
+    rows = db.execute(
+        select(LlmModelProvider).order_by(LlmModelProvider.model_id, LlmModelProvider.priority)
+    ).scalars().all()
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r.model_id, []).append({
+            "provider_id": r.provider_id,
+            "provider_model_id": r.provider_model_id or r.model_id,
+            "priority": r.priority,
+        })
+    return out
+
+
 def get_providers_for_model(
     db: Session, model_id: str, *, only_enabled: bool = True
-) -> list[LlmProvider]:
-    """按模型的优先级返回 Provider 实体列表（已过滤 enabled）。"""
+) -> list[dict]:
+    """按模型的优先级返回 Provider 链（已过滤 enabled），每项含 provider 与 provider_model_id。"""
     if not model_id:
         return []
     rows = db.execute(
@@ -142,12 +157,16 @@ def get_providers_for_model(
         .where(LlmModelProvider.model_id == model_id)
         .order_by(LlmModelProvider.priority)
     ).all()
-    providers: list[LlmProvider] = []
+    out: list[dict] = []
     for mp, prov in rows:
         if only_enabled and not prov.enabled:
             continue
-        providers.append(prov)
-    return providers
+        # 将 ORM 转为 dict 并附加 provider_model_id
+        p_dict = prov.to_dict(mask_key=False)
+        p_dict["provider_model_id"] = (mp.provider_model_id or "").strip() or model_id
+        p_dict["priority"] = mp.priority
+        out.append(p_dict)
+    return out
 
 
 def get_providers_for_model_from_map(
@@ -223,9 +242,14 @@ def set_model_provider_map(db: Session, model_provider_map: dict[str, list[str]]
 
 
 def set_providers_for_single_model(
-    db: Session, model_id: str, ordered_provider_ids: list[str]
+    db: Session, model_id: str, ordered_provider_ids: list[str] | list[dict]
 ) -> list[str]:
-    """覆盖单个模型的优先级链。"""
+    """覆盖单个模型的优先级链。
+
+    ordered_provider_ids 可为：
+    - list[str] 仅 provider_id（兼容旧调用，provider_model_id 回退为 model_id）
+    - list[dict] 每项 {provider_id, provider_model_id}
+    """
     from app.services.runtime_config import parse_models, get_config_map
 
     model_id = (model_id or "").strip()
@@ -238,21 +262,40 @@ def set_providers_for_single_model(
         raise ValueError(f"模型不存在于全局目录：{model_id}")
     provider_ids = {r.id for r in db.execute(select(LlmProvider)).scalars().all()}
     seen = set()
-    ordered: list[str] = []
-    for pid in ordered_provider_ids or []:
-        pid = str(pid or "").strip()
+    normalized: list[tuple[str, str]] = []  # (provider_id, provider_model_id)
+    for item in ordered_provider_ids or []:
+        if isinstance(item, dict):
+            pid = str(item.get("provider_id") or "").strip()
+            pmid = str(item.get("provider_model_id") or "").strip()
+        else:
+            pid = str(item or "").strip()
+            pmid = ""
         if not pid or pid in seen:
             continue
         if pid not in provider_ids:
             raise ValueError(f"Provider 不存在：{pid}")
         seen.add(pid)
-        ordered.append(pid)
+        # provider_model_id 为空时回退为逻辑 model_id
+        if not pmid:
+            pmid = model_id
+        # 校验长度
+        if len(pmid) > 256:
+            raise ValueError(f"Provider 模型 ID 过长：{pmid}")
+        normalized.append((pid, pmid))
 
     db.execute(delete(LlmModelProvider).where(LlmModelProvider.model_id == model_id))
-    for idx, pid in enumerate(ordered):
-        db.add(LlmModelProvider(model_id=model_id, provider_id=pid, priority=idx))
+    for idx, (pid, pmid) in enumerate(normalized):
+        db.add(LlmModelProvider(model_id=model_id, provider_id=pid, priority=idx, provider_model_id=pmid))
     db.commit()
-    return ordered
+    return [pid for pid, _ in normalized]
+
+
+def set_providers_for_single_model_detailed(
+    db: Session, model_id: str, bindings: list[dict]
+) -> list[dict]:
+    """以详细绑定覆盖（显式 provider_model_id）。"""
+    # 兼容：bindings 为 [{provider_id, provider_model_id}]
+    return set_providers_for_single_model(db, model_id, bindings)
 
 
 def is_model_available(db: Session, model_id: str) -> bool:

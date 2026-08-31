@@ -1289,7 +1289,41 @@ select option { background: var(--bg); color: var(--text); }
   background: var(--input-bg);
   padding: 0.35rem;
   max-height: 260px; overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
+.provider-binding-list::-webkit-scrollbar, .provider-binding-ordered::-webkit-scrollbar {
+  width: 6px; height: 6px;
+}
+.provider-binding-list::-webkit-scrollbar-thumb, .provider-binding-ordered::-webkit-scrollbar-thumb {
+  background: var(--border-strong); border-radius: 999px;
+}
+/* 新版：上下堆叠 + 可折叠 */
+.provider-binding-stack { display: flex; flex-direction: column; gap: 0.75rem; }
+.provider-binding-section {
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  overflow: hidden;
+}
+.provider-binding-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  cursor: pointer; user-select: none;
+  transition: background 0.15s ease;
+}
+.provider-binding-head:hover { background: var(--hover); }
+.provider-binding-head .provider-binding-title { margin-bottom: 0; }
+.provider-binding-head .chev { color: var(--faint); transition: transform 0.25s var(--ease); font-size: 0.7rem; }
+.provider-binding-item-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.provider-binding-item-main .provider-binding-name { font-size: 0.85rem; font-weight: 600; }
+.provider-ordered-main { display: flex; align-items: center; gap: 0.5rem; width: 100%; min-width: 0; }
+.provider-ordered-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.provider-ordered-item--with-id {
+  flex-direction: column; align-items: stretch; cursor: default;
+}
+.provider-ordered-item--with-id .field { margin-bottom: 0; }
+.provider-ordered-item--with-id input { width: 100%; min-width: 0; }
 .provider-binding-item {
   display: flex; align-items: center; gap: 0.5rem;
   padding: 0.55rem 0.6rem;

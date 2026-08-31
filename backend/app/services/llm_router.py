@@ -88,8 +88,10 @@ class LLMRouter:
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
     ) -> dict:
+        # provider_model_id 为该 Provider 下实际的 LiteLLM ID（可与逻辑 model 不同）
+        actual_model = (provider.get("provider_model_id") or "").strip() or model
         kwargs = {
-            "model": model,
+            "model": actual_model,
             "messages": messages,
             "max_tokens": max_tokens or self.max_tokens,
             "timeout": self.timeout,

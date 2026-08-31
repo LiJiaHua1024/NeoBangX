@@ -957,58 +957,90 @@
           <button class="icon-x" @click="modelProvidersModalOpen = false">×</button>
         </div>
         <div class="modal-body">
-          <p class="muted mb-3">勾选该模型可用的 Provider，右侧已选列表可拖拽排序（首位优先，失败自动 fallback 到下一位）。未勾选表示该 Provider 不支持此模型。</p>
+          <p class="muted mb-3">分两步完成：<b>① 勾选</b>支持该逻辑模型的 Provider，<b>② 在下方排序</b>（首位优先）并为每个 Provider 填入真实 LiteLLM Model ID。未勾选表示不支持此模型。</p>
 
-          <div class="provider-binding-grid">
-            <!-- 可选列表 -->
-            <div class="provider-binding-col">
-              <div class="provider-binding-title">可选 Provider（点击勾选）</div>
-              <div class="provider-binding-list">
-                <template x-for="p in providers" :key="'avail-' + p.id">
-                  <label class="provider-binding-item" :class="{ on: modelProvidersOrdered.includes(p.id), disabled: !p.enabled }">
-                    <input type="checkbox" :checked="modelProvidersOrdered.includes(p.id)" @change="toggleModelProvider(p.id)">
-                    <span class="provider-binding-name" x-text="p.name"></span>
-                    <span class="mono dim" style="font-size:0.7rem" x-text="p.id"></span>
-                    <span class="badge" :class="p.enabled ? 'badge-admin' : 'badge-user'" x-text="p.enabled ? '启用' : '禁用'"></span>
-                  </label>
-                </template>
-                <div class="empty" x-show="!providers.length" style="padding:1rem">暂无 Provider，请先添加</div>
+          <div class="provider-binding-stack">
+            <!-- ① 选择 Provider（勾选） -->
+            <div class="provider-binding-section">
+              <div class="provider-binding-head" @click="modelProvidersPickOpen = !modelProvidersPickOpen">
+                <div>
+                  <div class="provider-binding-title">
+                    ① 选择 Provider
+                    <span class="dim">— 勾选表示支持此逻辑模型</span>
+                    <span class="badge badge-user" x-text="`${providers.length} 个可选`"></span>
+                  </div>
+                  <div class="field-hint">勾选后可在下方调整优先级与 Model ID</div>
+                </div>
+                <span class="chev" :style="modelProvidersPickOpen ? 'transform:rotate(180deg)' : ''">▼</span>
+              </div>
+              <div x-show="modelProvidersPickOpen" x-transition style="margin-top:0.6rem">
+                <div class="provider-binding-list">
+                  <template x-for="p in providers" :key="'avail-' + p.id">
+                    <label class="provider-binding-item" :class="{ on: isProviderSelected(p.id), disabled: !p.enabled }">
+                      <input type="checkbox" :checked="isProviderSelected(p.id)" @change="toggleModelProvider(p.id)">
+                      <div class="provider-binding-item-main">
+                        <span class="provider-binding-name" x-text="p.name"></span>
+                        <span class="mono dim" style="font-size:0.68rem" x-text="p.id"></span>
+                        <span class="dim mono" style="font-size:0.68rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" x-text="p.base_url || '默认 endpoint'"></span>
+                      </div>
+                      <span class="badge" :class="p.enabled ? 'badge-admin' : 'badge-user'" x-text="p.enabled ? '启用' : '禁用'"></span>
+                    </label>
+                  </template>
+                  <div class="empty" x-show="!providers.length" style="padding:1rem">暂无 Provider，请先到上方“Provider 聚合”添加</div>
+                </div>
               </div>
             </div>
 
-            <!-- 已选有序列表 -->
-            <div class="provider-binding-col">
-              <div class="provider-binding-title">
-                已选（拖拽排序 · 首位优先）
-                <span class="dim" x-text="`· ${modelProvidersOrdered.length} 个`"></span>
-              </div>
-              <div class="provider-binding-ordered" x-show="modelProvidersOrdered.length">
-                <template x-for="(pid, idx) in modelProvidersOrdered" :key="'ordered-' + pid">
-                  <div class="provider-ordered-item"
-                       :class="{ 'dragging': modelProvidersDragIndex === idx, 'drag-over': modelProvidersDragOverIndex === idx && modelProvidersDragIndex !== idx }"
-                       draggable="true"
-                       @dragstart="startModelProvidersDrag(idx, $event)"
-                       @dragend="endModelProvidersDrag()"
-                       @dragover.prevent="dragModelProvidersOver(idx, $event)"
-                       @drop.prevent="dropModelProviders()">
-                    <span class="drag-handle" style="opacity:1">⋮⋮</span>
-                    <span class="mono" style="font-weight:700; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis" x-text="(providersById[pid] ? providersById[pid].name : pid)"></span>
-                    <span class="badge badge-user" x-text="idx===0 ? '首选' : '#' + (idx+1)"></span>
-                    <span class="provider-ordered-moves">
-                      <button class="provider-chip-move" @click.stop="moveModelProviderOrdered(idx, -1)" :disabled="idx===0" title="上移">↑</button>
-                      <button class="provider-chip-move" @click.stop="moveModelProviderOrdered(idx, 1)" :disabled="idx===modelProvidersOrdered.length-1" title="下移">↓</button>
-                    </span>
-                    <button class="link-btn danger" @click="toggleModelProvider(pid)" style="min-height:auto; padding:0 0.4rem">移除</button>
+            <!-- ② 排序与 Model ID（每 Provider 独立） -->
+            <div class="provider-binding-section" style="margin-top:0.9rem">
+              <div class="provider-binding-head" @click="modelProvidersOrderedOpen = !modelProvidersOrderedOpen">
+                <div>
+                  <div class="provider-binding-title">
+                    ② 排序与 Model ID
+                    <span class="dim">— 首位优先，失败自动 fallback</span>
+                    <span class="badge" :class="modelProvidersOrdered.length ? 'badge-admin' : 'badge-user'" x-text="`${modelProvidersOrdered.length} 个已选`"></span>
                   </div>
-                </template>
+                  <div class="field-hint">拖动手柄或用 ↑↓ 调整优先级；为每个 Provider 单独填入 LiteLLM 真实 ID</div>
+                </div>
+                <span class="chev" :style="modelProvidersOrderedOpen ? 'transform:rotate(180deg)' : ''">▼</span>
               </div>
-              <div class="empty" x-show="!modelProvidersOrdered.length" style="padding:1rem; border:1px dashed var(--border); border-radius:8px; text-align:center">未绑定任何 Provider，模型将不可用</div>
-              <div class="form-actions" style="margin-top:0.6rem">
-                <button class="btn-ghost" @click="modelProvidersOrdered = providers.filter(p=>p.enabled).map(p=>p.id)" :disabled="!providers.length">全选启用</button>
-                <button class="btn-ghost" @click="modelProvidersOrdered = []">清空</button>
+              <div x-show="modelProvidersOrderedOpen" x-transition style="margin-top:0.6rem">
+                <div class="provider-binding-ordered" x-show="modelProvidersOrdered.length">
+                  <template x-for="(item, idx) in modelProvidersOrdered" :key="'ordered-' + item.provider_id">
+                    <div class="provider-ordered-item provider-ordered-item--with-id"
+                         :class="{ 'dragging': modelProvidersDragIndex === idx, 'drag-over': modelProvidersDragOverIndex === idx && modelProvidersDragIndex !== idx }"
+                         @dragover.prevent="dragModelProvidersOver(idx, $event)"
+                         @drop.prevent="dropModelProviders()">
+                      <div class="provider-ordered-main">
+                        <span class="drag-handle" draggable="true" @dragstart="startModelProvidersDrag(idx, $event)" @dragend="endModelProvidersDrag()" style="opacity:1; cursor:grab" title="拖动排序">⋮⋮</span>
+                        <div class="provider-ordered-info">
+                          <span class="mono" style="font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" x-text="(providersById[item.provider_id] ? providersById[item.provider_id].name : item.provider_id)"></span>
+                          <span class="mono dim" style="font-size:0.66rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" x-text="providersById[item.provider_id] ? providersById[item.provider_id].base_url || '默认 endpoint' : ''"></span>
+                        </div>
+                        <span class="badge badge-user" x-text="idx===0 ? '首选' : '#' + (idx+1)"></span>
+                        <span class="provider-ordered-moves">
+                          <button class="provider-chip-move" @click.stop="moveModelProviderOrdered(idx, -1)" :disabled="idx===0" title="上移">↑</button>
+                          <button class="provider-chip-move" @click.stop="moveModelProviderOrdered(idx, 1)" :disabled="idx===modelProvidersOrdered.length-1" title="下移">↓</button>
+                        </span>
+                        <button class="link-btn danger" @click="toggleModelProvider(item.provider_id)" style="min-height:auto; padding:0 0.4rem; flex-shrink:0">移除</button>
+                      </div>
+                      <label class="field" style="margin-top:0.5rem; width:100%" @mousedown.stop @click.stop>
+                        <span style="font-size:0.72rem">该 Provider 下实际 Model ID（LiteLLM 格式）</span>
+                        <input type="text" class="mono" x-model="item.provider_model_id" :placeholder="modelProvidersModelId" style="font-size:0.78rem" @mousedown.stop @click.stop @dragstart.prevent>
+                        <span class="field-hint">例：OpenRouter 填 <span class="mono" x-text="modelProvidersModelId"></span>，直连填 <span class="mono" x-text="modelProvidersModelId.replace('openrouter/','')"></span>；留空回退逻辑 ID</span>
+                      </label>
+                    </div>
+                  </template>
+                </div>
+                <div class="empty" x-show="!modelProvidersOrdered.length" style="padding:0.9rem; border:1px dashed var(--border); border-radius:8px; text-align:center">尚未选择任何 Provider，模型将不可用；请在上方勾选</div>
+                <div class="form-actions" style="margin-top:0.6rem">
+                  <button class="btn-ghost" @click="modelProvidersOrdered = providers.filter(p=>p.enabled).map(p=> ({ provider_id: p.id, provider_model_id: modelProvidersModelId }))" :disabled="!providers.length">全选启用</button>
+                  <button class="btn-ghost" @click="modelProvidersOrdered = []">清空</button>
+                </div>
               </div>
             </div>
           </div>
+          <p class="field-hint mt-2">提示：同一逻辑模型（如“千问 3.7 Flash”）在不同 Provider 下 LiteLLM ID 可能不同，聚合时将按上方优先级用对应 ID 调用。</p>
         </div>
         <div class="modal-foot">
           <button class="btn-ghost" @click="modelProvidersModalOpen = false">取消</button>

@@ -101,12 +101,11 @@ _MIGRATION_BATCH_TTL = 30 * 60
 
 
 def _get_providers_for_model_sync(cfg: dict, model_id: str) -> list[dict]:
-    """基于 cfg 中的 providers 与 model_provider_map 计算该模型可用 Provider 链。"""
-    # cfg 来自 resolve_llm_settings，已含 providers 与 model_provider_map
+    """基于 cfg 中的 providers 与 model_provider_details 计算该模型可用 Provider 链（含 provider_model_id）。"""
     providers = cfg.get("providers") or []
     mp_map = cfg.get("model_provider_map") or {}
+    details = cfg.get("model_provider_details") or {}
     if not providers:
-        # 兼容旧单 Provider 配置
         if cfg.get("llm_api_key") or cfg.get("llm_base_url"):
             return [{
                 "id": "prov_legacy",
@@ -114,18 +113,35 @@ def _get_providers_for_model_sync(cfg: dict, model_id: str) -> list[dict]:
                 "base_url": cfg.get("llm_base_url") or "",
                 "api_key": cfg.get("llm_api_key") or "",
                 "enabled": True,
+                "provider_model_id": model_id,
             }]
         return []
     providers_by_id = {p["id"]: p for p in providers}
+    # 优先使用 detailed（含 provider_model_id），回退到简单 map
+    detail_list = details.get(model_id)
+    if detail_list is not None:
+        chain: list[dict] = []
+        for item in detail_list:
+            pid = item.get("provider_id")
+            p = providers_by_id.get(pid)
+            if p and p.get("enabled"):
+                merged = dict(p)
+                merged["provider_model_id"] = (item.get("provider_model_id") or "").strip() or model_id
+                merged["priority"] = item.get("priority", 0)
+                chain.append(merged)
+        return chain
+    # 兼容旧：仅有 map
     ordered_ids = mp_map.get(model_id) or []
-    # 若该模型未在 map 中配置，且为旧数据兼容，则返回所有 enabled providers（全量可用）
     if not ordered_ids and not mp_map:
-        return [p for p in providers if p.get("enabled")]
-    chain: list[dict] = []
+        # 旧数据全量可用，回退 provider_model_id 为逻辑 id
+        return [{**p, "provider_model_id": model_id} for p in providers if p.get("enabled")]
+    chain = []
     for pid in ordered_ids:
         p = providers_by_id.get(pid)
         if p and p.get("enabled"):
-            chain.append(p)
+            merged = dict(p)
+            merged["provider_model_id"] = model_id
+            chain.append(merged)
     return chain
 
 

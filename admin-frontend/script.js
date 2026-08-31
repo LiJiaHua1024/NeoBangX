@@ -120,19 +120,22 @@ function adminApp() {
     // 多 Provider 聚合
     providers: [],
     modelProviderMap: {},
+    modelProviderDetails: {},
     savingProvider: false,
     testingProviderId: null,
     // Provider 弹窗
     providerModalOpen: false,
     providerForm: { id: "", name: "", base_url: "", api_key: "", enabled: true },
-    // 模型 Provider 绑定弹窗（每模型独立优先级）
+    // 模型 Provider 绑定弹窗（每模型独立优先级 + per-provider model id）
     modelProvidersModalOpen: false,
     modelProvidersModelId: "",
     modelProvidersModelName: "",
-    modelProvidersOrdered: [],
+    modelProvidersOrdered: [], // [{provider_id, provider_model_id}]
     savingModelProviders: false,
     modelProvidersDragIndex: null,
     modelProvidersDragOverIndex: null,
+    modelProvidersPickOpen: true,
+    modelProvidersOrderedOpen: true,
     // 模型表格内 Provider 拖拽
     providerDragModelId: null,
     providerDragIndex: null,
@@ -868,13 +871,21 @@ function adminApp() {
         // 多 Provider 聚合
         this.providers = Array.isArray(data.providers) ? data.providers : [];
         this.modelProviderMap = data.model_provider_map && typeof data.model_provider_map === 'object' ? data.model_provider_map : {};
+        this.modelProviderDetails = data.model_provider_details && typeof data.model_provider_details === 'object' ? data.model_provider_details : {};
         // 兼容旧接口：若没有 providers 则尝试从 /model-providers 拉取
         if (!this.providers.length || !Object.keys(this.modelProviderMap).length) {
           try {
             const mp = await this.api("/api/admin/model-providers");
             if (!this.providers.length && Array.isArray(mp.providers)) this.providers = mp.providers;
             if (!Object.keys(this.modelProviderMap).length && mp.map) this.modelProviderMap = mp.map;
+            if (!Object.keys(this.modelProviderDetails).length && mp.details) this.modelProviderDetails = mp.details;
           } catch {}
+        }
+        // 若 details 缺失则从 map 构造默认（provider_model_id 回退为逻辑 id）
+        if (!Object.keys(this.modelProviderDetails).length && Object.keys(this.modelProviderMap).length) {
+          for (const mid in this.modelProviderMap) {
+            this.modelProviderDetails[mid] = (this.modelProviderMap[mid] || []).map(pid => ({ provider_id: pid, provider_model_id: mid, priority: 0 }));
+          }
         }
       } catch (e) {
         this.toast(e.message || "加载配置失败", "error");
@@ -1150,33 +1161,51 @@ function adminApp() {
       finally { this.testingProviderId = null; }
     },
 
-    /* ============ 模型 Provider 绑定（每模型独立优先级） ============ */
+    /* ============ 模型 Provider 绑定（每模型独立优先级 + per-provider model id） ============ */
     openModelProviders(modelId) {
       const m = this.configForm.models.find(x => x.id === modelId);
       this.modelProvidersModelId = modelId;
       this.modelProvidersModelName = m ? (m.name || m.id) : modelId;
-      this.modelProvidersOrdered = [...(this.modelProviderMap[modelId] || [])];
+      const details = this.modelProviderDetails[modelId] || [];
+      // details 为 [{provider_id, provider_model_id}]
+      this.modelProvidersOrdered = details.map(d => ({ provider_id: d.provider_id, provider_model_id: d.provider_model_id || modelId }));
+      // 兼容旧 map 若 details 为空但 map 有
+      if (!this.modelProvidersOrdered.length && (this.modelProviderMap[modelId] || []).length) {
+        this.modelProvidersOrdered = (this.modelProviderMap[modelId] || []).map(pid => ({ provider_id: pid, provider_model_id: modelId }));
+      }
       this.modelProvidersDragIndex = null;
       this.modelProvidersDragOverIndex = null;
       this.modelProvidersModalOpen = true;
     },
     toggleModelProvider(pid) {
-      const idx = this.modelProvidersOrdered.indexOf(pid);
-      if (idx === -1) this.modelProvidersOrdered.push(pid);
+      const idx = this.modelProvidersOrdered.findIndex(o => o.provider_id === pid);
+      if (idx === -1) this.modelProvidersOrdered.push({ provider_id: pid, provider_model_id: this.modelProvidersModelId });
       else this.modelProvidersOrdered.splice(idx, 1);
+    },
+    isProviderSelected(pid) {
+      return this.modelProvidersOrdered.some(o => o.provider_id === pid);
     },
     async saveModelProvidersModal() {
       if (!this.modelProvidersModelId) return;
+      // 校验 provider_model_id 非空且长度
+      for (const b of this.modelProvidersOrdered) {
+        const pmid = (b.provider_model_id || "").trim();
+        if (!pmid) { this.toast("Provider 模型 ID 不能为空", "error"); return; }
+        if (pmid.length > 256) { this.toast("Provider 模型 ID 过长", "error"); return; }
+      }
       this.savingModelProviders = true;
       try {
+        const bindings = this.modelProvidersOrdered.map(o => ({ provider_id: o.provider_id, provider_model_id: (o.provider_model_id || "").trim() || this.modelProvidersModelId }));
         await this.api(`/api/admin/models/${encodeURIComponent(this.modelProvidersModelId)}/providers`, {
           method: "PUT",
-          body: JSON.stringify({ ordered_provider_ids: this.modelProvidersOrdered }),
+          body: JSON.stringify({ bindings }),
         });
-        // 本地更新
-        this.modelProviderMap[this.modelProvidersModelId] = [...this.modelProvidersOrdered];
-        // 触发响应式（Alpine 需重新赋值对象）
+        // 本地更新 map 与 details
+        const pids = bindings.map(b => b.provider_id);
+        this.modelProviderMap[this.modelProvidersModelId] = [...pids];
+        this.modelProviderDetails[this.modelProvidersModelId] = bindings.map((b, i) => ({ provider_id: b.provider_id, provider_model_id: b.provider_model_id, priority: i }));
         this.modelProviderMap = { ...this.modelProviderMap };
+        this.modelProviderDetails = { ...this.modelProviderDetails };
         this.modelProvidersModalOpen = false;
         this.toast("优先级已保存");
       } catch (e) { this.toast(e.message || "保存失败", "error"); }
@@ -1238,11 +1267,32 @@ function adminApp() {
       const to = this.providerDragOverIndex;
       const mid = this.providerDragModelId;
       if (from === null || to === null || mid !== modelId || from === to) { this.endProviderDrag(); return; }
+      // 优先操作 details（含 provider_model_id），回退到 map
+      const srcDetails = this.modelProviderDetails[modelId];
+      if (srcDetails && srcDetails.length) {
+        const arr = [...srcDetails];
+        const [moved] = arr.splice(from, 1);
+        const shifted = to > from ? to - 1 : to;
+        arr.splice(shifted, 0, moved);
+        this.modelProviderDetails[modelId] = arr;
+        this.modelProviderDetails = { ...this.modelProviderDetails };
+        this.modelProviderMap[modelId] = arr.map(o => o.provider_id);
+        this.modelProviderMap = { ...this.modelProviderMap };
+        this.endProviderDrag();
+        try {
+          const bindings = arr.map(o => ({ provider_id: o.provider_id, provider_model_id: o.provider_model_id || modelId }));
+          await this.api(`/api/admin/models/${encodeURIComponent(modelId)}/providers`, {
+            method: "PUT",
+            body: JSON.stringify({ bindings }),
+          });
+          this.toast("优先级已更新");
+        } catch (e) { this.toast(e.message || "保存优先级失败", "error"); await this.loadConfig(); }
+        return;
+      }
       const arr = [...(this.modelProviderMap[modelId] || [])];
       const [moved] = arr.splice(from, 1);
       const shifted = to > from ? to - 1 : to;
       arr.splice(shifted, 0, moved);
-      // 乐观更新 UI
       this.modelProviderMap[modelId] = arr;
       this.modelProviderMap = { ...this.modelProviderMap };
       this.endProviderDrag();
@@ -1252,12 +1302,29 @@ function adminApp() {
           body: JSON.stringify({ ordered_provider_ids: arr }),
         });
         this.toast("优先级已更新");
-      } catch (e) {
-        this.toast(e.message || "保存优先级失败", "error");
-        await this.loadConfig();
-      }
+      } catch (e) { this.toast(e.message || "保存优先级失败", "error"); await this.loadConfig(); }
     },
     async moveProviderInModel(modelId, idx, dir) {
+      const details = this.modelProviderDetails[modelId];
+      if (details && details.length) {
+        const j = idx + dir;
+        if (j < 0 || j >= details.length) return;
+        const arr = [...details];
+        [arr[idx], arr[j]] = [arr[j], arr[idx]];
+        this.modelProviderDetails[modelId] = arr;
+        this.modelProviderDetails = { ...this.modelProviderDetails };
+        this.modelProviderMap[modelId] = arr.map(o => o.provider_id);
+        this.modelProviderMap = { ...this.modelProviderMap };
+        try {
+          const bindings = arr.map(o => ({ provider_id: o.provider_id, provider_model_id: o.provider_model_id || modelId }));
+          await this.api(`/api/admin/models/${encodeURIComponent(modelId)}/providers`, {
+            method: "PUT",
+            body: JSON.stringify({ bindings }),
+          });
+          this.toast("优先级已更新");
+        } catch (e) { this.toast(e.message || "保存失败", "error"); await this.loadConfig(); }
+        return;
+      }
       const arr = [...(this.modelProviderMap[modelId] || [])];
       const j = idx + dir;
       if (j < 0 || j >= arr.length) return;
@@ -1270,10 +1337,7 @@ function adminApp() {
           body: JSON.stringify({ ordered_provider_ids: arr }),
         });
         this.toast("优先级已更新");
-      } catch (e) {
-        this.toast(e.message || "保存失败", "error");
-        await this.loadConfig();
-      }
+      } catch (e) { this.toast(e.message || "保存失败", "error"); await this.loadConfig(); }
     },
     moveModelProviderOrdered(idx, dir) {
       const j = idx + dir;
