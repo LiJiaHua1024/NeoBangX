@@ -694,11 +694,11 @@
                 <input type="number" x-model.number="configForm.timeout" min="10" max="600">
               </label>
             </div>
-
-            <div class="form-actions">
-              <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存配置</button>
-              <button class="btn-ghost" @click="loadConfig()">重新加载</button>
-            </div>
+          </div>
+          <div class="form-actions" style="margin-top:1rem; border-top:1px solid var(--border); padding-top:1rem">
+            <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存配置</button>
+            <button class="btn-ghost" @click="loadConfig()">重新加载</button>
+            <span class="field-hint" style="margin-left:0.5rem; align-self:center">保存上方模型管理、Provider 聚合及兼容配置</span>
           </div>
         </div>
 
