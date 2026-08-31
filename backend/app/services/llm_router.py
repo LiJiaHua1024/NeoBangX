@@ -34,9 +34,9 @@ def is_retryable(exc: Exception) -> bool:
     name = exc.__class__.__name__ or ""
     if name in ("RateLimitError", "ServiceUnavailableError", "APIConnectionError", "Timeout", "TimeoutError"):
         return True
-    # 检查 litellm 的异常类型字符串
+    # 检查异常类型字符串（含 openai/httpx 的变体如 APITimeoutError/ConnectTimeout/ReadTimeout）
     name_lower = name.lower()
-    if "ratelimit" in name_lower or "serviceunavailable" in name_lower or "apiconnection" in name_lower:
+    if any(k in name_lower for k in ("ratelimit", "serviceunavailable", "apiconnection", "timeout", "connect")):
         return True
 
     msg = str(exc).lower()
