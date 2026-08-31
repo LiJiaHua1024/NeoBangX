@@ -306,7 +306,7 @@
                       <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
                         <div class="min-w-0">
                           <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
-                          <div class="ms-item-sub truncate" x-text="m.description || '未填写描述'"></div>
+                          <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                         </div>
                         <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
                           <svg viewBox="0 0 24 24">
@@ -541,7 +541,7 @@
                       <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
                         <div class="min-w-0">
                           <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
-                          <div class="ms-item-sub truncate" x-text="m.description || '未填写描述'"></div>
+                          <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                         </div>
                         <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
                           <svg viewBox="0 0 24 24">
@@ -697,7 +697,7 @@
                       <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
                         <div class="min-w-0">
                           <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
-                          <div class="ms-item-sub truncate" x-text="m.description || '未填写描述'"></div>
+                          <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                         </div>
                         <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
                           <svg viewBox="0 0 24 24">
