@@ -27,6 +27,12 @@ from app.services.provider_config import (
     set_providers_for_single_model,
     update_provider,
 )
+from app.services.device_profile import (
+    build_profile,
+    build_signals,
+    parse_summary,
+    parse_user_agent,
+)
 from app.services.request_log import (
     current_retention_days,
     purge_expired_logs,
@@ -563,6 +569,233 @@ async def list_devices(
         item["last_log_at"] = info.get("last_log_at")
         items.append(item)
     return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+@router.get("/devices/{device_id}")
+async def device_detail(
+    device_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """单设备详情：画像翻译 + 使用分布 + 最近请求。
+
+    画像翻译逻辑见 `app.services.device_profile`；聚合失败时降级为空，
+    但设备基础信息一定返回。指纹可伪造，仅供参考。
+    """
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="设备不存在")
+    base = db.query(UsageLog).filter(UsageLog.device_id == device.id)
+
+    try:
+        total = base.count()
+    except Exception:
+        total = 0
+    try:
+        success = base.filter(status_matches("success")).count()
+    except Exception:
+        success = 0
+    try:
+        cancelled = base.filter(status_matches("cancelled")).count()
+    except Exception:
+        cancelled = 0
+    try:
+        error = base.filter(status_matches("error")).count()
+    except Exception:
+        error = 0
+    try:
+        agg = base.with_entities(
+            func.coalesce(func.sum(UsageLog.total_tokens), 0).label("tokens"),
+            func.avg(UsageLog.duration_ms).label("avg_ms"),
+            func.min(UsageLog.created_at).label("first_at"),
+            func.max(UsageLog.created_at).label("last_at"),
+        ).one()
+        total_tokens = int(agg.tokens or 0)
+        avg_ms = round(float(agg.avg_ms)) if agg.avg_ms is not None else None
+        first_log_at = agg.first_at.isoformat() if agg.first_at else None
+        last_log_at = agg.last_at.isoformat() if agg.last_at else None
+    except Exception:
+        total_tokens, avg_ms, first_log_at, last_log_at = 0, None, None, None
+    try:
+        active_days = (
+            base.with_entities(func.count(func.distinct(func.date(UsageLog.created_at))))
+            .scalar()
+            or 0
+        )
+        active_days = int(active_days)
+    except Exception:
+        active_days = 0
+
+    codes: list[dict] = []
+    try:
+        rows = (
+            base.with_entities(
+                UsageLog.code,
+                func.count(UsageLog.id).label("count"),
+                func.max(UsageLog.created_at).label("last_at"),
+            )
+            .group_by(UsageLog.code)
+            .order_by(desc("count"))
+            .limit(20)
+            .all()
+        )
+        code_names = [r[0] for r in rows if r[0]]
+        notes: dict[str, str] = {}
+        if code_names:
+            try:
+                for c in (
+                    db.query(UsageCode).filter(UsageCode.code.in_(code_names)).all()
+                ):
+                    notes[c.code] = c.note or ""
+            except Exception:
+                notes = {}
+        for code, count, last_at in rows:
+            codes.append(
+                {
+                    "code": code or "",
+                    "note": notes.get(code or "", ""),
+                    "count": int(count or 0),
+                    "last_used_at": last_at.isoformat() if last_at else None,
+                }
+            )
+    except Exception:
+        codes = []
+
+    ips: list[dict] = []
+    try:
+        rows = (
+            base.filter(UsageLog.ip != "")
+            .with_entities(
+                UsageLog.ip,
+                func.count(UsageLog.id).label("count"),
+                func.max(UsageLog.created_at).label("last_at"),
+            )
+            .group_by(UsageLog.ip)
+            .order_by(desc("count"))
+            .limit(10)
+            .all()
+        )
+        ips = [
+            {
+                "ip": r[0] or "",
+                "count": int(r[1] or 0),
+                "last_seen_at": r[2].isoformat() if r[2] else None,
+            }
+            for r in rows
+        ]
+    except Exception:
+        ips = []
+
+    user_agents: list[dict] = []
+    try:
+        rows = (
+            base.filter(UsageLog.user_agent != "")
+            .with_entities(
+                UsageLog.user_agent,
+                func.count(UsageLog.id).label("count"),
+                func.max(UsageLog.created_at).label("last_at"),
+            )
+            .group_by(UsageLog.user_agent)
+            .order_by(desc("count"))
+            .limit(5)
+            .all()
+        )
+        for ua, count, last_at in rows:
+            parsed = parse_user_agent(ua or "")
+            user_agents.append(
+                {
+                    "user_agent": (ua or "")[:255],
+                    "browser": parsed["browser"],
+                    "os": parsed["os"],
+                    "device_type": parsed["device_type"],
+                    "count": int(count or 0),
+                    "last_seen_at": last_at.isoformat() if last_at else None,
+                }
+            )
+    except Exception:
+        user_agents = []
+
+    tools: list[dict] = []
+    try:
+        rows = (
+            base.with_entities(
+                UsageLog.tool_id,
+                UsageLog.tool_name,
+                func.count(UsageLog.id).label("count"),
+            )
+            .group_by(UsageLog.tool_id, UsageLog.tool_name)
+            .order_by(desc("count"))
+            .limit(10)
+            .all()
+        )
+        tools = [
+            {"tool_id": r[0] or "", "tool_name": r[1] or "", "count": int(r[2] or 0)}
+            for r in rows
+        ]
+    except Exception:
+        tools = []
+
+    models: list[dict] = []
+    try:
+        rows = (
+            base.filter(UsageLog.model != "")
+            .with_entities(UsageLog.model, func.count(UsageLog.id).label("count"))
+            .group_by(UsageLog.model)
+            .order_by(desc("count"))
+            .limit(10)
+            .all()
+        )
+        models = [{"model": r[0] or "", "count": int(r[1] or 0)} for r in rows]
+    except Exception:
+        models = []
+
+    recent_logs: list[dict] = []
+    try:
+        for log in base.order_by(desc(UsageLog.id)).limit(20).all():
+            recent_logs.append(
+                {
+                    "id": log.id,
+                    "created_at": log.created_at.isoformat() if log.created_at else None,
+                    "code": log.code or "",
+                    "tool_id": log.tool_id or "",
+                    "tool_name": log.tool_name or "",
+                    "model": log.model or "",
+                    "status": log.status or "success",
+                    "ip": log.ip or "",
+                    "duration_ms": log.duration_ms,
+                    "total_tokens": log.total_tokens,
+                }
+            )
+    except Exception:
+        recent_logs = []
+
+    summary = parse_summary(device.device_summary)
+    top_ua = user_agents[0]["user_agent"] if user_agents else ""
+    return {
+        "device": device.to_dict(),
+        "summary_parsed": summary,
+        "summary_raw": device.device_summary or "",
+        "profile": build_profile(summary, top_ua),
+        "signals": build_signals(
+            code_count=len(codes), ip_count=len(ips), ua_count=len(user_agents)
+        ),
+        "stats": {
+            "total_logs": int(total),
+            "success": int(success),
+            "cancelled": int(cancelled),
+            "error": int(error),
+            "total_tokens": int(total_tokens),
+            "avg_duration_ms": avg_ms,
+            "first_log_at": first_log_at,
+            "last_log_at": last_log_at,
+            "active_days": int(active_days),
+        },
+        "codes": codes,
+        "ips": ips,
+        "user_agents": user_agents,
+        "tools": tools,
+        "models": models,
+        "recent_logs": recent_logs,
+    }
 
 
 @router.patch("/devices/{device_id}")

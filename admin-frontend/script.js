@@ -512,6 +512,11 @@ function adminApp() {
     deviceModalOpen: false,
     savingDevice: false,
     deviceForm: { id: null, short_code: "", auto_name: "", note: "", color: "" },
+    // 设备画像抽屉（GET /api/admin/devices/{id}，摘要翻译 + 使用分布）
+    deviceDetailOpen: false,
+    deviceDetail: null,
+    deviceDetailLoading: false,
+    deviceDetailError: "",
     deviceColors: [
       "#c0392b", "#d35400", "#b7791f", "#1e8449", "#0e6e5f", "#148f77",
       "#2471a3", "#2e86c1", "#6c3483", "#884ea0", "#ad1457", "#ca6f1e",
@@ -1298,7 +1303,76 @@ function adminApp() {
       this.logDevice = d.short_code || String(d.id);
       this.logsPage = 1;
       this.tab = "logs";
+      this.closeDeviceDetail();
       this.openLogsTab();
+    },
+
+    /* ============ 设备画像 ============ */
+    async openDeviceDetail(d) {
+      if (!d || d.id == null) return;
+      this.deviceDetail = null;
+      this.deviceDetailError = "";
+      this.deviceDetailLoading = true;
+      this.deviceDetailOpen = true;
+      try {
+        this.deviceDetail = await this.api(`/api/admin/devices/${d.id}`);
+      } catch (e) {
+        this.deviceDetailError = e.message || "加载设备画像失败";
+        this.toast(this.deviceDetailError, "error");
+      } finally {
+        this.deviceDetailLoading = false;
+      }
+    },
+
+    closeDeviceDetail() {
+      this.deviceDetailOpen = false;
+      this.deviceDetail = null;
+      this.deviceDetailError = "";
+    },
+
+    openDeviceDetailFromLog() {
+      if (!this.logDetail || !this.logDetail.device) return;
+      const d = this.logDetail.device;
+      this.closeLogDetail();
+      this.openDeviceDetail(d);
+    },
+
+    async openLogFromDevice(logId) {
+      if (logId == null) return;
+      this.closeDeviceDetail();
+      await this.openLogDetail(logId);
+    },
+
+    openDeviceEditorFromDetail() {
+      if (!this.deviceDetail || !this.deviceDetail.device) return;
+      const d = this.deviceDetail.device;
+      this.closeDeviceDetail();
+      this.openDeviceEditor(d);
+    },
+
+    async copyDeviceProfileText() {
+      const det = this.deviceDetail;
+      if (!det || !det.device) return;
+      const d = det.device;
+      const st = det.stats || {};
+      const lines = [
+        `设备画像：${d.note || d.auto_name || d.short_code}（${d.short_code}）`,
+        `指纹：${d.fingerprint || "—"}`,
+        `首次出现：${this.fmtTime(d.first_seen_at)}`,
+        `末次活跃：${this.fmtTime(d.last_seen_at)} · 上报 ${d.seen_count ?? "—"} 次 · 活跃 ${st.active_days ?? "—"} 天`,
+        `请求：${st.total_logs ?? "—"} 次（成功 ${st.success ?? 0} / 停止 ${st.cancelled ?? 0} / 异常 ${st.error ?? 0}）`,
+        "",
+        ...((det.profile || []).map((p) => `${p.label}：${p.value}`)),
+        "",
+        `关联使用码（${(det.codes || []).length}）：${(det.codes || []).map((c) => `${c.code}×${c.count}`).join("、") || "—"}`,
+        `IP（${(det.ips || []).length}）：${(det.ips || []).map((x) => `${x.ip}×${x.count}`).join("、") || "—"}`,
+        `常用工具：${(det.tools || []).map((t) => `${t.tool_name || t.tool_id}×${t.count}`).join("、") || "—"}`,
+        `常用模型：${(det.models || []).map((m) => `${m.model}×${m.count}`).join("、") || "—"}`,
+      ];
+      if ((det.signals || []).length) {
+        lines.push("", "风险提示（仅供参考）：", ...det.signals.map((s) => `· ${s}`));
+      }
+      await this.copyText(lines.join("\n"));
     },
 
     async loadDevices() {
@@ -1362,6 +1436,9 @@ function adminApp() {
         }
         if (this.logDetail && this.logDetail.device && this.logDetail.device.id === f.id) {
           Object.assign(this.logDetail.device, updated);
+        }
+        if (this.deviceDetail && this.deviceDetail.device && this.deviceDetail.device.id === f.id) {
+          Object.assign(this.deviceDetail.device, updated);
         }
         this.deviceModalOpen = false;
         this.toast("设备已更新");

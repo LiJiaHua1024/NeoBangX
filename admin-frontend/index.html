@@ -26,7 +26,7 @@
 <body>
   <canvas id="bgfx" aria-hidden="true"></canvas>
 
-  <div x-data="adminApp()" x-init="init()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || codeNoteModalOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || codeNoteModalOpen)">
+  <div x-data="adminApp()" x-init="init()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen)">
     <!-- 侧栏 -->
     <aside class="sidebar glass">
       <div class="brand">
@@ -508,7 +508,7 @@
                 <td colspan="9" class="empty">暂无设备（有指纹上报的请求后自动出现）</td>
               </tr>
               <template x-for="d in devices" :key="d.id">
-                <tr>
+                <tr @click="openDeviceDetail(d)" style="cursor:pointer" :title="'查看 ' + (d.note || d.auto_name || d.short_code) + ' 的设备画像'">
                   <td data-label="设备" data-span="full">
                     <span class="fp-badge">
                       <span class="fp-dot" :style="d.color ? 'background:' + d.color : ''"></span>
@@ -526,8 +526,9 @@
                   <td class="mono dim" data-label="常用 IP" x-text="d.last_ip || '—'"></td>
                   <td class="dim mono" data-label="末次活跃" data-span="full" x-text="fmtTime(d.last_seen_at)"></td>
                   <td class="actions" data-label="操作" data-span="full">
-                    <button class="link-btn" @click="openDeviceEditor(d)">编辑</button>
-                    <button class="link-btn" @click="openDeviceLogs(d)">看日志</button>
+                    <button class="link-btn" @click.stop="openDeviceDetail(d)">详情</button>
+                    <button class="link-btn" @click.stop="openDeviceEditor(d)">编辑</button>
+                    <button class="link-btn" @click.stop="openDeviceLogs(d)">看日志</button>
                   </td>
                 </tr>
               </template>
@@ -1345,6 +1346,7 @@
                       <span class="dim mono" x-show="logDetail.device" x-text="` · ${logDetail.device.short_code}`"></span>
                     </span>
                     <span x-show="!logDetail.device">—</span>
+                    <button class="link-btn" x-show="logDetail.device" @click="openDeviceDetailFromLog()" style="margin-left:0.5rem">画像</button>
                   </span>
                 </div>
                 <div class="meta-item meta-item-wide" x-show="logDetail.device && logDetail.device.device_summary">
@@ -1388,6 +1390,220 @@
           <button class="btn-ghost" @click="filterByLogCode()" x-show="logDetail">查看该码的全部日志</button>
           <button class="btn-ghost" @click="filterByLogDevice()" x-show="logDetail && logDetail.device">查看该设备的全部日志</button>
           <button class="btn-ghost" @click="copyLogSummaryText()" x-show="logDetail">复制元数据</button>
+        </div>
+      </aside>
+    </div>
+
+    <!-- 设备画像抽屉：摘要翻译 + 使用分布 + 最近请求 -->
+    <div class="drawer-mask" x-show="deviceDetailOpen" x-transition.opacity @click.self="closeDeviceDetail()"
+         @keydown.window.escape="closeDeviceDetail()" x-cloak>
+      <aside class="drawer glass" x-show="deviceDetailOpen">
+        <div class="drawer-head">
+          <div>
+            <h3>设备画像 <span class="mono dim" x-text="deviceDetail ? deviceDetail.device.short_code : ''"></span></h3>
+            <p class="field-hint" x-show="deviceDetail" x-text="deviceDetail.device.note || deviceDetail.device.auto_name || ''"></p>
+          </div>
+          <button class="icon-x" @click="closeDeviceDetail()" title="关闭（Esc）">×</button>
+        </div>
+
+        <div class="drawer-body">
+          <template x-if="deviceDetail">
+            <div>
+              <!-- 基础标识 -->
+              <div class="meta-grid">
+                <div class="meta-item meta-item-wide">
+                  <span class="meta-label">设备</span>
+                  <span class="meta-value">
+                    <span class="fp-badge">
+                      <span class="fp-dot" :style="deviceDetail.device.color ? 'background:' + deviceDetail.device.color : ''"></span>
+                      <span x-text="deviceDetail.device.note || deviceDetail.device.auto_name || deviceDetail.device.short_code"></span>
+                    </span>
+                  </span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">短码</span>
+                  <span class="meta-value mono" x-text="deviceDetail.device.short_code"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">自动昵称</span>
+                  <span class="meta-value" x-text="deviceDetail.device.auto_name || '—'"></span>
+                </div>
+                <div class="meta-item meta-item-wide">
+                  <span class="meta-label">指纹全哈希</span>
+                  <span class="meta-value mono break-any" x-text="deviceDetail.device.fingerprint || '—'"></span>
+                  <button class="link-btn" x-show="deviceDetail.device.fingerprint" @click="copyText(deviceDetail.device.fingerprint)">复制</button>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">首次出现</span>
+                  <span class="meta-value mono" x-text="fmtTime(deviceDetail.device.first_seen_at)"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">末次活跃</span>
+                  <span class="meta-value mono" x-text="fmtTime(deviceDetail.device.last_seen_at)"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">上报次数</span>
+                  <span class="meta-value mono" x-text="deviceDetail.device.seen_count"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">活跃天数</span>
+                  <span class="meta-value mono" x-text="deviceDetail.stats.active_days != null ? deviceDetail.stats.active_days + ' 天' : '—'"></span>
+                </div>
+              </div>
+
+              <!-- 风险信号（仅供参考，不做拦截依据） -->
+              <div class="drawer-error" x-show="deviceDetail.signals && deviceDetail.signals.length" x-cloak>
+                <span class="meta-label">共享风险提示（仅供参考）</span>
+                <template x-for="s in deviceDetail.signals" :key="s">
+                  <div class="break-any" x-text="'· ' + s"></div>
+                </template>
+              </div>
+
+              <!-- 画像：摘要翻译 -->
+              <h4 class="card-title" style="margin:1.3rem 0 0.75rem">设备画像</h4>
+              <div class="meta-grid">
+                <template x-for="p in deviceDetail.profile" :key="p.key">
+                  <div class="meta-item" :class="{ 'meta-item-wide': p.key === 'screen' || p.key === 'browser' }">
+                    <span class="meta-label" x-text="p.label"></span>
+                    <span class="meta-value" x-text="p.value"></span>
+                    <div class="field-hint" x-text="p.hint"></div>
+                  </div>
+                </template>
+              </div>
+
+              <!-- 使用概况 -->
+              <h4 class="card-title" style="margin:1.3rem 0 0.75rem">使用概况</h4>
+              <div class="meta-grid">
+                <div class="meta-item">
+                  <span class="meta-label">请求次数</span>
+                  <span class="meta-value mono" x-text="fmtNum(deviceDetail.stats.total_logs)"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">成功 / 停止 / 异常</span>
+                  <span class="meta-value mono" x-text="`${deviceDetail.stats.success || 0} / ${deviceDetail.stats.cancelled || 0} / ${deviceDetail.stats.error || 0}`"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">总 Tokens</span>
+                  <span class="meta-value mono" x-text="fmtNum(deviceDetail.stats.total_tokens)"></span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">平均耗时</span>
+                  <span class="meta-value mono" x-text="fmtDuration(deviceDetail.stats.avg_duration_ms)"></span>
+                </div>
+              </div>
+
+              <!-- 分布 -->
+              <div class="payload-list">
+                <details class="payload-block" open x-show="deviceDetail.codes && deviceDetail.codes.length">
+                  <summary>
+                    <span class="payload-title" x-text="`关联使用码（${deviceDetail.codes.length}）`"></span>
+                    <span class="payload-size" x-show="deviceDetail.codes.length > 1">疑似共享</span>
+                  </summary>
+                  <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
+                    <template x-for="c in deviceDetail.codes" :key="c.code">
+                      <div style="display:flex; align-items:baseline; gap:0.5rem; flex-wrap:wrap">
+                        <span class="mono" style="font-weight:700" x-text="c.code"></span>
+                        <span class="dim" style="font-size:0.76rem" x-show="c.note" x-text="c.note"></span>
+                        <span class="dim mono" style="font-size:0.76rem; margin-left:auto" x-text="`×${c.count} · ${fmtTime(c.last_used_at)}`"></span>
+                      </div>
+                    </template>
+                  </div>
+                </details>
+
+                <details class="payload-block" x-show="deviceDetail.ips && deviceDetail.ips.length">
+                  <summary>
+                    <span class="payload-title" x-text="`IP（${deviceDetail.ips.length}）`"></span>
+                  </summary>
+                  <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
+                    <template x-for="x in deviceDetail.ips" :key="x.ip">
+                      <div style="display:flex; align-items:baseline; gap:0.5rem; flex-wrap:wrap">
+                        <span class="mono" x-text="x.ip"></span>
+                        <span class="dim mono" style="font-size:0.76rem; margin-left:auto" x-text="`×${x.count} · ${fmtTime(x.last_seen_at)}`"></span>
+                      </div>
+                    </template>
+                  </div>
+                </details>
+
+                <details class="payload-block" x-show="deviceDetail.user_agents && deviceDetail.user_agents.length">
+                  <summary>
+                    <span class="payload-title" x-text="`浏览器（${deviceDetail.user_agents.length} 种 UA）`"></span>
+                  </summary>
+                  <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.6rem">
+                    <template x-for="(u, idx) in deviceDetail.user_agents" :key="idx">
+                      <div>
+                        <div style="font-size:0.82rem; font-weight:650" x-text="`${u.browser} / ${u.os} / ${u.device_type}（×${u.count}）`"></div>
+                        <div class="mono dim break-any" style="font-size:0.7rem; margin-top:2px" x-text="u.user_agent"></div>
+                      </div>
+                    </template>
+                  </div>
+                </details>
+
+                <details class="payload-block" x-show="deviceDetail.tools && deviceDetail.tools.length">
+                  <summary>
+                    <span class="payload-title" x-text="`常用工具（Top ${deviceDetail.tools.length}）`"></span>
+                  </summary>
+                  <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
+                    <template x-for="t in deviceDetail.tools" :key="t.tool_id + t.tool_name">
+                      <div style="display:flex; align-items:baseline; gap:0.5rem">
+                        <span style="font-size:0.82rem" x-text="t.tool_name || t.tool_id || '—'"></span>
+                        <span class="dim mono" style="font-size:0.72rem" x-show="t.tool_id" x-text="`#${t.tool_id}`"></span>
+                        <span class="dim mono" style="font-size:0.76rem; margin-left:auto" x-text="`×${t.count}`"></span>
+                      </div>
+                    </template>
+                  </div>
+                </details>
+
+                <details class="payload-block" x-show="deviceDetail.models && deviceDetail.models.length">
+                  <summary>
+                    <span class="payload-title" x-text="`常用模型（Top ${deviceDetail.models.length}）`"></span>
+                  </summary>
+                  <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
+                    <template x-for="m in deviceDetail.models" :key="m.model">
+                      <div style="display:flex; align-items:baseline; gap:0.5rem">
+                        <span class="mono" style="font-size:0.78rem" x-text="m.model"></span>
+                        <span class="dim mono" style="font-size:0.76rem; margin-left:auto" x-text="`×${m.count}`"></span>
+                      </div>
+                    </template>
+                  </div>
+                </details>
+
+                <details class="payload-block" open x-show="deviceDetail.recent_logs && deviceDetail.recent_logs.length">
+                  <summary>
+                    <span class="payload-title" x-text="`最近请求（${deviceDetail.recent_logs.length}）`"></span>
+                  </summary>
+                  <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
+                    <template x-for="r in deviceDetail.recent_logs" :key="r.id">
+                      <div style="display:flex; align-items:baseline; gap:0.5rem; flex-wrap:wrap">
+                        <button class="link-btn mono" @click="openLogFromDevice(r.id)" x-text="'#' + r.id"></button>
+                        <span class="dim mono" style="font-size:0.72rem" x-text="fmtTime(r.created_at)"></span>
+                        <span style="font-size:0.78rem" x-text="r.tool_name || ('#' + r.tool_id)"></span>
+                        <span class="status-badge" :class="'st-' + (r.status || 'success')" style="font-size:0.66rem" x-text="logStatusLabel(r.status)"></span>
+                        <span class="dim mono" style="font-size:0.72rem; margin-left:auto" x-text="r.code"></span>
+                      </div>
+                    </template>
+                  </div>
+                </details>
+
+                <details class="payload-block">
+                  <summary>
+                    <span class="payload-title">原始摘要 JSON</span>
+                    <span class="payload-size mono" x-text="`${(deviceDetail.summary_raw || '').length} 字`"></span>
+                    <button class="link-btn" x-show="deviceDetail.summary_raw" @click.prevent.stop="copyText(deviceDetail.summary_raw)">复制</button>
+                  </summary>
+                  <pre class="payload-pre mono" x-text="deviceDetail.summary_raw || '（空）'"></pre>
+                </details>
+              </div>
+
+              <p class="field-hint" style="margin-top:0.9rem">指纹由客户端上报，可伪造；以上画像与风险提示仅供识别共享参考，不做拦截依据。</p>
+            </div>
+          </template>
+          <div class="drawer-loading" x-show="!deviceDetail" x-text="deviceDetailError || '加载中…'"></div>
+        </div>
+
+        <div class="drawer-foot" x-show="deviceDetail && !deviceDetailLoading">
+          <button class="btn-ghost" @click="openDeviceEditorFromDetail()">编辑备注</button>
+          <button class="btn-ghost" @click="openDeviceLogs(deviceDetail.device)">查看日志</button>
+          <button class="btn-ghost" @click="copyDeviceProfileText()">复制画像</button>
         </div>
       </aside>
     </div>

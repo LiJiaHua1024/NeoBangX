@@ -52,6 +52,7 @@
 | GET | `/api/admin/logs/summary` | 使用日志聚合统计（随筛选联动） |
 | GET | `/api/admin/logs/{id}` | 单条日志详情（含原始输入 / Prompt / 输出） |
 | GET | `/api/admin/devices` | 设备指纹聚合列表（短码/备注/昵称搜索） |
+| GET | `/api/admin/devices/{id}` | 单设备画像详情（摘要翻译 + 使用分布 + 最近请求） |
 | PATCH | `/api/admin/devices/{id}` | 更新设备备注（全局） |
 | POST | `/api/admin/logs/purge` | 手动清理过期日志 |
 | GET | `/api/admin/config` | 查看运行时配置 |
@@ -735,6 +736,35 @@ data: [DONE]
 `note` 不传则不变，空串则清空；`color` 不传则不变，空串则恢复自动颜色，
 `#rgb` / `#rrggbb` 设为自选颜色，其它格式返回 400。
 
+#### GET `/api/admin/devices/{device_id}`
+
+单设备画像详情：把 `device_summary` 翻译成管理员可读的画像，并附带使用分布。
+不存在返回 404。指纹可伪造，一切结论仅供参考，不做拦截依据。
+
+```json
+{
+  "device": { "id": 7, "short_code": "FP-AB12-CD34", "...": "同列表设备字段" },
+  "summary_parsed": { "os": "Win32", "lang": "zh-CN", "scr": "1920x1080", "dpr": "1", "cores": "8", "tz": "Asia/Shanghai" },
+  "summary_raw": "{\"os\":\"Win32\",...}",
+  "profile": [
+    { "key": "os", "label": "操作系统", "value": "Windows（Win32）", "hint": "来自 navigator.platform，仅供参考" },
+    { "key": "lang", "label": "语言", "value": "简体中文（中国大陆）（zh-CN）", "hint": "浏览器首选语言" },
+    { "key": "screen", "label": "屏幕", "value": "1920×1080（横屏，16:9…）", "hint": "scr 为 CSS 逻辑分辨率…" },
+    { "key": "cores", "label": "CPU", "value": "8 核（主流桌面 / 笔记本水平）", "hint": "逻辑核心（含超线程）…" },
+    { "key": "tz", "label": "时区", "value": "Asia/Shanghai（北京时间，UTC+8）", "hint": "可与 IP 归属地对照…" },
+    { "key": "browser", "label": "浏览器（最近一次）", "value": "Chrome 126 / Windows 10/11 64 位 / 桌面端", "hint": "由最近 UA 解析…" }
+  ],
+  "signals": ["多码：同一浏览器用过 2 个使用码（疑似共享 / 转借）"],
+  "stats": { "total_logs": 12, "success": 11, "cancelled": 0, "error": 1, "total_tokens": 1024, "avg_duration_ms": 8000, "first_log_at": "…", "last_log_at": "…", "active_days": 3 },
+  "codes": [{ "code": "NBXU-XXXX", "note": "备注", "count": 10, "last_used_at": "…" }],
+  "ips": [{ "ip": "192.168.1.66", "count": 10, "last_seen_at": "…" }],
+  "user_agents": [{ "user_agent": "Mozilla/5.0 …", "browser": "Chrome 126", "os": "Windows 10/11 64 位", "device_type": "桌面端", "count": 10, "last_seen_at": "…" }],
+  "tools": [{ "tool_id": "25", "tool_name": "自由对话", "count": 10 }],
+  "models": [{ "model": "…", "count": 10 }],
+  "recent_logs": [{ "id": 1, "created_at": "…", "code": "…", "tool_id": "25", "tool_name": "…", "model": "…", "status": "success", "ip": "…", "duration_ms": 100, "total_tokens": 10 }]
+}
+```
+
 ### 11.6 查看配置
 
 #### GET `/api/admin/config`
@@ -859,3 +889,4 @@ openrouter/deepseek/deepseek-chat
 | 1.3.0 | 2026-08-10 | 超标词排查改为机械实现（新增 `/api/chat/vocab/check`），替换独立为 `超标词替换.md` Prompt |
 | 1.4.0 | 2026-08-30 | 使用日志增强：新增状态 / 耗时 / token 用量 / IP / UA / 扣费次数字段，原始输入与输出按 `log_payload` 开关入库，新增 `/api/admin/logs/summary`、`/api/admin/logs/{id}`、`/api/admin/logs/purge` 与 `log_retention_days` 保留策略 |
 | 1.5.0 | 2026-09-04 | 设备指纹（仅用于识别共享，不做拦截依据）：前端经 ThumbmarkJS 上报 `X-Client-Fingerprint` / `X-Client-Fp-Summary`；日志新增 `device_id` / `fingerprint` 并挂载 `device`；日志筛选新增 `device` 参数、聚合新增 `distinct_devices`；新增 `/api/admin/devices` 列表与 `/api/admin/devices/{id}` 备注接口 |
+| 1.5.1 | 2026-09-04 | 设备画像详情：新增 `GET /api/admin/devices/{id}`（摘要翻译 profile + 风险 signals + 使用分布 codes/ips/user_agents/tools/models + 最近请求）；管理后台设备行可点开画像抽屉，日志详情可跳转画像 |
