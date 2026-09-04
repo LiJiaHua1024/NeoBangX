@@ -419,7 +419,7 @@
                   <td class="num mono" data-label="Tokens"
                       x-text="l.total_tokens != null ? (l.tokens_estimated ? '≈' : '') + fmtNum(l.total_tokens) : '—'"
                       :title="l.total_tokens != null ? `输入 ${l.prompt_tokens ?? '—'} / 输出 ${l.completion_tokens ?? '—'}${l.tokens_estimated ? '（估算值）' : ''}` : ''"></td>
-                  <td class="mono dim" data-label="IP" x-text="l.ip || '—'"></td>
+                  <td class="mono dim truncate-cell" data-label="IP" :title="l.ip || ''" x-text="l.ip || '—'"></td>
                   <td class="actions" data-label="操作">
                     <button class="link-btn" @click.stop="openLogDetail(l.id)">详情</button>
                   </td>
@@ -605,7 +605,7 @@
                     <div class="mono dim" style="font-size:0.68rem" x-text="p.id"></div>
                   </td>
                   <td class="dim mono truncate-cell" data-label="Base URL" data-span="full" :title="p.base_url" x-text="p.base_url || '（默认）'"></td>
-                  <td class="mono dim" data-label="API Key" :title="p.api_key" x-text="p.api_key || '—'"></td>
+                  <td class="mono dim truncate-cell" data-label="API Key" :title="p.api_key" x-text="p.api_key || '—'"></td>
                   <td data-label="启用">
                     <label class="switch switch-sm" :class="{ disabled: savingProvider }">
                       <input type="checkbox" :checked="p.enabled" @change="toggleProviderEnabled(p)">
@@ -1136,15 +1136,15 @@
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">工具 ID</span>
-                  <span class="meta-value mono" x-text="logDetail.tool_id || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail.tool_id || '—'"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">模型</span>
-                  <span class="meta-value mono" x-text="logDetail.model || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail.model || '—'"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">命中 Provider</span>
-                  <span class="meta-value mono" x-text="logDetail.provider_name ? `${logDetail.provider_name} (${logDetail.provider_id})` : (logDetail.provider_id || '—')"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail.provider_name ? `${logDetail.provider_name} (${logDetail.provider_id})` : (logDetail.provider_id || '—')"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">Fallback 尝试</span>
@@ -1152,11 +1152,11 @@
                 </div>
                 <div class="meta-item meta-item-wide">
                   <span class="meta-label">请求 ID</span>
-                  <span class="meta-value mono" x-text="logDetail.request_id || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail.request_id || '—'"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">IP</span>
-                  <span class="meta-value mono" x-text="logDetail.ip || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail.ip || '—'"></span>
                 </div>
                 <div class="meta-item meta-item-wide">
                   <span class="meta-label">客户端 UA</span>

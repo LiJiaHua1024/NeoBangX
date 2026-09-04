@@ -1003,8 +1003,22 @@ body.modal-open .panel-stack {
   display: block; margin-bottom: 0.15rem;
   font-size: 0.7rem; font-weight: 600; color: var(--faint);
 }
-.meta-value { font-size: 0.84rem; color: var(--text); overflow-wrap: break-word; }
+.meta-value { font-size: 0.84rem; color: var(--text); min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .break-any { overflow-wrap: anywhere; word-break: break-all; }
+
+/* 全局防溢出：IPv6 / UUID / Key / URL 这类无空格长串在任何容器里都不应撑破布局。
+   overflow-wrap:anywhere 在 white-space:nowrap 时不生效，所以桌面端的省略号截断不受影响；
+   窄屏卡片化（white-space:normal）时才允许在任意字符处换行。 */
+.data-table td,
+.meta-value,
+.drawer-error,
+.created-list li {
+  overflow-wrap: anywhere;
+}
+.data-table td > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 .drawer-error {
   margin-top: 1rem; padding: 0.7rem 0.85rem;
@@ -1139,8 +1153,16 @@ body.modal-open .panel-stack {
     display: flex; align-items: baseline; gap: 0.4rem;
     flex-wrap: wrap;
     min-width: 0;
+    max-width: 100%;
     padding: 0; border: 0;
     white-space: normal; text-align: left;
+    overflow-wrap: anywhere; word-break: break-word;
+  }
+  /* flex 子项默认 min-width:auto 会拒绝收缩，长串 span 先把卡片撑破；
+     这里强制允许收缩 + 任意处换行（IPv6 / UUID / Key / URL）。 */
+  .data-table td > span {
+    min-width: 0; max-width: 100%;
+    overflow-wrap: anywhere; word-break: break-word;
   }
   /* 徽标不能被压成竖排两行 */
   .data-table .badge, .data-table .status-badge { flex-shrink: 0; white-space: nowrap; }
