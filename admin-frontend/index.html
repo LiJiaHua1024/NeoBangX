@@ -7,8 +7,8 @@
   <meta name="description" content="NeoBangX 使用码与配置管理后台">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23b4502a'/%3E%3Cstop offset='1' stop-color='%238c3316'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=admin260831c">
-  <script defer src="/static/script.js?v=admin260831c"></script>
+  <link rel="stylesheet" href="/static/styles.css?v=admin260904c">
+  <script defer src="/static/script.js?v=admin260904c"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
   <!-- 首屏防闪烁 -->
   <script>
@@ -19,7 +19,7 @@
 <body>
   <div class="bg-orbs" aria-hidden="true"></div>
 
-  <div x-data="adminApp()" x-init="init()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen)">
+  <div x-data="adminApp()" x-init="init()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || codeNoteModalOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || codeNoteModalOpen)">
     <!-- 侧栏 -->
     <aside class="sidebar glass">
       <div class="brand">
@@ -39,6 +39,9 @@
         </button>
         <button class="nav-item" :class="{ on: tab === 'logs' }" @click="tab = 'logs'; openLogsTab()">
           <span>使用日志</span>
+        </button>
+        <button class="nav-item" :class="{ on: tab === 'devices' }" @click="tab = 'devices'; loadDevices()">
+          <span>设备指纹</span>
         </button>
         <button class="nav-item" :class="{ on: tab === 'logsettings' }" @click="tab = 'logsettings'; loadConfig()">
           <span>日志设置</span>
@@ -216,7 +219,7 @@
                   <td class="dim mono" data-label="创建时间" data-span="full" x-text="fmtTime(c.created_at)"></td>
                   <td class="actions" data-label="操作" data-span="full">
                     <button class="link-btn" @click="toggleCode(c)" x-text="c.is_enabled ? '禁用' : '启用'"></button>
-                    <button class="link-btn" @click="editNote(c)">备注</button>
+                    <button class="link-btn" @click="openCodeNoteEditor(c)">备注</button>
                     <button class="link-btn" x-show="c.code_type === 'user'" @click="openEditQuota(c)">改额度</button>
                     <button class="link-btn danger" @click="deleteCode(c)">删除</button>
                   </td>
@@ -241,7 +244,7 @@
             <div class="stat-label">请求次数</div>
             <div class="stat-value" x-text="fmtNum(logSummary.total)"></div>
             <div class="stat-foot"
-                 x-text="`成功 ${logSummary.success || 0} · 停止 ${logSummary.cancelled || 0} · 异常 ${logSummary.error || 0}`"></div>
+                 x-text="`成功 ${logSummary.success || 0} · 停止 ${logSummary.cancelled || 0} · 异常 ${logSummary.error || 0}${logSummary.distinct_devices ? ` · 设备 ${logSummary.distinct_devices}` : ''}`"></div>
           </div>
           <div class="stat-card glass">
             <div class="stat-label">总 Tokens</div>
@@ -266,6 +269,7 @@
         <div class="glass card toolbar" :class="{ 'picker-open': !!datePickerOpen }">
           <div class="filters log-filters">
             <input type="search" x-model="logCode" @keydown.enter="logsPage = 1; loadLogs()" placeholder="使用码">
+            <input type="search" x-model="logDevice" @keydown.enter="logsPage = 1; loadLogs()" placeholder="设备（短码/备注/昵称）">
             <input type="text" x-model="logToolId" @keydown.enter="logsPage = 1; loadLogs()" placeholder="工具 ID">
             <input type="text" x-model="logModel" @keydown.enter="logsPage = 1; loadLogs()" placeholder="模型（模糊）">
             <input type="text" x-model="logProvider" @keydown.enter="logsPage = 1; loadLogs()" placeholder="Provider（模糊）">
@@ -394,12 +398,13 @@
                 <th class="num">耗时</th>
                 <th class="num">Tokens</th>
                 <th>IP</th>
+                <th>设备</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
               <tr x-show="!logs.length">
-                <td colspan="10" class="empty">暂无日志</td>
+                <td colspan="11" class="empty">暂无日志</td>
               </tr>
               <template x-for="l in logs" :key="l.id">
                 <tr class="log-row" @click="openLogDetail(l.id)">
@@ -420,6 +425,13 @@
                       x-text="l.total_tokens != null ? (l.tokens_estimated ? '≈' : '') + fmtNum(l.total_tokens) : '—'"
                       :title="l.total_tokens != null ? `输入 ${l.prompt_tokens ?? '—'} / 输出 ${l.completion_tokens ?? '—'}${l.tokens_estimated ? '（估算值）' : ''}` : ''"></td>
                   <td class="mono dim truncate-cell" data-label="IP" :title="l.ip || ''" x-text="l.ip || '—'"></td>
+                  <td class="truncate-cell" data-label="设备" :title="deviceTitle(l)">
+                    <span class="fp-badge" x-show="l.device">
+                      <span class="fp-dot" :style="l.device && l.device.color ? 'background:' + l.device.color : ''"></span>
+                      <span x-text="deviceBadgeLabel(l)"></span>
+                    </span>
+                    <span class="dim" x-show="!l.device">—</span>
+                  </td>
                   <td class="actions" data-label="操作">
                     <button class="link-btn" @click.stop="openLogDetail(l.id)">详情</button>
                   </td>
@@ -454,6 +466,71 @@
         <p class="muted" x-show="payloadRecording === false" x-cloak>
           ⓘ 当前未开启「记录原始输入 / 输出」，日志详情只显示元数据。可到「日志设置」中开启。
         </p>
+      </section>
+
+      <!-- 设备指纹 -->
+      <section x-show="tab === 'devices'" class="panel-stack">
+        <div class="glass card toolbar">
+          <div class="filters">
+            <input type="search" x-model="deviceQuery" @keydown.enter="devicesPage = 1; loadDevices()" placeholder="搜索短码 / 备注 / 昵称">
+            <button class="btn-ghost" @click="devicesPage = 1; loadDevices()">查询</button>
+          </div>
+          <span class="dim" x-show="devicesTotal" x-text="`共 ${devicesTotal} 台设备`"></span>
+        </div>
+
+        <div class="glass card table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>设备</th>
+                <th>短码</th>
+                <th>备注</th>
+                <th>摘要</th>
+                <th class="num">次数</th>
+                <th class="num">关联码</th>
+                <th>常用 IP</th>
+                <th>末次活跃</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr x-show="!devices.length">
+                <td colspan="9" class="empty">暂无设备（有指纹上报的请求后自动出现）</td>
+              </tr>
+              <template x-for="d in devices" :key="d.id">
+                <tr>
+                  <td data-label="设备" data-span="full">
+                    <span class="fp-badge">
+                      <span class="fp-dot" :style="d.color ? 'background:' + d.color : ''"></span>
+                      <span x-text="d.note || d.auto_name || d.short_code"></span>
+                    </span>
+                  </td>
+                  <td class="mono dim" data-label="短码" x-text="d.short_code"></td>
+                  <td class="dim" data-label="备注" data-span="full" x-text="d.note || '—'"></td>
+                  <td class="dim mono truncate-cell" data-label="摘要" data-span="full" :title="d.device_summary || ''" x-text="d.device_summary || '—'"></td>
+                  <td class="num mono" data-label="次数" x-text="d.seen_count"></td>
+                  <td class="num mono" data-label="关联码">
+                    <span x-text="d.code_count"></span>
+                    <span class="badge badge-user" x-show="d.code_count > 1" title="同一设备用过多个使用码">多码</span>
+                  </td>
+                  <td class="mono dim" data-label="常用 IP" x-text="d.last_ip || '—'"></td>
+                  <td class="dim mono" data-label="末次活跃" data-span="full" x-text="fmtTime(d.last_seen_at)"></td>
+                  <td class="actions" data-label="操作" data-span="full">
+                    <button class="link-btn" @click="openDeviceEditor(d)">编辑</button>
+                    <button class="link-btn" @click="openDeviceLogs(d)">看日志</button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+
+          <div class="pager" x-show="devicesTotal > devicesPageSize">
+            <button class="btn-ghost" :disabled="devicesPage <= 1" @click="devicesPage--; loadDevices()">上一页</button>
+            <span class="dim" x-text="`第 ${devicesPage} 页 · 共 ${devicesTotal} 台`"></span>
+            <button class="btn-ghost" :disabled="devicesPage * devicesPageSize >= devicesTotal" @click="devicesPage++; loadDevices()">下一页</button>
+          </div>
+        </div>
+        <p class="muted">指纹仅用于识别共享，不做拦截依据；客户端可伪造，仅供参考。</p>
       </section>
 
       <!-- 配置 -->
@@ -817,6 +894,27 @@
       </div>
     </div>
 
+    <!-- 使用码备注弹窗（自研 UI，不调用浏览器原生弹窗） -->
+    <div class="modal-mask" x-show="codeNoteModalOpen" x-transition.opacity @click.self="codeNoteModalOpen = false">
+      <div class="modal glass modal-narrow" @click.stop>
+        <div class="modal-head">
+          <h3>备注使用码</h3>
+          <button class="icon-x" @click="codeNoteModalOpen = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="muted mb-3 mono" x-text="codeNoteForm.code"></p>
+          <label class="field">
+            <span>备注</span>
+            <input type="text" x-model="codeNoteForm.note" maxlength="255" placeholder="如：某校教研组；留空则清除备注">
+          </label>
+        </div>
+        <div class="modal-foot">
+          <button class="btn-ghost" @click="codeNoteModalOpen = false">取消</button>
+          <button class="btn-primary" @click="saveCodeNote()" :disabled="savingCodeNote">保存</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 模型添加/编辑弹窗 -->
     <div class="modal-mask" x-show="modelModalOpen" x-transition.opacity @click.self="modelModalOpen = false">
       <div class="modal glass modal-wide" @click.stop>
@@ -1162,6 +1260,21 @@
                   <span class="meta-label">客户端 UA</span>
                   <span class="meta-value mono break-any" x-text="logDetail.user_agent || '—'"></span>
                 </div>
+                <div class="meta-item meta-item-wide">
+                  <span class="meta-label">设备指纹</span>
+                  <span class="meta-value">
+                    <span class="fp-badge" x-show="logDetail.device">
+                      <span class="fp-dot" :style="logDetail.device && logDetail.device.color ? 'background:' + logDetail.device.color : ''"></span>
+                      <span x-text="logDetail.device ? (logDetail.device.note || logDetail.device.auto_name || logDetail.device.short_code) : ''"></span>
+                      <span class="dim mono" x-show="logDetail.device" x-text="` · ${logDetail.device.short_code}`"></span>
+                    </span>
+                    <span x-show="!logDetail.device">—</span>
+                  </span>
+                </div>
+                <div class="meta-item meta-item-wide" x-show="logDetail.device && logDetail.device.device_summary">
+                  <span class="meta-label">设备摘要</span>
+                  <span class="meta-value mono break-any" x-text="logDetail.device.device_summary || '—'"></span>
+                </div>
               </div>
 
               <div class="drawer-error" x-show="logDetail.error_message" x-cloak>
@@ -1197,9 +1310,53 @@
 
         <div class="drawer-foot" x-show="logDetail && !logDetailLoading">
           <button class="btn-ghost" @click="filterByLogCode()" x-show="logDetail">查看该码的全部日志</button>
+          <button class="btn-ghost" @click="filterByLogDevice()" x-show="logDetail && logDetail.device">查看该设备的全部日志</button>
           <button class="btn-ghost" @click="copyLogSummaryText()" x-show="logDetail">复制元数据</button>
         </div>
       </aside>
+    </div>
+
+    <!-- 编辑设备弹窗（备注 + 自选颜色，自研 UI，不调用浏览器原生弹窗） -->
+    <div class="modal-mask" x-show="deviceModalOpen" x-transition.opacity @click.self="deviceModalOpen = false">
+      <div class="modal glass modal-narrow" @click.stop>
+        <div class="modal-head">
+          <h3>编辑设备</h3>
+          <button class="icon-x" @click="deviceModalOpen = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="muted mb-3">
+            <span class="fp-badge">
+              <span class="fp-dot" :style="devicePreviewColor ? 'background:' + devicePreviewColor : ''"></span>
+              <span x-text="deviceForm.note.trim() || deviceForm.auto_name || deviceForm.short_code"></span>
+            </span>
+            <span class="mono dim ml-1.5" x-text="deviceForm.short_code"></span>
+          </p>
+          <label class="field mb-3">
+            <span>备注</span>
+            <input type="text" x-model="deviceForm.note" maxlength="255" placeholder="如：张老师电脑；留空则显示自动昵称">
+          </label>
+          <div class="field">
+            <span>徽章颜色</span>
+            <div class="swatch-grid">
+              <template x-for="c in deviceColors" :key="c">
+                <button class="swatch" :class="{ on: deviceForm.color === c }"
+                        :style="'background:' + c" :title="c"
+                        @click="deviceForm.color = c" :aria-label="'选择颜色 ' + c"></button>
+              </template>
+            </div>
+            <div class="swatch-custom-row">
+              <input type="text" class="mono" x-model="deviceForm.color" maxlength="7"
+                     placeholder="#rrggbb" spellcheck="false" autocomplete="off">
+              <button class="btn-ghost" @click="deviceForm.color = ''">恢复自动</button>
+            </div>
+            <span class="field-hint">点选色板或直接输入十六进制颜色；恢复自动则按指纹重新生成。</span>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn-ghost" @click="deviceModalOpen = false">取消</button>
+          <button class="btn-primary" @click="saveDeviceEditor()" :disabled="savingDevice">保存</button>
+        </div>
+      </div>
     </div>
 
     <!-- Toast -->

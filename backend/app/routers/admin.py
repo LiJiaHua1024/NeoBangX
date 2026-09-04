@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import secrets as secrets_lib
 from datetime import datetime, timezone
 
@@ -9,12 +10,12 @@ from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import case, desc, func
+from sqlalchemy import case, desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import LogPayload, UsageCode, UsageLog
+from app.models import Device, LogPayload, UsageCode, UsageLog
 from app.services.provider_config import (
     create_provider,
     delete_provider,
@@ -126,11 +127,16 @@ async def stats(db: Annotated[Session, Depends(get_db)]):
     )
     total_logs = db.query(func.count(UsageLog.id)).scalar() or 0
     total_used = db.query(func.coalesce(func.sum(UsageCode.used_count), 0)).scalar() or 0
+    try:
+        total_devices = db.query(func.count(Device.id)).scalar() or 0
+    except Exception:
+        total_devices = 0
     return {
         "total_codes": total_codes,
         "enabled_codes": enabled_codes,
         "total_logs": total_logs,
         "total_used": int(total_used),
+        "total_devices": int(total_devices),
         "security": {
             "jwt_secret_is_default": settings.jwt_secret_is_default,
         },
@@ -278,6 +284,8 @@ def _apply_log_filters(
     start: Optional[str],
     end: Optional[str],
     provider: str = "",
+    device: str = "",
+    db: Optional[Session] = None,
 ):
     if code:
         query = query.filter(UsageLog.code.ilike(f"%{code.strip()}%"))
@@ -298,7 +306,38 @@ def _apply_log_filters(
         query = query.filter(UsageLog.created_at >= _parse_log_date(start, "start"))
     if end:
         query = query.filter(UsageLog.created_at < _parse_log_date(end, "end"))
+    if device and device.strip():
+        query = _filter_by_device(query, device.strip(), db)
     return query
+
+
+def _filter_by_device(query, device: str, db: Optional[Session]):
+    """按设备筛选日志：短码 / 备注 / 自动昵称 / 全哈希模糊匹配。
+
+    纯数字视为 device_id 精确匹配；否则先在 devices 表中找候选 id，
+    再与 usage_logs.fingerprint 模糊匹配取并集。db 为空时退化为仅指纹匹配。
+    """
+    like = f"%{device}%"
+    device_ids: list[int] = []
+    if db is not None:
+        try:
+            q = db.query(Device.id).filter(
+                or_(
+                    Device.short_code.ilike(like),
+                    Device.note.ilike(like),
+                    Device.auto_name.ilike(like),
+                    Device.fingerprint.ilike(like),
+                )
+            )
+            device_ids = [row[0] for row in q.all()]
+        except Exception:
+            device_ids = []
+    conditions = [UsageLog.fingerprint.ilike(like)]
+    if device.strip().isdigit():
+        conditions.append(UsageLog.device_id == int(device.strip()))
+    if device_ids:
+        conditions.append(UsageLog.device_id.in_(device_ids))
+    return query.filter(or_(*conditions))
 
 
 # 注意：/logs/summary 与 /logs/purge 必须先于 /logs/{log_id} 声明，
@@ -313,10 +352,12 @@ async def logs_summary(
     start: Optional[str] = Query(None, description="起始时间（ISO，含）"),
     end: Optional[str] = Query(None, description="结束时间（ISO，不含）"),
     provider: str = Query("", description="按 Provider 筛选（模糊，匹配 id 或名称）"),
+    device: str = Query("", description="按设备筛选（短码/备注/昵称/指纹模糊，数字按设备 ID）"),
 ):
     query = _apply_log_filters(
         db.query(UsageLog),
         code=code, tool_id=tool_id, model=model, status=status, start=start, end=end, provider=provider,
+        device=device, db=db,
     )
     row = query.with_entities(
         func.count(UsageLog.id).label("total"),
@@ -325,6 +366,7 @@ async def logs_summary(
         func.coalesce(func.sum(case((status_matches("error"), 1), else_=0)), 0).label("error"),
         func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
         func.avg(UsageLog.duration_ms).label("avg_duration_ms"),
+        func.count(func.distinct(UsageLog.device_id)).label("distinct_devices"),
     ).one()
     return {
         "total": int(row.total),
@@ -333,6 +375,7 @@ async def logs_summary(
         "error": int(row.error),
         "total_tokens": int(row.total_tokens),
         "avg_duration_ms": round(float(row.avg_duration_ms)) if row.avg_duration_ms is not None else None,
+        "distinct_devices": int(row.distinct_devices or 0),
     }
 
 
@@ -362,12 +405,14 @@ async def list_logs(
     start: Optional[str] = Query(None, description="起始时间（ISO，含）"),
     end: Optional[str] = Query(None, description="结束时间（ISO，不含）"),
     provider: str = Query("", description="按 Provider 筛选（模糊）"),
+    device: str = Query("", description="按设备筛选（短码/备注/昵称/指纹模糊，数字按设备 ID）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
 ):
     query = _apply_log_filters(
         db.query(UsageLog),
         code=code, tool_id=tool_id, model=model, status=status, start=start, end=end, provider=provider,
+        device=device, db=db,
     )
 
     total = query.count()
@@ -377,12 +422,32 @@ async def list_logs(
         .limit(page_size)
         .all()
     )
+    items = [r.to_dict() for r in rows]
+    _attach_devices(db, items)
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [r.to_dict() for r in rows],
+        "items": items,
     }
+
+
+def _attach_devices(db: Session, items: list[dict]) -> None:
+    """为日志项批量挂载 device 摘要（避免 N+1，缺失则挂 None）。"""
+    ids = sorted({i.get("device_id") for i in items if i.get("device_id")})
+    if not ids:
+        for i in items:
+            i["device"] = None
+        return
+    try:
+        rows = db.query(Device).filter(Device.id.in_(ids)).all()
+    except Exception:
+        for i in items:
+            i["device"] = None
+        return
+    by_id = {d.id: d.to_dict() for d in rows}
+    for i in items:
+        i["device"] = by_id.get(i.get("device_id"))
 
 
 @router.get("/logs/{log_id}")
@@ -400,7 +465,124 @@ async def log_detail(
         if payload is not None
         else None
     )
+    device = db.get(Device, row.device_id) if row.device_id else None
+    data["device"] = device.to_dict() if device is not None else None
     return data
+
+
+class UpdateDeviceRequest(BaseModel):
+    note: Optional[str] = Field(None, max_length=255, description="设备备注（全局，不传则不变，空串则清空）")
+    color: Optional[str] = Field(
+        None, max_length=64,
+        description="徽章色点：不传则不变，空串则恢复自动颜色，#rgb/#rrggbb 则设为自选颜色",
+    )
+
+
+_DEVICE_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def _normalize_device_color(custom: str) -> str:
+    """#rgb 展开为 #rrggbb 并统一小写，前端各主题下展示一致。"""
+    custom = custom.strip().lower()
+    if len(custom) == 4:
+        custom = "#" + "".join(ch * 2 for ch in custom[1:])
+    return custom
+
+
+@router.get("/devices")
+async def list_devices(
+    db: Annotated[Session, Depends(get_db)],
+    q: str = Query("", description="按短码/备注/昵称/指纹搜索"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    query = db.query(Device)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                Device.short_code.ilike(like),
+                Device.note.ilike(like),
+                Device.auto_name.ilike(like),
+                Device.fingerprint.ilike(like),
+            )
+        )
+    total = query.count()
+    rows = (
+        query.order_by(desc(Device.last_seen_at))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    ids = [d.id for d in rows]
+    code_counts: dict[int, int] = {}
+    last_info: dict[int, dict] = {}
+    if ids:
+        try:
+            for device_id, count in (
+                db.query(UsageLog.device_id, func.count(func.distinct(UsageLog.code)))
+                .filter(UsageLog.device_id.in_(ids))
+                .group_by(UsageLog.device_id)
+                .all()
+            ):
+                code_counts[int(device_id)] = int(count)
+        except Exception:
+            code_counts = {}
+        try:
+            max_ids = dict(
+                db.query(UsageLog.device_id, func.max(UsageLog.id))
+                .filter(UsageLog.device_id.in_(ids))
+                .group_by(UsageLog.device_id)
+                .all()
+            )
+            if max_ids:
+                for log in (
+                    db.query(UsageLog).filter(UsageLog.id.in_(list(max_ids.values()))).all()
+                ):
+                    if log.device_id is not None:
+                        last_info[int(log.device_id)] = {
+                            "last_ip": log.ip or "",
+                            "last_code": log.code or "",
+                            "last_log_at": log.created_at.isoformat() if log.created_at else None,
+                        }
+        except Exception:
+            last_info = {}
+    items = []
+    for d in rows:
+        item = d.to_dict()
+        item["code_count"] = code_counts.get(d.id, 0)
+        info = last_info.get(d.id, {})
+        item["last_ip"] = info.get("last_ip", "")
+        item["last_code"] = info.get("last_code", "")
+        item["last_log_at"] = info.get("last_log_at")
+        items.append(item)
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+@router.patch("/devices/{device_id}")
+async def update_device(
+    device_id: int,
+    req: UpdateDeviceRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    row = db.get(Device, device_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="设备不存在")
+    if req.note is not None:
+        row.note = req.note.strip()[:255]
+    if req.color is not None:
+        custom = req.color.strip()
+        if not custom:
+            from app.services.device_fingerprint import color_for
+
+            row.color = color_for(row.fingerprint)
+        elif _DEVICE_COLOR_RE.fullmatch(custom):
+            row.color = _normalize_device_color(custom)
+        else:
+            raise HTTPException(status_code=400, detail="颜色格式不合法（仅支持 #rgb / #rrggbb）")
+    db.commit()
+    db.refresh(row)
+    return row.to_dict()
 
 
 @router.get("/config")

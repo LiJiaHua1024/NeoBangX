@@ -19,8 +19,11 @@ class FakeLLM:
 
 
 def _active_code():
+    # 瞬态码：仅供 get_current_code 覆盖使用，不落库。
+    # id 必须取自增序列够不到的大数，避免与其它测试落库的真实行串扰
+    #（曾用 id=11，新增测试文件后恰好撞上真实 code 行导致串库）。
     return UsageCode(
-        id=11,
+        id=999_111,
         code="NBXU-TEST-TEST-TEST",
         code_type="user",
         quota=3,

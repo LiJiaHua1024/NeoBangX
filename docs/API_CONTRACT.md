@@ -51,6 +51,8 @@
 | GET | `/api/admin/logs` | 使用日志列表（可按状态 / 模型 / 时间筛选） |
 | GET | `/api/admin/logs/summary` | 使用日志聚合统计（随筛选联动） |
 | GET | `/api/admin/logs/{id}` | 单条日志详情（含原始输入 / Prompt / 输出） |
+| GET | `/api/admin/devices` | 设备指纹聚合列表（短码/备注/昵称搜索） |
+| PATCH | `/api/admin/devices/{id}` | 更新设备备注（全局） |
 | POST | `/api/admin/logs/purge` | 手动清理过期日志 |
 | GET | `/api/admin/config` | 查看运行时配置 |
 | PUT | `/api/admin/config` | 更新运行时配置（含日志开关与保留天数） |
@@ -558,6 +560,7 @@ data: [DONE]
 | `status` | `success` \| `cancelled` \| `error`，非法值返回 400 |
 | `start` | 起始时间（含）。接受 `YYYY-MM-DD` 或 ISO 时间串；纯日期按零点处理，带时区的值统一换算为 UTC |
 | `end` | 结束时间（**不含**），格式同上 |
+| `device` | 按设备筛选：短码 / 备注 / 自动昵称 / 全哈希模糊匹配；纯数字按设备 ID 精确匹配 |
 | `page` | 页码，默认 1 |
 | `page_size` | 每页数量，默认 30，最大 100 |
 
@@ -602,6 +605,15 @@ data: [DONE]
 | `prompt_tokens` 等 | 供应商回传的 token 用量；未开启流式 usage 或供应商不支持时为 `null` |
 | `ip` | 客户端 IP，反代后按 `X-Real-IP` > `X-Forwarded-For` 首跳 > 直连地址取值 |
 | `units` | 本次请求**实际扣减**的额度次数。普通工具成功/停止 = 1；标题生成、错因分析、迁移单卡 = 0；迁移整批的最后一卡 = 整批次数 |
+| `device_id` / `fingerprint` | 浏览器设备指纹（仅用于识别共享，不做拦截依据）。`device_id` 为 `null` 表示当时无指纹（旧数据/上报失败）；`fingerprint` 为 ThumbmarkJS 全哈希冗余。列表与详情额外挂载 `device` 对象（含短码/昵称/备注/颜色/摘要），缺失时为 `null` |
+| `device` | 挂载的设备摘要：`{ id, fingerprint, short_code(FP-XXXX-XXXX), auto_name, display_name(备注优先), note, color, device_summary, first_seen_at, last_seen_at, seen_count }` |
+
+**设备指纹上报（仅用于识别共享，不做拦截依据）：** 前端经 ThumbmarkJS（MIT，自托管于
+`/static/vendor/`，加载失败时回退 jsDelivr CDN）计算后，在所有
+`/api/chat/*` 请求上附带 `X-Client-Fingerprint: <全哈希>` 与
+`X-Client-Fp-Summary: <精简设备 JSON>` 请求头。缺失/非法时按无指纹正常记录，
+绝不 400；指纹可伪造，仅做展示与共享识别，绝不做鉴权/额度/限流依据。
+`vocab/check` 为纯机械排查，不记日志，指纹头对其无影响。
 
 **旧数据兼容：** 本次增强之前写入的日志行没有这些新字段（`_add_missing_columns()`
 以可空、无默认值的方式 ALTER 加列，存量行读回为 `NULL`）。统一口径是：
@@ -629,11 +641,13 @@ data: [DONE]
   "cancelled": 6,
   "error": 10,
   "total_tokens": 411240,
-  "avg_duration_ms": 8421
+  "avg_duration_ms": 8421,
+  "distinct_devices": 3
 }
 ```
 
 `avg_duration_ms` 在没有可用耗时数据时为 `null`。
+`distinct_devices` 为当前筛选下出现过的不同设备数（按码过滤时可一眼看出该码被几台设备用过）。
 
 #### GET `/api/admin/logs/{log_id}`
 
@@ -643,6 +657,7 @@ data: [DONE]
 {
   "id": 1,
   "...": "同列表字段",
+  "device": { "id": 7, "short_code": "FP-AB12-CD34", "...": "同设备字段" },
   "payload": {
     "input": "用户原始输入",
     "prompt": "渲染后发给模型的完整 Prompt",
@@ -652,7 +667,7 @@ data: [DONE]
 ```
 
 `payload` 为 `null` 表示该次请求未开启原始数据记录（或记录功能当时处于关闭状态）。
-单段内容最长 60000 字，超出部分截断。
+单段内容最长 60000 字，超出部分截断。`device` 为 `null` 表示当时无指纹。
 
 #### POST `/api/admin/logs/purge`
 
@@ -673,6 +688,52 @@ data: [DONE]
 
 > 保留策略：`log_retention_days > 0` 时，主站进程在启动时清理一次，之后每 24 小时
 > 自动清理一次过期日志。
+>
+> 注意：清理只删 `usage_logs` / `log_payloads`，`devices` 表保留（设备备注不丢失）。
+
+#### GET `/api/admin/devices`
+
+按末次活跃倒序的设备聚合列表（备注按设备全局唯一）。
+
+**查询参数：** `q`（短码/备注/昵称/指纹模糊）、`page`（默认 1）、`page_size`（默认 20，最大 100）。
+
+```json
+{
+  "total": 3,
+  "page": 1,
+  "page_size": 20,
+  "items": [
+    {
+      "id": 7,
+      "fingerprint": "abc123…",
+      "short_code": "FP-AB12-CD34",
+      "auto_name": "青鹭·3F2A",
+      "display_name": "张老师电脑",
+      "note": "张老师电脑",
+      "color": "hsl(210 70% 45%)",
+      "device_summary": "{\"os\":\"Windows\",\"scr\":\"1920x1080\"}",
+      "first_seen_at": "2026-09-04T00:00:00+00:00",
+      "last_seen_at": "2026-09-04T01:00:00+00:00",
+      "seen_count": 12,
+      "code_count": 2,
+      "last_ip": "192.168.1.66",
+      "last_code": "NBXU-XXXX-XXXX-XXXX",
+      "last_log_at": "2026-09-04T01:00:00+00:00"
+    }
+  ]
+}
+```
+
+#### PATCH `/api/admin/devices/{device_id}`
+
+更新设备备注（全局，清空传空串则恢复显示自动昵称）。
+
+```json
+{ "note": "张老师电脑", "color": "#0e6e5f" }
+```
+
+`note` 不传则不变，空串则清空；`color` 不传则不变，空串则恢复自动颜色，
+`#rgb` / `#rrggbb` 设为自选颜色，其它格式返回 400。
 
 ### 11.6 查看配置
 
@@ -797,3 +858,4 @@ openrouter/deepseek/deepseek-chat
 | 1.2.0 | 2026-08-07 | 新增智能错题迁移错因分析、额度预检查与批量并行流式生成 |
 | 1.3.0 | 2026-08-10 | 超标词排查改为机械实现（新增 `/api/chat/vocab/check`），替换独立为 `超标词替换.md` Prompt |
 | 1.4.0 | 2026-08-30 | 使用日志增强：新增状态 / 耗时 / token 用量 / IP / UA / 扣费次数字段，原始输入与输出按 `log_payload` 开关入库，新增 `/api/admin/logs/summary`、`/api/admin/logs/{id}`、`/api/admin/logs/purge` 与 `log_retention_days` 保留策略 |
+| 1.5.0 | 2026-09-04 | 设备指纹（仅用于识别共享，不做拦截依据）：前端经 ThumbmarkJS 上报 `X-Client-Fingerprint` / `X-Client-Fp-Summary`；日志新增 `device_id` / `fingerprint` 并挂载 `device`；日志筛选新增 `device` 参数、聚合新增 `distinct_devices`；新增 `/api/admin/devices` 列表与 `/api/admin/devices/{id}` 备注接口 |

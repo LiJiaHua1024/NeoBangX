@@ -67,6 +67,7 @@ function adminApp() {
     logCode: "",
     logToolId: "",
     logModel: "",
+    logDevice: "",
     logStart: "",
     logEnd: "",
     datePickerOpen: null,
@@ -138,6 +139,21 @@ function adminApp() {
     providerDragOverIndex: null,
     // 日志 Provider 筛选
     logProvider: "",
+    // 设备指纹
+    devices: [],
+    devicesTotal: 0,
+    devicesPage: 1,
+    devicesPageSize: 20,
+    deviceQuery: "",
+    // 设备编辑弹窗（备注 + 自选颜色）
+    deviceModalOpen: false,
+    savingDevice: false,
+    deviceForm: { id: null, short_code: "", auto_name: "", note: "", color: "" },
+    deviceColors: [
+      "#c0392b", "#d35400", "#b7791f", "#1e8449", "#0e6e5f", "#148f77",
+      "#2471a3", "#2e86c1", "#6c3483", "#884ea0", "#ad1457", "#ca6f1e",
+      "#5d6d7e", "#2c3e50",
+    ],
     // 模型添加/编辑弹窗
     modelModalOpen: false,
     modelModalIndex: null,
@@ -165,6 +181,10 @@ function adminApp() {
     createdItems: [],
     quotaModalOpen: false,
     savingQuota: false,
+    // 使用码备注弹窗
+    codeNoteModalOpen: false,
+    savingCodeNote: false,
+    codeNoteForm: { id: null, code: "", note: "" },
     editingQuotaId: null,
     editingQuotaCode: "",
     editingQuotaUsed: 0,
@@ -178,6 +198,7 @@ function adminApp() {
           dashboard: "概览",
           codes: "使用码管理",
           logs: "使用日志",
+          devices: "设备指纹",
           logsettings: "日志设置",
           config: "API 配置",
         }[this.tab] || "管理后台"
@@ -189,6 +210,7 @@ function adminApp() {
           dashboard: "查看整体使用情况与快捷入口",
           codes: "生成、启用/禁用/删除使用码，查看额度",
           logs: "查看每次工具调用的详细记录",
+          devices: "按浏览器指纹聚合设备，备注区分不同用户",
           logsettings: "配置原始数据记录开关与日志保留策略",
           config: "管理 LLM 密钥、模型与调用参数",
         }[this.tab] || ""
@@ -212,6 +234,7 @@ function adminApp() {
         this.logToolId.trim() ||
         this.logModel.trim() ||
         this.logProvider.trim() ||
+        (this.logDevice || "").trim() ||
         this.logsStatusFilter ||
         this.logStart ||
         this.logEnd
@@ -444,18 +467,29 @@ function adminApp() {
       }
     },
 
-    async editNote(c) {
-      const note = prompt("备注", c.note || "");
-      if (note === null) return;
+    openCodeNoteEditor(c) {
+      if (!c) return;
+      this.codeNoteForm = { id: c.id, code: c.code || "", note: c.note || "" };
+      this.savingCodeNote = false;
+      this.codeNoteModalOpen = true;
+    },
+
+    async saveCodeNote() {
+      const f = this.codeNoteForm;
+      if (!f.id) return;
+      this.savingCodeNote = true;
       try {
-        await this.api(`/api/admin/codes/${c.id}`, {
+        await this.api(`/api/admin/codes/${f.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ note }),
+          body: JSON.stringify({ note: (f.note || "").trim() }),
         });
+        this.codeNoteModalOpen = false;
         this.toast("备注已更新");
         await this.loadCodes();
       } catch (e) {
         this.toast(e.message || "更新失败", "error");
+      } finally {
+        this.savingCodeNote = false;
       }
     },
 
@@ -693,6 +727,7 @@ function adminApp() {
       if (this.logToolId.trim()) params.set("tool_id", this.logToolId.trim());
       if (this.logModel.trim()) params.set("model", this.logModel.trim());
       if (this.logProvider.trim()) params.set("provider", this.logProvider.trim());
+      if ((this.logDevice || "").trim()) params.set("device", this.logDevice.trim());
       if (this.logsStatusFilter) params.set("status", this.logsStatusFilter);
       const start = this.logStart ? new Date(`${this.logStart}T00:00:00`) : null;
       if (start && !Number.isNaN(start.getTime())) params.set("start", start.toISOString());
@@ -754,6 +789,7 @@ function adminApp() {
       this.logToolId = "";
       this.logModel = "";
       this.logProvider = "";
+      this.logDevice = "";
       this.logsStatusFilter = "";
       this.logStart = "";
       this.logEnd = "";
@@ -790,6 +826,113 @@ function adminApp() {
       this.loadLogs();
     },
 
+    /* ============ 设备指纹 ============ */
+    deviceBadgeLabel(l) {
+      if (!l) return "—";
+      const d = l.device;
+      if (d) return d.note || d.auto_name || d.short_code || "—";
+      if (l.fingerprint) return `${String(l.fingerprint).slice(0, 8)}…`;
+      return "—";
+    },
+
+    deviceTitle(l) {
+      if (!l) return "";
+      const d = l.device;
+      if (d) {
+        return `${d.note || d.auto_name || d.short_code} · ${d.short_code}${d.device_summary ? ` · ${d.device_summary}` : ""}`;
+      }
+      return l.fingerprint || "";
+    },
+
+    filterByLogDevice() {
+      if (!this.logDetail || !this.logDetail.device) return;
+      const d = this.logDetail.device;
+      this.logDevice = d.short_code || String(d.id);
+      this.logsPage = 1;
+      this.closeLogDetail();
+      this.tab = "logs";
+      this.loadLogs();
+    },
+
+    openDeviceLogs(d) {
+      if (!d) return;
+      this.logDevice = d.short_code || String(d.id);
+      this.logsPage = 1;
+      this.tab = "logs";
+      this.openLogsTab();
+    },
+
+    async loadDevices() {
+      try {
+        const params = new URLSearchParams({
+          page: String(this.devicesPage),
+          page_size: String(this.devicesPageSize),
+        });
+        if ((this.deviceQuery || "").trim()) params.set("q", this.deviceQuery.trim());
+        const data = await this.api(`/api/admin/devices?${params}`);
+        this.devices = data.items || [];
+        this.devicesTotal = data.total || 0;
+        const maxPage = Math.max(1, Math.ceil(this.devicesTotal / this.devicesPageSize));
+        if (this.devicesPage > maxPage) {
+          this.devicesPage = maxPage;
+          return this.loadDevices();
+        }
+      } catch (e) {
+        this.toast(e.message || "加载设备失败", "error");
+      }
+    },
+
+    openDeviceEditor(d) {
+      if (!d) return;
+      this.deviceForm = {
+        id: d.id,
+        short_code: d.short_code || "",
+        auto_name: d.auto_name || "",
+        note: d.note || "",
+        color: d.color || "",
+      };
+      this.savingDevice = false;
+      this.deviceModalOpen = true;
+    },
+
+    get devicePreviewColor() {
+      const c = (this.deviceForm.color || "").trim();
+      if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c)) return c;
+      return "";
+    },
+
+    async saveDeviceEditor() {
+      const f = this.deviceForm;
+      if (!f.id) return;
+      const color = (f.color || "").trim();
+      if (color && !/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) {
+        this.toast("颜色格式不合法，请点选色板或输入 #rrggbb", "error");
+        return;
+      }
+      this.savingDevice = true;
+      try {
+        const updated = await this.api(`/api/admin/devices/${f.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ note: (f.note || "").trim(), color }),
+        });
+        const target = this.devices.find((x) => x.id === f.id);
+        if (target) Object.assign(target, updated);
+        // 日志列表与详情中同设备的徽章同步刷新
+        for (const l of this.logs) {
+          if (l.device && l.device.id === f.id) Object.assign(l.device, updated);
+        }
+        if (this.logDetail && this.logDetail.device && this.logDetail.device.id === f.id) {
+          Object.assign(this.logDetail.device, updated);
+        }
+        this.deviceModalOpen = false;
+        this.toast("设备已更新");
+      } catch (e) {
+        this.toast(e.message || "更新失败", "error");
+      } finally {
+        this.savingDevice = false;
+      }
+    },
+
     async copyLogSummaryText() {
       const l = this.logDetail;
       if (!l) return;
@@ -806,6 +949,7 @@ function adminApp() {
         `扣费：${this.fmtUnits(l.units)}`,
         `IP：${l.ip || "—"}`,
         `UA：${l.user_agent || "—"}`,
+        `设备：${l.device ? `${l.device.note || l.device.auto_name || l.device.short_code}（${l.device.short_code}）` : "—"}`,
         `请求 ID：${l.request_id || "—"}`,
         l.error_message ? `错误信息：${l.error_message}` : "",
       ]

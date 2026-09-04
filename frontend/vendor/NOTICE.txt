@@ -1,0 +1,10 @@
+# vendor 说明
+
+`thumbmark.umd.js` 为 ThumbmarkJS 浏览器指纹库的 UMD 构建（MIT 协议，可商用），
+来源：https://cdn.jsdelivr.net/npm/@thumbmarkjs/thumbmarkjs/dist/thumbmark.umd.js
+拉取日期：2026-09-04（约 30KB）。
+
+自托管原因：学校/内网环境可能屏蔽 jsDelivr 等公共 CDN，自托管保证指纹采集可用；
+前端加载失败时 `script.js` 中的 `nbxFpInit()` 仍会静默降级，绝不阻塞业务。
+
+升级方式：重新下载上述地址覆盖本文件即可（对外 API：`new ThumbmarkJS.Thumbmark().get()`）。

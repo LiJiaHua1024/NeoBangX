@@ -32,6 +32,7 @@ from app.services.request_log import (
     STATUS_ERROR,
     STATUS_SUCCESS,
     get_client_info,
+    get_fingerprint_info,
     record_usage_log,
 )
 from app.services.runtime_config import find_model_entry, resolve_llm_settings
@@ -219,10 +220,13 @@ def _log_llm_call(
     provider_id: str = "",
     provider_name: str = "",
     fallback_attempts: int | None = None,
+    fingerprint: str = "",
+    device_summary: str = "",
 ) -> None:
     """统一落一条 LLM 调用日志。同步函数，供 asyncio.to_thread 调用。
 
     元数据始终记录；原始输入 / 渲染 Prompt / 输出仅在 log_payload 开启时落库。
+    指纹仅用于识别共享，不做拦截依据：缺失/非法时按无指纹记录，绝不影响主请求。
     """
     record_usage_log(
         code_id=code.id,
@@ -245,6 +249,8 @@ def _log_llm_call(
         provider_id=provider_id or "",
         provider_name=provider_name or "",
         fallback_attempts=fallback_attempts,
+        fingerprint=fingerprint or "",
+        device_summary=device_summary or "",
     )
 
 
@@ -486,6 +492,7 @@ async def analyze_migration_causes(
     llm = _build_llm(cfg, model=req.model, chores=False)
     model_used = req.model or cfg["llm_model"]
     client_ip, user_agent = get_client_info(request)
+    fp_hash, fp_summary = get_fingerprint_info(request)
     started = monotonic()
     usage: dict = {}
     log_payload_enabled = bool(cfg.get("log_payload"))
@@ -519,6 +526,8 @@ async def analyze_migration_causes(
             provider_id=prov_id,
             provider_name=prov_name,
             fallback_attempts=attempts,
+            fingerprint=fp_hash,
+            device_summary=fp_summary,
         )
 
     try:
@@ -644,6 +653,7 @@ async def chat_stream(
     visual_response_format = None
     # 日志元数据：客户端信息与原始数据开关（开关随请求读取，改配置即时生效）
     client_ip, user_agent = get_client_info(request)
+    fp_hash, fp_summary = get_fingerprint_info(request)
     log_payload_enabled = bool(cfg.get("log_payload"))
 
     async def event_generator():
@@ -784,6 +794,8 @@ async def chat_stream(
                 provider_id=prov_id,
                 provider_name=prov_name,
                 fallback_attempts=attempts,
+                fingerprint=fp_hash,
+                device_summary=fp_summary,
             )
 
     return EventSourceResponse(
@@ -859,6 +871,7 @@ async def generate_title(
     llm = _build_llm(cfg, model=req.model, chores=True)
     model_used = req.model or cfg["chores_model"]
     client_ip, user_agent = get_client_info(request)
+    fp_hash, fp_summary = get_fingerprint_info(request)
     started = monotonic()
     usage: dict = {}
     log_payload_enabled = bool(cfg.get("log_payload"))
@@ -892,6 +905,8 @@ async def generate_title(
             provider_id=prov_id,
             provider_name=prov_name,
             fallback_attempts=attempts,
+            fingerprint=fp_hash,
+            device_summary=fp_summary,
         )
 
     try:

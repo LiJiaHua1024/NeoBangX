@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -17,7 +18,14 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import LogPayload, UsageLog
+from app.models import Device, LogPayload, UsageLog
+from app.services.device_fingerprint import (
+    auto_name_for,
+    clip_summary,
+    color_for,
+    normalize_fingerprint,
+    short_code_for,
+)
 from app.services.runtime_config import get_config_value
 
 logger = logging.getLogger(__name__)
@@ -76,6 +84,73 @@ def get_client_info(request: Request | None) -> tuple[str, str]:
     return ip[:64], ua[:255]
 
 
+def get_fingerprint_info(request: Request | None) -> tuple[str, str]:
+    """提取客户端上报的浏览器指纹（仅用于识别共享，不做拦截依据）。
+
+    前端经 ThumbmarkJS 计算后经请求头上报：
+    `X-Client-Fingerprint` 为全哈希，`X-Client-Fp-Summary` 为精简设备摘要。
+    非法/缺失一律返回空串，调用方直接视为无指纹，绝不报错。
+    """
+    if request is None:
+        return "", ""
+    try:
+        raw_fp = request.headers.get("x-client-fingerprint", "")
+        raw_summary = request.headers.get("x-client-fp-summary", "")
+    except Exception:
+        return "", ""
+    return normalize_fingerprint(raw_fp), clip_summary(raw_summary)
+
+
+def get_or_create_device(
+    db: Session,
+    fingerprint: str,
+    summary: str = "",
+) -> Device | None:
+    """按指纹查找或创建设备行，并刷新活跃统计。
+
+    无指纹返回 None。短码理论上可能碰撞（不同指纹同短码），此时在尾部
+    追加 2 位哈希区分，保证唯一索引不炸。任何异常返回 None，不影响主流程。
+    """
+    fp = normalize_fingerprint(fingerprint)
+    if not fp:
+        return None
+    try:
+        device = db.query(Device).filter(Device.fingerprint == fp).first()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if device is not None:
+            device.last_seen_at = now
+            device.seen_count = (device.seen_count or 0) + 1
+            if summary and summary != (device.device_summary or ""):
+                device.device_summary = summary[:1000]
+            db.flush()
+            return device
+        short_code = short_code_for(fp)
+        if db.query(Device).filter(Device.short_code == short_code).first() is not None:
+            extra = hashlib.sha256(f"FINGERPRINT-SHORT-RETRY:{fp}".encode()).hexdigest()[:2].upper()
+            short_code = f"{short_code}-{extra}"
+        device = Device(
+            fingerprint=fp,
+            short_code=short_code,
+            auto_name=auto_name_for(fp),
+            note="",
+            color=color_for(fp),
+            device_summary=(summary or "")[:1000],
+            first_seen_at=now,
+            last_seen_at=now,
+            seen_count=1,
+        )
+        db.add(device)
+        db.flush()
+        return device
+    except Exception:
+        logger.exception("Failed to get_or_create device")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
+
 def record_usage_log(
     *,
     code_id: int,
@@ -98,6 +173,8 @@ def record_usage_log(
     provider_id: str = "",
     provider_name: str = "",
     fallback_attempts: int | None = None,
+    fingerprint: str = "",
+    device_summary: str = "",
 ) -> int | None:
     """写一条使用日志（含开关控制的原始数据）。
 
@@ -108,6 +185,8 @@ def record_usage_log(
         usage = usage or {}
         db = SessionLocal()
         try:
+            fp = normalize_fingerprint(fingerprint)
+            device = get_or_create_device(db, fp, device_summary) if fp else None
             log = UsageLog(
                 code_id=code_id,
                 code=code or "",
@@ -128,6 +207,8 @@ def record_usage_log(
                 provider_id=(provider_id or "")[:64],
                 provider_name=(provider_name or "")[:128],
                 fallback_attempts=fallback_attempts,
+                device_id=device.id if device is not None else None,
+                fingerprint=fp,
             )
             db.add(log)
             db.flush()  # 先取 log.id 再挂 1:1 原始数据

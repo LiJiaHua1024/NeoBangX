@@ -167,6 +167,109 @@ const HISTORY_LIMIT = 100;
 // 迁移收藏单条体积可观（内嵌全部卡片输出），同样需要上限防止 localStorage 溢出
 const FAVORITES_LIMIT = 100;
 
+/* ---------------- 浏览器指纹（ThumbmarkJS，仅用于识别共享，不做拦截） ----------------
+   UMD 经 CDN 引入（frontend/index.html），计算失败/被拦截时静默降级为空，
+   绝不阻塞业务。结果缓存到 localStorage，请求时经请求头上报。 */
+const NBX_FP_KEY = "nbx_fp";
+const nbxFp = { hash: "", summary: "", ready: false };
+try {
+  const cached = JSON.parse(localStorage.getItem(NBX_FP_KEY) || "null");
+  if (cached && typeof cached.hash === "string" && cached.hash) {
+    nbxFp.hash = cached.hash.slice(0, 128);
+    nbxFp.summary = String(cached.summary || "").slice(0, 1000);
+  }
+} catch { /* 缓存损坏时忽略 */ }
+function nbxFpHeaders() {
+  try {
+    if (!nbxFp.hash) return {};
+    const h = { "X-Client-Fingerprint": String(nbxFp.hash).replace(/[^\x20-\x7E]/g, "") };
+    if (nbxFp.summary) {
+      const s = String(nbxFp.summary).replace(/[^\x20-\x7E]/g, "");
+      if (s) h["X-Client-Fp-Summary"] = s;
+    }
+    return h;
+  } catch {
+    return {};
+  }
+}
+function nbxFpSummarize(components) {
+  // 精简设备摘要：优先用 ThumbmarkJS components，缺字段时用 navigator 兜底
+  try {
+    const c = components || {};
+    const plat = (c.system && (c.system.platform || c.system.os)) || c.platform
+      || (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+    const lang = (c.locales && (c.locales.language || c.locales[0])) || navigator.language || "";
+    const w = (c.screen && (c.screen.width || c.screen.w)) || window.screen.width || "";
+    const h = (c.screen && (c.screen.height || c.screen.h)) || window.screen.height || "";
+    const dpr = window.devicePixelRatio || 1;
+    const cores = navigator.hardwareConcurrency || "";
+    const tz = (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone || "";
+    const raw = JSON.stringify({ os: String(plat).slice(0, 64), lang: String(lang).slice(0, 16), scr: `${w}x${h}`, dpr, cores, tz: String(tz).slice(0, 64) });
+    // 请求头只允许 Latin1，非 ASCII 会导致 fetch 抛错，直接剥离
+    return raw.replace(/[^\x20-\x7E]/g, "");
+  } catch {
+    return "";
+  }
+}
+async function nbxFpInit() {
+  if (nbxFp.ready) return;
+  nbxFp.ready = true;
+  const collect = async () => {
+    try {
+      const NS = window.ThumbmarkJS;
+      if (!NS || !NS.Thumbmark) {
+        nbxFp.warn = "指纹库未加载（文件缺失或被拦截）";
+        return false;
+      }
+      const t = new NS.Thumbmark();
+      const r = await t.get();
+      const hash = r && typeof r.thumbmark === "string" ? r.thumbmark.trim() : "";
+      if (!hash || !/^[A-Za-z0-9_\-:+=/.]+$/.test(hash) || hash.length > 128) {
+        nbxFp.warn = "指纹计算为空（可能被隐私类插件干扰）";
+        return false;
+      }
+      nbxFp.hash = hash;
+      nbxFp.summary = (nbxFpSummarize(r.components) || "").slice(0, 1000);
+      try {
+        localStorage.setItem(NBX_FP_KEY, JSON.stringify({ hash: nbxFp.hash, summary: nbxFp.summary }));
+      } catch { /* 配额不足时忽略 */ }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // 自托管加载失败时（如旧部署缺 vendor 文件），动态回退到 CDN 一次
+  const loadCdnFallback = () => new Promise((resolve) => {
+    try {
+      if (window.ThumbmarkJS && window.ThumbmarkJS.Thumbmark) return resolve(true);
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/@thumbmarkjs/thumbmarkjs/dist/thumbmark.umd.js";
+      s.async = true;
+      const done = (ok) => resolve(!!ok);
+      s.onload = () => done(true);
+      s.onerror = () => done(false);
+      setTimeout(() => done(!!(window.ThumbmarkJS && window.ThumbmarkJS.Thumbmark)), 6000);
+      document.head.appendChild(s);
+    } catch {
+      resolve(false);
+    }
+  });
+  if (await collect()) return;
+  // UMD 可能比本脚本晚到，延迟重试；仍缺失则走 CDN 兜底（仍失败则保持降级）
+  setTimeout(async () => {
+    if (nbxFp.hash) return;
+    if (await collect()) return;
+    if (window.ThumbmarkJS && window.ThumbmarkJS.Thumbmark) return;
+    nbxFp.warn = "指纹库未加载，正在尝试 CDN 兜底";
+    await loadCdnFallback();
+    if (!nbxFp.hash) await collect();
+    if (!nbxFp.hash && !nbxFp.warn) nbxFp.warn = "指纹库加载失败（可能被广告拦截插件拦截）";
+  }, 2500);
+}
+try { nbxFpInit(); } catch { /* 指纹初始化绝不抛错 */ }
+// 诊断钩子：控制台执行 __nbxFp.hash 有值即采集成功，为空则看 __nbxFp.warn
+try { window.__nbxFp = nbxFp; } catch { /* 忽略 */ }
+
 const THEMES = [
   { id: "paper", name: "宣纸", dot: "linear-gradient(135deg,#b4502a,#8c3316)" },
   { id: "celadon", name: "青瓷", dot: "linear-gradient(135deg,#0e6e5f,#0a5245)" },
@@ -2157,8 +2260,9 @@ function nbx() {
       }
     },
     authHeaders() {
-      if (!this.auth.token) return {};
-      return { "Authorization": "Bearer " + this.auth.token };
+      const h = {};
+      if (this.auth.token) h["Authorization"] = "Bearer " + this.auth.token;
+      return { ...h, ...nbxFpHeaders() };
     },
     async activateCode() {
       if (this.codeActivating) return; // 回车键不受按钮 disabled 拦截，需防重入

@@ -87,6 +87,47 @@ class UsageCode(Base):
         return data
 
 
+class Device(Base):
+    """浏览器设备指纹（仅用于识别共享，不做拦截依据）。
+
+    一行 = 一个真实浏览器。备注按设备全局唯一，同一设备换码显示同一备注。
+    短码 / 自动昵称 / 颜色均由后端按指纹确定性派生，保证各处展示一致。
+    """
+
+    __tablename__ = "devices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fingerprint: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    short_code: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
+    auto_name: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    note: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    color: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    device_summary: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(timezone=True), default=utcnow)
+    seen_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    @property
+    def display_name(self) -> str:
+        """备注优先于自动昵称展示。"""
+        return self.note or self.auto_name or self.short_code
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "fingerprint": self.fingerprint or "",
+            "short_code": self.short_code or "",
+            "auto_name": self.auto_name or "",
+            "display_name": self.display_name,
+            "note": self.note or "",
+            "color": self.color or "",
+            "device_summary": self.device_summary or "",
+            "first_seen_at": self.first_seen_at.isoformat() if self.first_seen_at else None,
+            "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
+            "seen_count": self.seen_count or 0,
+        }
+
+
 class UsageLog(Base):
     """使用日志。
 
@@ -126,6 +167,10 @@ class UsageLog(Base):
     provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     provider_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     fallback_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 浏览器设备指纹：仅用于识别共享，不做拦截依据。device_id 为 NULL 表示当时无指纹（旧数据/上报失败），
+    # fingerprint 冗余一份全哈希，防 devices 行被清理后日志仍可追溯。
+    device_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, default="")
 
     def to_dict(self) -> dict:
         # 旧库经自动迁移补列后，存量行的可空列读回为 None，统一收敛为展示默认值；
@@ -153,6 +198,8 @@ class UsageLog(Base):
             "provider_id": self.provider_id or "",
             "provider_name": self.provider_name or "",
             "fallback_attempts": self.fallback_attempts,
+            "device_id": self.device_id,
+            "fingerprint": self.fingerprint or "",
         }
 
 
