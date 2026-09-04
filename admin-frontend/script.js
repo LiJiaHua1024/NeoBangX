@@ -464,6 +464,15 @@ function adminApp() {
     },
     savingConfig: false,
     choresModelMenuOpen: false,
+    // MinerU 文档解析
+    parseConfig: { mode: "precision", model: "pipeline", has_token: false, token_masked: "" },
+    parseTokenInput: "",
+    parseModelMenuOpen: false,
+    testingMineru: false,
+    savingMineru: false,
+    get mineruModelLabel() {
+      return this.parseConfig.model === "vlm" ? "vlm" : "pipeline（推荐）";
+    },
     // 多 Provider 聚合
     providers: [],
     modelProviderMap: {},
@@ -555,6 +564,7 @@ function adminApp() {
           devices: "设备指纹",
           logsettings: "日志设置",
           config: "API 配置",
+          parse: "文档解析",
         }[this.tab] || "管理后台"
       );
     },
@@ -567,6 +577,7 @@ function adminApp() {
           devices: "按浏览器指纹聚合设备，备注区分不同用户",
           logsettings: "配置原始数据记录开关与日志保留策略",
           config: "管理 LLM 密钥、模型与调用参数",
+          parse: "配置 PDF 云端解析：精准/轻量模式、模型与 Token",
         }[this.tab] || ""
       );
     },
@@ -749,6 +760,7 @@ function adminApp() {
       try {
         await Promise.all([this.loadStats(), this.loadCodes(), this.loadLogs()]);
         if (this.tab === "config" || this.tab === "logsettings") await this.loadConfig();
+        if (this.tab === "parse") await this.loadMineru();
       } finally {
         this.loading = false;
       }
@@ -1738,6 +1750,63 @@ function adminApp() {
         this.toast(e.message || "保存失败", "error");
       } finally {
         this.savingConfig = false;
+      }
+    },
+
+    /* ============ MinerU 文档解析 ============ */
+    async loadMineru() {
+      try {
+        const data = await this.api("/api/admin/mineru");
+        this.parseConfig = {
+          mode: data.mode === "agent" ? "agent" : "precision",
+          model: data.model === "vlm" ? "vlm" : "pipeline",
+          has_token: !!data.has_token,
+          token_masked: data.token_masked || "",
+        };
+        this.parseTokenInput = "";
+      } catch (e) {
+        this.toast(e.message || "加载文档解析配置失败", "error");
+      }
+    },
+    async testMineru() {
+      if (this.testingMineru) return;
+      this.testingMineru = true;
+      try {
+        const data = await this.api("/api/admin/mineru/test", { method: "POST" });
+        this.toast(`Token 有效（${data.latency_ms ?? "?"}ms）`);
+      } catch (e) {
+        this.toast(e.message || "Token 测试失败", "error");
+      } finally {
+        this.testingMineru = false;
+      }
+    },
+    async saveMineru() {
+      if (this.savingMineru) return;
+      const mode = this.parseConfig.mode === "agent" ? "agent" : "precision";
+      const model = this.parseConfig.model === "vlm" ? "vlm" : "pipeline";
+      // 精准模式前端拦截：无 token 且未填写 → 提示先填写并测试
+      if (mode === "precision" && !this.parseConfig.has_token && !(this.parseTokenInput || "").trim()) {
+        this.toast("精准解析 API 需要填写 MinerU Token，请填写并通过测试后再保存", "error");
+        return;
+      }
+      this.savingMineru = true;
+      try {
+        const body = { mode, model };
+        const tokenIn = (this.parseTokenInput || "").trim();
+        if (tokenIn) body.token = tokenIn;
+        const data = await this.api("/api/admin/mineru", { method: "PUT", body: JSON.stringify(body) });
+        this.parseConfig = {
+          mode: data.mode === "agent" ? "agent" : "precision",
+          model: data.model === "vlm" ? "vlm" : "pipeline",
+          has_token: !!data.has_token,
+          token_masked: data.token_masked || "",
+        };
+        this.parseTokenInput = "";
+        this.toast("文档解析配置已保存");
+      } catch (e) {
+        this.toast(e.message || "保存失败", "error");
+      } finally {
+        this.savingMineru = false;
       }
     },
 

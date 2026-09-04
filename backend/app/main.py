@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import SessionLocal, bootstrap_lock, init_db
-from app.routers import auth, chat, tools
+from app.routers import auth, chat, parse, tools
 from app.services.request_log import (
     current_retention_days,
     purge_expired_logs_standalone,
@@ -115,6 +115,7 @@ app = FastAPI(
 app.include_router(tools.router)
 app.include_router(chat.router)
 app.include_router(auth.router)
+app.include_router(parse.router)
 
 
 @app.get("/api/health")

@@ -526,6 +526,11 @@ body {
 }
 .filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; flex: 1; }
 
+/* 文档解析页：.glass 的 backdrop-filter 使每张卡片各自成为层叠上下文，
+   卡片之间退化为按 DOM 顺序绘制；模型卡的下拉菜单要盖住下方的 Token 卡，
+   需手动抬层（同 .toolbar 做法） */
+.parse-model-card { position: relative; z-index: 30; }
+
 input, select, textarea {
   background: var(--input-bg);
   border: 1px solid var(--border-strong);

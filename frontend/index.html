@@ -1046,7 +1046,7 @@
                     <div class="file-card-icon"><span x-html="icon('file-text','w-6 h-6')"></span></div>
                     <div class="file-card-info">
                       <div class="file-card-name" x-text="attachedFile ? attachedFile.name : ''"></div>
-                      <div class="file-card-meta" x-text="attachedFile ? formatFileSize(attachedFile.size) + ' · 内容已读取' : ''"></div>
+                      <div class="file-card-meta" x-text="parsingFile ? parsingLabel : (attachedFile ? formatFileSize(attachedFile.size) + ' · 内容已读取' + (parseElapsed ? ' · 用时' + parseElapsed : '') : '')"></div>
                     </div>
                     <button class="icon-btn danger" @click="removeAttachedFile()" title="移除文件"><span x-html="icon('x','w-4 h-4')"></span></button>
                   </div>
@@ -1055,12 +1055,12 @@
                   <div class="flex items-center gap-2 mt-2 flex-wrap">
                     <label class="btn-ghost" style="padding:.45rem .8rem;font-size:.82rem;cursor:pointer">
                       <span x-html="icon('paperclip','w-4 h-4')"></span>上传 Word
-                      <input type="file" accept=".docx,.doc,.txt,.md" style="display:none" @change="handleFileSelect($event)">
+                      <input type="file" accept=".docx,.doc,.txt,.md,.pdf" style="display:none" @change="handleFileSelect($event)">
                     </label>
-                    <span class="text-xs text-faint hidden sm:inline">支持 .docx / .txt，自动跳过听力</span>
+                    <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf，自动跳过听力</span>
                     <span class="ml-auto flex items-center gap-2">
                       <span class="text-xs text-faint" x-show="input.length" x-text="input.length + ' 字'"></span>
-                      <button x-show="!streaming" class="btn-primary" @click="run()" :disabled="!input.trim()">
+                      <button x-show="!streaming" class="btn-primary" @click="run()" :disabled="!input.trim() || parsingFile">
                         <span x-html="icon('send','w-4 h-4')"></span>开始解析
                       </button>
                       <button x-show="streaming" class="btn-primary btn-stop" @click="stop()"><span x-html="icon('stop','w-4 h-4')"></span>停止</button>
@@ -1270,7 +1270,7 @@
                     </div>
                     <div class="file-card-info">
                       <div class="file-card-name" x-text="attachedFile ? attachedFile.name : ''"></div>
-                      <div class="file-card-meta" x-text="attachedFile ? formatFileSize(attachedFile.size) + ' · 内容已读取' : ''"></div>
+                      <div class="file-card-meta" x-text="parsingFile ? parsingLabel : (attachedFile ? formatFileSize(attachedFile.size) + ' · 内容已读取' + (parseElapsed ? ' · 用时' + parseElapsed : '') : '')"></div>
                     </div>
                     <button class="icon-btn danger" @click="removeAttachedFile()" title="移除文件，回到文字输入"
                             x-html="icon('x','w-4 h-4')"></button>
@@ -1289,8 +1289,9 @@
                             :title="inputMode === 'file' ? '重新选择文件' : '上传文件（将替换当前文字）'"
                             x-html="icon('paperclip','w-[18px] h-[18px]')"></button>
                     <input type="file" x-ref="fileInput" class="hidden"
-                           accept=".txt,.md,.markdown,.docx,.doc"
+                           accept=".txt,.md,.markdown,.docx,.doc,.pdf"
                            @change="handleFileSelect($event)">
+                    <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf</span>
                     <button class="icon-btn" x-show="inputMode === 'text'" @click="saveFavoriteFromInput()" title="收藏这段输入"
                             x-html="icon('bookmark-plus','w-[18px] h-[18px]')"></button>
                     <button class="icon-btn danger" x-show="input && inputMode === 'text'" @click="clearInput()" title="清空输入"
@@ -1298,8 +1299,8 @@
                     <span class="text-[11px] text-faint ml-1"
                           x-text="inputMode === 'text' && input.length > 0 ? input.length + ' 字' : ''"></span>
                     <div class="ml-auto">
-                      <button x-show="!streaming" class="btn-primary" @click="run()">
-                        <span x-html="icon('send','w-4 h-4')"></span>执行
+                      <button x-show="!streaming" class="btn-primary" @click="run()" :disabled="parsingFile">
+                        <span x-html="icon('send','w-4 h-4')"></span><span x-text="parsingFile ? '解析中…' : '执行'"></span>
                       </button>
                       <button x-show="streaming" class="btn-primary btn-stop" @click="stop()">
                         <span x-html="icon('stop','w-4 h-4')"></span>停止
@@ -1526,6 +1527,73 @@
               </div>
             </div>
           </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 文件上传失败弹窗 ==================== -->
+    <div x-show="uploadErrorOpen" class="modal-mask" x-transition.opacity
+         @click.self="closeUploadError()" @keydown.escape.window="closeUploadError()">
+      <div class="modal-card glass-deep pop-in" style="max-width:26rem" @click.stop role="alertdialog" aria-modal="true">
+        <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
+          <span class="text-dim" x-html="icon('alert','w-4 h-4')"></span>
+          <h3 class="font-bold text-sm" x-text="uploadErrorTitle || '文件上传失败'"></h3>
+          <button class="icon-btn ml-auto" @click="closeUploadError()" title="关闭" x-html="icon('x','w-4 h-4')"></button>
+        </div>
+        <div class="p-5 space-y-3">
+          <p class="text-sm leading-relaxed" x-text="uploadErrorMsg"></p>
+          <div x-show="uploadErrorDetail">
+            <button class="text-xs text-dim underline underline-offset-2" @click="showUploadDetail = !showUploadDetail"
+                    x-text="showUploadDetail ? '收起详细信息' : '查看详细信息'"></button>
+            <p x-show="showUploadDetail" class="mt-1.5 text-xs text-faint font-mono break-all leading-relaxed" x-text="uploadErrorDetail"></p>
+          </div>
+          <button class="btn-primary w-full justify-center" @click="closeUploadError()">知道了</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 扫描版警告弹窗 ==================== -->
+    <div x-show="scanWarnOpen" class="modal-mask" x-transition.opacity
+         @click.self="scanWarnOpen = false" @keydown.escape.window="scanWarnOpen = false">
+      <div class="modal-card glass-deep pop-in" style="max-width:28rem" @click.stop role="alertdialog" aria-modal="true">
+        <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
+          <span class="text-dim" x-html="icon('alert','w-4 h-4')"></span>
+          <h3 class="font-bold text-sm">⚠️ 检测到图片/扫描版试卷</h3>
+          <button class="icon-btn ml-auto" @click="scanWarnOpen = false" title="关闭" x-html="icon('x','w-4 h-4')"></button>
+        </div>
+        <div class="p-5 space-y-3">
+          <p x-show="scanWarnStage === 'post'" class="text-xs leading-relaxed px-3 py-2 rounded-lg"
+             style="background:color-mix(in srgb, var(--accent) 12%, transparent)" x-text="'首次解析结果为空，更可能是扫描件。'"></p>
+          <p class="text-sm leading-relaxed">当前文件未检测到可复制的文本层，很有可能属于图片或扫描件。</p>
+          <ul class="text-sm leading-relaxed space-y-1.5 list-disc pl-5">
+            <li><strong>识别耗时极长：</strong>OCR 排队与视觉逐字解析需等待较长时间。</li>
+            <li><strong>容易识别错乱：</strong>题干格式、下划线填空可能存在排版误差或漏字。</li>
+          </ul>
+          <p class="text-sm leading-relaxed"><strong>强烈建议：</strong>上传由 Word源文件/软件直接导出的原生电子版 PDF。</p>
+          <p class="text-xs text-dim leading-relaxed">如仍要继续，结果准确性不做保证。</p>
+          <div class="flex flex-col gap-2 pt-1">
+            <button class="btn-primary w-full justify-center" @click="reselectPdfFile()">重新选择文件</button>
+            <button class="btn-primary btn-stop w-full justify-center" @click="confirmScanContinue()" :disabled="scanConfirming"
+                    x-text="scanConfirming ? '解析中…' : '仍要继续解析（不推荐）'"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== PDF 云端解析中 ==================== -->
+    <div x-show="parsingFile && !scanWarnOpen" class="modal-mask" x-transition.opacity>
+      <div class="modal-card glass-deep pop-in" style="max-width:24rem" @click.stop role="status" aria-live="polite">
+        <div class="p-6 flex flex-col items-center text-center gap-4">
+          <div class="thinking-orb-wrap"><div class="thinking-orb"><div class="thinking-orb-inner"></div></div></div>
+          <div>
+            <h3 class="font-bold text-sm">正在解析 PDF，请稍候</h3>
+            <p class="text-xs text-dim mt-1.5 truncate" style="max-width:18rem" x-text="pendingPdfFile ? pendingPdfFile.name : ''"></p>
+            <p class="text-xs text-faint mt-1.5 flex items-center justify-center gap-1.5">
+              <span class="thinking-dots"><span></span><span></span><span></span></span>大文件可能需要几分钟
+            </p>
+            <p class="text-xs font-semibold mt-1" style="color:var(--accent)" x-text="'已用时 ' + parseElapsedSec + ' 秒'"></p>
+          </div>
+          <button class="btn-ghost w-full justify-center" @click="cancelPdfUpload()">取消</button>
         </div>
       </div>
     </div>

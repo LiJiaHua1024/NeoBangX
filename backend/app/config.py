@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     max_tokens: int = 4096
     timeout: int = 120
 
+    # MinerU 文档解析（PDF）：模式 precision=精准解析API（推荐）/ agent=轻量解析API；
+    # 模型仅精准模式有效 pipeline（推荐）/ vlm；token 仅精准模式必填；base_url 硬编码官方地址
+    mineru_mode: str = "precision"
+    mineru_model: str = "pipeline"
+    mineru_token: str = ""
+
     # 使用日志
     # 是否记录每次请求的原始输入 / 渲染 Prompt / 模型输出（元数据始终记录）
     log_payload: bool = False

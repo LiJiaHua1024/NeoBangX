@@ -56,6 +56,9 @@
         <button class="nav-item" :class="{ on: tab === 'config' }" @click="tab = 'config'; loadConfig()">
           <span>API 配置</span>
         </button>
+        <button class="nav-item" :class="{ on: tab === 'parse' }" @click="tab = 'parse'; loadMineru()">
+          <span>文档解析</span>
+        </button>
       </nav>
 
       <div class="sidebar-foot">
@@ -752,6 +755,72 @@
           </div>
         </div>
 
+      </section>
+
+      <!-- 文档解析 -->
+      <section x-show="tab === 'parse'" class="panel-stack">
+        <div class="glass card">
+          <div>
+            <h2 class="card-title">解析模式</h2>
+            <p class="muted">PDF 由云端 MinerU 解析。is_ocr 由系统按两阶段自动控制（先关后开），无需手动配置。</p>
+          </div>
+          <div class="form-grid mt-3" style="grid-template-columns:1fr 1fr">
+            <button class="btn-ghost" @click="parseConfig.mode = 'precision'"
+                    :style="parseConfig.mode === 'precision' ? 'border-color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent)' : ''"
+                    style="flex-direction:column;align-items:flex-start;gap:.25rem;height:auto;padding:.9rem 1rem">
+              <span style="font-weight:700" x-text="'精准解析 API（推荐）' + (parseConfig.mode === 'precision' ? ' ✓' : '')"></span>
+              <span class="field-hint" style="text-align:left">需 Token · 上限 200MB / 200页 · 质量最高 · 支持批量</span>
+            </button>
+            <button class="btn-ghost" @click="parseConfig.mode = 'agent'"
+                    :style="parseConfig.mode === 'agent' ? 'border-color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent)' : ''"
+                    style="flex-direction:column;align-items:flex-start;gap:.25rem;height:auto;padding:.9rem 1rem">
+              <span style="font-weight:700" x-text="'Agent 轻量解析 API' + (parseConfig.mode === 'agent' ? ' ✓' : '')"></span>
+              <span class="field-hint" style="text-align:left">免 Token（IP 限流）· 上限 10MB / 20页 · 单文件 · 仅 Markdown</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="glass card parse-model-card" x-show="parseConfig.mode === 'precision'">
+          <div>
+            <h2 class="card-title">模型版本</h2>
+            <p class="muted">仅精准模式有效；切换后保存生效。</p>
+          </div>
+          <div class="custom-select mt-3" @click.outside="parseModelMenuOpen = false" style="max-width: 360px;">
+            <button class="custom-select-trigger" :class="{ open: parseModelMenuOpen }" @click="parseModelMenuOpen = !parseModelMenuOpen">
+              <span class="truncate" x-text="mineruModelLabel"></span>
+              <span class="chev">▼</span>
+            </button>
+            <div class="custom-select-menu" x-show="parseModelMenuOpen" x-cloak>
+              <button class="custom-select-item" :class="{ on: parseConfig.model !== 'vlm' }" @click="parseConfig.model = 'pipeline'; parseModelMenuOpen = false">pipeline（推荐）</button>
+              <button class="custom-select-item" :class="{ on: parseConfig.model === 'vlm' }" @click="parseConfig.model = 'vlm'; parseModelMenuOpen = false">vlm</button>
+            </div>
+          </div>
+          <p class="field-hint mt-2">推荐 pipeline：速度与效果均衡；vlm 精度更高但更慢。切换后保存生效。</p>
+        </div>
+
+        <div class="glass card" x-show="parseConfig.mode === 'precision'">
+          <div>
+            <h2 class="card-title">MinerU Token</h2>
+            <p class="muted">精准解析 API 必填。在 <a href="https://mineru.net/apiManage/token" target="_blank" rel="noopener noreferrer" class="link-btn">MinerU Token 页</a>创建并复制 Token 后填写（注意不是 OpenXLab 用户中心的 AccessKey）。</p>
+          </div>
+          <div class="form-grid mt-3">
+            <label class="field">
+              <span>Token（已配置：<span class="mono" x-text="parseConfig.token_masked || '未配置'"></span>）</span>
+              <input type="password" x-model="parseTokenInput" placeholder="粘贴 Token 单行，或 Access Key / Secret Key 两行；留空表示不修改" autocomplete="off" spellcheck="false">
+              <span class="field-hint">支持直接粘贴 Token，或粘贴两行格式（自动提取 Secret Key）；保存即覆盖，留空保持原值</span>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button class="btn-ghost" @click="testMineru()" :disabled="testingMineru" x-text="testingMineru ? '测试中…' : '一键测试是否可用'"></button>
+          </div>
+        </div>
+
+        <div class="glass card">
+          <div class="form-actions" style="margin-top:0">
+            <button class="btn-primary" @click="saveMineru()" :disabled="savingMineru" x-text="savingMineru ? '保存中…' : '保存'"></button>
+            <button class="btn-ghost" @click="loadMineru()">重新加载</button>
+          </div>
+        </div>
       </section>
 
       <!-- 日志设置 -->

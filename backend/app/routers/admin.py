@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import secrets as secrets_lib
 from datetime import datetime, timezone
@@ -33,8 +34,11 @@ from app.services.request_log import (
 )
 from app.services.runtime_config import (
     CONFIG_KEYS,
+    MINERU_MODES,
+    MINERU_MODELS,
     REASONING_EFFORTS,
     get_config_map,
+    get_config_value,
     mask_config,
     parse_models,
     resolve_llm_settings,
@@ -42,6 +46,8 @@ from app.services.runtime_config import (
     set_config_values,
 )
 from app.services.usage_code import create_codes, write_jwt_secret_file
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -912,3 +918,102 @@ async def put_single_model_providers_api(model_id: str, req: SingleModelProvider
         code = 404 if "不存在" in msg else 400
         raise HTTPException(status_code=code, detail=msg) from None
     return {"model_id": model_id, "ordered_provider_ids": ordered}
+
+
+# ---- MinerU 文档解析配置 ----
+
+class MineruUpdateRequest(BaseModel):
+    mode: Optional[str] = Field(None, description="precision=精准解析API（推荐）| agent=轻量解析API")
+    model: Optional[str] = Field(None, description="pipeline（推荐）| vlm，仅精准模式有效")
+    token: Optional[str] = Field(None, max_length=2048, description="精准模式 Token；已配置下传空/**** 表示不修改")
+
+
+def _mineru_token_masked(raw: str) -> str:
+    if not raw:
+        return ""
+    if len(raw) <= 8:
+        return "****"
+    return raw[:4] + "****" + raw[-4:]
+
+
+@router.get("/mineru")
+async def get_mineru_config(db: Annotated[Session, Depends(get_db)]):
+    mode = (get_config_value(db, "mineru_mode", "precision") or "precision").strip() or "precision"
+    if mode not in MINERU_MODES:
+        mode = "precision"
+    model = (get_config_value(db, "mineru_model", "pipeline") or "pipeline").strip() or "pipeline"
+    if model not in MINERU_MODELS:
+        model = "pipeline"
+    token = (get_config_value(db, "mineru_token", "") or "").strip()
+    return {
+        "mode": mode,
+        "model": model,
+        "has_token": bool(token),
+        "token_masked": _mineru_token_masked(token),
+    }
+
+
+@router.put("/mineru")
+async def put_mineru_config(req: MineruUpdateRequest, db: Annotated[Session, Depends(get_db)]):
+    raw = req.model_dump(exclude_unset=True)
+    updates: dict[str, str] = {}
+    if "mode" in raw and raw["mode"] is not None:
+        mode = str(raw["mode"] or "").strip()
+        if mode not in MINERU_MODES:
+            raise HTTPException(status_code=400, detail=f"非法解析模式：{mode}（仅支持 precision / agent）")
+        updates["mineru_mode"] = mode
+    if "model" in raw and raw["model"] is not None:
+        model = str(raw["model"] or "").strip()
+        if model not in MINERU_MODELS:
+            raise HTTPException(status_code=400, detail=f"非法模型版本：{model}（仅支持 pipeline / vlm）")
+        updates["mineru_model"] = model
+    if "token" in raw and raw["token"] is not None:
+        token_in = str(raw["token"] or "")
+        # 已配置下传空/**** 表示不修改（与 Provider 的 **** 约定一致）
+        existing = (get_config_value(db, "mineru_token", "") or "").strip()
+        if token_in == "" or token_in.strip() == "" or "****" in token_in:
+            if existing and (token_in == "" or "****" in token_in):
+                pass  # 不修改
+            elif not existing and not token_in.strip():
+                pass  # 本就为空
+            else:
+                updates["mineru_token"] = ""
+        else:
+            from app.services.mineru import extract_mineru_token
+
+            token_value, token_source = extract_mineru_token(token_in)
+            if not token_value:
+                raise HTTPException(status_code=400, detail="未能识别出有效的 Token：请粘贴 MinerU Token 单行，或 Access Key / Secret Key 两行格式")
+            logger.info("mineru token updated (source=%s)", token_source)
+            updates["mineru_token"] = token_value
+    # 精准模式要求 Token 非空（以前后端合并值为准）
+    final_mode = updates.get("mineru_mode") or (get_config_value(db, "mineru_mode", "precision") or "precision").strip()
+    if "mineru_token" in updates:
+        final_token = updates["mineru_token"]
+    else:
+        final_token = (get_config_value(db, "mineru_token", "") or "").strip()
+    if final_mode == "precision" and not final_token:
+        raise HTTPException(status_code=400, detail="精准解析 API 需要填写 MinerU Token（可在 MinerU API 管理页获取），或切换为 Agent 轻量解析 API")
+    if updates:
+        set_config_values(db, updates)
+    return await get_mineru_config(db)
+
+
+@router.post("/mineru/test")
+async def test_mineru_token(db: Annotated[Session, Depends(get_db)]):
+    """一键测试精准 Token 是否可用：最小 file-urls/batch 探活，不实际上传（无扣费）。"""
+    from time import monotonic
+
+    from app.services.mineru import MinerUError, probe_precision_token
+
+    token = (get_config_value(db, "mineru_token", "") or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="尚未填写 MinerU Token，无法测试")
+    started = monotonic()
+    try:
+        latency = await probe_precision_token(token=token)
+        return {"status": "ok", "latency_ms": int(latency)}
+    except MinerUError as e:
+        raise HTTPException(status_code=e.http_status, detail=e.user_message) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"测试失败：{e}") from e

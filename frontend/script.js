@@ -1188,6 +1188,33 @@ function nbx() {
     submittedFileName: "",
     submittedExpanded: false,
 
+    /* --- 文件上传（本地 + PDF 云端 MinerU） --- */
+    parseConfig: { pdf_enabled: true, mode: "precision", model: "pipeline", limits: { precision_mb: 200, agent_mb: 10, current_mb: 200 } },
+    parsingFile: false,
+    parsingLabel: "",
+    pendingPdfFile: null,
+    parseStartedAt: 0,
+    parseElapsedSec: 0,
+    parseElapsed: "",
+    _parseTimer: null,
+    scanWarnOpen: false,
+    scanWarnStage: "pre",
+    scanConfirming: false,
+    uploadErrorOpen: false,
+    uploadErrorTitle: "",
+    uploadErrorMsg: "",
+    uploadErrorDetail: "",
+    showUploadDetail: false,
+    _pdfAbort: null,
+    get uploadHintText() {
+      const base = "支持 .docx / .doc / .txt / .md / .pdf，自动跳过听力";
+      if (this.parseConfig && this.parseConfig.pdf_enabled === false) return base + "（PDF 解析未配置）";
+      return base;
+    },
+    get uploadHintTitle() {
+      return "PDF 由云端解析，较大文件需等待；拍照/扫描件效果较差";
+    },
+
     /* --- 面板状态 --- */
     leftOpen: false,
     rightMobileOpen: false,
@@ -2100,6 +2127,7 @@ function nbx() {
       this.loadAuth();
 
       await this.loadTools();
+      this.loadParseConfig();
 
       const savedModel = localStorage.getItem(LS.model);
       if (savedModel && this.models.some((m) => m.id === savedModel)) this.selectedModel = savedModel;
@@ -2563,37 +2591,151 @@ function nbx() {
       if (file) this.readFileContent(file);
     },
     removeAttachedFile() {
+      try { if (this._pdfAbort) this._pdfAbort.abort(); } catch {}
+      this._pdfAbort = null;
+      this._stopParseTimer();
+      this.parsingFile = false;
+      this.parseElapsed = "";
+      this.parseElapsedSec = 0;
+      this.pendingPdfFile = null;
+      this.scanWarnOpen = false;
+      this.scanConfirming = false;
       this.attachedFile = null;
       this.input = "";
       this.inputMode = "text";
       this.$nextTick(() => this.autoGrow());
     },
+    openUploadError(title, msg, detail) {
+      this.uploadErrorTitle = title || "文件上传失败";
+      this.uploadErrorMsg = msg || "文件上传失败，请重试。";
+      this.uploadErrorDetail = detail || "";
+      this.showUploadDetail = false;
+      this.uploadErrorOpen = true;
+    },
+    closeUploadError() {
+      this.uploadErrorOpen = false;
+    },
+    _uploadErrDetail(file, extra) {
+      const nm = (file && file.name) || (typeof file === "string" ? file : "") || "未知文件";
+      const size = file && file.size ? " · 大小：" + this.formatFileSize(file.size) : "";
+      return `文件名：${nm}${size}${extra ? " · " + extra : ""}`;
+    },
+    reselectPdfFile() {
+      // 警告弹窗的“重新选择文件”：关闭弹窗并弹出系统文件选择（自有按钮触发，非原生 UI 展示）
+      this.scanWarnOpen = false;
+      this.scanConfirming = false;
+      this.$nextTick(() => {
+        const inputs = document.querySelectorAll('input[type="file"]');
+        for (const el of inputs) {
+          if (el && el.offsetParent !== null) { el.click(); break; }
+        }
+      });
+    },
+    async confirmScanContinue() {
+      if (this.scanConfirming) return;
+      const file = this.pendingPdfFile;
+      if (!file) { this.scanWarnOpen = false; return; }
+      this.scanConfirming = true;
+      try {
+        await this._uploadPdf(file, true);
+      } finally {
+        this.scanConfirming = false;
+      }
+    },
+    cancelPdfUpload() {
+      // 解析进度弹窗的“取消”：中断前端等待并复位状态；
+      // 服务端任务会自然超时结束，不再回填结果
+      try { if (this._pdfAbort) this._pdfAbort.abort(); } catch {}
+      this._pdfAbort = null;
+      this._stopParseTimer();
+      this.parsingFile = false;
+      this.parsingLabel = "";
+      this.pendingPdfFile = null;
+      this.scanConfirming = false;
+    },
+    _stopParseTimer() {
+      try { if (this._parseTimer) clearInterval(this._parseTimer); } catch {}
+      this._parseTimer = null;
+    },
+    formatParseElapsed(sec) {
+      const s = Math.max(0, Math.floor(sec || 0));
+      if (s < 60) return `${s}秒`;
+      return `${Math.floor(s / 60)}分${String(s % 60).padStart(2, "0")}秒`;
+    },
+    async loadParseConfig() {
+      try {
+        const res = await fetch("/api/parse/config");
+        const data = await res.json();
+        if (data && data.limits) this.parseConfig = data;
+      } catch {}
+    },
     async readFileContent(file) {
       const name = file.name || "";
-      const ext = name.split(".").pop().toLowerCase();
-      const SUPPORTED = ["txt", "md", "markdown", "docx", "doc"];
-      if (!SUPPORTED.includes(ext)) {
-        this.toast("不支持的文件格式，请上传 Word / TXT / Markdown 文件", "error");
+      const dot = name.lastIndexOf(".");
+      const ext = dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+      const LOCAL = ["txt", "md", "markdown", "docx", "doc"];
+      const REMOTE = ["pdf"];
+      if (!ext) {
+        this.openUploadError("不支持的文件格式", "文件缺少扩展名。请上传 PDF / Word（.docx）/ TXT / Markdown 文件。", this._uploadErrDetail(name, "未检测到扩展名"));
+        return;
+      }
+      if (!LOCAL.includes(ext) && !REMOTE.includes(ext)) {
+        this.openUploadError("不支持的文件格式", `暂不支持“${ext}”格式。请上传 PDF / Word（.docx）/ TXT / Markdown 文件。`, this._uploadErrDetail(name, "扩展名：" + ext));
+        return;
+      }
+      if (!file.size) {
+        this.openUploadError("文件上传失败", "文件为空，无法读取。请检查文件后重试。", this._uploadErrDetail(file, "文件为空"));
+        return;
+      }
+      if (this.parsingFile) {
+        this.toast("文件正在解析中，请稍候", "warn");
+        return;
+      }
+      this.parseElapsed = "";
+      if (REMOTE.includes(ext)) {
+        await this._uploadPdf(file, false);
         return;
       }
       if (file.size > 20 * 1024 * 1024) {
-        this.toast("文件超过 20MB，请拆分后再上传", "error");
+        this.openUploadError("文件上传失败", "文件超过 20MB，请拆分后再上传。", this._uploadErrDetail(file, "超过本地解析上限 20MB"));
         return;
       }
       try {
         let text = "";
         if (ext === "docx") {
-          text = await this._readDocx(file);
+          try {
+            text = await this._readDocx(file);
+          } catch (e) {
+            const msg = String((e && e.message) || "");
+            if (!window.mammoth || /mammoth/i.test(msg)) {
+              this.openUploadError("文件上传失败", "解析组件未加载，请检查网络后刷新页面重试。", this._uploadErrDetail(file, msg || "解析组件缺失"));
+            } else if (/invalid|corrupt|damaged|encrypted|zip/i.test(msg)) {
+              this.openUploadError("文件上传失败", "该 Word 文件可能已损坏或被加密，请重新保存为 .docx 后再试。", this._uploadErrDetail(file, msg || "文件损坏"));
+            } else {
+              this.openUploadError("文件上传失败", "Word 解析失败，请重新保存为 .docx 后再试。", this._uploadErrDetail(file, msg || "解析失败"));
+            }
+            return;
+          }
         } else if (ext === "doc") {
-          text = await this._readTextFile(file);
+          try {
+            text = await this._readTextFile(file);
+          } catch (e) {
+            this.openUploadError("文件上传失败", "浏览器读取文件时中断，请重试。", this._uploadErrDetail(file, "浏览器读取中断"));
+            return;
+          }
           if (text && text.includes("\u0000")) {
             this.toast("旧版 .doc 格式解析可能不完整，建议另存为 .docx 后重新上传", "warn");
           }
         } else {
-          text = await this._readTextFile(file);
+          try {
+            text = await this._readTextFile(file);
+          } catch (e) {
+            this.openUploadError("文件上传失败", "浏览器读取文件时中断，请重试。", this._uploadErrDetail(file, "浏览器读取中断"));
+            return;
+          }
         }
         if (!text || !text.trim()) {
-          this.toast("文件内容为空或无法解析", "warn");
+          this.openUploadError("文件上传失败", "文件内容为空或无法解析，请检查文件后重试。", this._uploadErrDetail(file, "内容为空"));
           return;
         }
         this.input = text;
@@ -2601,7 +2743,92 @@ function nbx() {
         this.attachedFile = { name, size: file.size };
         this.toast(`已读取文件「${name}」`);
       } catch (e) {
-        this.toast("文件解析失败：" + (e.message || "未知错误"), "error");
+        this.openUploadError("文件上传失败", "文件读取失败，请重试。", this._uploadErrDetail(file, String((e && e.message) || "未知错误")));
+      }
+    },
+    async _uploadPdf(file, confirmScanned) {
+      if (!this.requireAuth("请先输入使用码再上传 PDF")) return;
+      const cfg = this.parseConfig || {};
+      const limits = cfg.limits || {};
+      const limitMB = Number(limits.current_mb) || (cfg.mode === "agent" ? 10 : 200);
+      if (file.size > limitMB * 1024 * 1024) {
+        this.openUploadError("文件上传失败", `文件超过 ${limitMB}MB（当前${this.formatFileSize(file.size)}）。精准模式上限200MB，轻量模式上限10MB；过大请拆分或让管理员切换为精准模式。`, this._uploadErrDetail(file, `超过当前上限 ${limitMB}MB`));
+        return;
+      }
+      if (cfg.pdf_enabled === false) {
+        this.openUploadError("文件上传失败", "PDF 解析尚未配置（缺少 MinerU Token）。请联系管理员在管理后台 → 文档解析中填写。", this._uploadErrDetail(file, "服务端未配置解析 Token"));
+        return;
+      }
+      try { if (this._pdfAbort) this._pdfAbort.abort(); } catch {}
+      const ctrl = new AbortController();
+      this._pdfAbort = ctrl;
+      this.parsingFile = true;
+      this.parsingLabel = "云端解析中，请稍候…";
+      this.pendingPdfFile = file;
+      this.parseElapsed = "";
+      this.parseElapsedSec = 0;
+      this.parseStartedAt = Date.now();
+      this._stopParseTimer();
+      this._parseTimer = setInterval(() => {
+        this.parseElapsedSec = Math.floor((Date.now() - this.parseStartedAt) / 1000);
+        this.parsingLabel = `云端解析中（已用时 ${this.parseElapsedSec} 秒），请稍候…`;
+      }, 500);
+      try {
+        const fd = new FormData();
+        fd.append("file", file, file.name || "document.pdf");
+        fd.append("confirm_scanned", confirmScanned ? "true" : "false");
+        let res;
+        try {
+          res = await fetch("/api/parse/file", { method: "POST", headers: this.authHeaders(), body: fd, signal: ctrl.signal });
+        } catch (e) {
+          if (e && e.name === "AbortError") return;
+          this.openUploadError("文件上传失败", "网络连接失败，请检查网络后重试。", this._uploadErrDetail(file, "网络错误：" + String((e && e.message) || "请求失败")));
+          return;
+        }
+        if (res.status === 401) {
+          this.clearAuth();
+          this.openUploadError("文件上传失败", "登录已过期，请重新输入使用码。", this._uploadErrDetail(file, "登录过期 HTTP 401"));
+          return;
+        }
+        let data = null;
+        try {
+          data = await res.json();
+        } catch (e) {
+          this.openUploadError("文件上传失败", "服务器返回异常，请稍后重试。", this._uploadErrDetail(file, "服务端响应异常"));
+          return;
+        }
+        const detail = (data && data.detail && typeof data.detail === "object") ? data.detail : {};
+        const kind = detail.kind || data.kind || "";
+        const msg = detail.message || data.message || "";
+        if (res.status === 409 && kind === "scanned_suspected") {
+          this.scanWarnStage = detail.stage === "post_parse" ? "post" : "pre";
+          this.scanWarnOpen = true;
+          return;
+        }
+        if (!res.ok) {
+          const title = kind === "unsupported" ? "不支持的文件格式" : "文件上传失败";
+          this.openUploadError(title, msg || `解析失败（${res.status}）。请重试。`, this._uploadErrDetail(file, `错误分类：${kind || "未知"} · HTTP ${res.status}`));
+          if (res.status === 429) this.toast("请稍后再试", "warn");
+          return;
+        }
+        const text = (data && data.text) || "";
+        if (!text.trim()) {
+          this.openUploadError("文件上传失败", "解析结果为空，请换一份 PDF 或联系管理员。", this._uploadErrDetail(file, "解析结果为空"));
+          return;
+        }
+        this.scanWarnOpen = false;
+        this.input = text;
+        this.inputMode = "file";
+        this.attachedFile = { name: file.name, size: file.size };
+        this.parseElapsed = this.formatParseElapsed((Date.now() - this.parseStartedAt) / 1000);
+        const imgNote = data.images_removed ? `，已去除 ${data.images_removed} 张图片` : "";
+        this.toast(`已读取文件「${file.name}」${imgNote}（用时${this.parseElapsed}）`);
+        if (data.truncated) this.toast("文件内容过长，已截断前 50000 字", "warn");
+      } finally {
+        if (this._pdfAbort === ctrl) this._pdfAbort = null;
+        this._stopParseTimer();
+        this.parsingFile = false;
+        this.parsingLabel = "";
       }
     },
     _readTextFile(file) {

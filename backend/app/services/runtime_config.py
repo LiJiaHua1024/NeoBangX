@@ -19,10 +19,17 @@ CONFIG_KEYS = [
     "timeout",
     "log_payload",
     "log_retention_days",
+    "mineru_mode",
+    "mineru_model",
+    "mineru_token",
 ]
 
+# MinerU 文档解析合法取值
+MINERU_MODES = {"precision", "agent"}
+MINERU_MODELS = {"pipeline", "vlm"}
+
 # 敏感字段：列表接口可脱敏（旧键保留仅为兼容读取，不再写入）
-SENSITIVE_KEYS = {"llm_api_key", "chores_api_key", "openrouter_api_key"}
+SENSITIVE_KEYS = {"llm_api_key", "chores_api_key", "openrouter_api_key", "mineru_token"}
 
 # LiteLLM reasoning_effort 合法取值（none = 关闭思考）
 REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high"}
@@ -157,6 +164,9 @@ def _env_defaults() -> dict[str, str]:
         "timeout": str(settings.timeout),
         "log_payload": "true" if settings.log_payload else "false",
         "log_retention_days": str(settings.log_retention_days),
+        "mineru_mode": settings.mineru_mode,
+        "mineru_model": settings.mineru_model,
+        "mineru_token": settings.mineru_token,
     }
 
 
@@ -410,6 +420,14 @@ def resolve_llm_settings(db: Session) -> dict:
     if not model_provider_map and providers:
         available_model_ids = {m["id"] for m in model_list if not m.get("chores_only") and m.get("enabled", True)}
 
+    mineru_mode = (cfg.get("mineru_mode") or "precision").strip() or "precision"
+    if mineru_mode not in MINERU_MODES:
+        mineru_mode = "precision"
+    mineru_model = (cfg.get("mineru_model") or "pipeline").strip() or "pipeline"
+    if mineru_model not in MINERU_MODELS:
+        mineru_model = "pipeline"
+    mineru_token = (cfg.get("mineru_token") or "").strip()
+
     return {
         "models": model_list,
         "default_model": default_model,
@@ -428,4 +446,9 @@ def resolve_llm_settings(db: Session) -> dict:
         "model_provider_map": model_provider_map,
         "model_provider_details": model_provider_details,
         "available_model_ids": available_model_ids,
+        "mineru": {
+            "mode": mineru_mode,
+            "model": mineru_model,
+            "has_token": bool(mineru_token),
+        },
     }
