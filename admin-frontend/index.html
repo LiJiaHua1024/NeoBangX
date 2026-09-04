@@ -7,8 +7,8 @@
   <meta name="description" content="NeoBangX 使用码与配置管理后台">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23b4502a'/%3E%3Cstop offset='1' stop-color='%238c3316'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=admin260904d">
-  <script defer src="/static/script.js?v=admin260904d"></script>
+  <link rel="stylesheet" href="/static/styles.css?v=admin260904k">
+  <script defer src="/static/script.js?v=admin260904k"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -40,6 +40,9 @@
       <nav class="nav">
         <button class="nav-item" :class="{ on: tab === 'dashboard' }" @click="tab = 'dashboard'">
           <span>概览</span>
+        </button>
+        <button class="nav-item" :class="{ on: tab === 'analytics' }" @click="tab = 'analytics'; openAnalyticsTab()">
+          <span>用量分析</span>
         </button>
         <button class="nav-item" :class="{ on: tab === 'codes' }" @click="tab = 'codes'; loadCodes()">
           <span>使用码</span>
@@ -142,6 +145,398 @@
           </div>
           <p class="muted mt-4">主站端口 8000 对外；本管理后台 8001 仅内网访问。</p>
         </div>
+      </section>
+
+      <!-- 用量分析：顶级 LLM API 后台风格，全部自研 UI（分段选择 + div 条形 + SVG 折线 + conic 环形，无浏览器原生控件） -->
+      <section x-show="tab === 'analytics'" class="panel-stack">
+        <div class="glass card toolbar ana-toolbar">
+          <div class="seg-control" role="tablist" aria-label="时间范围">
+            <template x-for="opt in analyticsDaysOptions" :key="opt.id">
+              <button class="seg-item" :class="{ on: analyticsDays === opt.id }"
+                      @click="setAnalyticsDays(opt.id)" x-text="opt.label"></button>
+            </template>
+          </div>
+          <div class="ana-toolbar-right">
+            <span class="dim mono ana-range" x-text="analyticsData ? anaRangeLabel() : '—'"></span>
+            <button class="btn-ghost" @click="loadAnalytics()" :disabled="analyticsLoading" x-text="analyticsLoading ? '加载中…' : '刷新'"></button>
+            <button class="btn-ghost" @click="copyAnalyticsSummary()" x-show="analyticsData">复制摘要</button>
+          </div>
+        </div>
+        <p class="muted" x-show="analyticsData && analyticsData.range.daily_grain === 'week'">全部窗口跨度较大，已按自然周聚合展示趋势。</p>
+
+        <div class="glass card" x-show="analyticsLoading && !analyticsData">
+          <p class="muted">正在聚合用量数据…</p>
+        </div>
+        <div class="glass card" x-show="analyticsError" x-cloak>
+          <p class="muted" x-text="analyticsError"></p>
+          <button class="btn-ghost" @click="loadAnalytics()">重试</button>
+        </div>
+
+        <template x-if="analyticsData">
+          <div class="ana-stack">
+            <!-- KPI 总览（含环比） -->
+            <div class="stat-grid ana-kpi-grid">
+              <div class="stat-card glass">
+                <div class="stat-label">请求总数</div>
+                <div class="stat-value" x-text="fmtCompact(anaKpis().total)" :title="fmtNum(anaKpis().total)"></div>
+                <div class="stat-foot">
+                  <span x-text="`成功 ${anaKpis().success || 0} · 用户停止 ${anaKpis().cancelled || 0} · 异常 ${anaKpis().error || 0}`"></span>
+                  <span class="delta" :class="deltaTone(anaDeltas()?.total)" x-show="anaDeltas()" x-text="`环比 ${fmtDeltaRatio(anaDeltas()?.total)}`"></span>
+                </div>
+              </div>
+              <div class="stat-card glass">
+                <div class="stat-label">总 Tokens（输入 / 输出）</div>
+                <div class="stat-value" x-text="fmtCompact(anaKpis().total_tokens)" :title="fmtNum(anaKpis().total_tokens)"></div>
+                <div class="stat-foot">
+                  <span x-text="`${fmtCompact(anaKpis().prompt_tokens)} / ${fmtCompact(anaKpis().completion_tokens)} · 平均 ${anaKpis().avg_tokens_per_req ?? '—'} Tokens/次`"></span>
+                  <span class="delta" :class="deltaTone(anaDeltas()?.total_tokens)" x-show="anaDeltas()" x-text="`环比 ${fmtDeltaRatio(anaDeltas()?.total_tokens)}`"></span>
+                </div>
+              </div>
+              <div class="stat-card glass">
+                <div class="stat-label">成功率</div>
+                <div class="stat-value" x-text="fmtPct(anaKpis().success_rate)"></div>
+                <div class="stat-foot">
+                  <span x-text="`错误率 ${fmtPct(anaKpis().error_rate)}`"></span>
+                  <span class="delta" :class="deltaTone(anaDeltas()?.success_rate_pp / 100 || null)" x-show="anaDeltas()" x-text="`环比 ${anaDeltas() ? (anaDeltas().success_rate_pp > 0 ? '+' : '') + anaDeltas().success_rate_pp + 'pp' : ''}`"></span>
+                </div>
+              </div>
+              <div class="stat-card glass">
+                <div class="stat-label">平均耗时 / P95</div>
+                <div class="stat-value" x-text="fmtDuration(anaKpis().avg_duration_ms)"></div>
+                <div class="stat-foot">
+                  <span x-text="`P50 ${fmtDuration(analyticsData.latency.p50)} · P95 ${fmtDuration(analyticsData.latency.p95)} · P99 ${fmtDuration(analyticsData.latency.p99)}`"></span>
+                  <span class="delta" :class="deltaTone(anaDeltas()?.avg_duration_ms, true)" x-show="anaDeltas()" x-text="`环比 ${fmtDeltaRatio(anaDeltas()?.avg_duration_ms)}`"></span>
+                </div>
+              </div>
+              <div class="stat-card glass">
+                <div class="stat-label">活跃使用码 / 设备</div>
+                <div class="stat-value" x-text="`${anaKpis().active_codes ?? '—'} / ${anaKpis().active_devices ?? '—'}`"></div>
+                <div class="stat-foot">
+                  <span x-text="`模型 ${anaKpis().active_models || 0} · 工具 ${anaKpis().active_tools || 0} · Provider ${anaKpis().active_providers || 0}`"></span>
+                  <span class="delta" :class="deltaTone(anaDeltas()?.active_codes)" x-show="anaDeltas()" x-text="`活跃码环比 ${fmtDeltaRatio(anaDeltas()?.active_codes)}`"></span>
+                </div>
+              </div>
+              <div class="stat-card glass">
+                <div class="stat-label">扣费次数 / 备用切换</div>
+                <div class="stat-value" x-text="fmtCompact(anaKpis().units)"></div>
+                <div class="stat-foot" x-text="`备用切换 ${analyticsData.fallback.count} 次（${fmtPct(analyticsData.fallback.rate)}）· 平均尝试 ${analyticsData.fallback.avg_attempts ?? '—'} 次`"></div>
+              </div>
+            </div>
+
+            <!-- 趋势 -->
+            <div class="ana-grid-2">
+              <div class="glass card">
+                <h2 class="card-title">请求趋势 <span class="dim" x-text="`· 峰值 ${analyticsData.peak ? analyticsData.peak.date + ' ' + analyticsData.peak.total + ' 次' : '—'}`"></span></h2>
+                <div class="ana-bars" x-show="anaDaily().length">
+                  <template x-for="d in anaDaily()" :key="d.date">
+                    <div class="ana-bar-col" :title="`${d.date}：${fmtNum(d.total)} 次（成功 ${fmtNum(d.success)} / 异常 ${fmtNum(d.error)}）`">
+                      <div class="ana-bar-track">
+                        <div class="ana-bar-fill" :style="`height:${anaBarH(d.total, anaMaxDaily())}`"></div>
+                        <div class="ana-bar-err" :style="`height:${d.total ? (d.error / d.total * 100).toFixed(1) + '%' : '0%'}`"></div>
+                      </div>
+                      <div class="ana-bar-x" x-text="d.date.slice(5)"></div>
+                    </div>
+                  </template>
+                </div>
+                <p class="muted" x-show="!anaDaily().length">该窗口暂无请求。</p>
+                <p class="field-hint">柱高 = 当日请求量；柱顶红色段 = 异常占比。悬停查看明细。</p>
+                <svg class="ana-spark" viewBox="0 0 300 36" preserveAspectRatio="none" x-show="anaDaily().length">
+                  <polyline :points="anaSparkPoints(anaDaily().map(d => d.total), 300, 36)" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>
+                </svg>
+              </div>
+              <div class="glass card">
+                <h2 class="card-title">Tokens 趋势 <span class="dim">· 下方深色为输入，上方浅色为输出，柱总高按当日总量缩放</span></h2>
+                <div class="ana-bars" x-show="anaDaily().length">
+                  <template x-for="d in anaDaily()" :key="'tok-' + d.date">
+                    <div class="ana-bar-col" :title="`${d.date}：${fmtNum(d.total_tokens)} Tokens（输入 ${fmtNum(d.prompt_tokens)} / 输出 ${fmtNum(d.completion_tokens)}）`">
+                      <div class="ana-bar-track ana-stacked-track">
+                        <div class="ana-stacked-fill" :style="`height:${anaBarH(d.total_tokens, anaMaxDailyTokens())}`">
+                          <div class="ana-seg-out" :style="`height:${d.total_tokens ? (d.completion_tokens / d.total_tokens * 100).toFixed(1) + '%' : '0%'}`"></div>
+                          <div class="ana-seg-in" :style="`height:${d.total_tokens ? (d.prompt_tokens / d.total_tokens * 100).toFixed(1) + '%' : '0%'}`"></div>
+                        </div>
+                      </div>
+                      <div class="ana-bar-x" x-text="d.date.slice(5)"></div>
+                    </div>
+                  </template>
+                </div>
+                <p class="muted" x-show="!anaDaily().length">该窗口暂无 Token 记录。</p>
+                <p class="field-hint">柱总高按当日总量等比缩放；供应商未回传 usage 的请求不计入。</p>
+              </div>
+            </div>
+
+            <div class="ana-grid-2">
+              <div class="glass card">
+                <h2 class="card-title">成功率 / 错误率趋势</h2>
+                <svg class="ana-spark ana-spark-lg" viewBox="0 0 300 64" preserveAspectRatio="none" x-show="anaDaily().length">
+                  <polyline :points="anaSparkPoints(anaDaily().map(d => d.error_rate * 100), 300, 64)" fill="none" stroke="var(--danger)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>
+                </svg>
+                <div class="ana-legend"><span class="lg-dot" style="background:var(--danger)"></span>每日错误率（%）</div>
+                <p class="field-hint" x-text="anaDaily().length ? `窗口内最高 ${fmtPct(Math.max(...anaDaily().map(d => d.error_rate || 0)))}，平均 ${fmtPct((anaDaily().reduce((a, d) => a + (d.error_rate || 0), 0) / Math.max(1, anaDaily().length)))}` : ''"></p>
+              </div>
+              <div class="glass card">
+                <h2 class="card-title">平均耗时趋势</h2>
+                <svg class="ana-spark ana-spark-lg" viewBox="0 0 300 64" preserveAspectRatio="none" x-show="anaDaily().length">
+                  <polyline :points="anaSparkPoints(anaDaily().map(d => d.avg_duration_ms || 0), 300, 64)" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>
+                </svg>
+                <div class="ana-legend"><span class="lg-dot" style="background:var(--accent)"></span>每日平均耗时（ms）</div>
+                <p class="field-hint">只统计 duration_ms 非空的请求；超时与异常拉高均值时结合 P95 看。</p>
+              </div>
+            </div>
+
+            <!-- 开销大头：模型 -->
+            <div class="glass card">
+              <h2 class="card-title">开销大头 · 按模型 <span class="dim">（请求占比 / Token 占比 / 平均耗时 / 错误率）</span></h2>
+              <div class="table-wrap ana-table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>模型</th><th class="num">请求</th><th>请求占比</th><th class="num">Tokens</th><th>Token 占比</th><th class="num">均耗时</th><th class="num">均 Tokens/次</th><th class="num">错误率</th></tr></thead>
+                  <tbody>
+                    <tr x-show="!analyticsData.by_model.length"><td colspan="8" class="empty">暂无数据</td></tr>
+                    <template x-for="m in analyticsData.by_model" :key="m.model">
+                      <tr>
+                        <td class="mono truncate-cell" data-label="模型" data-span="full" x-text="m.model"></td>
+                        <td class="num mono" data-label="请求" x-text="fmtCompact(m.requests)"></td>
+                        <td data-label="请求占比" data-span="full"><div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(m.share)}`"></div><span class="mono dim" x-text="fmtPct(m.share)"></span></div></td>
+                        <td class="num mono" data-label="Tokens" x-text="fmtCompact(m.total_tokens)"></td>
+                        <td data-label="Token 占比" data-span="full"><div class="ana-hbar"><div class="ana-hbar-fill tok" :style="`width:${anaRowW(m.token_share)}`"></div><span class="mono dim" x-text="fmtPct(m.token_share)"></span></div></td>
+                        <td class="num mono" data-label="均耗时" x-text="fmtDuration(m.avg_duration_ms)"></td>
+                        <td class="num mono" data-label="均 Tokens/次" x-text="m.avg_tokens ?? '—'"></td>
+                        <td class="num mono" data-label="错误率" x-text="fmtPct(m.error_rate)" :class="{ 'stat-value-bad': m.error_rate > 0.1 }"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <p class="field-hint">调试建议：Token 占比最高的模型是降本首选；错误率 &gt;10% 标红，优先排查该模型的 Provider 绑定与超时配置。</p>
+            </div>
+
+            <!-- 开销大头：工具 -->
+            <div class="glass card">
+              <h2 class="card-title">开销大头 · 按工具</h2>
+              <div class="table-wrap ana-table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>工具</th><th class="num">请求</th><th>请求占比</th><th class="num">Tokens</th><th>Token 占比</th><th class="num">均耗时</th><th class="num">错误率</th></tr></thead>
+                  <tbody>
+                    <tr x-show="!analyticsData.by_tool.length"><td colspan="7" class="empty">暂无数据</td></tr>
+                    <template x-for="t in analyticsData.by_tool" :key="t.tool_id + t.tool_name">
+                      <tr>
+                        <td data-label="工具" data-span="full"><span x-text="t.tool_name || t.tool_id"></span> <span class="dim mono" x-show="t.tool_id" x-text="`#${t.tool_id}`"></span><div class="mono dim" x-text="`输入 ${fmtCompact(t.prompt_tokens)} / 输出 ${fmtCompact(t.completion_tokens)}`"></div></td>
+                        <td class="num mono" data-label="请求" x-text="fmtCompact(t.requests)"></td>
+                        <td data-label="请求占比" data-span="full"><div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(t.share)}`"></div><span class="mono dim" x-text="fmtPct(t.share)"></span></div></td>
+                        <td class="num mono" data-label="Tokens" x-text="fmtCompact(t.total_tokens)"></td>
+                        <td data-label="Token 占比" data-span="full"><div class="ana-hbar"><div class="ana-hbar-fill tok" :style="`width:${anaRowW(t.token_share)}`"></div><span class="mono dim" x-text="fmtPct(t.token_share)"></span></div></td>
+                        <td class="num mono" data-label="均耗时" x-text="fmtDuration(t.avg_duration_ms)"></td>
+                        <td class="num mono" data-label="错误率" x-text="fmtPct(t.error_rate)" :class="{ 'stat-value-bad': t.error_rate > 0.1 }"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <p class="field-hint">输入远大于输出的工具，优先优化 Prompt 裁剪与上下文复用；平均耗时最长的工具优先做流式与超时治理。</p>
+            </div>
+
+            <!-- Provider 与组合 -->
+            <div class="ana-grid-2">
+              <div class="glass card">
+                <h2 class="card-title">按 Provider <span class="dim">· 含备用切换率</span></h2>
+                <template x-for="p in analyticsData.by_provider" :key="p.provider_id">
+                  <div class="ana-row">
+                    <div class="ana-row-head"><span class="mono" x-text="p.label"></span><span class="dim mono" x-text="`${fmtCompact(p.requests)} 次 · ${fmtPct(p.share)}`"></span></div>
+                    <div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(p.share)}`"></div></div>
+                    <div class="dim mono ana-row-foot" x-text="`Tokens ${fmtCompact(p.total_tokens)}（${fmtPct(p.token_share)}）· 平均耗时 ${fmtDuration(p.avg_duration_ms)} · 错误率 ${fmtPct(p.error_rate)} · 备用切换 ${fmtPct(p.fallback_rate)}`"></div>
+                  </div>
+                </template>
+                <p class="muted" x-show="!analyticsData.by_provider.length">暂无 Provider 数据（旧数据无该字段会归为“未记录”）。</p>
+              </div>
+              <div class="glass card">
+                <h2 class="card-title">最贵 / 最慢组合 <span class="dim">· 工具 × 模型</span></h2>
+                <template x-for="c in analyticsData.combos" :key="c.label">
+                  <div class="ana-row">
+                    <div class="ana-row-head"><span x-text="c.label"></span><span class="dim mono" x-text="`${fmtCompact(c.requests)} 次`"></span></div>
+                    <div class="ana-hbar"><div class="ana-hbar-fill tok" :style="`width:${anaRowW(c.token_share)}`"></div></div>
+                    <div class="dim mono ana-row-foot" x-text="`Tokens 占比 ${fmtPct(c.token_share)} · 平均 ${c.avg_tokens ?? '—'} Tokens/次 · 平均耗时 ${fmtDuration(c.avg_duration_ms)} · 错误率 ${fmtPct(c.error_rate)}`"></div>
+                  </div>
+                </template>
+                <p class="muted" x-show="!analyticsData.combos.length">暂无组合数据。</p>
+                <p class="field-hint">优化顺序：Token 占比高 → 优先降本；平均耗时长 → 优先降延迟；错误率高 → 优先止血。</p>
+              </div>
+            </div>
+
+            <!-- Top 使用码 / 设备 -->
+            <div class="ana-grid-2">
+              <div class="glass card">
+                <h2 class="card-title">使用码排行 <span class="dim">· 按请求（前 15）</span></h2>
+                <div class="table-wrap ana-table-wrap">
+                  <table class="data-table">
+                    <thead><tr><th>使用码</th><th class="num">请求</th><th class="num">Tokens</th><th class="num">错误率</th><th>最近使用</th></tr></thead>
+                    <tbody>
+                      <tr x-show="!analyticsData.top_codes.length"><td colspan="5" class="empty">暂无数据</td></tr>
+                      <template x-for="c in analyticsData.top_codes" :key="c.code">
+                        <tr>
+                          <td class="mono" data-label="使用码" data-span="full"><span x-text="c.code"></span> <span class="dim" x-show="c.note" x-text="c.note"></span></td>
+                          <td class="num mono" data-label="请求" x-text="`${fmtCompact(c.requests)}（${fmtPct(c.share)}）`"></td>
+                          <td class="num mono" data-label="Tokens" x-text="`${fmtCompact(c.total_tokens)}（${fmtPct(c.token_share)}）`"></td>
+                          <td class="num mono" data-label="错误率" x-text="fmtPct(c.error_rate)"></td>
+                          <td class="dim mono" data-label="最近使用" data-span="full" x-text="fmtTime(c.last_used_at)"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+                <h2 class="card-title" style="margin-top:1rem">按 Tokens 排行 <span class="dim">· 真正的开销大头</span></h2>
+                <template x-for="(c, i) in analyticsData.top_codes_by_tokens.slice(0, 8)" :key="'tok-' + c.code">
+                  <div class="ana-row">
+                    <div class="ana-row-head"><span class="mono" x-text="`#${i + 1} ${c.code}`"></span><span class="dim mono" x-text="`${fmtCompact(c.total_tokens)}（${fmtPct(c.token_share)}）`"></span></div>
+                    <div class="ana-hbar"><div class="ana-hbar-fill tok" :style="`width:${anaRowW(c.token_share)}`"></div></div>
+                  </div>
+                </template>
+              </div>
+              <div class="glass card">
+                <h2 class="card-title">设备排行 <span class="dim">· 按请求（前 10）</span></h2>
+                <template x-for="d in analyticsData.top_devices" :key="d.device_id">
+                  <div class="ana-row">
+                    <div class="ana-row-head"><span x-text="d.label"></span><span class="dim mono" x-text="d.short_code"></span></div>
+                    <div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(d.share)}`"></div></div>
+                    <div class="dim mono ana-row-foot" x-text="`${fmtCompact(d.requests)} 次（${fmtPct(d.share)}）· ${fmtCompact(d.total_tokens)} tokens · 错误 ${fmtPct(d.error_rate)} · ${fmtTime(d.last_used_at)}`"></div>
+                  </div>
+                </template>
+                <p class="muted" x-show="!analyticsData.top_devices.length">暂无设备数据（旧数据或未上报指纹）。</p>
+                <h2 class="card-title" style="margin-top:1rem">状态分布</h2>
+                <div class="ana-donut-row">
+                  <div class="ana-donut-svg ana-donut-wide" role="img" :aria-label="`成功率 ${fmtPct(anaKpis().success_rate)}`" @mouseleave="donutHover = null">
+                    <svg viewBox="-80 -6 280 132">
+                      <circle cx="60" cy="60" r="44" fill="none" stroke="var(--border)" stroke-width="14"></circle>
+                      <circle cx="60" cy="60" r="44" fill="none" stroke="var(--ok)" stroke-width="14" style="cursor:pointer" @mouseenter="donutHover = 'success'" @click="donutHover = donutHover === 'success' ? null : 'success'" :stroke="donutStroke('success')" :stroke-opacity="donutStrokeOpacity('success')" :stroke-width="donutStrokeWidth('success')" :stroke-dasharray="donutSeg('success').dash" :stroke-dashoffset="donutSeg('success').offset" transform="rotate(-90 60 60)" stroke-linecap="butt"></circle>
+                      <circle cx="60" cy="60" r="44" fill="none" stroke="var(--faint)" stroke-width="14" style="cursor:pointer" @mouseenter="donutHover = 'cancelled'" @click="donutHover = donutHover === 'cancelled' ? null : 'cancelled'" :stroke="donutStroke('cancelled')" :stroke-opacity="donutStrokeOpacity('cancelled')" :stroke-width="donutStrokeWidth('cancelled')" :stroke-dasharray="donutSeg('cancelled').dash" :stroke-dashoffset="donutSeg('cancelled').offset" transform="rotate(-90 60 60)" stroke-linecap="butt"></circle>
+                      <circle cx="60" cy="60" r="44" fill="none" stroke="var(--danger)" stroke-width="14" style="cursor:pointer" @mouseenter="donutHover = 'error'" @click="donutHover = donutHover === 'error' ? null : 'error'" :stroke="donutStroke('error')" :stroke-opacity="donutStrokeOpacity('error')" :stroke-width="donutStrokeWidth('error')" :stroke-dasharray="donutSeg('error').dash" :stroke-dashoffset="donutSeg('error').offset" transform="rotate(-90 60 60)" stroke-linecap="butt"></circle>
+                      <g x-show="donutLabel('success').show" style="cursor:pointer" @mouseenter="donutHover = 'success'" @click="donutHover = donutHover === 'success' ? null : 'success'" :opacity="(!donutHover || donutHover === 'success') ? 1 : 0.35">
+                        <polyline :points="donutLabel('success').points" fill="none" stroke="var(--ok)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                        <circle :cx="donutLabel('success').ax" :cy="donutLabel('success').ay" r="2.6" fill="var(--ok)"></circle>
+                        <text :x="donutLabel('success').tx" :y="donutLabel('success').ly" :text-anchor="donutLabel('success').anchor" font-size="12" font-weight="700" fill="var(--text)" x-text="donutLabel('success').line1"></text>
+                        <text :x="donutLabel('success').tx" :y="donutLabel('success').ly2" :text-anchor="donutLabel('success').anchor" font-size="11" fill="var(--dim)" x-text="donutLabel('success').line2"></text>
+                      </g>
+                      <g x-show="donutLabel('cancelled').show" style="cursor:pointer" @mouseenter="donutHover = 'cancelled'" @click="donutHover = donutHover === 'cancelled' ? null : 'cancelled'" :opacity="(!donutHover || donutHover === 'cancelled') ? 1 : 0.35">
+                        <polyline :points="donutLabel('cancelled').points" fill="none" stroke="var(--faint)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                        <circle :cx="donutLabel('cancelled').ax" :cy="donutLabel('cancelled').ay" r="2.6" fill="var(--faint)"></circle>
+                        <text :x="donutLabel('cancelled').tx" :y="donutLabel('cancelled').ly" :text-anchor="donutLabel('cancelled').anchor" font-size="12" font-weight="700" fill="var(--text)" x-text="donutLabel('cancelled').line1"></text>
+                        <text :x="donutLabel('cancelled').tx" :y="donutLabel('cancelled').ly2" :text-anchor="donutLabel('cancelled').anchor" font-size="11" fill="var(--dim)" x-text="donutLabel('cancelled').line2"></text>
+                      </g>
+                      <g x-show="donutLabel('error').show" style="cursor:pointer" @mouseenter="donutHover = 'error'" @click="donutHover = donutHover === 'error' ? null : 'error'" :opacity="(!donutHover || donutHover === 'error') ? 1 : 0.35">
+                        <polyline :points="donutLabel('error').points" fill="none" stroke="var(--danger)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                        <circle :cx="donutLabel('error').ax" :cy="donutLabel('error').ay" r="2.6" fill="var(--danger)"></circle>
+                        <text :x="donutLabel('error').tx" :y="donutLabel('error').ly" :text-anchor="donutLabel('error').anchor" font-size="12" font-weight="700" fill="var(--text)" x-text="donutLabel('error').line1"></text>
+                        <text :x="donutLabel('error').tx" :y="donutLabel('error').ly2" :text-anchor="donutLabel('error').anchor" font-size="11" fill="var(--dim)" x-text="donutLabel('error').line2"></text>
+                      </g>
+                    </svg>
+                    <div class="ana-donut-center"><b x-text="donutCenter().pct"></b><span x-text="donutCenter().label"></span></div>
+                  </div>
+                  <div class="dim ana-donut-foot" x-text="`Tokens（估算口径）${fmtCompact(anaKpis().estimated)} 次 · Tokens 未上报 ${fmtCompact(anaKpis().missing_tokens)} · 耗时未记录 ${fmtCompact(anaKpis().missing_duration)}`"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 节律与耗时分布 -->
+            <div class="ana-grid-2">
+              <div class="glass card">
+                <h2 class="card-title">小时节律 <span class="dim">· UTC 小时，找高峰与空闲</span></h2>
+                <div class="ana-heat">
+                  <template x-for="h in analyticsData.by_hour" :key="h.hour">
+                    <div class="ana-heat-cell" :style="anaHeatStyle(h.requests)" :title="`${h.hour} 点：${fmtNum(h.requests)} 次 / ${fmtNum(h.total_tokens)} Tokens / 异常 ${fmtNum(h.error)} 次`">
+                      <span x-text="h.hour"></span>
+                      <b x-text="h.requests"></b>
+                    </div>
+                  </template>
+                </div>
+                <p class="field-hint">颜色越深请求越密；结合星期分布判断是上课高峰还是异常突刺。</p>
+                <h2 class="card-title" style="margin-top:1rem">星期分布</h2>
+                <template x-for="w in analyticsData.by_weekday" :key="w.weekday">
+                  <div class="ana-row">
+                    <div class="ana-row-head"><span x-text="w.label"></span><span class="dim mono" x-text="`${fmtCompact(w.requests)} 次 · ${fmtCompact(w.total_tokens)} tokens`"></span></div>
+                    <div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(w.requests / Math.max(1, anaKpis().total))}`"></div></div>
+                  </div>
+                </template>
+              </div>
+              <div class="glass card">
+                <h2 class="card-title">耗时分布 <span class="dim" x-text="`· P50 ${fmtDuration(analyticsData.latency.p50)} / P90 ${fmtDuration(analyticsData.latency.p90)} / P95 ${fmtDuration(analyticsData.latency.p95)} / P99 ${fmtDuration(analyticsData.latency.p99)} / 最大 ${fmtDuration(analyticsData.latency.max)}`"></span></h2>
+                <template x-for="b in analyticsData.latency.buckets" :key="b.label">
+                  <div class="ana-row">
+                    <div class="ana-row-head"><span class="mono" x-text="b.label"></span><span class="dim mono" x-text="`${fmtCompact(b.count)}（${fmtPct(b.share)}）`"></span></div>
+                    <div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(b.share)}`"></div></div>
+                  </div>
+                </template>
+                <p class="field-hint" x-text="`样本 ${fmtCompact(analyticsData.latency.count)} 次（耗时为空的不计）；P95 远大于均值说明长尾严重，优先查慢组合与 Provider 超时。`"></p>
+                <h2 class="card-title" style="margin-top:1rem">数据质量</h2>
+                <p class="muted" x-text="`Tokens 未上报 ${fmtCompact(anaKpis().missing_tokens)}（${fmtPct(anaKpis().total ? anaKpis().missing_tokens / anaKpis().total : 0)}）· 估算口径 ${fmtCompact(anaKpis().estimated)} 次 · 耗时未记录 ${fmtCompact(anaKpis().missing_duration)} · 备用切换 ${analyticsData.fallback.count} 次（${fmtPct(analyticsData.fallback.rate)}，最大 ${analyticsData.fallback.max_attempts ?? '—'} 次）`"></p>
+              </div>
+            </div>
+
+            <!-- 错误与慢请求 -->
+            <div class="ana-grid-2">
+              <div class="glass card">
+                <h2 class="card-title">错误分类 Top <span class="dim">· 点击编号查看日志详情</span></h2>
+                <template x-for="e in analyticsData.top_errors" :key="e.example_log_id">
+                  <div class="ana-err-card">
+                    <div class="ana-err-top">
+                      <button class="link-btn mono" @click="openAnalyticsLog(e.example_log_id)" x-text="`日志 #${e.example_log_id}`"></button>
+                      <span class="ana-err-count" x-text="`${fmtCompact(e.count)} 次 · 占异常 ${fmtPct(e.share)}`"></span>
+                      <span class="ana-err-actions">
+                        <button class="link-btn" @click="copyErrText(e.error_message)">复制原文</button>
+                      </span>
+                    </div>
+                    <div class="ana-err-share"><i :style="`width:${(Math.max(2, Math.min(100, (e.share || 0) * 100))).toFixed(1)}%`"></i></div>
+                    <div class="ana-err-kind" x-text="anaErrInfo(e.error_message).kind"></div>
+                    <div class="ana-err-why" x-text="anaErrInfo(e.error_message).why"></div>
+                    <div class="ana-chip-row">
+                      <span class="ana-chip mono" x-show="anaErrModel(e.error_message)" x-text="anaErrModel(e.error_message)"></span>
+                      <span class="ana-chip" x-text="`示例日志 #${e.example_log_id}`"></span>
+                    </div>
+                    <details class="ana-err-raw">
+                      <summary><span>查看上游返回的原始错误信息</span><span class="ana-err-actions"><button class="link-btn" @click.prevent.stop="copyErrText(e.error_message)">复制</button></span></summary>
+                      <pre class="mono" x-text="e.error_message"></pre>
+                    </details>
+                  </div>
+                </template>
+                <p class="muted" x-show="!analyticsData.top_errors.length">该窗口内暂无异常请求，服务状态良好。</p>
+                <h2 class="card-title" style="margin-top:1rem">最近异常记录（10 条）</h2>
+                <template x-for="r in analyticsData.recent_errors" :key="r.log_id">
+                  <div class="ana-recent-card" @click="openAnalyticsLog(r.log_id)">
+                    <button class="link-btn mono" @click.stop="openAnalyticsLog(r.log_id)" x-text="`#${r.log_id}`"></button>
+                    <span class="ana-recent-kind" x-text="anaErrInfo(r.error_message).kind"></span>
+                    <span class="ana-recent-time" x-text="fmtTime(r.created_at)"></span>
+                    <div class="ana-recent-meta">
+                      <span x-text="r.tool_name || ('工具 ' + (r.tool_id || '—'))"></span>
+                      <span class="mono" x-text="r.model || '模型未记录'"></span>
+                      <span class="mono" x-text="r.code"></span>
+                      <span class="mono" x-show="r.provider_name || r.provider_id" x-text="r.provider_name || r.provider_id"></span>
+                    </div>
+                    <div class="ana-recent-why" x-text="anaErrInfo(r.error_message).why"></div>
+                  </div>
+                </template>
+                <p class="muted" x-show="!analyticsData.recent_errors.length">暂无最近异常记录。</p>
+              </div>
+              <div class="glass card">
+                <h2 class="card-title">最慢请求 Top10 <span class="dim">· 点击跳详情，定位超时瓶颈</span></h2>
+                <div class="table-wrap ana-table-wrap">
+                  <table class="data-table">
+                    <thead><tr><th>日志</th><th class="num">耗时</th><th>工具 / 模型</th><th class="num">Tokens</th><th>时间</th></tr></thead>
+                    <tbody>
+                      <tr x-show="!analyticsData.slowest.length"><td colspan="5" class="empty">暂无耗时数据</td></tr>
+                      <template x-for="s in analyticsData.slowest" :key="s.log_id">
+                        <tr class="log-row" @click="openAnalyticsLog(s.log_id)">
+                          <td class="mono" data-label="日志" x-text="`#${s.log_id}`"></td>
+                          <td class="num mono" data-label="耗时" x-text="fmtDuration(s.duration_ms)"></td>
+                          <td data-label="工具 / 模型" data-span="full"><span x-text="s.tool_name || s.tool_id || '—'"></span> <span class="dim mono" x-text="s.model || ''"></span> <span class="status-badge" :class="'st-' + (s.status || 'success')" x-text="logStatusLabel(s.status)"></span></td>
+                          <td class="num mono" data-label="Tokens" x-text="s.total_tokens ?? '—'"></td>
+                          <td class="dim mono" data-label="时间" data-span="full" x-text="fmtTime(s.created_at)"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+                <p class="field-hint">慢且 Token 大 → 模型/输出裁剪；慢但 Token 小 → Provider 网络或排队，考虑换优先级或加超时重试。</p>
+              </div>
+            </div>
+          </div>
+        </template>
       </section>
 
       <!-- 使用码 -->

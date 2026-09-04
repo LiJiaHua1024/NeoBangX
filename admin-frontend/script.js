@@ -394,7 +394,7 @@ function createBackground(canvas) {
 
 function adminApp() {
   return {
-    version: "1.1.0",
+    version: "1.2.0",
     theme: "paper",
     themes: ADMIN_THEMES,
     tab: "dashboard",
@@ -439,6 +439,19 @@ function adminApp() {
       { id: "error", label: "异常" },
     ],
     logSummary: {},
+    // ============ 用量分析（顶级 LLM API 后台风格，全部自研 UI：分段选择 + div 条形 + SVG 折线 + conic 环形） ============
+    analyticsDays: 30,
+    analyticsDaysOptions: [
+      { id: 7, label: "近 7 天" },
+      { id: 14, label: "近 14 天" },
+      { id: 30, label: "近 30 天" },
+      { id: 90, label: "近 90 天" },
+      { id: 0, label: "全部" },
+    ],
+    analyticsData: null,
+    analyticsLoading: false,
+    analyticsError: "",
+    donutHover: null,
     // 详情抽屉
     logDetailOpen: false,
     logDetail: null,
@@ -564,6 +577,7 @@ function adminApp() {
       return (
         {
           dashboard: "概览",
+          analytics: "用量分析",
           codes: "使用码管理",
           logs: "使用日志",
           devices: "设备指纹",
@@ -577,6 +591,7 @@ function adminApp() {
       return (
         {
           dashboard: "查看整体使用情况与快捷入口",
+          analytics: "像顶级 LLM API 后台一样看开销大头、趋势与性能瓶颈",
           codes: "生成、启用/禁用/删除使用码，查看额度",
           logs: "查看每次工具调用的详细记录",
           devices: "按浏览器指纹聚合设备，备注区分不同用户",
@@ -766,6 +781,7 @@ function adminApp() {
         await Promise.all([this.loadStats(), this.loadCodes(), this.loadLogs()]);
         if (this.tab === "config" || this.tab === "logsettings") await this.loadConfig();
         if (this.tab === "parse") await this.loadMineru();
+        if (this.tab === "analytics") await this.loadAnalytics();
       } finally {
         this.loading = false;
       }
@@ -989,6 +1005,30 @@ function adminApp() {
     fmtNum(value) {
       if (value == null || value === "" || !Number.isFinite(Number(value))) return "—";
       return Number(value).toLocaleString("zh-CN");
+    },
+
+    /* 紧凑数字：≥1000 时按 k/M/B/T 进位并保留一位小数（如 1500→1.5k、2300000→2.3M）；
+       未达到千位时与 fmtNum 一致，保证小数字仍精确可读 */
+    fmtCompact(value) {
+      if (value == null || value === "" || !Number.isFinite(Number(value))) return "—";
+      const n = Number(value);
+      const sign = n < 0 ? "-" : "";
+      const abs = Math.abs(n);
+      if (abs < 1000) return n.toLocaleString("zh-CN");
+      const units = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "k"]];
+      for (let i = 0; i < units.length; i++) {
+        const [unit, suffix] = units[i];
+        if (abs >= unit) {
+          let v = abs / unit;
+          // 四舍五入后满 1000 则向更大单位进位（如 999999→1.0M 而非 1000.0k）
+          if (v >= 999.95 && i > 0) {
+            const [bigger, biggerSuffix] = units[i - 1];
+            return `${sign}${(abs / bigger).toFixed(1)}${biggerSuffix}`;
+          }
+          return `${sign}${v.toFixed(1)}${suffix}`;
+        }
+      }
+      return n.toLocaleString("zh-CN");
     },
 
     /* 扣费次数：null = 旧记录升级前未保存该字段，与「本次未扣费」(0) 不是一回事 */
@@ -1226,6 +1266,289 @@ function adminApp() {
       } catch {
         this.payloadRecording = null;
       }
+    },
+
+    /* ============ 用量分析（自研展示组件，无浏览器原生控件） ============ */
+    openAnalyticsTab() {
+      this.loadAnalytics();
+    },
+    setAnalyticsDays(d) {
+      if (this.analyticsDays === d || this.analyticsLoading) return;
+      this.analyticsDays = d;
+      this.loadAnalytics();
+    },
+    async loadAnalytics() {
+      this.analyticsLoading = true;
+      this.analyticsError = "";
+      this.donutHover = null;
+      try {
+        this.analyticsData = await this.api(`/api/admin/analytics?days=${this.analyticsDays}`);
+      } catch (e) {
+        this.analyticsError = e.message || "加载用量分析失败";
+        this.analyticsData = null;
+      } finally {
+        this.analyticsLoading = false;
+      }
+    },
+    fmtPct(ratio) {
+      if (ratio == null || !Number.isFinite(Number(ratio))) return "—";
+      return `${(Number(ratio) * 100).toFixed(1)}%`;
+    },
+    fmtDeltaRatio(v) {
+      if (v == null || !Number.isFinite(Number(v))) return "—";
+      const pct = Number(v) * 100;
+      const sign = pct > 0 ? "+" : "";
+      return `${sign}${pct.toFixed(1)}%`;
+    },
+    deltaTone(v, invert = false) {
+      if (v == null || !Number.isFinite(Number(v)) || Math.abs(v) < 0.0005) return "flat";
+      const up = v > 0;
+      const good = invert ? !up : up;
+      // 中性灰处理极小波动已在 flat 覆盖；此处只区分好/坏
+      return good ? "good" : "bad";
+    },
+    anaKpis() {
+      return (this.analyticsData && this.analyticsData.kpis) || {};
+    },
+    anaDeltas() {
+      return (this.analyticsData && this.analyticsData.deltas) || null;
+    },
+    anaDaily() {
+      return (this.analyticsData && this.analyticsData.daily) || [];
+    },
+    anaMaxDaily() {
+      const arr = this.anaDaily();
+      return Math.max(1, ...arr.map((d) => d.total || 0));
+    },
+    anaMaxDailyTokens() {
+      const arr = this.anaDaily();
+      return Math.max(1, ...arr.map((d) => d.total_tokens || 0));
+    },
+    anaMaxDailyLatency() {
+      const arr = this.anaDaily().map((d) => d.avg_duration_ms || 0);
+      return Math.max(1, ...arr);
+    },
+    anaMaxHour() {
+      const arr = (this.analyticsData && this.analyticsData.by_hour) || [];
+      return Math.max(1, ...arr.map((h) => h.requests || 0));
+    },
+    anaMaxWeek() {
+      const arr = (this.analyticsData && this.analyticsData.by_weekday) || [];
+      return Math.max(1, ...arr.map((w) => w.requests || 0));
+    },
+    anaMaxBucket() {
+      const b = (this.analyticsData && this.analyticsData.latency && this.analyticsData.latency.buckets) || [];
+      return Math.max(1, ...b.map((x) => x.count || 0));
+    },
+    anaBarH(v, max) {
+      const m = Math.max(1, Number(max) || 1);
+      return `${Math.max(3, Math.round((Number(v) || 0) / m * 100))}%`;
+    },
+    anaRowW(share) {
+      const s = Math.max(0, Math.min(1, Number(share) || 0));
+      return `${Math.max(1.5, s * 100).toFixed(1)}%`;
+    },
+    /* Donut segment math: static circles bound per key instead of template x-for,
+       which is unreliable inside the SVG namespace. Empty segments yield a
+       zero-length dash and stay invisible. */
+    donutSeg(key) {
+      const k = this.anaKpis();
+      const total = Math.max(1, Number(k.total) || 0);
+      const C = 2 * Math.PI * 44;
+      const vals = {
+        success: Number(k.success) || 0,
+        cancelled: Number(k.cancelled) || 0,
+        error: Number(k.error) || 0,
+      };
+      const order = ["success", "cancelled", "error"];
+      let acc = 0;
+      for (const o of order) {
+        const frac = vals[o] / total;
+        if (o === key) {
+          if (vals[o] <= 0) return { dash: `0 ${C.toFixed(1)}`, offset: "0", acc: 0, frac: 0 };
+          const len = frac * C;
+          const gap = frac < 1 ? 2.5 : 0;
+          return {
+            dash: `${Math.max(0.1, len - gap).toFixed(1)} ${(C - len + gap).toFixed(1)}`,
+            offset: (-acc * C).toFixed(1),
+            acc,
+            frac,
+          };
+        }
+        acc += frac;
+      }
+      return { dash: `0 ${C.toFixed(1)}`, offset: "0", acc: 0, frac: 0 };
+    },
+    donutKeyColor(key) {
+      return { success: "var(--ok)", cancelled: "var(--faint)", error: "var(--danger)" }[key] || "var(--faint)";
+    },
+    donutStroke(key) {
+      if (!this.donutHover || this.donutHover === key) return this.donutKeyColor(key);
+      return "var(--faint)";
+    },
+    donutStrokeOpacity(key) {
+      if (!this.donutHover || this.donutHover === key) return 1;
+      return 0.3;
+    },
+    donutStrokeWidth(key) {
+      return this.donutHover === key ? 18 : 14;
+    },
+    /* External labels (ECharts style): each segment gets a leader line plus a
+       two-line value label outside the ring. Line and label come from one
+       computation, so they can never disconnect. */
+    donutLabels() {
+      const k = this.anaKpis();
+      const total = Number(k.total) || 0;
+      const defs = [
+        { key: "success", name: "成功", value: Number(k.success) || 0 },
+        { key: "cancelled", name: "用户停止", value: Number(k.cancelled) || 0 },
+        { key: "error", name: "异常", value: Number(k.error) || 0 },
+      ];
+      let acc = 0;
+      const out = [];
+      for (const d of defs) {
+        const frac = total ? d.value / total : 0;
+        if (d.value > 0 && frac > 0) {
+          const mid = acc + frac / 2;
+          const ang = ((-90 + mid * 360) * Math.PI) / 180;
+          const cos = Math.cos(ang), sin = Math.sin(ang);
+          out.push({
+            key: d.key,
+            show: true,
+            side: cos >= 0 ? 1 : -1,
+            line1: `${d.name} ${this.fmtCompact(d.value)}次`,
+            line2: this.fmtPct(total ? d.value / total : 0),
+            ax: +(60 + 54 * cos).toFixed(1),
+            ay: +(60 + 54 * sin).toFixed(1),
+            ex: +(60 + 58 * cos).toFixed(1),
+            ey: +(60 + 58 * sin).toFixed(1),
+          });
+        }
+        acc += frac;
+      }
+      // 同侧标签纵向防重叠：按肘部高度排序并推开，最后整体钳制进画布
+      for (const side of [1, -1]) {
+        const group = out.filter((l) => l.side === side).sort((a, b) => a.ey - b.ey);
+        let prev = -Infinity;
+        for (const l of group) {
+          l.ly = Math.max(l.ey, prev + 17);
+          prev = l.ly;
+        }
+        const over = prev - 110;
+        if (group.length && over > 0) {
+          for (const l of group) l.ly -= over;
+        }
+        for (const l of group) {
+          l.ly = +Math.max(6, Math.min(110, l.ly)).toFixed(1);
+          l.ly2 = +(l.ly + 14).toFixed(1);
+          l.tx = +(l.ex + side * 8).toFixed(1);
+          l.anchor = side > 0 ? "start" : "end";
+          l.points = `${l.ax},${l.ay} ${l.ex},${l.ey} ${l.tx},${l.ly}`;
+        }
+      }
+      return out;
+    },
+    donutLabel(key) {
+      const hit = this.donutLabels().find((l) => l.key === key);
+      return hit || { show: false, points: "", tx: 0, ly: 0, ly2: 0, anchor: "start", line1: "", line2: "", ax: 0, ay: 0 };
+    },
+    donutCenter() {
+      const k = this.anaKpis();
+      const total = Number(k.total) || 0;
+      if (this.donutHover === "cancelled") {
+        return { pct: this.fmtPct(total ? (Number(k.cancelled) || 0) / total : 0), label: "用户停止" };
+      }
+      if (this.donutHover === "error") {
+        return { pct: this.fmtPct(k.error_rate), label: "异常占比" };
+      }
+      if (this.donutHover === "success") {
+        return { pct: this.fmtPct(k.success_rate), label: "成功占比" };
+      }
+      return { pct: this.fmtPct(k.success_rate), label: "成功率" };
+    },
+    anaHeatStyle(requests) {
+      const max = this.anaMaxHour() || 1;
+      const ratio = Math.max(0, Math.min(1, (Number(requests) || 0) / max));
+      const pct = Math.round(8 + ratio * 84);
+      const bg = `color-mix(in srgb, var(--accent) ${pct}%, var(--code-bg))`;
+      const fg = ratio > 0.55 ? "#fff" : "var(--text)";
+      return `background:${bg};color:${fg};`;
+    },
+    anaErrModel(msg) {
+      const s = String(msg || "");
+      const m = s.match(/[a-z0-9][a-z0-9\-_.]*\/[a-z0-9\-_.:/]+/i);
+      if (!m) return "";
+      return m[0].slice(0, 64);
+    },
+    anaErrInfo(msg) {
+      const s = String(msg || "").trim();
+      if (!s) return { kind: "未知错误", why: "错误信息为空，请点击编号查看该条日志的详情与上下文。" };
+      if (/429|ratelimit|rate-limited|temporarily.*limited/i.test(s)) {
+        return { kind: "限流 429", why: "上游供应商暂时限流：可稍后重试，或自备 Key 分散限额；限流集中在某一模型时可临时切换优先级。" };
+      }
+      if (/cannot connect|connection|ssl|econn|enotfound|socket/i.test(s)) {
+        return { kind: "连接失败", why: "无法连通上游网关：多为网络波动或上游不可用；若集中在某一 Provider，请检查其 Base URL 与网络。" };
+      }
+      if (/timeout|timed out|超时/i.test(s)) {
+        return { kind: "请求超时", why: "上游响应过慢或输出过长：可精简 Prompt、限制输出长度，或检查超时与 Fallback 配置。" };
+      }
+      if (/401|403|unauthorized|invalid key|invalid_api_key|insufficient/i.test(s)) {
+        return { kind: "鉴权或额度失败", why: "上游 Key 无效、过期或额度不足：请检查对应 Provider 的 API Key 与剩余额度。" };
+      }
+      if (/\b400\b|invalid_request|bad request|validation/i.test(s)) {
+        return { kind: "请求参数错误", why: "请求参数被上游拒绝：多为模型不支持该参数、内容超限或格式不合法。" };
+      }
+      if (/apierror|provider returned error|openrouterexception|5\d\d/i.test(s)) {
+        return { kind: "上游返回错误", why: "上游网关返回了错误响应：点击编号查看详情中的完整错误信息，确认是否需要切换 Provider。" };
+      }
+      return { kind: "调用失败", why: "本次调用未成功：点击编号查看详情中的完整错误信息与耗时、Tokens 定位原因。" };
+    },
+    async copyErrText(text) {
+      await this.copyText(String(text || ""));
+    },
+    anaSparkPoints(values, w, h) {
+      const arr = (values || []).map((v) => Number(v) || 0);
+      if (!arr.length) return "";
+      const max = Math.max(1, ...arr);
+      const min = Math.min(...arr);
+      const span = Math.max(1e-9, max - min);
+      const n = arr.length;
+      return arr.map((v, i) => {
+        const x = n === 1 ? w / 2 : (i / (n - 1)) * w;
+        const y = h - 3 - ((v - min) / span) * (h - 6);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(" ");
+    },
+    anaRangeLabel() {
+      const d = this.analyticsData;
+      if (!d) return "";
+      if (d.range.days === 0) return `全部数据 · 共 ${this.fmtCompact(d.kpis.total)} 次请求`;
+      return `近 ${d.range.days} 天 · 共 ${this.fmtCompact(d.kpis.total)} 次请求`;
+    },
+    async copyAnalyticsSummary() {
+      const d = this.analyticsData;
+      if (!d) return;
+      const k = d.kpis || {};
+      const lines = [
+        `用量分析（${this.anaRangeLabel()}）`,
+        `请求：${k.total ?? "—"} 次（成功 ${k.success ?? 0} / 用户停止 ${k.cancelled ?? 0} / 异常 ${k.error ?? 0}，成功率 ${this.fmtPct(k.success_rate)}）`,
+        `Tokens：合计 ${k.total_tokens ?? "—"}（输入 ${k.prompt_tokens ?? 0} / 输出 ${k.completion_tokens ?? 0}，平均 ${k.avg_tokens_per_req ?? "—"} Tokens/次）`,
+        `耗时：平均 ${this.fmtDuration(k.avg_duration_ms)} / P95 ${this.fmtDuration(d.latency?.p95)} / P99 ${this.fmtDuration(d.latency?.p99)}`,
+        `活跃：使用码 ${k.active_codes ?? 0} · 设备 ${k.active_devices ?? 0} · 模型 ${k.active_models ?? 0} · 工具 ${k.active_tools ?? 0} · 扣费 ${k.units ?? 0} 次`,
+        "",
+        `模型 Top（按请求）：${(d.by_model || []).slice(0, 5).map((m) => `${m.model}×${m.requests}（${this.fmtPct(m.share)}）`).join("、") || "—"}`,
+        `工具 Top（按请求）：${(d.by_tool || []).slice(0, 5).map((t) => `${t.label}×${t.requests}（${this.fmtPct(t.share)}）`).join("、") || "—"}`,
+        `Provider Top：${(d.by_provider || []).slice(0, 5).map((p) => `${p.label}×${p.requests}（${this.fmtPct(p.share)}）`).join("、") || "—"}`,
+        `使用码 Top：${(d.top_codes || []).slice(0, 5).map((c) => `${c.code}×${c.requests}`).join("、") || "—"}`,
+        d.peak ? `单日峰值：${d.peak.date} ${d.peak.total} 次 / ${d.peak.total_tokens} tokens` : "",
+        `备用切换：${d.fallback?.count ?? 0} 次（${this.fmtPct(d.fallback?.rate)}），平均尝试 ${d.fallback?.avg_attempts ?? "—"} 次`,
+        `错误 Top：${(d.top_errors || []).slice(0, 3).map((e) => `${e.error_message.slice(0, 40)}×${e.count}`).join("；") || "—"}`,
+      ].filter(Boolean);
+      await this.copyText(lines.join("\n"));
+    },
+    openAnalyticsLog(id) {
+      if (id == null) return;
+      this.openLogDetail(id);
     },
 
     resetLogFilters() {

@@ -155,6 +155,593 @@ async def stats(db: Annotated[Session, Depends(get_db)]):
     }
 
 
+@router.get("/analytics")
+async def usage_analytics(
+    db: Annotated[Session, Depends(get_db)],
+    days: int = Query(30, description="统计窗口：7/14/30/90，0=全部"),
+):
+    """用量分析聚合（管理后台「用量分析」Tab 数据源）。
+
+    单次返回窗口内的全部预聚合：KPI（含环比）、每日趋势、
+    按模型/工具/Provider/使用码/设备/小时/星期的分布、
+    耗时分位数与直方图、工具×模型组合、错误 Top、慢请求与最近异常、
+    Fallback 与 Token 数据质量。前端只做展示，不做全量拉取。
+    """
+    from collections import Counter
+    from datetime import timedelta
+
+    if days not in (0, 7, 14, 30, 90):
+        raise HTTPException(status_code=400, detail="days 仅支持 7/14/30/90/0（0=全部）")
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if days == 0:
+        earliest = db.query(func.min(UsageLog.created_at)).scalar()
+        start = earliest if earliest is not None else now
+        prev_start = None
+        prev_end = None
+    else:
+        start = now - timedelta(days=days)
+        prev_end = start
+        prev_start = start - timedelta(days=days)
+
+    def _base(s, e):
+        q = db.query(UsageLog)
+        if s is not None:
+            q = q.filter(UsageLog.created_at >= s)
+        if e is not None:
+            q = q.filter(UsageLog.created_at < e)
+        return q
+
+    def _kpis(s, e):
+        q = _base(s, e)
+        try:
+            row = q.with_entities(
+                func.count(UsageLog.id).label("total"),
+                func.coalesce(func.sum(case((status_matches("success"), 1), else_=0)), 0).label("success"),
+                func.coalesce(func.sum(case((status_matches("cancelled"), 1), else_=0)), 0).label("cancelled"),
+                func.coalesce(func.sum(case((status_matches("error"), 1), else_=0)), 0).label("error"),
+                func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
+                func.coalesce(func.sum(UsageLog.completion_tokens), 0).label("completion_tokens"),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+                func.avg(UsageLog.duration_ms).label("avg_ms"),
+                func.coalesce(func.sum(UsageLog.units), 0).label("units"),
+                func.coalesce(func.sum(case((UsageLog.tokens_estimated.is_(True), 1), else_=0)), 0).label("estimated"),
+                func.coalesce(func.sum(case((UsageLog.total_tokens.is_(None), 1), else_=0)), 0).label("missing_tokens"),
+                func.coalesce(func.sum(case((UsageLog.duration_ms.is_(None), 1), else_=0)), 0).label("missing_duration"),
+                func.count(func.distinct(UsageLog.code)).label("active_codes"),
+                func.count(func.distinct(UsageLog.model)).label("active_models"),
+                func.count(func.distinct(UsageLog.tool_id)).label("active_tools"),
+                func.count(func.distinct(UsageLog.provider_id)).label("active_providers"),
+            ).one()
+        except Exception:
+            logger.exception("analytics kpis failed")
+            return {
+                "total": 0, "success": 0, "cancelled": 0, "error": 0,
+                "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                "avg_duration_ms": None, "units": 0, "estimated": 0,
+                "missing_tokens": 0, "missing_duration": 0,
+                "active_codes": 0, "active_models": 0, "active_tools": 0,
+                "active_providers": 0, "active_devices": 0,
+                "success_rate": 0.0, "error_rate": 0.0,
+                "avg_tokens_per_req": None,
+            }
+        try:
+            active_devices = q.with_entities(func.count(func.distinct(UsageLog.device_id))).scalar() or 0
+        except Exception:
+            active_devices = 0
+        total = int(row.total or 0)
+        success = int(row.success or 0)
+        error = int(row.error or 0)
+        avg_ms = round(float(row.avg_ms)) if row.avg_ms is not None else None
+        total_tokens = int(row.total_tokens or 0)
+        return {
+            "total": total,
+            "success": success,
+            "cancelled": int(row.cancelled or 0),
+            "error": error,
+            "prompt_tokens": int(row.prompt_tokens or 0),
+            "completion_tokens": int(row.completion_tokens or 0),
+            "total_tokens": total_tokens,
+            "avg_duration_ms": avg_ms,
+            "units": int(row.units or 0),
+            "estimated": int(row.estimated or 0),
+            "missing_tokens": int(row.missing_tokens or 0),
+            "missing_duration": int(row.missing_duration or 0),
+            "active_codes": int(row.active_codes or 0),
+            "active_models": int(row.active_models or 0),
+            "active_tools": int(row.active_tools or 0),
+            "active_providers": int(row.active_providers or 0),
+            "active_devices": int(active_devices or 0),
+            "success_rate": round(success / total, 4) if total else 0.0,
+            "error_rate": round(error / total, 4) if total else 0.0,
+            "avg_tokens_per_req": round(total_tokens / total, 1) if total else None,
+        }
+
+    def _pct(a, b):
+        if b is None or b == 0 or a is None:
+            return None
+        try:
+            return round((a - b) / abs(b), 4)
+        except Exception:
+            return None
+
+    kpis = _kpis(start if days != 0 else None, now)
+    prev = _kpis(prev_start, prev_end) if prev_start is not None else None
+    deltas = None
+    if prev is not None:
+        deltas = {
+            "total": _pct(kpis["total"], prev["total"]),
+            "total_tokens": _pct(kpis["total_tokens"], prev["total_tokens"]),
+            "error_rate_pp": round((kpis["error_rate"] - prev["error_rate"]) * 100, 2),
+            "avg_duration_ms": _pct(kpis["avg_duration_ms"], prev["avg_duration_ms"]),
+            "active_codes": _pct(kpis["active_codes"], prev["active_codes"]),
+            "success_rate_pp": round((kpis["success_rate"] - prev["success_rate"]) * 100, 2),
+        }
+
+    # ---------- 每日趋势 ----------
+    daily: list[dict] = []
+    try:
+        date_col = func.date(UsageLog.created_at).label("d")
+        rows = (
+            _base(start if days != 0 else None, now)
+            .with_entities(
+                date_col,
+                func.count(UsageLog.id).label("total"),
+                func.coalesce(func.sum(case((status_matches("success"), 1), else_=0)), 0).label("success"),
+                func.coalesce(func.sum(case((status_matches("cancelled"), 1), else_=0)), 0).label("cancelled"),
+                func.coalesce(func.sum(case((status_matches("error"), 1), else_=0)), 0).label("error"),
+                func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
+                func.coalesce(func.sum(UsageLog.completion_tokens), 0).label("completion_tokens"),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+                func.avg(UsageLog.duration_ms).label("avg_ms"),
+                func.count(func.distinct(UsageLog.code)).label("active_codes"),
+            )
+            .group_by(date_col)
+            .order_by(date_col)
+            .all()
+        )
+        # 全部窗口跨度过大时按周聚合，避免前端上千个点
+        if days == 0 and len(rows) > 400:
+            week_col = func.strftime("%Y-W%W", UsageLog.created_at).label("d")
+            rows = (
+                _base(None, now)
+                .with_entities(
+                    week_col,
+                    func.count(UsageLog.id).label("total"),
+                    func.coalesce(func.sum(case((status_matches("success"), 1), else_=0)), 0).label("success"),
+                    func.coalesce(func.sum(case((status_matches("cancelled"), 1), else_=0)), 0).label("cancelled"),
+                    func.coalesce(func.sum(case((status_matches("error"), 1), else_=0)), 0).label("error"),
+                    func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
+                    func.coalesce(func.sum(UsageLog.completion_tokens), 0).label("completion_tokens"),
+                    func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+                    func.avg(UsageLog.duration_ms).label("avg_ms"),
+                    func.count(func.distinct(UsageLog.code)).label("active_codes"),
+                )
+                .group_by(week_col)
+                .order_by(week_col)
+                .all()
+            )
+        for r in rows:
+            total = int(r.total or 0)
+            daily.append({
+                "date": str(r.d),
+                "total": total,
+                "success": int(r.success or 0),
+                "cancelled": int(r.cancelled or 0),
+                "error": int(r.error or 0),
+                "error_rate": round(int(r.error or 0) / total, 4) if total else 0.0,
+                "prompt_tokens": int(r.prompt_tokens or 0),
+                "completion_tokens": int(r.completion_tokens or 0),
+                "total_tokens": int(r.total_tokens or 0),
+                "avg_duration_ms": round(float(r.avg_ms)) if r.avg_ms is not None else None,
+                "active_codes": int(r.active_codes or 0),
+            })
+    except Exception:
+        logger.exception("analytics daily failed")
+        daily = []
+
+    def _dist_group(*cols, limit=12):
+        try:
+            q = _base(start if days != 0 else None, now).with_entities(
+                *cols,
+                func.count(UsageLog.id).label("requests"),
+                func.coalesce(func.sum(case((status_matches("success"), 1), else_=0)), 0).label("success"),
+                func.coalesce(func.sum(case((status_matches("error"), 1), else_=0)), 0).label("error"),
+                func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
+                func.coalesce(func.sum(UsageLog.completion_tokens), 0).label("completion_tokens"),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+                func.avg(UsageLog.duration_ms).label("avg_ms"),
+                func.avg(UsageLog.fallback_attempts).label("fallback_avg"),
+                func.coalesce(func.sum(case((UsageLog.fallback_attempts > 0, 1), else_=0)), 0).label("fallback_count"),
+            )
+            for c in cols:
+                q = q.group_by(c)
+            q = q.order_by(desc("requests")).limit(limit)
+            return q.all()
+        except Exception:
+            logger.exception("analytics dist failed")
+            return []
+
+    total_req = kpis["total"] or 0
+    total_tok = kpis["total_tokens"] or 0
+
+    # ---------- 按模型 ----------
+    by_model = []
+    for r in _dist_group(UsageLog.model, limit=15):
+        req = int(r.requests or 0)
+        tok = int(r.total_tokens or 0)
+        err = int(r.error or 0)
+        by_model.append({
+            "model": r.model or "（未记录）",
+            "requests": req,
+            "share": round(req / total_req, 4) if total_req else 0.0,
+            "success": int(r.success or 0),
+            "error": err,
+            "error_rate": round(err / req, 4) if req else 0.0,
+            "prompt_tokens": int(r.prompt_tokens or 0),
+            "completion_tokens": int(r.completion_tokens or 0),
+            "total_tokens": tok,
+            "token_share": round(tok / total_tok, 4) if total_tok else 0.0,
+            "avg_duration_ms": round(float(r.avg_ms)) if r.avg_ms is not None else None,
+            "avg_tokens": round(tok / req, 1) if req else None,
+            "fallback_rate": round(int(r.fallback_count or 0) / req, 4) if req else 0.0,
+        })
+
+    # ---------- 按工具 ----------
+    by_tool = []
+    for r in _dist_group(UsageLog.tool_id, UsageLog.tool_name, limit=15):
+        req = int(r.requests or 0)
+        tok = int(r.total_tokens or 0)
+        err = int(r.error or 0)
+        by_tool.append({
+            "tool_id": r.tool_id or "（未记录）",
+            "tool_name": r.tool_name or "",
+            "label": (r.tool_name or r.tool_id or "（未记录）"),
+            "requests": req,
+            "share": round(req / total_req, 4) if total_req else 0.0,
+            "success": int(r.success or 0),
+            "error": err,
+            "error_rate": round(err / req, 4) if req else 0.0,
+            "prompt_tokens": int(r.prompt_tokens or 0),
+            "completion_tokens": int(r.completion_tokens or 0),
+            "total_tokens": tok,
+            "token_share": round(tok / total_tok, 4) if total_tok else 0.0,
+            "avg_duration_ms": round(float(r.avg_ms)) if r.avg_ms is not None else None,
+            "avg_tokens": round(tok / req, 1) if req else None,
+        })
+
+    # ---------- 按 Provider ----------
+    by_provider = []
+    for r in _dist_group(UsageLog.provider_id, UsageLog.provider_name, limit=15):
+        req = int(r.requests or 0)
+        tok = int(r.total_tokens or 0)
+        err = int(r.error or 0)
+        pid = r.provider_id or ""
+        by_provider.append({
+            "provider_id": pid or "（未记录/旧数据）",
+            "provider_name": r.provider_name or "",
+            "label": (r.provider_name or pid or "（未记录/旧数据）"),
+            "requests": req,
+            "share": round(req / total_req, 4) if total_req else 0.0,
+            "success": int(r.success or 0),
+            "error": err,
+            "error_rate": round(err / req, 4) if req else 0.0,
+            "total_tokens": tok,
+            "token_share": round(tok / total_tok, 4) if total_tok else 0.0,
+            "avg_duration_ms": round(float(r.avg_ms)) if r.avg_ms is not None else None,
+            "fallback_avg": round(float(r.fallback_avg), 2) if r.fallback_avg is not None else None,
+            "fallback_rate": round(int(r.fallback_count or 0) / req, 4) if req else 0.0,
+        })
+
+    # ---------- 工具×模型组合（定位最贵/最慢组合） ----------
+    combos = []
+    for r in _dist_group(UsageLog.tool_id, UsageLog.tool_name, UsageLog.model, limit=15):
+        req = int(r.requests or 0)
+        tok = int(r.total_tokens or 0)
+        err = int(r.error or 0)
+        combos.append({
+            "tool_id": r.tool_id or "",
+            "tool_name": r.tool_name or "",
+            "model": r.model or "",
+            "label": f"{r.tool_name or r.tool_id or '—'} × {r.model or '—'}",
+            "requests": req,
+            "share": round(req / total_req, 4) if total_req else 0.0,
+            "total_tokens": tok,
+            "token_share": round(tok / total_tok, 4) if total_tok else 0.0,
+            "avg_duration_ms": round(float(r.avg_ms)) if r.avg_ms is not None else None,
+            "avg_tokens": round(tok / req, 1) if req else None,
+            "error": err,
+            "error_rate": round(err / req, 4) if req else 0.0,
+        })
+
+    # ---------- Top 使用码 ----------
+    top_codes: list[dict] = []
+    top_codes_by_tokens: list[dict] = []
+    try:
+        rows = (
+            _base(start if days != 0 else None, now)
+            .with_entities(
+                UsageLog.code,
+                func.count(UsageLog.id).label("requests"),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0).label("tokens"),
+                func.coalesce(func.sum(case((status_matches("error"), 1), else_=0)), 0).label("error"),
+                func.avg(UsageLog.duration_ms).label("avg_ms"),
+                func.max(UsageLog.created_at).label("last_at"),
+            )
+            .group_by(UsageLog.code)
+            .order_by(desc("requests"))
+            .limit(15)
+            .all()
+        )
+        code_notes: dict[str, str] = {}
+        code_types: dict[str, str] = {}
+        try:
+            for c in db.query(UsageCode).filter(UsageCode.code.in_([r.code for r in rows])).all():
+                code_notes[c.code] = c.note or ""
+                code_types[c.code] = c.code_type or ""
+        except Exception:
+            pass
+        for r in rows:
+            req = int(r.requests or 0)
+            top_codes.append({
+                "code": r.code or "（未记录）",
+                "note": code_notes.get(r.code or "", ""),
+                "code_type": code_types.get(r.code or "", ""),
+                "requests": req,
+                "share": round(req / total_req, 4) if total_req else 0.0,
+                "total_tokens": int(r.tokens or 0),
+                "token_share": round(int(r.tokens or 0) / total_tok, 4) if total_tok else 0.0,
+                "error": int(r.error or 0),
+                "error_rate": round(int(r.error or 0) / req, 4) if req else 0.0,
+                "avg_duration_ms": round(float(r.avg_ms)) if r.avg_ms is not None else None,
+                "last_used_at": r.last_at.isoformat() if r.last_at else None,
+            })
+        top_codes_by_tokens = sorted(top_codes, key=lambda x: x["total_tokens"], reverse=True)[:15]
+    except Exception:
+        logger.exception("analytics top codes failed")
+        top_codes = []
+        top_codes_by_tokens = []
+
+    # ---------- Top 设备 ----------
+    top_devices = []
+    try:
+        rows = (
+            _base(start if days != 0 else None, now)
+            .filter(UsageLog.device_id.is_not(None))
+            .with_entities(
+                UsageLog.device_id,
+                func.count(UsageLog.id).label("requests"),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0).label("tokens"),
+                func.coalesce(func.sum(case((status_matches("error"), 1), else_=0)), 0).label("error"),
+                func.avg(UsageLog.duration_ms).label("avg_ms"),
+                func.max(UsageLog.created_at).label("last_at"),
+            )
+            .group_by(UsageLog.device_id)
+            .order_by(desc("requests"))
+            .limit(10)
+            .all()
+        )
+        dev_map = {}
+        try:
+            ids = [r.device_id for r in rows if r.device_id is not None]
+            if ids:
+                for d in db.query(Device).filter(Device.id.in_(ids)).all():
+                    dev_map[d.id] = d.to_dict()
+        except Exception:
+            pass
+        for r in rows:
+            req = int(r.requests or 0)
+            d = dev_map.get(r.device_id or -1, {})
+            top_devices.append({
+                "device_id": r.device_id,
+                "label": (d.get("note") or d.get("auto_name") or d.get("short_code") or f"#{r.device_id}"),
+                "short_code": d.get("short_code") or "",
+                "requests": req,
+                "share": round(req / total_req, 4) if total_req else 0.0,
+                "total_tokens": int(r.tokens or 0),
+                "error": int(r.error or 0),
+                "error_rate": round(int(r.error or 0) / req, 4) if req else 0.0,
+                "avg_duration_ms": round(float(r.avg_ms)) if r.avg_ms is not None else None,
+                "last_used_at": r.last_at.isoformat() if r.last_at else None,
+            })
+    except Exception:
+        logger.exception("analytics top devices failed")
+        top_devices = []
+
+    # ---------- 小时 / 星期分布 ----------
+    by_hour = [{"hour": h, "requests": 0, "total_tokens": 0, "error": 0} for h in range(24)]
+    by_weekday = [{"weekday": i, "label": l, "requests": 0, "total_tokens": 0} for i, l in enumerate(["周一", "周二", "周三", "周四", "周五", "周六", "周日"])]
+    try:
+        hour_col = func.strftime("%H", UsageLog.created_at).label("h")
+        for r in (
+            _base(start if days != 0 else None, now)
+            .with_entities(
+                hour_col,
+                func.count(UsageLog.id).label("requests"),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0).label("tokens"),
+                func.coalesce(func.sum(case((status_matches("error"), 1), else_=0)), 0).label("error"),
+            )
+            .group_by(hour_col)
+            .all()
+        ):
+            try:
+                h = int(str(r.h))
+            except Exception:
+                continue
+            if 0 <= h <= 23:
+                by_hour[h] = {"hour": h, "requests": int(r.requests or 0), "total_tokens": int(r.tokens or 0), "error": int(r.error or 0)}
+        # %w: 0=周日..6=周六 → 换算为 0=周一..6=周日
+        wd_col = func.strftime("%w", UsageLog.created_at).label("w")
+        for r in (
+            _base(start if days != 0 else None, now)
+            .with_entities(
+                wd_col,
+                func.count(UsageLog.id).label("requests"),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0).label("tokens"),
+            )
+            .group_by(wd_col)
+            .all()
+        ):
+            try:
+                w = int(str(r.w))
+            except Exception:
+                continue
+            idx = (w + 6) % 7
+            by_weekday[idx]["requests"] = int(r.requests or 0)
+            by_weekday[idx]["total_tokens"] = int(r.tokens or 0)
+    except Exception:
+        logger.exception("analytics hour/weekday failed")
+
+    # ---------- 耗时分位数 + 直方图 ----------
+    latency = {"p50": None, "p90": None, "p95": None, "p99": None, "max": None, "avg": kpis["avg_duration_ms"], "count": 0, "buckets": []}
+    bucket_defs = [(1000, "<1s"), (3000, "1–3s"), (5000, "3–5s"), (10000, "5–10s"), (30000, "10–30s"), (None, "30s+")]
+    bucket_counts = [0] * len(bucket_defs)
+    try:
+        durations = [
+            r[0] for r in _base(start if days != 0 else None, now)
+            .with_entities(UsageLog.duration_ms)
+            .filter(UsageLog.duration_ms.is_not(None))
+            .all()
+        ]
+        durations = sorted(int(d) for d in durations if d is not None)
+        n = len(durations)
+        latency["count"] = n
+        if n:
+            def _q(p):
+                idx = min(n - 1, max(0, int(p * n)))
+                return int(durations[idx])
+            latency.update({
+                "p50": _q(0.50), "p90": _q(0.90), "p95": _q(0.95), "p99": _q(0.99),
+                "max": int(durations[-1]),
+            })
+            for d in durations:
+                for i, (le, _label) in enumerate(bucket_defs):
+                    if le is None or d < le:
+                        bucket_counts[i] += 1
+                        break
+        latency["buckets"] = [
+            {"label": label, "count": bucket_counts[i], "share": round(bucket_counts[i] / n, 4) if n else 0.0}
+            for i, (_le, label) in enumerate(bucket_defs)
+        ]
+    except Exception:
+        logger.exception("analytics latency failed")
+        latency["buckets"] = [{"label": label, "count": 0, "share": 0.0} for _le, label in bucket_defs]
+
+    # ---------- 错误 Top / 慢请求 / 最近异常 / Fallback ----------
+    top_errors = []
+    try:
+        rows = (
+            _base(start if days != 0 else None, now)
+            .filter(status_matches("error"))
+            .with_entities(
+                UsageLog.error_message,
+                func.count(UsageLog.id).label("count"),
+                func.max(UsageLog.id).label("example_id"),
+            )
+            .group_by(UsageLog.error_message)
+            .order_by(desc("count"))
+            .limit(10)
+            .all()
+        )
+        err_total = kpis["error"] or 0
+        for r in rows:
+            msg = (r.error_message or "（空错误信息）")
+            top_errors.append({
+                "error_message": msg[:300],
+                "count": int(r.count or 0),
+                "share": round(int(r.count or 0) / err_total, 4) if err_total else 0.0,
+                "example_log_id": int(r.example_id) if r.example_id is not None else None,
+            })
+    except Exception:
+        logger.exception("analytics top errors failed")
+
+    slowest = []
+    try:
+        rows = (
+            _base(start if days != 0 else None, now)
+            .filter(UsageLog.duration_ms.is_not(None))
+            .order_by(desc(UsageLog.duration_ms))
+            .limit(10)
+            .all()
+        )
+        for r in rows:
+            slowest.append({
+                "log_id": r.id, "code": r.code, "tool_id": r.tool_id, "tool_name": r.tool_name,
+                "model": r.model, "status": r.status or "success",
+                "duration_ms": r.duration_ms, "total_tokens": r.total_tokens,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            })
+    except Exception:
+        logger.exception("analytics slowest failed")
+
+    recent_errors = []
+    try:
+        rows = (
+            _base(start if days != 0 else None, now)
+            .filter(status_matches("error"))
+            .order_by(desc(UsageLog.id))
+            .limit(10)
+            .all()
+        )
+        for r in rows:
+            recent_errors.append({
+                "log_id": r.id, "code": r.code, "tool_id": r.tool_id, "tool_name": r.tool_name,
+                "model": r.model, "provider_name": r.provider_name or "", "provider_id": r.provider_id or "",
+                "error_message": (r.error_message or "")[:200],
+                "duration_ms": r.duration_ms,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            })
+    except Exception:
+        logger.exception("analytics recent errors failed")
+
+    fallback = {"rate": 0.0, "count": 0, "avg_attempts": None, "max_attempts": None}
+    try:
+        q = _base(start if days != 0 else None, now)
+        fb_count = q.filter(UsageLog.fallback_attempts > 0).count()
+        agg = q.with_entities(func.avg(UsageLog.fallback_attempts), func.max(UsageLog.fallback_attempts)).one()
+        fallback = {
+            "count": int(fb_count or 0),
+            "rate": round(int(fb_count or 0) / total_req, 4) if total_req else 0.0,
+            "avg_attempts": round(float(agg[0]), 2) if agg[0] is not None else None,
+            "max_attempts": int(agg[1]) if agg[1] is not None else None,
+        }
+    except Exception:
+        logger.exception("analytics fallback failed")
+
+    peak = None
+    if daily:
+        best = max(daily, key=lambda d: d["total"])
+        peak = {"date": best["date"], "total": best["total"], "total_tokens": best["total_tokens"]}
+
+    return {
+        "range": {
+            "days": days,
+            "start": start.isoformat() if days != 0 else None,
+            "end": now.isoformat(),
+            "daily_grain": "week" if (days == 0 and daily and str(daily[0].get("date", "")).startswith("20") and "-W" in str(daily[0].get("date", ""))) else "day",
+        },
+        "kpis": kpis,
+        "prev": prev,
+        "deltas": deltas,
+        "daily": daily,
+        "by_model": by_model,
+        "by_tool": by_tool,
+        "by_provider": by_provider,
+        "combos": combos,
+        "top_codes": top_codes,
+        "top_codes_by_tokens": top_codes_by_tokens,
+        "top_devices": top_devices,
+        "by_hour": by_hour,
+        "by_weekday": by_weekday,
+        "latency": latency,
+        "top_errors": top_errors,
+        "slowest": slowest,
+        "recent_errors": recent_errors,
+        "fallback": fallback,
+        "peak": peak,
+    }
+
+
 @router.post("/jwt-secret/rotate")
 async def rotate_jwt_secret():
     """一键生成新的 JWT 随机密钥：写入数据卷 jwt_secret.txt 并在本进程立即生效。
