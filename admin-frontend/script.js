@@ -141,7 +141,7 @@ function adminApp() {
     // 模型添加/编辑弹窗
     modelModalOpen: false,
     modelModalIndex: null,
-    modelForm: { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null, chores_only: false },
+    modelForm: { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null, chores_only: false, enabled: true },
     thinkingMenuOpen: false,
     // 模型拖拽排序
     dragIndex: null,
@@ -235,7 +235,7 @@ function adminApp() {
       return (
         !!this.configForm.default_model &&
         this.configForm.models.length > 0 &&
-        !this.configForm.models.some((m) => m.id === this.configForm.default_model && !m.chores_only)
+        !this.configForm.models.some((m) => m.id === this.configForm.default_model && !m.chores_only && m.enabled !== false)
       );
     },
     get providersById() {
@@ -244,10 +244,10 @@ function adminApp() {
       return map;
     },
     get hasUnboundModels() {
-      return this.configForm.models.some((m) => !(this.modelProviderMap[m.id] && this.modelProviderMap[m.id].length));
+      return this.configForm.models.some((m) => m.enabled !== false && !(this.modelProviderMap[m.id] && this.modelProviderMap[m.id].length));
     },
     get unboundModelCount() {
-      return this.configForm.models.filter((m) => !(this.modelProviderMap[m.id] && this.modelProviderMap[m.id].length)).length;
+      return this.configForm.models.filter((m) => m.enabled !== false && !(this.modelProviderMap[m.id] && this.modelProviderMap[m.id].length)).length;
     },
 
     async init() {
@@ -855,6 +855,7 @@ function adminApp() {
                 reasoning_effort: m.reasoning_effort || null,
                 thinking_budget: m.thinking_budget || null,
                 chores_only: !!m.chores_only,
+                enabled: m.enabled !== false,
               }))
             : [],
           chores_model: cfg.chores_model || "",
@@ -910,7 +911,7 @@ function adminApp() {
 
     openAddModel() {
       this.modelModalIndex = null;
-      this.modelForm = { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null, chores_only: false };
+      this.modelForm = { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null, chores_only: false, enabled: true };
       this.thinkingMenuOpen = false;
       this.modelModalOpen = true;
     },
@@ -927,6 +928,7 @@ function adminApp() {
         mode: m.thinking_budget ? "budget" : m.reasoning_effort || "default",
         thinking_budget: m.thinking_budget || null,
         chores_only: !!m.chores_only,
+        enabled: m.enabled !== false,
       };
       this.thinkingMenuOpen = false;
       this.modelModalOpen = true;
@@ -957,10 +959,19 @@ function adminApp() {
         return;
       }
       const chordsOnly = !!this.modelForm.chores_only;
+      const enabled = this.modelForm.enabled !== false;
       const editingOldId = this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
       const targetId = id;
       if (chordsOnly && targetId && this.configForm.default_model === targetId) {
         this.toast("默认模型不可设为仅 Chores，请先切换默认模型", "error");
+        return;
+      }
+      if (!enabled && targetId && this.configForm.default_model === targetId) {
+        this.toast("默认模型不可直接禁用，请先切换默认模型", "error");
+        return;
+      }
+      if (!enabled && targetId && this.configForm.chores_model === targetId) {
+        this.toast("该模型正被用作 Chores 模型，请先切换 Chores 模型再禁用", "error");
         return;
       }
       const entry = {
@@ -971,6 +982,7 @@ function adminApp() {
         reasoning_effort: mode !== "default" && mode !== "budget" ? mode : null,
         thinking_budget: mode === "budget" ? parseInt(this.modelForm.thinking_budget, 10) : null,
         chores_only: chordsOnly,
+        enabled,
       };
       const oldId =
         this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
@@ -985,7 +997,7 @@ function adminApp() {
           this.configForm.chores_model = id;
         }
       }
-      if (!this.configForm.default_model && !chordsOnly) this.configForm.default_model = id;
+      if (!this.configForm.default_model && !chordsOnly && enabled) this.configForm.default_model = id;
       this.modelModalOpen = false;
       // 自动保存，无需用户再点保存配置即可绑定 Provider
       try {
@@ -1001,7 +1013,7 @@ function adminApp() {
       if (!confirm(`确定从列表移除模型「${m.name || m.id}」？`)) return;
       this.configForm.models.splice(i, 1);
       if (this.configForm.default_model === m.id) {
-        const next = this.configForm.models.find(x => !x.chores_only) || this.configForm.models[0];
+        const next = this.configForm.models.find(x => !x.chores_only && x.enabled !== false) || this.configForm.models[0];
         this.configForm.default_model = next?.id || "";
       }
       if (this.configForm.chores_model === m.id) {
@@ -1066,7 +1078,34 @@ function adminApp() {
         this.toast("仅 Chores 模型不可设为默认", "error");
         return;
       }
+      if (m && m.enabled === false) {
+        this.toast("已禁用模型不可设为默认，请先启用", "error");
+        return;
+      }
       this.configForm.default_model = id;
+    },
+
+    async toggleModelEnabled(i) {
+      const m = this.configForm.models[i];
+      if (!m) return;
+      const nextEnabled = m.enabled === false;
+      if (!nextEnabled) {
+        if (this.configForm.default_model === m.id) {
+          this.toast("默认模型不可直接禁用，请先切换默认模型", "error");
+          return;
+        }
+        if (this.configForm.chores_model === m.id) {
+          this.toast("该模型正被用作 Chores 模型，请先切换 Chores 模型再禁用", "error");
+          return;
+        }
+      }
+      m.enabled = nextEnabled;
+      try {
+        await this.saveConfig();
+      } catch (e) {
+        // saveConfig 已 toast，失败时回滚本地状态
+        m.enabled = !nextEnabled;
+      }
     },
 
     async saveConfig() {
@@ -1083,10 +1122,18 @@ function adminApp() {
         this.toast("默认模型不可为仅 Chores 模型", "error");
         return;
       }
+      if (defaultHit && defaultHit.enabled === false) {
+        this.toast("默认模型已禁用，请先切换默认模型再保存", "error");
+        return;
+      }
       if (this.configForm.chores_model) {
         const cm = this.configForm.models.find(m => m.id === this.configForm.chores_model);
         if (!cm) {
           this.toast("Chores 模型不存在于模型列表", "error");
+          return;
+        }
+        if (cm.enabled === false) {
+          this.toast("Chores 模型已禁用，请先切换 Chores 模型再保存", "error");
           return;
         }
       }
@@ -1107,6 +1154,7 @@ function adminApp() {
             reasoning_effort: m.reasoning_effort || null,
             thinking_budget: m.thinking_budget || null,
             chores_only: !!m.chores_only,
+            enabled: m.enabled !== false,
           })),
         };
         await this.api("/api/admin/config", {

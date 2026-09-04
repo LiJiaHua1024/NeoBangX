@@ -70,6 +70,7 @@ class ModelEntry(BaseModel):
         None, ge=1, description="思考 token 预算，优先于 reasoning_effort"
     )
     chores_only: bool = Field(False, description="仅用于 Chores，不在 8000 用户端展示")
+    enabled: bool = Field(True, description="是否启用，禁用后用户端与 Chores 均不可用")
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -466,24 +467,54 @@ async def update_admin_config(
         if key == "default_model":
             dm = str(value or "").strip()
             if dm:
-                # 校验 default_model 不可为仅 Chores 模型
+                # 校验 default_model 不可为仅 Chores / 已禁用模型
                 check_models = pending_models if pending_models is not None else parse_models(get_config_map(db).get("models", ""))
                 hit = next((m for m in check_models if m["id"] == dm), None)
                 if not hit:
                     raise HTTPException(status_code=400, detail=f"默认模型不存在：{dm}")
                 if hit.get("chores_only"):
                     raise HTTPException(status_code=400, detail="默认模型不可为仅 Chores 模型")
+                if not hit.get("enabled", True):
+                    raise HTTPException(status_code=400, detail=f"默认模型已禁用：{dm}")
             updates[key] = str(value)
             continue
         if key == "chores_model":
             cm = str(value or "").strip()
             if cm:
                 check_models = pending_models if pending_models is not None else parse_models(get_config_map(db).get("models", ""))
-                if not any(m["id"] == cm for m in check_models):
+                hit = next((m for m in check_models if m["id"] == cm), None)
+                if not hit:
                     raise HTTPException(status_code=400, detail=f"Chores 模型不存在：{cm}")
+                if not hit.get("enabled", True):
+                    raise HTTPException(status_code=400, detail=f"Chores 模型已禁用：{cm}")
             updates[key] = str(value)
             continue
         updates[key] = str(value)
+
+    # 最终一致性校验：仅改 models（禁用某模型）但未同步改 default/chores 时拦截，
+    # 避免存量 default/chores 指向已禁用模型（与仅 Chores 同理）。
+    try:
+        _old_cfg = get_config_map(db)
+    except Exception:
+        _old_cfg = {}
+    _final_models = pending_models if pending_models is not None else parse_models(_old_cfg.get("models", ""))
+    if "default_model" in raw:
+        _final_default = str(raw.get("default_model") or "").strip()
+    else:
+        _final_default = (_old_cfg.get("default_model") or "").strip()
+    if "chores_model" in raw:
+        _final_chores = str(raw.get("chores_model") or "").strip()
+    else:
+        _final_chores = (_old_cfg.get("chores_model") or "").strip()
+    if _final_models:
+        if _final_default:
+            _hit = next((m for m in _final_models if m["id"] == _final_default), None)
+            if _hit is not None and not _hit.get("enabled", True):
+                raise HTTPException(status_code=400, detail=f"默认模型已禁用：{_final_default}，请先切换默认模型再禁用")
+        if _final_chores:
+            _hit = next((m for m in _final_models if m["id"] == _final_chores), None)
+            if _hit is not None and not _hit.get("enabled", True):
+                raise HTTPException(status_code=400, detail=f"Chores 模型已禁用：{_final_chores}，请先切换 Chores 模型再禁用")
 
     if not updates:
         cfg = get_config_map(db)

@@ -162,14 +162,20 @@ async def list_tools(
 
     llm_cfg = resolve_llm_settings(db)
     available = llm_cfg.get("available_model_ids")
-    # 若没有可用集合（旧库未迁移或无 Provider），则回退为全量模型
+    # 若没有可用集合（旧库未迁移或无 Provider），则回退为启用且非仅 Chores 模型；
+    # 禁用模型任何情况下都不回退暴露（区别于仅 Chores 仅隐藏用户端）。
+    def _user_visible(models):
+        return [m for m in models if m.get("enabled", True) and not m.get("chores_only")]
+
     if available:
         filtered_models = [m for m in llm_cfg["models"] if m["id"] in available]
-        # 若过滤后为空（配置异常，模型均未绑定），则仍返回全量以免前端无模型可选
+        # 若过滤后为空（配置异常，模型均未绑定），回退为启用且非仅 Chores 模型以免前端无模型可选
         if not filtered_models:
-            filtered_models = llm_cfg["models"]
+            filtered_models = _user_visible(llm_cfg["models"])
     else:
-        filtered_models = llm_cfg["models"]
+        # available 为空：可能是未迁移或全部未绑定/禁用，回退同样不含禁用与仅 Chores
+        fallback = _user_visible(llm_cfg["models"])
+        filtered_models = fallback if fallback else []
     return {
         "groups": groups,
         "models": [
@@ -185,12 +191,16 @@ async def list_models(db: Annotated[Session, Depends(get_db)]):
     """返回可用模型列表"""
     llm_cfg = resolve_llm_settings(db)
     available = llm_cfg.get("available_model_ids")
+    def _user_visible(models):
+        return [m for m in models if m.get("enabled", True) and not m.get("chores_only")]
+
     if available:
         filtered_models = [m for m in llm_cfg["models"] if m["id"] in available]
         if not filtered_models:
-            filtered_models = llm_cfg["models"]
+            filtered_models = _user_visible(llm_cfg["models"])
     else:
-        filtered_models = llm_cfg["models"]
+        fallback = _user_visible(llm_cfg["models"])
+        filtered_models = fallback if fallback else []
     return {
         "models": [
             {

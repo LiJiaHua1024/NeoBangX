@@ -135,12 +135,17 @@ async def get_config():
         db.close()
 
     available = llm_cfg.get("available_model_ids")
+    # 禁用模型任何情况下都不回退暴露
+    def _user_visible(models):
+        return [m for m in models if m.get("enabled", True) and not m.get("chores_only")]
+
     if available:
         models = [m for m in llm_cfg["models"] if m["id"] in available]
         if not models:
-            models = llm_cfg["models"]
+            models = _user_visible(llm_cfg["models"])
     else:
-        models = llm_cfg["models"]
+        fallback = _user_visible(llm_cfg["models"])
+        models = fallback if fallback else []
     return {
         "models": models,
         "default_model": llm_cfg["default_model"],

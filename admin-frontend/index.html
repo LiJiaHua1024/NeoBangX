@@ -510,6 +510,7 @@
                     <span x-text="m.name || m.id"></span>
                     <span class="badge badge-admin ml-1.5" x-show="m.id === configForm.default_model">默认</span>
                     <span class="badge badge-user ml-1.5" x-show="m.chores_only">仅 Chores</span>
+                    <span class="badge ml-1.5" x-show="m.enabled === false" style="color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 40%, transparent);background:color-mix(in srgb, var(--danger) 12%, transparent)">已禁用</span>
                     <div class="mono dim" style="font-size:0.7rem; margin-top:2px;" x-text="m.id"></div>
                   </td>
                   <td data-label="可用 Provider" data-span="full" style="min-width: 260px;">
@@ -552,7 +553,8 @@
                   </td>
                   <td data-label="思考控制"><span class="badge badge-user" x-text="thinkingLabel(m)"></span></td>
                   <td class="actions" data-label="操作" data-span="full">
-                    <button class="link-btn" x-show="m.id !== configForm.default_model && !m.chores_only" @click="setDefaultModel(m.id)">设为默认</button>
+                    <button class="link-btn" x-show="m.id !== configForm.default_model && !m.chores_only && m.enabled !== false" @click="setDefaultModel(m.id)">设为默认</button>
+                    <button class="link-btn" @click="toggleModelEnabled(i)" x-text="m.enabled === false ? '启用' : '禁用'"></button>
                     <button class="link-btn" @click="openEditModel(i)">编辑</button>
                     <button class="link-btn" @click="openModelProviders(m.id)">绑定</button>
                     <button class="link-btn" :disabled="i === 0" @click="moveModel(i, -1)" title="上移">↑</button>
@@ -648,9 +650,10 @@
                 <div class="custom-select-menu" x-show="choresModelMenuOpen" x-cloak>
                   <button class="custom-select-item" :class="{ on: !configForm.chores_model }" @click="configForm.chores_model = ''; choresModelMenuOpen = false" x-text="`跟随默认（${defaultModelLabel}）`"></button>
                   <template x-for="m in configForm.models" :key="'chores-'+m.id">
-                    <button class="custom-select-item" :class="{ on: configForm.chores_model === m.id }" @click="configForm.chores_model = m.id; choresModelMenuOpen = false" style="justify-content: flex-start; gap: 0.5rem;">
+                    <button class="custom-select-item" :class="{ on: configForm.chores_model === m.id }" :disabled="m.enabled === false" :title="m.enabled === false ? '已禁用，不可选' : ''" @click="configForm.chores_model = m.id; choresModelMenuOpen = false" style="justify-content: flex-start; gap: 0.5rem;">
                       <span x-text="m.name || m.id"></span>
                       <span class="badge badge-user" x-show="m.chores_only">仅 Chores</span>
+                      <span class="badge" x-show="m.enabled === false" style="color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 40%, transparent)">已禁用</span>
                     </button>
                   </template>
                   <div class="custom-select-item" x-show="!configForm.models.length" style="cursor:default; justify-content: flex-start;">请先在上方添加模型</div>
@@ -845,6 +848,17 @@
               <span class="dim" x-text="modelForm.chores_only ? '仅用于 Chores' : '用户可选'"></span>
             </div>
             <span class="field-hint">勾选后该模型仅用于 Chores</span>
+          </label>
+          <label class="field mb-3">
+            <span>启用状态</span>
+            <div class="switch-row" style="align-items:center">
+              <label class="switch">
+                <input type="checkbox" x-model="modelForm.enabled">
+                <span class="switch-slider"></span>
+              </label>
+              <span class="dim" x-text="modelForm.enabled !== false ? '已启用' : '已禁用（用户端与 Chores 均不可用）'"></span>
+            </div>
+            <span class="field-hint">禁用后该模型不在用户端展示，Chores 也不可选；区别于“仅用于 Chores”</span>
           </label>
           <label class="field mb-3">
             <span>推荐评分（0-10）</span>

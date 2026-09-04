@@ -294,7 +294,16 @@ def set_providers_for_single_model_detailed(
 
 
 def is_model_available(db: Session, model_id: str) -> bool:
-    """该模型是否至少有一个 enabled Provider 绑定。"""
+    """该模型是否可用：未禁用、非仅 Chores 且至少有一个 enabled Provider 绑定。"""
+    try:
+        from app.services.runtime_config import get_config_map, parse_models
+
+        models = parse_models(get_config_map(db).get("models", ""))
+        hit = next((m for m in models if m["id"] == model_id), None)
+        if hit is None or not hit.get("enabled", True) or hit.get("chores_only"):
+            return False
+    except Exception:
+        pass
     return len(get_providers_for_model(db, model_id, only_enabled=True)) > 0
 
 

@@ -37,11 +37,45 @@ def _clamp_score(score) -> float | None:
     return round(max(0.0, min(10.0, float(score))), 1)
 
 
+def _parse_enabled(item: dict) -> bool:
+    """解析模型启用状态，缺省为 True（兼容老数据）。
+
+    优先级：enabled / is_enabled > disabled（取反）。
+    """
+    raw = item.get("enabled")
+    if raw is None:
+        raw = item.get("is_enabled")
+    if raw is not None:
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return bool(raw)
+        s = str(raw).strip().lower()
+        if s in ("0", "false", "no", "off", "disabled", "disable"):
+            return False
+        if s in ("1", "true", "yes", "on", "enabled", "enable"):
+            return True
+        return True
+    disabled_raw = item.get("disabled")
+    if disabled_raw is not None:
+        if isinstance(disabled_raw, bool):
+            return not disabled_raw
+        if isinstance(disabled_raw, (int, float)):
+            return not bool(disabled_raw)
+        s = str(disabled_raw).strip().lower()
+        if s in ("1", "true", "yes", "on"):
+            return False
+        if s in ("0", "false", "no", "off"):
+            return True
+    return True
+
+
 def parse_models(raw: str) -> list[dict]:
     """解析模型配置。
 
-    新格式：JSON 数组，每项含 id / name / description / score / reasoning_effort / thinking_budget / chores_only；
+    新格式：JSON 数组，每项含 id / name / description / score / reasoning_effort / thinking_budget / chores_only / enabled；
     旧格式：逗号分隔的模型 ID 字符串，自动升级为结构化条目。
+    enabled 缺省为 True（兼容老数据）；禁用后用户端与 Chores 均不可用。
     """
     raw = (raw or "").strip()
     if not raw:
@@ -71,6 +105,7 @@ def parse_models(raw: str) -> list[dict]:
             if chores_only_raw is None:
                 chores_only_raw = item.get("choresOnly")
             chores_only = bool(chores_only_raw) if isinstance(chores_only_raw, bool) else str(chores_only_raw).lower() in ("1", "true", "yes", "on") if chores_only_raw is not None else False
+            enabled = _parse_enabled(item)
             out.append({
                 "id": model_id,
                 "name": str(item.get("name") or "").strip() or model_id,
@@ -79,6 +114,7 @@ def parse_models(raw: str) -> list[dict]:
                 "reasoning_effort": effort if effort in REASONING_EFFORTS else None,
                 "thinking_budget": int(budget) if isinstance(budget, (int, float)) and int(budget) > 0 else None,
                 "chores_only": chores_only,
+                "enabled": enabled,
             })
         return out
     # 旧版逗号分隔格式
@@ -91,6 +127,7 @@ def parse_models(raw: str) -> list[dict]:
             "reasoning_effort": None,
             "thinking_budget": None,
             "chores_only": False,
+            "enabled": True,
         }
         for m in raw.split(",")
         if m.strip()
@@ -280,7 +317,21 @@ def resolve_llm_settings(db: Session) -> dict:
             "reasoning_effort": None,
             "thinking_budget": None,
             "chores_only": False,
+            "enabled": True,
         }]
+
+    # Chores 模型若指向已禁用模型则回退到默认（默认可用才回退，否则保留原值由上层报错，
+    # 避免静默切换掩盖误配置；管理端保存时已拦截，此处仅防脏数据）。
+    by_id = {m["id"]: m for m in model_list}
+    _chores_hit = by_id.get(chores_model)
+    if _chores_hit is not None and not _chores_hit.get("enabled", True):
+        _default_hit = by_id.get(default_model)
+        if _default_hit is not None and _default_hit.get("enabled", True):
+            chores_model = default_model
+        else:
+            _fallback = next((m for m in model_list if m.get("enabled", True)), None)
+            if _fallback is not None:
+                chores_model = _fallback["id"]
 
     log_payload, log_retention_days = parse_log_settings(cfg)
 
@@ -342,21 +393,22 @@ def resolve_llm_settings(db: Session) -> dict:
             if not model_provider_details:
                 model_provider_details = {m["id"]: [{"provider_id": "prov_legacy", "provider_model_id": m["id"], "priority": 0}] for m in model_list}
 
-    # 计算可用模型（至少有一个 enabled Provider 绑定的模型，且非仅 Chores）
+    # 计算可用模型（至少有一个 enabled Provider 绑定的模型，且非仅 Chores、未禁用）
     providers_by_id = {p["id"]: p for p in providers}
     chores_only_ids = {m["id"] for m in model_list if m.get("chores_only")}
+    disabled_ids = {m["id"] for m in model_list if not m.get("enabled", True)}
     available_model_ids = set()
     for mid, pids in model_provider_map.items():
-        if mid in chores_only_ids:
+        if mid in chores_only_ids or mid in disabled_ids:
             continue
         for pid in pids:
             prov = providers_by_id.get(pid)
             if prov and prov.get("enabled"):
                 available_model_ids.add(mid)
                 break
-    # 若没有 model_provider_map 配置（新库未迁移），则视为所有非仅 Chores 模型可用
+    # 若没有 model_provider_map 配置（新库未迁移），则视为所有启用且非仅 Chores 模型可用
     if not model_provider_map and providers:
-        available_model_ids = {m["id"] for m in model_list if not m.get("chores_only")}
+        available_model_ids = {m["id"] for m in model_list if not m.get("chores_only") and m.get("enabled", True)}
 
     return {
         "models": model_list,

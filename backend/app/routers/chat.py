@@ -74,8 +74,12 @@ def _validate_model(cfg: dict, model: Optional[str]) -> None:
     if not model:
         return
     # 先校验模型是否在全局目录
-    if find_model_entry(cfg["models"], model) is None:
+    entry = find_model_entry(cfg["models"], model)
+    if entry is None:
         raise HTTPException(status_code=400, detail=f"模型不可用：{model}")
+    # 禁用模型在用户端与 Chores 均不可选（语义上区别于仅 Chores）
+    if not entry.get("enabled", True):
+        raise HTTPException(status_code=400, detail=f"模型已禁用：{model}")
     # 再校验该模型是否至少有一个 enabled Provider 绑定
     available = cfg.get("available_model_ids")
     if available is not None and model not in available:
@@ -102,6 +106,13 @@ _MIGRATION_BATCH_TTL = 30 * 60
 
 def _get_providers_for_model_sync(cfg: dict, model_id: str) -> list[dict]:
     """基于 cfg 中的 providers 与 model_provider_details 计算该模型可用 Provider 链（含 provider_model_id）。"""
+    # 禁用模型直接返回空链（用户端与 Chores 均不可用，区别于仅 Chores 仍可用于 Chores）
+    try:
+        _entry = find_model_entry(cfg.get("models") or [], model_id)
+        if _entry is not None and not _entry.get("enabled", True):
+            return []
+    except Exception:
+        pass
     providers = cfg.get("providers") or []
     mp_map = cfg.get("model_provider_map") or {}
     details = cfg.get("model_provider_details") or {}
