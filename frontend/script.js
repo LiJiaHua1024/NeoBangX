@@ -1032,6 +1032,13 @@ function nbx() {
     maskOn: false,
     copied: false,
 
+    /* --- 试卷可视化全解 --- */
+    visualPaper: null,
+    vpFullscreen: false,
+    vpActiveTab: "reference",
+    vpParseError: "",
+    _vpRenderPending: false,
+
     /* --- 智能错题迁移 --- */
     migration: null,
     migrationExportTarget: null,
@@ -1192,6 +1199,464 @@ function nbx() {
     resetVocab() {
       this.vocab = this.newVocabState();
     },
+
+    /* ============ 试卷可视化全解 ============ */
+    newVisualPaperState() {
+      return {
+        paper: null,
+        groups: [],
+        answerMap: {},
+        notice: "",
+        total: null,
+        historyId: null,
+        rawJson: "",
+        parseError: "",
+        isJson: false,
+        currentGroupIdx: 0,
+        currentQIdx: 0,
+        activeTab: "reference",
+      };
+    },
+    // 输出残片是否含自定义 @@TAG@@（中断残片绝不直接展示原文）
+    get vpHasCustomFragment() {
+      const raw = this.output || "";
+      return /@@[A-Z_]+(@@|=)/.test(raw);
+    },
+    // 生成中断且无完整题：展示中断卡，不裸奔原文
+    get vpInterrupted() {
+      return !this.streaming && !this.vpHasData && !!this.output.trim() && this.vpHasCustomFragment;
+    },
+    resetVisualPaper() {
+      this.visualPaper = this.newVisualPaperState();
+      this.vpCloseFullscreen();
+      this.vpActiveTab = "reference";
+      this.vpParseError = "";
+      this._vpRenderPending = false;
+    },
+    parseCustomVisualPaper(raw) {
+      if (!raw || raw.indexOf("@@") === -1) return null;
+      const lines = raw.split(/\r?\n/);
+      const ALLOWED = new Set(["reading","cloze7","cloze","grammar","writing_app","writing_cont","other"]);
+      let totalDeclared = null;
+      let paperTitle = "";
+      let notice = "";
+      const groups = [];
+      let currentGroup = null;
+      let currentQ = null;
+      let currentField = null;
+      let fieldBuf = [];
+      // 兼容两种写法：@@TAG@@ 内容 与 @@TAG=内容（部分模型会输出后者，含义相同）
+      const TAG_RE = /^@@([A-Z_]+)(@@|=)\s*(.*)$/;
+      const flushField = () => {
+        if (currentField === null || currentQ === null) { fieldBuf = []; currentField = null; return; }
+        const content = fieldBuf.join("\n").trim();
+        fieldBuf = [];
+        const cf = currentField;
+        currentField = null;
+        if (cf === "PASSAGE") {
+          let finalPassage = content;
+          const stripped = content.trim();
+          let isPlaceholder = false;
+          if (!stripped) isPlaceholder = true;
+          else if (/^\s*[<＜]?\s*(同上|见上|略|—+|同\s*A\s*篇).*?[>＞]?\s*$/.test(stripped)) isPlaceholder = true;
+          else if (stripped.includes("同上") && stripped.length < 30) isPlaceholder = true;
+          if (isPlaceholder && currentGroup && currentGroup.questions && currentGroup.questions.length) {
+            const prev = currentGroup.questions[currentGroup.questions.length - 1].passage;
+            if (prev) finalPassage = prev;
+          }
+          currentQ.passage = finalPassage;
+        }
+        else if (cf === "STEM") currentQ.stem = content;
+        else if (cf === "OPTIONS") {
+          const opts = [];
+          for (const l of content.split("\n")) {
+            const line = l.trim();
+            if (!line) continue;
+            const m = line.match(/^([A-Ga-g])\s*[\.、:：\)）]?\s*(.*)$/);
+            if (m) opts.push({label: m[1].toUpperCase(), text: m[2].trim()});
+            else opts.push({label: "", text: line});
+          }
+          currentQ._raw_options = opts;
+        } else if (cf === "ANSWER") currentQ._answer_raw = content.trim();
+        else if (cf === "EVIDENCE") currentQ._evidence_raw = content.trim();
+        else if (cf === "REASON") currentQ._reason_raw = content.trim();
+        else if (cf === "DISTRACTOR") currentQ._distractor_raw = content.trim();
+        else if (cf === "PITFALLS") {
+          const pits = [];
+          for (const l of content.split("\n")) {
+            let line = l.trim();
+            if (!line) continue;
+            line = line.replace(/^[\d\.\、\)\）\s]+/, "");
+            if (line.includes("::")) {
+              const idx = line.indexOf("::");
+              pits.push({title: line.slice(0, idx).trim(), desc: line.slice(idx+2).trim()});
+            } else if (line.includes("：") || line.includes(":")) {
+              const parts = line.split(/[：:]/);
+              if (parts.length >= 2) pits.push({title: parts[0].trim(), desc: parts.slice(1).join(":").trim()});
+              else pits.push({title: line, desc: ""});
+            } else pits.push({title: line, desc: ""});
+          }
+          currentQ._pitfalls_raw = pits;
+        } else if (cf === "PATTERN_NAME") currentQ._pattern_name_raw = content.trim();
+        else if (cf === "PATTERN_STEPS") {
+          const steps = content.split("\n").map(s=>s.trim()).filter(Boolean).map(s=>s.replace(/^[\d\.\、\)\）\s]+/, ""));
+          currentQ._pattern_steps_raw = steps;
+        } else if (cf === "TRANSFER_PASSAGE") currentQ._transfer_passage_raw = content;
+        else if (cf === "TRANSFER_STEM") currentQ._transfer_stem_raw = content.trim();
+        else if (cf === "TRANSFER_OPTIONS") {
+          const opts = [];
+          for (const l of content.split("\n")) {
+            const line = l.trim();
+            if (!line) continue;
+            const m = line.match(/^([A-Ga-g])\s*[\.、:：\)）]?\s*(.*)$/);
+            if (m) opts.push({label: m[1].toUpperCase(), text: m[2].trim()});
+            else opts.push({label: "", text: line});
+          }
+          currentQ._transfer_options_raw = opts;
+        } else if (cf === "TRANSFER_ANSWER") currentQ._transfer_answer_raw = content.trim();
+        else if (cf === "TRANSFER_EXPL") currentQ._transfer_expl_raw = content.trim();
+        else if (cf === "WRITING_POINTS") {
+          let points = content.split("\n").map(s=>s.trim()).filter(Boolean).map(s=>s.replace(/^[\d\.\、\)\）\s]+/, ""));
+          currentQ._writing_points_raw = points;
+        } else if (cf === "WRITING_OUTLINE") currentQ._writing_outline_raw = content.trim();
+        else if (cf === "WRITING_SAMPLE") currentQ._writing_sample_raw = content;
+      };
+      const commitQuestion = () => {
+        if (currentQ === null || currentGroup === null) return;
+        if (currentField !== null && fieldBuf.length) flushField();
+        const no = currentQ.no || "1";
+        const options = currentQ._raw_options || [];
+        const pitfalls = currentQ._pitfalls_raw || [];
+        const patternName = currentQ._pattern_name_raw || "";
+        const patternSteps = currentQ._pattern_steps_raw || [];
+        const reference = {evidence: currentQ._evidence_raw || "", reason: currentQ._reason_raw || "", distractor: currentQ._distractor_raw || ""};
+        const pattern = {name: patternName, steps: patternSteps};
+        let qtype = (currentQ.qtype || "").trim().toLowerCase();
+        if (qtype !== "choice" && qtype !== "blank" && qtype !== "writing") {
+          if (currentGroup.id === "writing_app" || currentGroup.id === "writing_cont") qtype = "writing";
+          else if (options.length) qtype = "choice";
+          else qtype = "blank";
+        }
+        const isWriting = qtype === "writing" || currentGroup.id === "writing_app" || currentGroup.id === "writing_cont";
+        if (isWriting) qtype = "writing";
+        let transfer = null;
+        let writingGuide = null;
+        if (isWriting) {
+          writingGuide = {points: currentQ._writing_points_raw || [], outline: currentQ._writing_outline_raw || "", sample: currentQ._writing_sample_raw || ""};
+          if (!writingGuide.points.length && !writingGuide.outline && !writingGuide.sample) writingGuide = {points:[], outline:"", sample:""};
+        } else {
+          const tPass = currentQ._transfer_passage_raw || "";
+          const tStem = currentQ._transfer_stem_raw || "";
+          const tOpts = currentQ._transfer_options_raw || [];
+          const tAns = currentQ._transfer_answer_raw || "";
+          const tExpl = currentQ._transfer_expl_raw || "";
+          if (tPass || tStem || tOpts.length || tAns) {
+            transfer = {passage: tPass, stem: tStem, options: tOpts, answer: tAns, explanation: tExpl};
+          }
+        }
+        const qObj = {
+          no: String(no).trim(),
+          qtype: qtype,
+          passage: currentQ.passage || "",
+          stem: currentQ.stem || "",
+          options: options,
+          answer: currentQ._answer_raw || null,
+          reference: reference,
+          pitfalls: pitfalls,
+          pattern: pattern.name || pattern.steps.length ? pattern : {name:"", steps:[]},
+          transfer: transfer,
+          writingGuide: writingGuide,
+        };
+        if (isWriting && !qObj.answer) qObj.answer = null;
+        if (qObj.answer === "") qObj.answer = isWriting ? null : "";
+        currentGroup.questions.push(qObj);
+        currentQ = null;
+      };
+      for (let rawLine of lines) {
+        const line = rawLine.replace(/\r$/, "");
+        const m = line.trim().match(TAG_RE);
+        if (m) {
+          const tag = m[1];
+          let value = m[3].trim();
+          if (m[2] === "@@" && value.startsWith("=")) value = value.slice(1).trim();
+          if (currentField !== null) flushField();
+          if (tag === "TOTAL") {
+            const num = value.match(/\d+/);
+            if (num) totalDeclared = parseInt(num[0], 10);
+          } else if (tag === "PAPER") {
+            paperTitle = value;
+          } else if (tag === "NOTICE") {
+            notice = value;
+          } else if (tag === "GROUP") {
+            if (currentQ !== null) { currentQ = null; currentField=null; fieldBuf=[]; }
+            const parts = value.split("|").map(p=>p.trim());
+            let gid = parts[0] ? parts[0].trim() : "other";
+            let title, intro;
+            if (!ALLOWED.has(gid)) {
+              if (parts.length === 2) { title = parts[0]; intro = parts[1]; gid = "other"; }
+              else { title = parts[1] || gid; intro = parts[2] || ""; gid = "other"; }
+            } else {
+              title = parts[1] || gid;
+              intro = parts[2] || "";
+            }
+            currentGroup = {id: gid, title: title, intro: intro, questions: []};
+            groups.push(currentGroup);
+          } else if (tag === "Q") {
+            if (currentQ !== null) { currentQ = null; currentField=null; fieldBuf=[]; }
+            const no = value.trim() || "1";
+            currentQ = {no: no};
+            if (currentGroup === null) {
+              currentGroup = {id:"other", title:"未分组", intro:"", questions:[]};
+              groups.push(currentGroup);
+            }
+          } else if (tag === "QTYPE") {
+            if (currentQ !== null) {
+              const v = value.trim().toLowerCase();
+              currentQ.qtype = (v === "choice" || v === "blank" || v === "writing") ? v : v;
+            }
+          } else if (tag === "END_Q") {
+            commitQuestion();
+            currentField = null;
+            fieldBuf = [];
+          } else if (["PASSAGE","STEM","OPTIONS","ANSWER","EVIDENCE","REASON","DISTRACTOR","PITFALLS","PATTERN_NAME","PATTERN_STEPS","TRANSFER_PASSAGE","TRANSFER_STEM","TRANSFER_OPTIONS","TRANSFER_ANSWER","TRANSFER_EXPL","WRITING_POINTS","WRITING_OUTLINE","WRITING_SAMPLE"].includes(tag)) {
+            currentField = tag;
+            fieldBuf = [];
+            if (value) fieldBuf.push(value);
+          } else {
+            if (currentField !== null) fieldBuf.push(line);
+          }
+        } else {
+          if (currentField !== null && currentQ !== null) fieldBuf.push(line);
+        }
+      }
+      if (!groups.length && totalDeclared === null && !paperTitle && !notice) return null;
+      const answerMap = {};
+      for (const g of groups) for (const q of g.questions) {
+        if (q.answer) answerMap[String(q.no)] = String(q.answer);
+        else if (q.writingGuide) answerMap[String(q.no)] = "见范文";
+      }
+      return {paper:{title:paperTitle, subject:"英语", year:""}, notice: notice, answerMap: answerMap, groups: groups, total: totalDeclared};
+    },
+    tryParseVisualPaper(raw) {
+      if (!raw || !raw.trim()) return { data: null, error: "empty" };
+      // 优先自定义分隔格式（B方案）
+      if (/@@[A-Z_]+(@@|=)/.test(raw)) {
+        const custom = this.parseCustomVisualPaper(raw);
+        if (custom && Array.isArray(custom.groups)) {
+          // 即使 groups 为空但 total 为 0 也是合法（例外）
+          return { data: custom, error: "" };
+        }
+        // 若含标签但解析为空，仍尝试 JSON 回退（旧历史）
+      }
+      // 回退 JSON（兼容旧历史）
+      let text = raw.trim();
+      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      let candidates = [];
+      if (fenced && fenced[1]) candidates.push(fenced[1].trim());
+      candidates.push(text);
+      const firstBrace = text.indexOf("{");
+      const lastBrace = text.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        candidates.push(text.slice(firstBrace, lastBrace + 1));
+      }
+      for (const cand of candidates) {
+        if (!cand) continue;
+        try {
+          const data = JSON.parse(cand);
+          if (data && typeof data === "object" && Array.isArray(data.groups)) return { data, error: "" };
+        } catch {}
+        for (let i = 0; i < cand.length; i++) {
+          if (cand[i] !== "{") continue;
+          try {
+            const val = JSON.parse(cand.slice(i));
+            if (val && typeof val === "object" && Array.isArray(val.groups)) return { data: val, error: "" };
+          } catch {}
+        }
+      }
+      return { data: null, error: "no valid custom or JSON found" };
+    },
+    normalizeVisualPaper(data) {
+      if (!data || typeof data !== "object") return null;
+      let out;
+      try { out = JSON.parse(JSON.stringify(data)); } catch { return null; }
+      if (!out.paper || typeof out.paper !== "object") out.paper = { title: "", subject: "英语", year: "" };
+      out.paper.title = out.paper.title || "";
+      out.paper.subject = out.paper.subject || "英语";
+      out.paper.year = out.paper.year || "";
+      out.notice = out.notice || "";
+      out.answerMap = out.answerMap || {};
+      out.groups = Array.isArray(out.groups) ? out.groups : [];
+      out.total = out.total != null ? out.total : null;
+      if (out.total == null) {
+        const cnt = out.groups.reduce((s,g)=>s + (g.questions||[]).length, 0);
+        out.total = cnt || null;
+      }
+      if (!out.answerMap || !Object.keys(out.answerMap).length) {
+        const am = {};
+        for (const g of out.groups) for (const q of g.questions) {
+          if (q.answer) am[String(q.no)] = String(q.answer);
+          else if (q.writingGuide) am[String(q.no)] = "见范文";
+        }
+        out.answerMap = am;
+      }
+      const trunc = (s,n)=> s.length>n ? s.slice(0,n)+"…" : s;
+      for (const g of out.groups) {
+        g.intro = trunc(String(g.intro||""), 200);
+        for (const q of g.questions) {
+          if (q.qtype !== "choice" && q.qtype !== "blank" && q.qtype !== "writing") {
+            if (g.id === "writing_app" || g.id === "writing_cont") q.qtype = "writing";
+            else if (Array.isArray(q.options) && q.options.length) q.qtype = "choice";
+            else q.qtype = "blank";
+          }
+          const gid = g.id;
+          if (gid === "writing_app" || gid === "writing_cont") {
+            q.transfer = null;
+            if (!q.writingGuide) q.writingGuide = {points:[], outline:"", sample:""};
+          } else {
+            if (q.transfer === undefined) q.transfer = null;
+            if (q.writingGuide === undefined) q.writingGuide = null;
+          }
+          if (typeof q.passage === "string") q.passage = trunc(q.passage, 4000);
+          if (typeof q.stem === "string") q.stem = trunc(q.stem, 1000);
+          if (q.reference) {
+            for (const k of ["evidence","reason","distractor"]) if (typeof q.reference[k]==="string") q.reference[k]=trunc(q.reference[k],800);
+          }
+          for (const p of (q.pitfalls||[])) if (typeof p.desc==="string") p.desc=trunc(p.desc,500);
+          if (q.pattern && Array.isArray(q.pattern.steps)) q.pattern.steps = q.pattern.steps.slice(0,5).map(s=>trunc(String(s),300));
+          if (q.transfer && typeof q.transfer.passage==="string") q.transfer.passage=trunc(q.transfer.passage,800);
+        }
+      }
+      return out;
+    },
+    get vpGroups() {
+      return (this.visualPaper && this.visualPaper.groups) || [];
+    },
+    get vpCurrentGroup() {
+      if (!this.visualPaper || !this.visualPaper.groups.length) return null;
+      const idx = Math.max(0, Math.min(this.visualPaper.currentGroupIdx, this.visualPaper.groups.length - 1));
+      return this.visualPaper.groups[idx] || null;
+    },
+    get vpCurrentQuestion() {
+      const g = this.vpCurrentGroup;
+      if (!g || !Array.isArray(g.questions) || !g.questions.length) return null;
+      const qIdx = Math.max(0, Math.min(this.visualPaper.currentQIdx, g.questions.length - 1));
+      return g.questions[qIdx] || null;
+    },
+    get vpQuestionCount() {
+      if (!this.visualPaper) return 0;
+      let c = 0;
+      for (const g of this.visualPaper.groups) c += (g.questions || []).length;
+      return c;
+    },
+    get vpCurrentGlobalIndex() {
+      if (!this.visualPaper) return 0;
+      let idx = 0;
+      for (let i = 0; i < this.visualPaper.currentGroupIdx; i++) {
+        idx += (this.visualPaper.groups[i].questions || []).length;
+      }
+      idx += this.visualPaper.currentQIdx + 1;
+      return idx;
+    },
+    get vpHasData() {
+      return !!this.visualPaper && this.visualPaper.groups.length > 0 && this.vpQuestionCount > 0;
+    },
+    get vpTotal() {
+      if (!this.visualPaper) return 0;
+      if (this.visualPaper.total != null && this.visualPaper.total > 0) return this.visualPaper.total;
+      return this.vpQuestionCount;
+    },
+    get vpProgressPercent() {
+      if (!this.vpTotal) return 0;
+      return Math.min(100, Math.round((this.vpQuestionCount / this.vpTotal) * 100));
+    },
+    get vpRemaining() {
+      return Math.max(0, (this.vpTotal || 0) - this.vpQuestionCount);
+    },
+    vpSelectQuestion(gIdx, qIdx) {
+      if (!this.visualPaper) return;
+      this.visualPaper.currentGroupIdx = gIdx;
+      this.visualPaper.currentQIdx = qIdx;
+      this.vpActiveTab = "reference";
+      // 若全屏，保持全屏；否则滚动到顶部
+      this.$nextTick(() => {
+        const el = this.$refs.vpRightPane;
+        if (el) el.scrollTop = 0;
+        const leftEl = this.$refs.vpLeftPane;
+        if (leftEl) leftEl.scrollTop = 0;
+      });
+    },
+    vpIsCurrent(gIdx, qIdx) {
+      return this.visualPaper && this.visualPaper.currentGroupIdx === gIdx && this.visualPaper.currentQIdx === qIdx;
+    },
+    vpNextQuestion() {
+      if (!this.visualPaper || !this.vpCurrentGroup) return;
+      const g = this.vpCurrentGroup;
+      if (this.visualPaper.currentQIdx + 1 < (g.questions || []).length) {
+        this.visualPaper.currentQIdx += 1;
+      } else {
+        // 跨组
+        let ng = this.visualPaper.currentGroupIdx + 1;
+        while (ng < this.visualPaper.groups.length) {
+          if ((this.visualPaper.groups[ng].questions || []).length > 0) {
+            this.visualPaper.currentGroupIdx = ng;
+            this.visualPaper.currentQIdx = 0;
+            break;
+          }
+          ng += 1;
+        }
+        if (ng >= this.visualPaper.groups.length) return;
+      }
+      this.vpActiveTab = "reference";
+      this.$nextTick(() => {
+        const el = this.$refs.vpRightPane;
+        if (el) el.scrollTop = 0;
+      });
+    },
+    vpPrevQuestion() {
+      if (!this.visualPaper || !this.vpCurrentGroup) return;
+      if (this.visualPaper.currentQIdx > 0) {
+        this.visualPaper.currentQIdx -= 1;
+      } else {
+        let ng = this.visualPaper.currentGroupIdx - 1;
+        while (ng >= 0) {
+          const len = (this.visualPaper.groups[ng].questions || []).length;
+          if (len > 0) {
+            this.visualPaper.currentGroupIdx = ng;
+            this.visualPaper.currentQIdx = len - 1;
+            break;
+          }
+          ng -= 1;
+        }
+        if (ng < 0) return;
+      }
+      this.vpActiveTab = "reference";
+      this.$nextTick(() => {
+        const el = this.$refs.vpRightPane;
+        if (el) el.scrollTop = 0;
+      });
+    },
+    toggleVpFullscreen() {
+      this.vpFullscreen = !this.vpFullscreen;
+      if (this.vpFullscreen) {
+        this._vpBoundHandler = (e) => {
+          if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); this.vpNextQuestion(); }
+          else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); this.vpPrevQuestion(); }
+          else if (e.key === "Escape") { this.vpCloseFullscreen(); }
+        };
+        document.addEventListener("keydown", this._vpBoundHandler);
+        // 锁住 body 滚动，全屏层内部左右分栏各自滚动
+        document.documentElement.style.overflow = "hidden";
+      } else {
+        if (this._vpBoundHandler) document.removeEventListener("keydown", this._vpBoundHandler);
+        this._vpBoundHandler = null;
+        document.documentElement.style.overflow = "";
+      }
+    },
+    vpCloseFullscreen() {
+      this.vpFullscreen = false;
+      if (this._vpBoundHandler) { document.removeEventListener("keydown", this._vpBoundHandler); this._vpBoundHandler = null; }
+      document.documentElement.style.overflow = "";
+    },
     get mascotAnchorName() {
       if (!this.currentTool) return "home";
       return "tool";
@@ -1212,6 +1677,9 @@ function nbx() {
       }
       if (this.isVocabTool) {
         return !!this.vocab && !this.vocab.checked && !this.vocab.output;
+      }
+      if (this.isVisualPaperTool) {
+        return !this.vpHasData && !this.streaming && !this.inputCollapsed;
       }
       return !this.inputCollapsed && !this.submittedInput && !this.output && !this.errorMsg;
     },
@@ -1336,6 +1804,9 @@ function nbx() {
     },
     get isVocabTool() {
       return !!this.currentTool && this.currentTool.id === "24";
+    },
+    get isVisualPaperTool() {
+      return !!this.currentTool && this.currentTool.id === "13";
     },
     get vocabOverCount() {
       return this.vocab && this.vocab.result ? (this.vocab.result.over_words || []).length : 0;
@@ -1491,6 +1962,7 @@ function nbx() {
       configureMarked();
       this.resetMigration();
       this.resetVocab();
+      this.resetVisualPaper();
 
       // 主题
       const savedTheme = localStorage.getItem(LS.theme);
@@ -1809,6 +2281,7 @@ function nbx() {
       this.submittedExpanded = false;
       this.resetMigration();
       this.resetVocab();
+      this.resetVisualPaper();
       const el = ev && ev.currentTarget ? ev.currentTarget : null;
       if (el && this._bg) {
         const r = el.getBoundingClientRect();
@@ -2560,6 +3033,9 @@ function nbx() {
       return this.isMigrationTool && !!this.migrationExportTarget;
     },
     getExportMarkdown() {
+      if (this.isVisualPaperTool && this.vpHasData) {
+        return this.vpGetExportMarkdown();
+      }
       if (this.hasMigrationExportTarget()) {
         const cards = this.migrationExportCards();
         return this.migrationExportTarget.scope === "all"
@@ -2569,6 +3045,9 @@ function nbx() {
       return this.output;
     },
     getExportPlain() {
+      if (this.isVisualPaperTool && this.vpHasData) {
+        return this.vpGetExportPlain();
+      }
       if (this.hasMigrationExportTarget()) {
         const cards = this.migrationExportCards();
         return this.migrationExportTarget.scope === "all"
@@ -2579,7 +3058,9 @@ function nbx() {
     },
     buildExportContent() {
       let content;
-      if (this.hasMigrationExportTarget()) {
+      if (this.isVisualPaperTool && this.vpHasData) {
+        content = renderMd(this.vpGetExportMarkdown());
+      } else if (this.hasMigrationExportTarget()) {
         content = this.migrationExportCards()
           .map((card, index) => {
             const pageBreak = this.migrationExportTarget.scope === "all" && index
@@ -2657,6 +3138,10 @@ function nbx() {
       }
       if (this.isVocabTool) {
         await this.checkVocab();
+        return;
+      }
+      if (this.isVisualPaperTool) {
+        await this.runVisualPaper();
         return;
       }
       if (this.streaming) return;
@@ -2841,6 +3326,250 @@ function nbx() {
         }
         if (state === "stopped") this.toast("已停止生成", "warn");
       }
+    },
+
+    /* ============ 试卷可视化全解 流式 ============ */
+    async runVisualPaper() {
+      if (this.streaming) return;
+      const text = this.input.trim();
+      if (!text) {
+        this.toast("请先粘贴或输入试卷内容", "warn");
+        this.shakeComposer();
+        return;
+      }
+      if (this.currentTool && this.currentTool.prompt_loaded === false) {
+        if (!confirm(`「${this.currentTool.name}」的提示词文件尚未加载，生成效果可能不完整。仍要继续吗？`)) return;
+      }
+      this.retreatMascot();
+      this.resetVisualPaper();
+      this.visualPaper = this.newVisualPaperState();
+      this.output = "";
+      this.rendered = "";
+      this.errorMsg = "";
+      this._nearBottom = true;
+      this.submittedInput = text;
+      this.submittedFileName = this.attachedFile ? this.attachedFile.name : "";
+      this.inputCollapsed = true;
+      this.input = "";
+      this.attachedFile = null;
+      this.inputMode = "text";
+      await this._runVisualStream(text, null);
+    },
+    // 可视化流式共享入口：updateId 非空时在原历史记录上追加更新，不新增记录
+    async _runVisualStream(inputText, updateId) {
+      this.retreatMascot();
+      this.streaming = true;
+      this.thinking = true;
+      this.thinkingElapsed = "0.0";
+      this._stopRequested = false;
+      this.status = "connecting";
+      this.requestId = `13_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      this._abortCtrl = new AbortController();
+      this.startTimer();
+      this.startThinkTimer();
+      try {
+        const { state } = await this._streamChat({
+          toolId: "13",
+          input: inputText,
+          requestId: this.requestId,
+          onToken: (tok) => {
+            if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
+            this.status = "streaming";
+            this.output += tok;
+            if (this.visualPaper) this.visualPaper.rawJson = this.output;
+            this.vpScheduleRender();
+          },
+        });
+        this.finalizeVisualPaper(state === "stopped" ? "stopped" : "done", "", updateId ? { updateId } : {});
+      } catch (e) {
+        if (e && e.name === "AbortError") {
+          this.finalizeVisualPaper("stopped", "", updateId ? { updateId } : {});
+        } else {
+          this.finalizeVisualPaper("error", (e && e.message) || "网络请求失败");
+        }
+      }
+    },
+    finalizeVisualPaper(state, errMsg, opts = {}) {
+      this.streaming = false;
+      this.thinking = false;
+      this.stopTimer();
+      this.stopThinkTimer();
+      this.vpDoRender();
+      if (state === "error") {
+        this.status = "error";
+        this.errorMsg = errMsg || "生成失败";
+        this.vpParseError = errMsg || "生成失败";
+        this.toast("生成失败：" + this.errorMsg, "error");
+      } else {
+        this.status = state;
+        if (this.output.trim()) {
+          const updateId = opts.updateId || null;
+          let item = updateId ? this.history.find(h => h.id === updateId) : null;
+          if (item) {
+            // 续写/重跑：在原记录上追加更新，不新增记录
+            item.output = this.output;
+            item.partial = (state === "stopped");
+            item.model = this.selectedModel;
+            if (this.visualPaper && (this.visualPaper.groups?.length || this.visualPaper.total)) {
+              item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
+            }
+            lsSet(LS.history, this.history);
+          } else {
+            item = this.pushHistory(state === "stopped");
+            // 为可视化历史附加结构化数据，便于回放（0 完整题也保存 total/paper，中断可续）
+            if (this.visualPaper && (this.visualPaper.groups?.length || this.visualPaper.total || (this.visualPaper.paper && this.visualPaper.paper.title))) {
+              item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
+              // 同步到 history 存储
+              lsSet(LS.history, this.history);
+            }
+            if (this.visualPaper) this.visualPaper.historyId = item.id;
+            this.generateTitle(item);
+          }
+        }
+        if (state === "stopped") this.toast("已停止生成", "warn");
+      }
+    },
+    async continueVisualPaper() {
+      if (this.streaming) return;
+      if (!this.visualPaper || !this.submittedInput) {
+        this.toast("没有可续写的试卷", "warn");
+        return;
+      }
+      if (!this.requireAuth("请先输入使用码")) return;
+      const keepId = this.visualPaper.historyId || null;
+      // 连总数都没解析出来 → 整卷重跑，原记录上覆盖，不新增记录
+      if ((this.visualPaper.total || 0) <= 0 && this.vpQuestionCount === 0) {
+        const text = this.submittedInput;
+        this.resetVisualPaper();
+        this.visualPaper = this.newVisualPaperState();
+        this.visualPaper.historyId = keepId;
+        this.output = "";
+        this.rendered = "";
+        this.errorMsg = "";
+        await this._runVisualStream(text, keepId);
+        return;
+      }
+      if (this.vpRemaining <= 0) {
+        this.toast("已全部生成，无需续写");
+        return;
+      }
+      const alreadyNos = [];
+      for (const g of this.visualPaper.groups) for (const q of g.questions) alreadyNos.push(q.no);
+      const lastNo = alreadyNos.length ? Math.max(...alreadyNos.map(n=>parseInt(n)||0)) : 0;
+      const nextNo = lastNo + 1;
+      const remaining = this.vpRemaining;
+      const contInput = this.submittedInput + `\n\n【续写指令】已生成 ${this.vpQuestionCount}/${this.vpTotal} 题，题号 ${alreadyNos.join(",")} 已完成，请继续生成剩余 ${remaining} 题，从 @@Q@@ ${nextNo} 开始，按相同 @@TAG@@ 格式输出，每题以 @@END_Q@@ 结束，不要重复已生成题，也不要重新输出 @@TOTAL@@/@@PAPER@@/@@NOTICE@@。`;
+      if (this.output && !this.output.endsWith("\n")) this.output += "\n";
+      const baseLen = this.output.length;
+      await this._runVisualStream(contInput, keepId);
+      // 若续写未新增任何内容（模型未按指令），提示
+      if (this.output.length === baseLen) this.toast("续写未返回新题目，请重试", "warn");
+    },
+    vpScheduleRender() {
+      if (this._vpRenderPending) return;
+      this._vpRenderPending = true;
+      setTimeout(() => {
+        this._vpRenderPending = false;
+        this.vpDoRender();
+      }, 80);
+    },
+    vpDoRender() {
+      const raw = this.output || (this.visualPaper && this.visualPaper.rawJson) || "";
+      if (!raw.trim()) return;
+      const { data, error } = this.tryParseVisualPaper(raw);
+      if (data) {
+        const norm = this.normalizeVisualPaper(data);
+        if (norm) {
+          if (!this.visualPaper) this.visualPaper = this.newVisualPaperState();
+          this.visualPaper.paper = norm.paper;
+          this.visualPaper.groups = norm.groups;
+          this.visualPaper.answerMap = norm.answerMap;
+          this.visualPaper.notice = norm.notice;
+          this.visualPaper.total = norm.total;
+          this.visualPaper.isJson = true;
+          this.visualPaper.parseError = "";
+          this.vpParseError = "";
+          // 保持当前选中题合法
+          if (this.visualPaper.groups.length) {
+            if (this.visualPaper.currentGroupIdx >= this.visualPaper.groups.length) this.visualPaper.currentGroupIdx = 0;
+            const g = this.visualPaper.groups[this.visualPaper.currentGroupIdx];
+            if (g && this.visualPaper.currentQIdx >= (g.questions || []).length) this.visualPaper.currentQIdx = 0;
+          }
+          // 0 完整题但解析出总数/标题：中断残片，不报错、不展示原文
+          if (this.vpQuestionCount === 0) {
+            this.rendered = "";
+            this.vpParseError = "";
+          }
+          return;
+        }
+      }
+      // 自定义格式残片但整体解析失败：同样不展示原文裸 @@ 标签
+      if (/@@[A-Z_]+(@@|=)/.test(raw)) {
+        if (this.visualPaper) this.visualPaper.isJson = false;
+        this.vpParseError = "";
+        this.rendered = "";
+        return;
+      }
+      // 解析失败：保留错误供界面展示回退 Markdown（仅非自定义格式走这里）
+      if (this.visualPaper) {
+        this.visualPaper.parseError = error || "解析失败";
+        this.visualPaper.isJson = false;
+      }
+      this.vpParseError = error || "解析失败";
+      // 回退：仍用通用 Markdown 渲染
+      this.rendered = renderMd(raw);
+    },
+    vpGetExportMarkdown() {
+      if (!this.visualPaper || !this.visualPaper.groups) return this.output || "";
+      const vp = this.visualPaper;
+      let md = `# ${vp.paper?.title || "试卷可视化全解"}\n\n`;
+      if (vp.notice) md += `> ${vp.notice}\n\n`;
+      // 答案速查表
+      if (vp.answerMap && Object.keys(vp.answerMap).length) {
+        md += `## 答案速查表\n\n`;
+        md += `| 题号 | 答案 |\n|---|---|\n`;
+        for (const [k, v] of Object.entries(vp.answerMap)) md += `| ${k} | ${v} |\n`;
+        md += `\n`;
+      }
+      for (const g of vp.groups) {
+        md += `## ${g.title}\n\n${g.intro ? g.intro + "\n\n" : ""}`;
+        for (const q of (g.questions || [])) {
+          md += `### 第 ${q.no} 题 ${q.stem || ""}\n\n`;
+          if (q.passage) md += `${q.passage}\n\n`;
+          if (Array.isArray(q.options)) {
+            for (const o of q.options) md += `- ${o.label}. ${o.text}\n`;
+            md += `\n`;
+          }
+          if (q.answer) md += `**答案：${q.answer}**\n\n`;
+          if (q.reference) {
+            md += `**参考答案**\n\n- 证据：${q.reference.evidence}\n- 推理：${q.reference.reason}\n- 干扰项：${q.reference.distractor}\n\n`;
+          }
+          if (Array.isArray(q.pitfalls)) {
+            md += `**易错点分析**\n\n`;
+            for (const p of q.pitfalls) md += `- **${p.title}**：${p.desc}\n`;
+            md += `\n`;
+          }
+          if (q.pattern) {
+            md += `**考点范式归纳**\n\n- 范式：${q.pattern.name}\n`;
+            for (let i = 0; i < (q.pattern.steps || []).length; i++) md += `${i + 1}. ${q.pattern.steps[i]}\n`;
+            md += `\n`;
+          }
+          if (q.transfer) {
+            const tr = q.transfer;
+            md += `**迁移训练**\n\n${tr.passage}\n\n**${tr.stem}**\n\n`;
+            for (const o of (tr.options || [])) md += `- ${o.label}. ${o.text}\n`;
+            md += `\n答案：${tr.answer}\n\n解析：${tr.explanation}\n\n`;
+          } else if (q.writingGuide) {
+            md += `**写作指导**\n\n- 要点：${(q.writingGuide.points || []).join("；")}\n- 框架：${q.writingGuide.outline}\n- 范文：${q.writingGuide.sample}\n\n`;
+          }
+          md += `---\n\n`;
+        }
+      }
+      return md;
+    },
+    vpGetExportPlain() {
+      // 复用 Markdown 转纯文本
+      return markdownToPlainText(this.vpGetExportMarkdown());
     },
 
     /* --- 渲染（节流） --- */
@@ -3142,6 +3871,10 @@ function nbx() {
         this.openMigrationHistory(item);
         return;
       }
+      if (item.visualPaper || item.toolId === "13") {
+        this.openVisualPaperHistory(item);
+        return;
+      }
       const tool = this.findTool(item.toolId);
       this.currentTool = tool || {
         id: item.toolId, name: item.toolName, icon: item.icon,
@@ -3212,6 +3945,60 @@ function nbx() {
       this.migration.generating = false;
       this.rightMobileOpen = false;
     },
+    openVisualPaperHistory(item) {
+      const tool = this.findTool("13") || {
+        id: "13", name: "试卷可视化全解", icon: "projector", description: "整卷题目与解析的课堂投影版", prompt_loaded: true,
+      };
+      this.currentTool = tool;
+      this.resetVisualPaper();
+      this.submittedInput = item.input || "";
+      this.submittedFileName = item.fileName || "";
+      this.inputCollapsed = true;
+      this.output = item.output || "";
+      this.errorMsg = "";
+      this.status = "history";
+      this.vpCloseFullscreen();
+      this.vpActiveTab = "reference";
+      if (item.visualPaper && item.visualPaper.groups) {
+        this.visualPaper = JSON.parse(JSON.stringify(item.visualPaper));
+        this.visualPaper.rawJson = item.output || "";
+        this.visualPaper.isJson = true;
+        this.visualPaper.historyId = item.id;
+        this.vpParseError = "";
+      } else {
+        // 旧历史：尝试解析 Markdown 回退
+        this.visualPaper = this.newVisualPaperState();
+        this.visualPaper.rawJson = item.output || "";
+        this.visualPaper.historyId = item.id;
+        const { data } = this.tryParseVisualPaper(item.output || "");
+        if (data) {
+          const norm = this.normalizeVisualPaper(data);
+          if (norm) {
+            this.visualPaper.paper = norm.paper;
+            this.visualPaper.groups = norm.groups;
+            this.visualPaper.answerMap = norm.answerMap;
+            this.visualPaper.notice = norm.notice;
+            this.visualPaper.total = norm.total;
+            this.visualPaper.isJson = true;
+          }
+        } else {
+          // 保留为非 JSON；自定义格式残片走中断卡，绝不展示原文裸标签
+          this.visualPaper.isJson = false;
+          if (/@@[A-Z_]+(@@|=)/.test(item.output || "")) {
+            this.vpParseError = "";
+            this.rendered = "";
+          } else {
+            this.vpParseError = "旧版记录，已回退为 Markdown 展示";
+            this.rendered = renderMd(item.output || "");
+          }
+        }
+      }
+      this.rightMobileOpen = false;
+      this.$nextTick(() => {
+        this.vpDoRender();
+        this.scheduleMascotCheck(80);
+      });
+    },
     startNewTopic() {
       if (this.isMigrationTool) {
         this.resetMigration();
@@ -3221,6 +4008,28 @@ function nbx() {
       if (this.isVocabTool) {
         this.resetVocab();
         this.scheduleMascotCheck(80);
+        return;
+      }
+      if (this.isVisualPaperTool) {
+        this.resetVisualPaper();
+        this.inputCollapsed = false;
+        this.submittedInput = "";
+        this.submittedFileName = "";
+        this.submittedExpanded = false;
+        this.output = "";
+        this.rendered = "";
+        this.errorMsg = "";
+        this.status = "idle";
+        this.vpCloseFullscreen();
+        this.vpActiveTab = "reference";
+        this.inputMode = "text";
+        this.attachedFile = null;
+        this.$nextTick(() => {
+          this.autoGrow();
+          const el = this.$refs.inputEl;
+          if (el) el.focus();
+          this.scheduleMascotCheck(80);
+        });
         return;
       }
       this.inputCollapsed = false;

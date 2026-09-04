@@ -98,6 +98,7 @@ class LLMService:
         stream: bool,
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
+        response_format: Optional[dict] = None,
     ) -> dict:
         kwargs = {
             "model": self._get_model(model),
@@ -120,6 +121,8 @@ class LLMService:
             # 请求供应商在流末尾返回 token 用量；不支持的供应商由
             # litellm.drop_params 自动丢弃该参数，不会引发报错
             kwargs["stream_options"] = {"include_usage": True}
+        if response_format:
+            kwargs["response_format"] = response_format
         return kwargs
 
     async def chat(
@@ -132,11 +135,13 @@ class LLMService:
         max_tokens: Optional[int] = None,
         messages: Optional[list[dict]] = None,
         usage_out: Optional[dict] = None,
+        response_format: Optional[dict] = None,
     ) -> str:
         """非流式调用，返回完整字符串；传入 usage_out 时回填 token 用量。"""
         request_messages = messages or self._get_messages(system_prompt, user_prompt)
         kwargs = self._build_kwargs(
             model, request_messages, api_key, base_url, max_tokens, stream=False,
+            response_format=response_format,
         )
 
         try:
@@ -193,6 +198,7 @@ class LLMService:
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
         usage_out: Optional[dict] = None,
+        response_format: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
         """支持中止的流式调用
 
@@ -203,6 +209,7 @@ class LLMService:
         kwargs = self._build_kwargs(
             model, messages, api_key, base_url, max_tokens, stream=True,
             reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
+            response_format=response_format,
         )
 
         streamed_parts: list[str] = []

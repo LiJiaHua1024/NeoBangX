@@ -87,6 +87,7 @@ class LLMRouter:
         stream: bool,
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
+        response_format: Optional[dict] = None,
     ) -> dict:
         # provider_model_id 为该 Provider 下实际的 LiteLLM ID（可与逻辑 model 不同）
         actual_model = (provider.get("provider_model_id") or "").strip() or model
@@ -107,6 +108,8 @@ class LLMRouter:
             kwargs["reasoning_effort"] = reasoning_effort
         if stream:
             kwargs["stream_options"] = {"include_usage": True}
+        if response_format:
+            kwargs["response_format"] = response_format
         return kwargs
 
     async def chat(
@@ -120,6 +123,7 @@ class LLMRouter:
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
         usage_out: Optional[dict] = None,
+        response_format: Optional[dict] = None,
     ) -> str:
         if not self.providers:
             raise RuntimeError("该模型未绑定任何可用 Provider")
@@ -140,6 +144,7 @@ class LLMRouter:
             kwargs = self._build_kwargs(
                 provider, model_id, request_messages, max_tokens, stream=False,
                 reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
+                response_format=response_format,
             )
             try:
                 response = await acompletion(**kwargs)
@@ -179,6 +184,7 @@ class LLMRouter:
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
         usage_out: Optional[dict] = None,
+        response_format: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
         if not self.providers:
             raise RuntimeError("该模型未绑定任何可用 Provider")
@@ -198,6 +204,7 @@ class LLMRouter:
             kwargs = self._build_kwargs(
                 provider, model_id, base_messages, max_tokens, stream=True,
                 reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
+                response_format=response_format,
             )
             yielded_any = False
             streamed_parts: list[str] = []

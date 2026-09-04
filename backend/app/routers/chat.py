@@ -629,6 +629,8 @@ async def chat_stream(
     model_entry = find_model_entry(cfg["models"], model_used)
     reasoning_effort = model_entry.get("reasoning_effort") if model_entry else None
     thinking_budget = model_entry.get("thinking_budget") if model_entry else None
+    # 试卷可视化全解使用自定义分隔格式，无需 JSON mode，兼容性更强（忠于原始模型配置，不强制覆盖 reasoning/max_tokens）
+    visual_response_format = None
     # 日志元数据：客户端信息与原始数据开关（开关随请求读取，改配置即时生效）
     client_ip, user_agent = get_client_info(request)
     log_payload_enabled = bool(cfg.get("log_payload"))
@@ -651,6 +653,7 @@ async def chat_stream(
                 reasoning_effort=reasoning_effort,
                 thinking_budget=thinking_budget,
                 usage_out=usage,
+                response_format=visual_response_format,
             ):
                 output_parts.append(token)
                 if await request.is_disconnected():

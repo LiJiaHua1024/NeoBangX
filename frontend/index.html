@@ -149,7 +149,7 @@
       </div>
 
       <!-- 主面板 -->
-      <section x-ref="mainPanel" class="glass rounded-[1.4rem] flex-1 min-h-0 flex flex-col overflow-hidden relative">
+      <section x-ref="mainPanel" class="glass rounded-[1.4rem] flex-1 min-h-0 flex flex-col overflow-hidden relative" :class="(vpFullscreen && isVisualPaperTool) ? 'vp-fullscreen-active' : ''">
         <div class="stream-bar" x-show="streaming"></div>
 
         <!-- 穹妹布玩具：单实例，按当前页面状态和可用空间探出 / 收回（双击切换悠空主题） -->
@@ -664,8 +664,414 @@
           </div>
         </template>
 
+        <!-- ========== 试卷可视化全解 ========== -->
+        <template x-if="currentTool && isVisualPaperTool">
+          <div class="flex-1 min-h-0 flex flex-col" :class="vpFullscreen ? 'vp-embed-full' : ''">
+            <!-- 工具头部 -->
+            <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
+              <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
+                    style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
+                    x-html="icon(currentTool.icon,'w-5 h-5')"></span>
+              <div class="min-w-0">
+                <h2 class="font-bold leading-tight truncate" style="font-size:.98rem" x-text="currentTool.name"></h2>
+                <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
+              </div>
+              <div class="ml-auto flex items-center gap-2">
+                <span class="text-xs text-faint hidden sm:inline">模型</span>
+                <div class="ms-wrap" @click.outside="modelMenuOpen = false">
+                  <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
+                          @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
+                    <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
+                    <span class="truncate" x-text="shortModel(selectedModel)"></span>
+                    <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                  </button>
+                  <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
+                       x-transition:enter="ms-anim" x-transition:enter-start="ms-anim-from" x-transition:enter-end="ms-anim-to"
+                       x-transition:leave="ms-anim-leave" x-transition:leave-start="ms-anim-to" x-transition:leave-end="ms-anim-from">
+                    <template x-for="m in allModels" :key="m.id">
+                      <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
+                        <div class="min-w-0">
+                          <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
+                          <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
+                        </div>
+                        <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
+                          <svg viewBox="0 0 24 24">
+                            <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
+                            <circle class="ms-ring-bar" cx="12" cy="12" r="10"
+                                    :stroke="modelScoreColor(m.score)"
+                                    stroke-dasharray="62.83"
+                                    :stroke-dashoffset="modelRingOffset(m.score)"></circle>
+                          </svg>
+                          <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
+                        </span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 试卷标题条（有数据时） -->
+            <div x-show="vpHasData" class="vp-paper-bar px-4 sm:px-5 py-2.5 flex items-center gap-3 flex-wrap shrink-0" style="border-bottom:1px solid var(--border);background:color-mix(in srgb, var(--accent) 4%, transparent)">
+              <div class="min-w-0 flex-1">
+                <div class="font-semibold text-sm truncate" x-text="visualPaper && visualPaper.paper ? visualPaper.paper.title : ''"></div>
+                <div class="text-xs text-dim truncate" x-show="visualPaper && visualPaper.notice" x-text="visualPaper.notice"></div>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0 flex-wrap">
+                <span class="text-xs text-dim hidden sm:inline" x-text="'第 ' + vpCurrentGlobalIndex + ' / ' + vpQuestionCount + ' 题'"></span>
+                <button class="icon-btn" style="width:2rem;height:2rem" :class="{ 'on': maskOn }" @click="toggleMask()" :title="maskOn ? '显示答案' : '隐藏答案'" x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
+                <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpPrevQuestion()" :disabled="vpQuestionCount===0">上一题</button>
+                <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpNextQuestion()" :disabled="vpQuestionCount===0">下一题</button>
+                <div class="relative" @click.outside="closeExportMenu()">
+                  <button class="icon-btn" style="width:2rem;height:2rem" :class="{ 'on': exportMenuOpen }" @click="toggleExportMenu($event.currentTarget)" title="导出" x-html="icon('insert','w-4 h-4')"></button>
+                  <div x-show="exportMenuOpen" x-transition:enter="export-menu-anim" x-transition:enter-start="export-menu-anim-from" x-transition:enter-end="export-menu-anim-to" x-transition:leave="export-menu-anim-leave" x-transition:leave-start="export-menu-anim-to" x-transition:leave-end="export-menu-anim-from" class="export-menu glass-deep rounded-xl" data-export-menu :style="exportMenuStyle">
+                    <div class="export-size-row">
+                      <span class="export-size-label" :class="{ 'disabled': !exportSizeEnabled }">文字大小</span>
+                      <input type="range" class="export-slider" min="10" max="24" step="1" x-model.number="exportFontSize" :disabled="!exportSizeEnabled">
+                      <span class="export-size-num" :class="{ 'disabled': !exportSizeEnabled }" x-text="exportFontSize"></span>
+                    </div>
+                    <div class="export-list">
+                      <template x-for="f in exportFormats" :key="f.id">
+                        <div class="export-item" :class="{ 'active': exportFormat === f.id }" @click="exportFormat = f.id">
+                          <span class="export-item-icon" x-html="icon(f.icon, 'w-4 h-4')"></span>
+                          <div class="export-item-text">
+                            <span class="export-item-name" x-text="f.name"></span>
+                            <span class="export-item-desc" x-text="f.desc"></span>
+                          </div>
+                          <span class="export-check" x-show="exportFormat === f.id" x-html="icon('check','w-3.5 h-3.5')"></span>
+                        </div>
+                      </template>
+                    </div>
+                    <div class="export-action">
+                      <button class="btn-primary w-full justify-center" @click="doExport()" x-text="exportIsCopy ? '复制' : '下载'"></button>
+                    </div>
+                  </div>
+                </div>
+                <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="toggleVpFullscreen()" x-html="vpFullscreen ? icon('x','w-4 h-4') : icon('panel-right','w-4 h-4')"></button>
+                <span x-text="vpFullscreen ? '退出全屏' : '全屏讲题'" class="text-xs hidden sm:inline" style="margin-left:-4px"></span>
+              </div>
+            </div>
+
+            <!-- 进度条（B方案增量解析，实时追踪） -->
+            <div x-show="vpTotal > 0 && (vpHasData || streaming)" class="px-4 sm:px-5 py-2 shrink-0" style="border-bottom:1px solid var(--border);background:color-mix(in srgb, var(--accent) 3%, transparent)">
+              <div class="flex items-center gap-3">
+                <div class="flex-1 h-1.5 rounded-full overflow-hidden" style="background:var(--border)">
+                  <div class="h-full transition-all duration-500" style="background:linear-gradient(90deg,var(--accent),var(--accent-2))" :style="'width:' + vpProgressPercent + '%'"></div>
+                </div>
+                <span class="text-xs text-dim whitespace-nowrap" x-text="vpQuestionCount + ' / ' + vpTotal + ' 题'"></span>
+                <span class="text-xs font-medium whitespace-nowrap" :class="vpRemaining===0 ? 'text-emerald-600' : 'text-dim'" x-text="streaming ? (vpRemaining>0 ? '剩余 ' + vpRemaining + ' 题' : '即将完成…') : (vpRemaining===0 ? '已完成' : '已生成 ' + vpProgressPercent + '%')"></span>
+                <button x-show="streaming" class="btn-primary btn-stop" style="padding:.3rem .8rem;font-size:.78rem" @click="stop()" title="停止生成，已生成题目会保留，可继续生成"><span x-html="icon('stop','w-3.5 h-3.5')"></span>停止</button>
+              </div>
+              <div x-show="streaming" class="text-[11px] text-faint mt-1.5">每完成一道题即实时预览，已生成内容即使中断也不会丢失</div>
+            </div>
+
+            <!-- 续写按钮（中断恢复） -->
+            <div x-show="vpHasData && vpRemaining > 0 && !streaming" class="px-4 sm:px-5 py-2 flex justify-center shrink-0" style="border-bottom:1px solid var(--border)">
+              <button class="btn-primary" @click="continueVisualPaper()">
+                <span x-html="icon('refresh','w-4 h-4')"></span>
+                <span x-text="'继续生成剩余 ' + vpRemaining + ' 题'"></span>
+              </button>
+            </div>
+
+            <!-- 主内容区 -->
+            <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <!-- 空状态：双占位 -->
+              <div x-show="!vpHasData && !streaming && !errorMsg" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
+                <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6">
+                  <!-- 生成中断（残片无完整题）：不展示原文裸标签，提供继续/重跑 -->
+                  <div x-show="vpInterrupted" class="glass-soft rounded-2xl p-5 text-center">
+                    <div class="font-semibold text-sm">生成被中断，暂无完整题目</div>
+                    <p class="text-xs text-dim mt-1.5 leading-relaxed" x-text="vpTotal > 0 ? ('已识别 ' + vpTotal + ' 题，但中断前没有完成任何一题。点击继续将在原记录上追加生成，不会新增记录。') : '中断过早，未能识别出试卷结构。点击重新生成将在原记录上覆盖，不会新增记录。'"></p>
+                    <button class="btn-primary mt-3" @click="continueVisualPaper()">
+                      <span x-html="icon('refresh','w-4 h-4')"></span>
+                      <span x-text="vpTotal > 0 ? '继续生成' : '重新生成'"></span>
+                    </button>
+                  </div>
+                  <div x-show="!vpInterrupted" class="grid sm:grid-cols-2 gap-4">
+                    <div class="glass-soft rounded-2xl p-6 flex flex-col items-center text-center">
+                      <div class="w-12 h-12 rounded-xl flex items-center justify-center mb-3" style="background:color-mix(in srgb, var(--accent) 10%, transparent);color:var(--accent)" x-html="icon('file-text','w-6 h-6')"></div>
+                      <div class="font-semibold text-sm">等待识别</div>
+                      <div class="text-xs text-dim mt-1.5 leading-relaxed">粘贴试卷后，这里显示 AI 整理后的可点击试题</div>
+                    </div>
+                    <div class="glass-soft rounded-2xl p-6 flex flex-col items-center text-center">
+                      <div class="w-12 h-12 rounded-xl flex items-center justify-center mb-3" style="background:color-mix(in srgb, var(--accent) 10%, transparent);color:var(--accent)" x-html="icon('analysis','w-6 h-6')"></div>
+                      <div class="font-semibold text-sm">等待解题</div>
+                      <div class="text-xs text-dim mt-1.5 leading-relaxed">识题完成后，点击左侧题目生成专业四维解析</div>
+                    </div>
+                  </div>
+                  <div x-show="visualPaper && visualPaper.notice" class="error-card mt-4" x-text="visualPaper.notice"></div>
+                  <div x-show="vpParseError" class="error-card mt-4">
+                    <div class="font-semibold mb-1">解析格式异常，已回退为 Markdown 展示</div>
+                    <div class="text-xs opacity-80" x-text="vpParseError"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 加载态 -->
+              <div x-show="streaming && !vpHasData" class="flex-1 min-h-0 flex flex-col items-center justify-center text-center px-6 py-10">
+                <div class="thinking-block">
+                  <div class="thinking-orb-wrap">
+                    <div class="thinking-orb"><div class="thinking-orb-inner"></div></div>
+                  </div>
+                  <div class="thinking-label">
+                    <span class="thinking-dots"><span></span><span></span><span></span></span>
+                    <span class="thinking-text" x-text="theme === 'sora' ? '云正在聚拢' : '模型正在思考'"></span>
+                    <span class="thinking-time" x-text="thinkingElapsed + 's'"></span>
+                  </div>
+                </div>
+                <div class="max-w-md w-full mt-6 space-y-2">
+                  <div class="skel h-3 w-full"></div>
+                  <div class="skel h-3 w-5/6"></div>
+                  <div class="skel h-3 w-4/6"></div>
+                </div>
+                <button x-show="streaming" class="btn-primary btn-stop mt-6" @click="stop()" title="停止生成，已生成题目会保留，可继续生成"><span x-html="icon('stop','w-4 h-4')"></span>停止生成</button>
+              </div>
+
+              <!-- 解析失败回退 Markdown（仅流结束后展示，生成中绝不裸奔原文） -->
+              <div x-show="!vpHasData && output && vpParseError && !streaming" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
+                <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6">
+                  <div class="error-card mb-4">模型返回格式异常，已按 Markdown 回退展示（不影响导出）。</div>
+                  <div class="md" x-html="rendered"></div>
+                </div>
+              </div>
+
+              <!-- 有数据：左右分栏 -->
+              <div x-show="vpHasData" class="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+                <!-- 左：题库导航 + 语篇 -->
+                <div class="w-full lg:w-[42%] xl:w-[44%] flex flex-col border-b lg:border-b-0 lg:border-r shrink-0" style="border-color:var(--border)">
+                  <!-- 题库导航 -->
+                  <div class="shrink-0 max-h-[38%] lg:max-h-[42%] overflow-y-auto scroll-thin border-b" style="border-color:var(--border)">
+                    <template x-for="(g, gIdx) in vpGroups" :key="gIdx">
+                      <div class="px-3 py-2">
+                        <div class="flex items-center gap-2 mb-1.5">
+                          <span class="text-xs font-bold tracking-wide" style="color:var(--accent)" x-text="g.title"></span>
+                          <span class="text-[11px] text-faint" x-text="g.questions.length + ' 题'"></span>
+                        </div>
+                        <div class="text-xs text-dim leading-relaxed mb-2" x-text="g.intro"></div>
+                        <div class="flex flex-wrap gap-1.5">
+                          <template x-for="(q, qIdx) in (g.questions || [])" :key="q.no">
+                            <button class="vp-q-chip" :class="{ 'active': vpIsCurrent(gIdx, qIdx) }" @click="vpSelectQuestion(gIdx, qIdx)">
+                              <span x-text="q.no"></span>
+                              <span class="vp-q-chip-ans" x-show="q.answer" :class="{ 'masked': maskOn }" x-text="q.answer"></span>
+                            </button>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                  <!-- 语篇阅读区 -->
+                  <div x-ref="vpLeftPane" class="flex-1 min-h-0 overflow-y-auto scroll-thin p-4 sm:p-5">
+                    <div x-show="vpCurrentQuestion && vpCurrentQuestion.passage" class="vp-passage text-sm leading-relaxed whitespace-pre-wrap" x-text="vpCurrentQuestion.passage"></div>
+                    <div x-show="vpCurrentQuestion && !vpCurrentQuestion.passage" class="text-sm text-dim">该题无独立语篇（写作题或语法填空）</div>
+                    <div x-show="visualPaper && visualPaper.answerMap && Object.keys(visualPaper.answerMap).length" class="mt-6 pt-4 border-t" style="border-color:var(--border)">
+                      <div class="text-xs font-semibold mb-2">答案速查表</div>
+                      <div class="flex flex-wrap gap-1.5">
+                        <template x-for="(ans, no) in (visualPaper.answerMap || {})" :key="no">
+                          <span class="chip neutral vp-ans-chip" :title="no + ': ' + ans" x-text="no + ': ' + ans"></span>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 右：题目 + 四维 Tab -->
+                <div x-ref="vpRightPane" class="flex-1 min-h-0 overflow-y-auto scroll-thin p-4 sm:p-5">
+                  <template x-if="vpCurrentQuestion">
+                    <div>
+                      <!-- 题干 + 选项 2x2 -->
+                      <div class="vp-question-head">
+                        <div class="flex items-start gap-2 mb-3">
+                          <span class="chip" style="background:color-mix(in srgb, var(--accent) 14%, transparent)" x-text="'第 ' + vpCurrentQuestion.no + ' 题'"></span>
+                          <span class="chip neutral" x-show="vpCurrentQuestion.qtype === 'blank'" title="填空类（无选项，答案为填空文本）">填空</span>
+                          <span class="chip neutral" x-show="vpCurrentQuestion.qtype === 'writing'" title="写作题">写作</span>
+                          <span class="text-xs text-dim mt-0.5" x-text="vpCurrentGroup ? vpCurrentGroup.title : ''"></span>
+                          <span class="ml-auto text-xs text-faint" x-show="vpQuestionCount" x-text="vpCurrentGlobalIndex + ' / ' + vpQuestionCount"></span>
+                        </div>
+                        <div class="font-medium text-sm leading-relaxed mb-3" x-text="vpCurrentQuestion.stem"></div>
+                        <!-- 选项网格 -->
+                        <div x-show="vpCurrentQuestion.options && vpCurrentQuestion.options.length" class="vp-options-grid">
+                          <template x-for="opt in (vpCurrentQuestion.options || [])" :key="opt.label">
+                            <div class="vp-option-card" :class="{ 'correct': vpCurrentQuestion.answer && opt.label === vpCurrentQuestion.answer, 'masked': maskOn && vpCurrentQuestion.answer && opt.label === vpCurrentQuestion.answer }">
+                              <span class="vp-option-label" x-text="opt.label"></span>
+                              <span class="vp-option-text" x-text="opt.text"></span>
+                            </div>
+                          </template>
+                        </div>
+                        <!-- 写作指导（无选项时） -->
+                        <div x-show="vpCurrentQuestion.writingGuide" class="glass-soft rounded-xl p-4 mt-3">
+                          <div class="text-xs font-semibold mb-2">写作指导</div>
+                          <div class="text-xs text-dim mb-2" x-text="'审题要点：' + ((vpCurrentQuestion.writingGuide && vpCurrentQuestion.writingGuide.points || []).join('；'))"></div>
+                          <div class="text-xs text-dim mb-2" x-text="'结构框架：' + (vpCurrentQuestion.writingGuide ? vpCurrentQuestion.writingGuide.outline : '')"></div>
+                          <div class="text-sm leading-relaxed whitespace-pre-wrap" x-text="vpCurrentQuestion.writingGuide ? vpCurrentQuestion.writingGuide.sample : ''"></div>
+                        </div>
+                      </div>
+
+                      <!-- 四维 Tabs -->
+                      <div class="seg mt-4" style="padding:.2rem">
+                        <button :class="{ 'on': vpActiveTab === 'reference' }" @click="vpActiveTab = 'reference'">参考答案</button>
+                        <button :class="{ 'on': vpActiveTab === 'pitfalls' }" @click="vpActiveTab = 'pitfalls'">易错点</button>
+                        <button :class="{ 'on': vpActiveTab === 'pattern' }" @click="vpActiveTab = 'pattern'">考点范式</button>
+                        <button :class="{ 'on': vpActiveTab === 'transfer' }" @click="vpActiveTab = 'transfer'" :disabled="!vpCurrentQuestion.transfer" :title="vpCurrentQuestion.transfer ? '' : '写作题不设迁移训练'">迁移训练</button>
+                      </div>
+
+                      <!-- 参考答案 -->
+                      <div x-show="vpActiveTab === 'reference'" class="vp-tab-panel" :class="{ 'mask-answers': maskOn }">
+                        <div class="vp-tab-title">参考答案 <span class="vp-tab-sub" x-show="vpCurrentQuestion.answer" :class="{ 'ans': true }" x-text="'答案：' + vpCurrentQuestion.answer"></span></div>
+                        <div x-show="vpCurrentQuestion.reference" class="space-y-2 text-sm leading-relaxed">
+                          <div><span class="font-semibold">证据：</span><span x-text="vpCurrentQuestion.reference.evidence"></span></div>
+                          <div><span class="font-semibold">推理：</span><span x-text="vpCurrentQuestion.reference.reason"></span></div>
+                          <div><span class="font-semibold">干扰项：</span><span x-text="vpCurrentQuestion.reference.distractor"></span></div>
+                        </div>
+                      </div>
+
+                      <!-- 易错点 -->
+                      <div x-show="vpActiveTab === 'pitfalls'" class="vp-tab-panel">
+                        <div class="vp-tab-title">易错点分析</div>
+                        <div class="space-y-2">
+                          <template x-for="(p, idx) in (vpCurrentQuestion.pitfalls || [])" :key="idx">
+                            <div class="vp-pitfall-item">
+                              <div class="vp-pitfall-title" x-text="(idx+1) + '. ' + p.title"></div>
+                              <div class="vp-pitfall-desc" x-text="p.desc"></div>
+                            </div>
+                          </template>
+                          <div x-show="!(vpCurrentQuestion.pitfalls && vpCurrentQuestion.pitfalls.length)" class="text-sm text-dim">暂无易错点分析</div>
+                        </div>
+                      </div>
+
+                      <!-- 考点范式 -->
+                      <div x-show="vpActiveTab === 'pattern'" class="vp-tab-panel" :class="{ 'mask-answers': maskOn }">
+                        <div class="vp-tab-title">考点范式归纳</div>
+                        <div class="space-y-2 text-sm">
+                          <div><span class="font-semibold">范式：</span><span class="ans" x-text="vpCurrentQuestion.pattern ? vpCurrentQuestion.pattern.name : ''"></span></div>
+                          <ol class="list-decimal pl-5 space-y-1">
+                            <template x-for="(step, idx) in (vpCurrentQuestion.pattern ? vpCurrentQuestion.pattern.steps : [])" :key="idx">
+                              <li x-text="step"></li>
+                            </template>
+                          </ol>
+                        </div>
+                      </div>
+
+                      <!-- 迁移训练 -->
+                      <div x-show="vpActiveTab === 'transfer'" class="vp-tab-panel" :class="{ 'mask-answers': maskOn }">
+                        <template x-if="vpCurrentQuestion.transfer">
+                          <div>
+                            <div class="vp-tab-title">迁移训练 <span class="text-xs text-dim font-normal">（同构新题，话题不同·范式相同）</span></div>
+                            <div class="glass-soft rounded-xl p-4 mb-3">
+                              <div class="text-sm leading-relaxed whitespace-pre-wrap mb-3" x-text="vpCurrentQuestion.transfer.passage"></div>
+                              <div class="font-medium text-sm mb-2" x-text="vpCurrentQuestion.transfer.stem"></div>
+                              <div class="vp-options-grid">
+                                <template x-for="opt in (vpCurrentQuestion.transfer.options || [])" :key="opt.label">
+                                  <div class="vp-option-card" :class="{ 'correct': opt.label === vpCurrentQuestion.transfer.answer, 'masked': maskOn && opt.label === vpCurrentQuestion.transfer.answer }">
+                                    <span class="vp-option-label" x-text="opt.label"></span>
+                                    <span class="vp-option-text" x-text="opt.text"></span>
+                                  </div>
+                                </template>
+                              </div>
+                              <div class="mt-3 pt-3 border-t text-sm" style="border-color:var(--border)">
+                                <div><span class="font-semibold ans" x-text="'答案：' + vpCurrentQuestion.transfer.answer"></span></div>
+                                <div class="text-dim mt-1" x-text="vpCurrentQuestion.transfer.explanation"></div>
+                              </div>
+                            </div>
+                          </div>
+                        </template>
+                        <template x-if="!vpCurrentQuestion.transfer">
+                          <div class="text-sm text-dim">该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。</div>
+                        </template>
+                      </div>
+                    </div>
+                  </template>
+                  <div x-show="!vpCurrentQuestion" class="text-sm text-dim">请选择左侧题目查看解析</div>
+                </div>
+              </div>
+              <!-- 错误提示 -->
+              <div x-show="errorMsg" class="px-4 sm:px-5 py-3">
+                <div class="error-card">
+                  <div class="font-semibold mb-1">这次生成没有成功</div>
+                  <div x-text="errorMsg"></div>
+                  <div class="mt-2 text-xs opacity-80">可以稍后再点一次「开始解析」；若多次失败，可能是模型服务繁忙或网络问题。</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 状态条 -->
+            <div class="px-4 sm:px-5 py-1.5 flex items-center gap-2 text-xs text-dim border-t shrink-0" style="border-color:var(--border)">
+              <span :class="status === 'streaming' ? 'status-dot live' : (status === 'done' ? 'status-dot ok' : (status === 'error' ? 'status-dot err' : 'status-dot'))"></span>
+              <span x-text="status === 'streaming' ? '生成中… ' + elapsed + 's' : (status === 'done' ? '已完成 · ' + vpQuestionCount + ' 题' : (status === 'error' ? '生成失败' : (status === 'history' ? '历史记录' : '就绪')))"></span>
+              <span class="text-faint hidden sm:inline" x-show="vpHasData" x-text="'· ' + vpQuestionCount + ' 题'"></span>
+              <span class="text-faint hidden md:inline" x-text="'· ' + shortModel(selectedModel)"></span>
+              <span class="ml-auto flex items-center gap-1">
+                <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData" :class="{ 'on': maskOn }" @click="toggleMask()" :title="maskOn ? '显示答案' : '隐藏答案'" x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
+                <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData || output" @click="copyResult()" :title="copied ? '已复制' : '复制'" x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
+                <div class="relative" x-show="vpHasData || output" @click.outside="closeExportMenu()">
+                  <button class="icon-btn" style="width:2rem;height:2rem" :class="{ 'on': exportMenuOpen }" @click="toggleExportMenu($event.currentTarget)" title="导出" x-html="icon('insert','w-4 h-4')"></button>
+                  <div x-show="exportMenuOpen" x-transition:enter="export-menu-anim" x-transition:enter-start="export-menu-anim-from" x-transition:enter-end="export-menu-anim-to" x-transition:leave="export-menu-anim-leave" x-transition:leave-start="export-menu-anim-to" x-transition:leave-end="export-menu-anim-from" class="export-menu glass-deep rounded-xl" data-export-menu :style="exportMenuStyle">
+                    <div class="export-size-row">
+                      <span class="export-size-label" :class="{ 'disabled': !exportSizeEnabled }">文字大小</span>
+                      <input type="range" class="export-slider" min="10" max="24" step="1" x-model.number="exportFontSize" :disabled="!exportSizeEnabled">
+                      <span class="export-size-num" :class="{ 'disabled': !exportSizeEnabled }" x-text="exportFontSize"></span>
+                    </div>
+                    <div class="export-list">
+                      <template x-for="f in exportFormats" :key="f.id">
+                        <div class="export-item" :class="{ 'active': exportFormat === f.id }" @click="exportFormat = f.id">
+                          <span class="export-item-icon" x-html="icon(f.icon, 'w-4 h-4')"></span>
+                          <div class="export-item-text">
+                            <span class="export-item-name" x-text="f.name"></span>
+                            <span class="export-item-desc" x-text="f.desc"></span>
+                          </div>
+                          <span class="export-check" x-show="exportFormat === f.id" x-html="icon('check','w-3.5 h-3.5')"></span>
+                        </div>
+                      </template>
+                    </div>
+                    <div class="export-action">
+                      <button class="btn-primary w-full justify-center" @click="doExport()" x-text="exportIsCopy ? '复制' : '下载'"></button>
+                    </div>
+                  </div>
+                </div>
+              </span>
+            </div>
+
+            <!-- 输入区（复用通用输入：粘贴/Word） -->
+            <div class="p-3 sm:p-4 pt-2 shrink-0">
+              <div x-show="inputCollapsed && vpHasData" x-transition class="flex justify-center">
+                <button class="btn-new-topic" @click="startNewTopic()">
+                  <span x-html="icon('plus','w-4 h-4')"></span>
+                  <span>开始新试卷</span>
+                </button>
+              </div>
+              <div x-show="!inputCollapsed" x-transition>
+                <div class="composer glass-soft rounded-2xl p-3" x-ref="composer" @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false" @drop.prevent="handleFileDrop($event)" :class="{ 'drag-over': dragOver }">
+                  <div x-show="inputMode === 'file' && attachedFile" class="file-card">
+                    <div class="file-card-icon"><span x-html="icon('file-text','w-6 h-6')"></span></div>
+                    <div class="file-card-info">
+                      <div class="file-card-name" x-text="attachedFile ? attachedFile.name : ''"></div>
+                      <div class="file-card-meta" x-text="attachedFile ? formatFileSize(attachedFile.size) + ' · 内容已读取' : ''"></div>
+                    </div>
+                    <button class="icon-btn danger" @click="removeAttachedFile()" title="移除文件"><span x-html="icon('x','w-4 h-4')"></span></button>
+                  </div>
+                  <textarea x-show="inputMode === 'text'" x-ref="inputEl" x-model="input" @input="autoGrow()" @keydown.enter.ctrl="run()" placeholder="粘贴试卷文本或上传 Word（自动跳过听力部分），我将为每一道笔试题提供参考答案、易错点、考点范式与迁移训练…"
+                            rows="4" style="min-height:4.2rem;max-height:16rem;overflow-y:auto"></textarea>
+                  <div class="flex items-center gap-2 mt-2 flex-wrap">
+                    <label class="btn-ghost" style="padding:.45rem .8rem;font-size:.82rem;cursor:pointer">
+                      <span x-html="icon('paperclip','w-4 h-4')"></span>上传 Word
+                      <input type="file" accept=".docx,.doc,.txt,.md" style="display:none" @change="handleFileSelect($event)">
+                    </label>
+                    <span class="text-xs text-faint hidden sm:inline">支持 .docx / .txt，自动跳过听力</span>
+                    <span class="ml-auto flex items-center gap-2">
+                      <span class="text-xs text-faint" x-show="input.length" x-text="input.length + ' 字'"></span>
+                      <button x-show="!streaming" class="btn-primary" @click="run()" :disabled="!input.trim()">
+                        <span x-html="icon('send','w-4 h-4')"></span>开始解析
+                      </button>
+                      <button x-show="streaming" class="btn-primary btn-stop" @click="stop()"><span x-html="icon('stop','w-4 h-4')"></span>停止</button>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <!-- ========== 普通工具操作页 ========== -->
-        <template x-if="currentTool && !isMigrationTool && !isVocabTool">
+        <template x-if="currentTool && !isMigrationTool && !isVocabTool && !isVisualPaperTool">
           <div class="flex-1 min-h-0 flex flex-col">
 
             <!-- 工具头部 -->
