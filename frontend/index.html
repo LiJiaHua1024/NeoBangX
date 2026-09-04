@@ -486,8 +486,20 @@
                         </div>
                       </div>
                       <div class="migration-result-body" x-show="!card.collapsed" x-collapse>
-                        <div x-show="card.streaming && !card.output" class="migration-card-loading">
+                        <div x-show="card.streaming && !card.output && !card.reasoning" class="migration-card-loading">
                           <span class="thinking-dots"><span></span><span></span><span></span></span>正在生成
+                        </div>
+                        <div x-show="card.reasoning" class="reasoning-box reasoning-box-card" :class="{ 'collapsed': !card.reasoningOpen }">
+                          <button class="reasoning-head" @click="card.reasoningOpen = !card.reasoningOpen">
+                            <span class="status-dot" :class="card.status === 'done' ? 'ok' : 'live'"></span>
+                            <span class="reasoning-title" x-text="card.output ? '思考过程' : '正在思考…'"></span>
+                            <span class="reasoning-count" x-text="card.reasoningTokens + ' tok'"></span>
+                            <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                          </button>
+                          <div class="reasoning-body scroll-thin" x-show="card.reasoningOpen" x-collapse>
+                            <pre x-text="card.reasoning"></pre>
+                            <div class="reasoning-truncated" x-show="card.reasoningTruncated">内容较长，仅保留最近部分</div>
+                          </div>
                         </div>
                         <div class="md" x-show="card.output" x-html="card.rendered"></div>
                         <span class="tw-cursor" x-show="card.streaming"></span>
@@ -650,8 +662,20 @@
                     </span>
                   </div>
                   <div class="md" x-show="vocab.output" x-html="vocab.rendered"></div>
-                  <div class="vocab-loading" x-show="vocab.replacing && !vocab.output">
+                  <div class="vocab-loading" x-show="vocab.replacing && !vocab.output && !vocab.reasoning">
                     <span>AI 正在替换超标词…</span>
+                  </div>
+                  <div x-show="vocab.reasoning" class="reasoning-box reasoning-box-card" :class="{ 'collapsed': !vocab.reasoningOpen }">
+                    <button class="reasoning-head" @click="vocab.reasoningOpen = !vocab.reasoningOpen">
+                      <span class="status-dot" :class="vocab.reasoningDone ? 'ok' : 'live'"></span>
+                      <span class="reasoning-title" x-text="vocab.reasoningDone ? '思考过程' : '正在思考…'"></span>
+                      <span class="reasoning-count" x-text="vocab.reasoningTokens + ' tok'"></span>
+                      <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
+                    <div class="reasoning-body scroll-thin" x-show="vocab.reasoningOpen" x-collapse>
+                      <pre x-ref="vocabReasoningBody" x-text="vocab.reasoning"></pre>
+                      <div class="reasoning-truncated" x-show="vocab.reasoningTruncated">内容较长，仅保留最近部分</div>
+                    </div>
                   </div>
                   <p class="text-sm text-danger mt-2" x-show="vocab.status === 'error'" x-text="vocab.checkError"></p>
                 </div>
@@ -811,14 +835,26 @@
 
               <!-- 加载态 -->
               <div x-show="streaming && !vpHasData" class="flex-1 min-h-0 flex flex-col items-center justify-center text-center px-6 py-10">
-                <div class="thinking-block">
+                <div class="thinking-block" x-show="!reasoning">
                   <div class="thinking-orb-wrap">
                     <div class="thinking-orb"><div class="thinking-orb-inner"></div></div>
                   </div>
                   <div class="thinking-label">
                     <span class="thinking-dots"><span></span><span></span><span></span></span>
-                    <span class="thinking-text" x-text="theme === 'sora' ? '云正在聚拢' : '模型正在思考'"></span>
-                    <span class="thinking-time" x-text="thinkingElapsed + 's'"></span>
+                    <span class="thinking-text" x-text="theme === 'sora' ? '云正在聚拢' : '等待模型响应'"></span>
+                    <span class="thinking-time" x-text="thinkingTimeText"></span>
+                  </div>
+                </div>
+                <div x-show="reasoning" class="reasoning-box reasoning-box-narrow" :class="{ 'collapsed': !reasoningOpen }">
+                  <button class="reasoning-head" @click="reasoningOpen = !reasoningOpen">
+                    <span class="status-dot" :class="reasoningDone ? 'ok' : 'live'"></span>
+                    <span class="reasoning-title" x-text="reasoningDone ? '思考过程' : '正在思考…'"></span>
+                    <span class="reasoning-count" x-text="reasoningStatText"></span>
+                    <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                  </button>
+                  <div class="reasoning-body scroll-thin" x-show="reasoningOpen" x-collapse>
+                    <pre x-text="reasoning"></pre>
+                    <div class="reasoning-truncated" x-show="reasoningTruncated">内容较长，仅保留最近部分</div>
                   </div>
                 </div>
                 <div class="max-w-md w-full mt-6 space-y-2">
@@ -1156,7 +1192,7 @@
               <!-- 生成结果 -->
               <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6" x-show="output || streaming">
                 <!-- 思考中动画 -->
-                <div x-show="thinking" class="thinking-block fade-in">
+                <div x-show="thinking && !reasoning" class="thinking-block fade-in">
                   <div class="thinking-orb-wrap">
                     <div class="thinking-orb">
                       <div class="thinking-orb-inner"></div>
@@ -1166,8 +1202,21 @@
                     <span class="thinking-dots">
                       <span></span><span></span><span></span>
                     </span>
-                    <span class="thinking-text" x-text="theme === 'sora' ? '云正在聚拢' : '模型正在思考'"></span>
-                    <span class="thinking-time" x-text="thinkingElapsed + 's'"></span>
+                    <span class="thinking-text" x-text="theme === 'sora' ? '云正在聚拢' : '等待模型响应'"></span>
+                    <span class="thinking-time" x-text="thinkingTimeText"></span>
+                  </div>
+                </div>
+                <!-- 推理过程（有界：固定 max-height + 盒内滚动 + 截头保尾，不顶走正文） -->
+                <div x-show="reasoning" class="reasoning-box" :class="{ 'collapsed': !reasoningOpen }">
+                  <button class="reasoning-head" @click="reasoningOpen = !reasoningOpen">
+                    <span class="status-dot" :class="reasoningDone ? 'ok' : 'live'"></span>
+                    <span class="reasoning-title" x-text="reasoningDone ? '思考过程' : '正在思考…'"></span>
+                    <span class="reasoning-count" x-text="reasoningStatText"></span>
+                    <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                  </button>
+                  <div class="reasoning-body scroll-thin" x-show="reasoningOpen" x-collapse>
+                    <pre x-ref="reasoningBody" x-text="reasoning"></pre>
+                    <div class="reasoning-truncated" x-show="reasoningTruncated">内容较长，仅保留最近部分</div>
                   </div>
                 </div>
                 <div class="md" x-ref="mdRoot"

@@ -18,6 +18,59 @@ def extract_usage(usage, out: dict) -> None:
             out[key] = int(value)
 
 
+def _get_delta_field(delta, key: str):
+    """兼容对象与 dict 两种 delta 形态取值。"""
+    if delta is None:
+        return None
+    if isinstance(delta, dict):
+        return delta.get(key)
+    return getattr(delta, key, None)
+
+
+def extract_reasoning_from_delta(delta) -> str:
+    """从流式 delta 中提取推理过程片段。
+
+    各家供应商经 LiteLLM 归一后字段不完全一致，常见有：
+    - DeepSeek / OpenRouter 系：``reasoning_content``（str）
+    - OpenAI 系：``reasoning``（str 或 block 列表）
+    - Anthropic 系：``thinking``（str 或 block 列表）
+    无推理内容时返回空串；解析失败同样返回空串，绝不影响主流程。
+    """
+    if delta is None:
+        return ""
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        try:
+            value = _get_delta_field(delta, key)
+        except Exception:
+            continue
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, list) and value:
+            parts: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    if item:
+                        parts.append(item)
+                elif isinstance(item, dict):
+                    for sub in ("thinking", "text", "reasoning", "content"):
+                        text = item.get(sub)
+                        if isinstance(text, str) and text:
+                            parts.append(text)
+                            break
+                else:
+                    for sub in ("thinking", "text", "reasoning", "content"):
+                        try:
+                            text = getattr(item, sub, None)
+                        except Exception:
+                            text = None
+                        if isinstance(text, str) and text:
+                            parts.append(text)
+                            break
+            if parts:
+                return "".join(parts)
+    return ""
+
+
 def estimate_missing_usage(
     messages: list, completion_text: str, model: str, out: dict | None
 ) -> None:
@@ -44,6 +97,25 @@ def estimate_missing_usage(
         out["estimated"] = True
     except Exception as e:
         logger.warning("Token usage estimation failed: %s", e)
+
+
+def count_text_tokens(text: str, model: str) -> int:
+    """用 litellm 内置 tokenizer 精确计数一段文本的 token 数。
+
+    供流式推理事件逐 delta 计数使用，前端据此累加展示 tok 与 tok/s 速度。
+    tokenizer 选择在 litellm 内部按模型 lru_cache 缓存，逐 delta 调用开销可忽略；
+    未收录的模型自动退回 tiktoken 默认词表（词表随 litellm 内置、完全离线），
+    计数失败时按 CJK 粗估兜底，任何异常都不应影响主请求。
+    """
+    if not text:
+        return 0
+    try:
+        return max(1, int(litellm.token_counter(model=model, text=text)))
+    except Exception as e:
+        logger.warning("Reasoning token counting failed: %s", e)
+        cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+        other = len(text) - cjk
+        return max(1, cjk + (other + 3) // 4)
 
 
 class LLMService:
@@ -164,8 +236,13 @@ class LLMService:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         max_tokens: Optional[int] = None,
-    ) -> AsyncGenerator[str, None]:
-        """流式调用，逐 token 返回文本片段"""
+    ) -> AsyncGenerator[str | tuple[str, str], None]:
+        """流式调用，逐 token 返回文本片段。
+
+        推理过程以 ``("reasoning", text)`` 元组透出，正文仍为 plain str，
+        调用方须先判断 ``isinstance(item, tuple)`` 再消费，避免把推理
+        混入正文。
+        """
         messages = self._get_messages(system_prompt, user_prompt)
         kwargs = self._build_kwargs(model, messages, api_key, base_url, max_tokens, stream=True)
 
@@ -177,8 +254,14 @@ class LLMService:
                 if not getattr(chunk, "choices", None):
                     continue
                 delta = chunk.choices[0].delta
-                if delta and delta.content:
-                    yield delta.content
+                if delta is None:
+                    continue
+                reasoning = extract_reasoning_from_delta(delta)
+                if reasoning:
+                    yield ("reasoning", reasoning)
+                content = _get_delta_field(delta, "content")
+                if content:
+                    yield content
         except asyncio.CancelledError:
             logger.info("LLM stream cancelled by client")
             raise
@@ -199,11 +282,13 @@ class LLMService:
         thinking_budget: Optional[int] = None,
         usage_out: Optional[dict] = None,
         response_format: Optional[dict] = None,
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[str | tuple[str, str], None]:
         """支持中止的流式调用
 
         当 stop_event 被 set 时，停止生成并退出。
         传入 usage_out 时，流末尾的 usage 分块（空 choices）会被提取而非丢弃。
+        推理过程以 ``("reasoning", text)`` 元组透出，正文仍为 plain str；
+        推理不计入 streamed_parts（不参与用量估算与日志 output）。
         """
         messages = self._get_messages(system_prompt, user_prompt)
         kwargs = self._build_kwargs(
@@ -225,9 +310,15 @@ class LLMService:
                         extract_usage(chunk.usage, usage_out)
                     continue
                 delta = chunk.choices[0].delta
-                if delta and delta.content:
-                    streamed_parts.append(delta.content)
-                    yield delta.content
+                if delta is None:
+                    continue
+                reasoning = extract_reasoning_from_delta(delta)
+                if reasoning:
+                    yield ("reasoning", reasoning)
+                content = _get_delta_field(delta, "content")
+                if content:
+                    streamed_parts.append(content)
+                    yield content
         except asyncio.CancelledError:
             logger.info("LLM stream cancelled by client")
             raise

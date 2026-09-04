@@ -166,6 +166,11 @@ const LS = {
 const HISTORY_LIMIT = 100;
 // 迁移收藏单条体积可观（内嵌全部卡片输出），同样需要上限防止 localStorage 溢出
 const FAVORITES_LIMIT = 100;
+// 推理过程展示上限：只让用户“看到正在思考”，不无限制堆内容。
+// 主流程 / 词汇替换共用 3000 字，迁移单卡 2000 字，超出截头保尾；
+// 推理另有 max-height + 内部滚动双保险，盒子本身高度恒定。
+const REASONING_LIMIT = 3000;
+const CARD_REASONING_LIMIT = 2000;
 
 /* ---------------- 浏览器指纹（ThumbmarkJS，仅用于识别共享，不做拦截） ----------------
    UMD 经 CDN 引入（frontend/index.html），计算失败/被拦截时静默降级为空，
@@ -1112,6 +1117,17 @@ function tagAnswerElements(root) {
   });
 }
 
+/* 计时展示：秒保留 1 位小数，满 60s 合并为 m，满 1h 合并为 h */
+function fmtDuration(sec) {
+  const s = Math.max(0, Number(sec) || 0);
+  if (s < 60) return s.toFixed(1) + "s";
+  if (s < 3600) return (s / 60).toFixed(1) + "m";
+  return (s / 3600).toFixed(1) + "h";
+}
+function fmtTokens(n) {
+  return (Number(n) || 0).toLocaleString("en-US");
+}
+
 /* ---------------- Alpine 主应用 ---------------- */
 function nbx() {
   return {
@@ -1130,7 +1146,19 @@ function nbx() {
     status: "idle",
     errorMsg: "",
     elapsed: "0.0",
-    thinkingElapsed: "0.0",
+    // 等待阶段计时：请求发出 → 首个事件到达（此期间还没在思考，只是等响应）
+    thinkingSec: 0,
+    // 推理过程（ ephemeral，不进历史/导出/复制）：有 reasoning 事件才显示，
+    // 无事件时保持空，界面回退到“等待模型响应”动画。
+    reasoning: "",
+    reasoningOpen: true,
+    reasoningDone: false,
+    reasoningTruncated: false,
+    // 思考阶段统计：首个推理 chunk → 首个正文 token，reasoningDone 后冻结
+    reasoningSec: 0,
+    reasoningTokens: 0,
+    reasoningSpeed: 0,
+    _reasoningStartTs: 0,
     requestId: null,
     maskOn: false,
     copied: false,
@@ -1324,6 +1352,11 @@ function nbx() {
         output: "",
         rendered: "",
         requestId: null,
+        reasoning: "",
+        reasoningOpen: true,
+        reasoningDone: false,
+        reasoningTruncated: false,
+        reasoningTokens: 0,
       };
     },
     resetVocab() {
@@ -2013,6 +2046,7 @@ function nbx() {
       this.vocab.elapsed = "0.0";
       this.vocab.output = "";
       this.vocab.rendered = "";
+      this.resetVocabReasoning();
       this.vocab.requestId = "24_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
       this._abortCtrl = new AbortController();
       this._startTs = performance.now();
@@ -2026,11 +2060,13 @@ function nbx() {
           toolId: this.currentTool.id,
           input,
           requestId: this.vocab.requestId,
+          onReasoning: (text) => this.appendVocabReasoning(text),
           onToken: (text) => {
             if (this.vocab.thinking) {
               this.vocab.thinking = false;
               this.vocab.status = "streaming";
             }
+            this.finishVocabReasoningOnToken();
             this.vocab.output += text;
             this.scheduleRender();
           },
@@ -2069,6 +2105,10 @@ function nbx() {
         clearInterval(this._timer);
         this._timer = null;
         this.vocab.replacing = false;
+        if (this.vocab.reasoning) {
+          this.vocab.reasoningDone = true;
+          this.vocab.reasoningOpen = false;
+        }
       }
     },
     stopVocabReplace() {
@@ -2406,6 +2446,7 @@ function nbx() {
       this.errorMsg = "";
       this.status = "idle";
       this.maskOn = false;
+      this.resetReasoning();
       this.leftOpen = false;
       this.inputCollapsed = false;
       this.submittedInput = "";
@@ -2434,6 +2475,7 @@ function nbx() {
       }
       this.currentTool = null;
       this.leftOpen = false;
+      this.resetReasoning();
       this.scheduleMascotCheck(80);
     },
 
@@ -3069,6 +3111,10 @@ function nbx() {
           streaming: true,
           collapsed: false,
           requestId: `${state.batchId}_${index}`,
+          reasoning: "",
+          reasoningOpen: true,
+          reasoningTruncated: false,
+          reasoningTokens: 0,
         }));
         state.generating = true;
         const batchId = state.batchId;
@@ -3166,6 +3212,20 @@ function nbx() {
             try { message = JSON.parse(data).message || data; } catch {}
             throw new Error(message);
           }
+          if (event === "reasoning") {
+            let text = data;
+            let tok = 0;
+            try {
+              const parsed = JSON.parse(data);
+              if (typeof parsed === "string") text = parsed;
+              else if (parsed && typeof parsed.t === "string") {
+                text = parsed.t;
+                tok = Number(parsed.n) || 0;
+              }
+            } catch {}
+            if (text) this.appendCardReasoning(card, text, tok);
+            return;
+          }
           if (event === "token") {
             let text = data;
             try {
@@ -3173,6 +3233,8 @@ function nbx() {
               if (typeof parsed === "string") text = parsed;
             } catch {}
             if (text) {
+              // 首个正文 token 到达即收起本卡推理盒，避免答案被顶下去。
+              if (card.reasoning) card.reasoningOpen = false;
               card.output += text;
               this.scheduleCardRender(card);
             }
@@ -3181,6 +3243,7 @@ function nbx() {
             if (card._renderTimer) { clearTimeout(card._renderTimer); card._renderTimer = null; }
             card._renderPending = false;
             card.rendered = renderMd(card.output);
+            if (card.reasoning) card.reasoningOpen = false;
             if (data === "[CANCELLED]") card.status = "stopped";
             else card.status = "done";
           }
@@ -3496,7 +3559,8 @@ function nbx() {
       this.errorMsg = "";
       this.streaming = true;
       this.thinking = true;
-      this.thinkingElapsed = "0.0";
+      this.thinkingSec = 0;
+      this.resetReasoning();
       this._stopRequested = false;
       this.status = "connecting";
       this._nearBottom = true;
@@ -3518,8 +3582,10 @@ function nbx() {
           toolId: this.currentTool.id,
           input: text,
           requestId: this.requestId,
+          onReasoning: (text) => this.appendReasoning(text),
           onToken: (text) => {
             if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
+            this.finishReasoningOnToken();
             this.status = "streaming";
             this.output += text;
             this.scheduleRender();
@@ -3536,7 +3602,7 @@ function nbx() {
     },
 
     /* 通用 SSE 流式调用：返回 { state: "done" | "stopped" }，出错时抛出 Error */
-    async _streamChat({ toolId, input, requestId, onToken }) {
+    async _streamChat({ toolId, input, requestId, onToken, onReasoning }) {
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: {
@@ -3584,6 +3650,23 @@ function nbx() {
           throw new Error(m);
         }
         if (data === "[CANCELLED]") { stopped = true; return; }
+        if (ev === "reasoning") {
+          // 推理过程与正文分离：JSON 解码后交 onReasoning，不进 output。
+          // 新后端事件为 {t, n}（n 为后端 tokenizer 计得的 token 数），旧后端仍为纯字符串；
+          // 旧后端没有该事件时 onReasoning 保持不被调用，界面回退到等待动画。
+          let text = data;
+          let tok = 0;
+          try {
+            const parsed = JSON.parse(data);
+            if (typeof parsed === "string") text = parsed;
+            else if (parsed && typeof parsed.t === "string") {
+              text = parsed.t;
+              tok = Number(parsed.n) || 0;
+            }
+          } catch {}
+          if (text && onReasoning) onReasoning(text, tok);
+          return;
+        }
         if (ev === "token") {
           // token 为 JSON 编码字符串（换行保真传输），解码失败时降级为原文
           let text = data;
@@ -3644,6 +3727,11 @@ function nbx() {
       this.thinking = false;
       this.stopTimer();
       this.stopThinkTimer();
+      // 推理盒收起：答案已定稿，推理只留作可展开回看，不再占版面。
+      if (this.reasoning) {
+        this.reasoningDone = true;
+        this.reasoningOpen = false;
+      }
       this.doRender();
       if (state === "error") {
         this.status = "error";
@@ -3691,7 +3779,8 @@ function nbx() {
       this.retreatMascot();
       this.streaming = true;
       this.thinking = true;
-      this.thinkingElapsed = "0.0";
+      this.thinkingSec = 0;
+      this.resetReasoning();
       this._stopRequested = false;
       this.status = "connecting";
       this.requestId = `13_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -3703,8 +3792,10 @@ function nbx() {
           toolId: "13",
           input: inputText,
           requestId: this.requestId,
+          onReasoning: (text) => this.appendReasoning(text),
           onToken: (tok) => {
             if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
+            this.finishReasoningOnToken();
             this.status = "streaming";
             this.output += tok;
             if (this.visualPaper) this.visualPaper.rawJson = this.output;
@@ -3725,6 +3816,10 @@ function nbx() {
       this.thinking = false;
       this.stopTimer();
       this.stopThinkTimer();
+      if (this.reasoning) {
+        this.reasoningDone = true;
+        this.reasoningOpen = false;
+      }
       this.vpDoRender();
       if (state === "error") {
         this.status = "error";
@@ -3903,6 +3998,81 @@ function nbx() {
       return markdownToPlainText(this.vpGetExportMarkdown());
     },
 
+    /* --- 推理过程（有界展示：截头保尾 + 盒内滚动 + 首 token 自动收起） --- */
+    resetReasoning() {
+      this.reasoning = "";
+      this.reasoningOpen = true;
+      this.reasoningDone = false;
+      this.reasoningTruncated = false;
+      this.reasoningSec = 0;
+      this.reasoningTokens = 0;
+      this.reasoningSpeed = 0;
+      this._reasoningStartTs = 0;
+    },
+    appendReasoning(text, tok) {
+      if (!text) return;
+      // token 数由后端 tokenizer 随事件下发；旧格式缺失时退回 1（chunk≈1 token）
+      if (!this._reasoningStartTs) this._reasoningStartTs = performance.now();
+      this.reasoningTokens += tok > 0 ? tok : 1;
+      let next = this.reasoning + text;
+      if (next.length > REASONING_LIMIT) {
+        next = next.slice(next.length - REASONING_LIMIT);
+        this.reasoningTruncated = true;
+      }
+      this.reasoning = next;
+      this.scrollReasoning();
+    },
+    finishReasoningOnToken() {
+      // 正文开始后推理即收起，避免把答案顶下去；用户可手动展开回看。
+      if (this.reasoning) {
+        this.reasoningDone = true;
+        this.reasoningOpen = false;
+      }
+    },
+    scrollReasoning() {
+      this.$nextTick(() => {
+        const el = this.$refs.reasoningBody;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+    resetVocabReasoning() {
+      if (!this.vocab) return;
+      this.vocab.reasoning = "";
+      this.vocab.reasoningOpen = true;
+      this.vocab.reasoningDone = false;
+      this.vocab.reasoningTruncated = false;
+      this.vocab.reasoningTokens = 0;
+    },
+    appendVocabReasoning(text, tok) {
+      if (!text || !this.vocab) return;
+      this.vocab.reasoningTokens = (this.vocab.reasoningTokens || 0) + (tok > 0 ? tok : 1);
+      let next = (this.vocab.reasoning || "") + text;
+      if (next.length > REASONING_LIMIT) {
+        next = next.slice(next.length - REASONING_LIMIT);
+        this.vocab.reasoningTruncated = true;
+      }
+      this.vocab.reasoning = next;
+      this.$nextTick(() => {
+        const el = this.$refs.vocabReasoningBody;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+    finishVocabReasoningOnToken() {
+      if (this.vocab && this.vocab.reasoning) {
+        this.vocab.reasoningDone = true;
+        this.vocab.reasoningOpen = false;
+      }
+    },
+    appendCardReasoning(card, text, tok) {
+      if (!text || !card) return;
+      card.reasoningTokens = (card.reasoningTokens || 0) + (tok > 0 ? tok : 1);
+      let next = (card.reasoning || "") + text;
+      if (next.length > CARD_REASONING_LIMIT) {
+        next = next.slice(next.length - CARD_REASONING_LIMIT);
+        card.reasoningTruncated = true;
+      }
+      card.reasoning = next;
+    },
     /* --- 渲染（节流） --- */
     scheduleRender() {
       if (this._renderPending) return;
@@ -3965,10 +4135,23 @@ function nbx() {
       const startTs = performance.now();
       clearInterval(this._thinkTimer);
       this._thinkTimer = setInterval(() => {
-        this.thinkingElapsed = ((performance.now() - startTs) / 1000).toFixed(1);
+        const now = performance.now();
+        this.thinkingSec = (now - startTs) / 1000;
+        // 思考阶段从首个推理 chunk 起算，正文 token 到达（reasoningDone）后冻结
+        if (this._reasoningStartTs && !this.reasoningDone) {
+          const sec = (now - this._reasoningStartTs) / 1000;
+          this.reasoningSec = sec;
+          this.reasoningSpeed = this.reasoningTokens / Math.max(sec, 0.05);
+        }
       }, 100);
     },
     stopThinkTimer() {
+      // 停表时固化思考统计，消除 100ms 轮询的尾差
+      if (this._reasoningStartTs && !this.reasoningDone) {
+        const sec = (performance.now() - this._reasoningStartTs) / 1000;
+        this.reasoningSec = sec;
+        this.reasoningSpeed = this.reasoningTokens / Math.max(sec, 0.05);
+      }
       clearInterval(this._thinkTimer);
       this._thinkTimer = null;
     },
@@ -4231,6 +4414,7 @@ function nbx() {
       this.output = item.output;
       this.errorMsg = "";
       this.status = "history";
+      this.resetReasoning();
       this.doRender();
       this.rightMobileOpen = false;
       this.$nextTick(() => {
@@ -4270,6 +4454,10 @@ function nbx() {
         streaming: false,
         collapsed: false,
         requestId: "",
+        reasoning: "",
+        reasoningOpen: false,
+        reasoningTruncated: false,
+        reasoningTokens: 0,
       }));
       this.migration.step = 4;
       this.migration.generated = true;
@@ -4282,6 +4470,7 @@ function nbx() {
       };
       this.currentTool = tool;
       this.resetVisualPaper();
+      this.resetReasoning();
       this.submittedInput = item.input || "";
       this.submittedFileName = item.fileName || "";
       this.inputCollapsed = true;
@@ -4343,6 +4532,7 @@ function nbx() {
       }
       if (this.isVisualPaperTool) {
         this.resetVisualPaper();
+        this.resetReasoning();
         this.inputCollapsed = false;
         this.submittedInput = "";
         this.submittedFileName = "";
@@ -4371,6 +4561,7 @@ function nbx() {
       this.rendered = "";
       this.errorMsg = "";
       this.status = "idle";
+      this.resetReasoning();
       this.inputMode = "text";
       this.attachedFile = null;
       this.$nextTick(() => {
@@ -4484,10 +4675,26 @@ function nbx() {
       const t = (s || "").replace(/\s+/g, " ").trim();
       return t.length > n ? t.slice(0, n) + "…" : t;
     },
+    /* 等待/思考两阶段实时提示：等待 = 请求已发出但还没首个事件；思考 = 推理 chunk 已开始 */
+    get liveWaitText() {
+      if (!this.thinking) return "";
+      return this.reasoning
+        ? "思考中… " + fmtDuration(this.reasoningSec)
+        : "等待模型响应… " + fmtDuration(this.thinkingSec);
+    },
+    get thinkingTimeText() {
+      return fmtDuration(this.thinkingSec);
+    },
+    /* 推理盒统计行：token 数 + 计时 + 实时速度（tok/s），结束后保留最终值 */
+    get reasoningStatText() {
+      const parts = [fmtTokens(this.reasoningTokens) + " tok", fmtDuration(this.reasoningSec)];
+      if (this.reasoningSpeed > 0) parts.push(this.reasoningSpeed.toFixed(1) + " tok/s");
+      return parts.join(" · ");
+    },
     get statusText() {
       switch (this.status) {
-        case "connecting": return this.thinking ? "思考中… " + this.thinkingElapsed + "s" : "正在连接模型…";
-        case "streaming": return this.thinking ? "思考中… " + this.thinkingElapsed + "s" : "生成中… " + this.elapsed + "s";
+        case "connecting": return this.thinking ? this.liveWaitText : "正在连接模型…";
+        case "streaming": return this.thinking ? this.liveWaitText : "生成中… " + this.elapsed + "s";
         case "done": return "已完成 · 用时 " + this.elapsed + "s";
         case "stopped": return "已手动停止";
         case "error": return "出错了";

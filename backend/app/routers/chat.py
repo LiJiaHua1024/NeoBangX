@@ -15,7 +15,7 @@ from app.database import SessionLocal
 from app.deps import get_current_code
 from app.models import UsageCode
 from app.routers.tools import _resolve_prompt_filename, get_prompt_loader
-from app.services.llm import LLMService
+from app.services.llm import LLMService, count_text_tokens
 from app.services.llm_router import LLMRouter
 from app.services.migration import (
     MIGRATION_ANALYSIS_PROMPT_NAME,
@@ -667,7 +667,7 @@ async def chat_stream(
         usage: dict = {}
         started = monotonic()
         try:
-            async for token in llm.chat_stream_with_stop(
+            async for item in llm.chat_stream_with_stop(
                 user_prompt=prompt,
                 model=req.model,
                 stop_event=stop_event,
@@ -676,6 +676,23 @@ async def chat_stream(
                 usage_out=usage,
                 response_format=visual_response_format,
             ):
+                # 推理过程单独透出：不计入正文、不写日志 output、不参与用量估算；
+                # 事件为 {t, n}，n 为 litellm tokenizer 逐 delta 计得的 token 数，
+                # 前端据此累加展示 tok 与 tok/s；测试用的旧式 FakeLLM 仍 yield 纯 str，视为 token。
+                if isinstance(item, tuple) and item and item[0] == "reasoning":
+                    reasoning_text = item[1] if len(item) > 1 else ""
+                    if not reasoning_text:
+                        continue
+                    if await request.is_disconnected():
+                        logger.info(f"Client disconnected: {request_id}")
+                        client_disconnected = True
+                        break
+                    yield {"event": "reasoning", "data": json.dumps(
+                        {"t": reasoning_text, "n": count_text_tokens(reasoning_text, model_used)},
+                        ensure_ascii=False,
+                    )}
+                    continue
+                token = item
                 output_parts.append(token)
                 if await request.is_disconnected():
                     logger.info(f"Client disconnected: {request_id}")

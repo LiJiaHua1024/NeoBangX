@@ -1233,6 +1233,51 @@ html[data-theme="sora"] .mascot-peeking {
   50% { box-shadow: 0 0 0 5px transparent; opacity: 0.55; }
 }
 
+/* 推理过程（有界展示）：盒高恒定，内容只在盒内滚动，绝不把正文顶下去 */
+.reasoning-box {
+  margin-bottom: 1rem;
+  border-radius: 0.85rem;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+.reasoning-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-align: left;
+  transition: background 0.18s ease;
+}
+.reasoning-head:hover { background: var(--hover-bg); }
+.reasoning-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reasoning-count { font-size: 0.68rem; font-weight: 500; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.reasoning-head .chev { display: inline-flex; color: var(--text-faint); transition: transform 0.35s var(--ease-spring); }
+.reasoning-box.collapsed .reasoning-head .chev { transform: rotate(-90deg); }
+.reasoning-body {
+  max-height: 9rem;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding: 0.6rem 0.8rem;
+}
+.reasoning-body pre {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.65;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font);
+}
+.reasoning-truncated { margin-top: 0.4rem; font-size: 0.68rem; color: var(--text-faint); }
+.reasoning-box-narrow { max-width: 28rem; width: 100%; text-align: left; }
+.reasoning-box-card { margin: 0.6rem 0 0; }
+.reasoning-box-card .reasoning-body { max-height: 7rem; }
+
 /* 答案遮罩（试卷可视化全解） */
 .ans { transition: filter 0.35s ease, opacity 0.35s ease; border-radius: 4px; }
 .mask-answers .ans { filter: blur(7px); opacity: 0.8; cursor: pointer; }

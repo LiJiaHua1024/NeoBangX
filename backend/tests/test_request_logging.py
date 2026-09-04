@@ -623,6 +623,43 @@ def test_stream_records_payload_when_enabled(stream):
         db.close()
 
 
+def test_stream_forwards_reasoning_without_polluting_output(stream):
+    """推理以 reasoning 事件单独透出：不混入 token 正文，不进日志 output。"""
+    client, harness = stream
+    harness.llm = _FakeStreamLLM([("reasoning", "先想一下"), "答", "案"])
+    _set_payload_flag(True)
+    db = SessionLocal()
+    try:
+        code = _make_code(db, "NBXU-LOG-R001-0011")
+    finally:
+        db.close()
+    harness.code = code
+
+    response = _post_stream(client, input_text="推理展示")
+    assert response.status_code == 200
+    assert json_tokens(response.text) == ["答", "案"]
+
+    reasonings = []
+    current_event = ""
+    for line in response.text.splitlines():
+        if line.startswith("event:"):
+            current_event = line[6:].strip()
+        elif line.startswith("data:") and current_event == "reasoning":
+            reasonings.append(json.loads(line[5:].strip()))
+    # 事件为 {t, n}：文本 + litellm tokenizer 计得的 token 数（非空且 ≥1）
+    assert len(reasonings) == 1
+    assert reasonings[0]["t"] == "先想一下"
+    assert isinstance(reasonings[0]["n"], int) and reasonings[0]["n"] >= 1
+
+    row = _logs_for(code.id)[0]
+    db = SessionLocal()
+    try:
+        payload = db.get(LogPayload, row.id)
+        assert payload.output == "答案"
+    finally:
+        db.close()
+
+
 def test_stream_records_error_status_without_charging(stream):
     client, harness = stream
     harness.llm = _FakeStreamLLM(["x"], error=RuntimeError("上游 500"))

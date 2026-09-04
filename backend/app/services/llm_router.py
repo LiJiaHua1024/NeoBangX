@@ -9,7 +9,11 @@ from typing import AsyncGenerator, Optional
 import litellm
 from litellm import acompletion
 
-from app.services.llm import estimate_missing_usage, extract_usage
+from app.services.llm import (
+    estimate_missing_usage,
+    extract_reasoning_from_delta,
+    extract_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +189,12 @@ class LLMRouter:
         thinking_budget: Optional[int] = None,
         usage_out: Optional[dict] = None,
         response_format: Optional[dict] = None,
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[str | tuple[str, str], None]:
+        """聚合路由的流式调用：正文为 plain str，推理为 ("reasoning", text)。
+
+        fallback 语义不变：只有首个正文 token 前的失败才切下一家；
+        纯推理片段不计入 yielded_any，避免“只吐了思考就被误判为已开流”。
+        """
         if not self.providers:
             raise RuntimeError("该模型未绑定任何可用 Provider")
 
@@ -219,10 +228,18 @@ class LLMRouter:
                             extract_usage(chunk.usage, usage_out)
                         continue
                     delta = chunk.choices[0].delta
-                    if delta and delta.content:
+                    if delta is None:
+                        continue
+                    reasoning = extract_reasoning_from_delta(delta)
+                    if reasoning:
+                        yield ("reasoning", reasoning)
+                    content = getattr(delta, "content", None)
+                    if isinstance(delta, dict):
+                        content = delta.get("content", content)
+                    if content:
                         yielded_any = True
-                        streamed_parts.append(delta.content)
-                        yield delta.content
+                        streamed_parts.append(content)
+                        yield content
                 # 流正常结束（或被 stop_event 中断）
                 if usage_out is not None:
                     estimate_missing_usage(base_messages, "".join(streamed_parts), kwargs["model"], usage_out)
