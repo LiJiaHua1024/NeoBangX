@@ -65,6 +65,12 @@ const ICON_PATHS = {
   "key": '<circle cx="7.5" cy="15.5" r="2.5"/><path d="m11 12 4-4"/><path d="m13 10 2.5 2.5"/><path d="M15 8h2v2"/>',
   "shield": '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
   "alert": '<circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/>',
+
+  // —— 全屏讲解舞台 ——
+  "grid": '<rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/>',
+  "pin": '<path d="M12 16.5V21"/><path d="M9.5 3h5v6.2l2.7 3.6a1 1 0 0 1-.8 1.6H7.6a1 1 0 0 1-.8-1.6l2.7-3.6V3Z"/>',
+  "chevron-left": '<path d="m15 18-6-6 6-6"/>',
+  "chevron-up": '<path d="m18 15-6-6-6 6"/>',
 };
 
 function icon(name, cls = "w-5 h-5") {
@@ -1222,6 +1228,11 @@ function nbx() {
     vpActiveTab: "reference",
     vpParseError: "",
     _vpRenderPending: false,
+    // 全屏讲解舞台：总览面板 / 控制台自动隐藏（上下两半可独立唤回）/ 固定
+    vpOverviewOpen: false,
+    vpTopHidden: false,
+    vpBottomHidden: false,
+    vpChromePinned: false,
 
     /* --- 智能错题迁移 --- */
     migration: null,
@@ -1788,6 +1799,42 @@ function nbx() {
     get vpRemaining() {
       return Math.max(0, (this.vpTotal || 0) - this.vpQuestionCount);
     },
+    // 是否处于第一/最后一题（考虑跨组空组），供全屏角落按钮禁用
+    get vpIsFirstQuestion() {
+      if (!this.visualPaper) return true;
+      for (let i = this.visualPaper.currentGroupIdx - 1; i >= 0; i--) {
+        if ((this.visualPaper.groups[i].questions || []).length > 0) return false;
+      }
+      return this.visualPaper.currentQIdx <= 0;
+    },
+    get vpIsLastQuestion() {
+      if (!this.visualPaper) return true;
+      for (let i = this.visualPaper.currentGroupIdx + 1; i < this.visualPaper.groups.length; i++) {
+        if ((this.visualPaper.groups[i].questions || []).length > 0) return false;
+      }
+      const g = this.vpCurrentGroup;
+      return !g || this.visualPaper.currentQIdx >= (g.questions || []).length - 1;
+    },
+    // 全屏题目总览：按大题分组的扁平视图（含当前题标记）
+    get vpOverviewGroups() {
+      if (!this.visualPaper) return [];
+      return this.visualPaper.groups.map((g, gIdx) => ({
+        gIdx,
+        title: g.title,
+        intro: g.intro || "",
+        questions: (g.questions || []).map((q, qIdx) => ({
+          gIdx, qIdx,
+          no: q.no,
+          answer: q.answer || "",
+          current: this.vpIsCurrent(gIdx, qIdx),
+        })),
+      }));
+    },
+    // 已识别总题数超出已生成数时，总览里留虚线占位
+    get vpPlaceholderCount() {
+      const total = this.vpTotal || 0, count = this.vpQuestionCount;
+      return total > count ? total - count : 0;
+    },
     vpSelectQuestion(gIdx, qIdx) {
       if (!this.visualPaper) return;
       this.visualPaper.currentGroupIdx = gIdx;
@@ -1852,26 +1899,144 @@ function nbx() {
       });
     },
     toggleVpFullscreen() {
-      this.vpFullscreen = !this.vpFullscreen;
-      if (this.vpFullscreen) {
-        this._vpBoundHandler = (e) => {
-          if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); this.vpNextQuestion(); }
-          else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); this.vpPrevQuestion(); }
-          else if (e.key === "Escape") { this.vpCloseFullscreen(); }
-        };
-        document.addEventListener("keydown", this._vpBoundHandler);
-        // 锁住 body 滚动，全屏层内部左右分栏各自滚动
-        document.documentElement.style.overflow = "hidden";
-      } else {
-        if (this._vpBoundHandler) document.removeEventListener("keydown", this._vpBoundHandler);
-        this._vpBoundHandler = null;
-        document.documentElement.style.overflow = "";
+      if (this.vpFullscreen) { this.vpCloseFullscreen(); return; }
+      this.vpFullscreen = true;
+      this.vpOverviewOpen = false;
+      this.vpTopHidden = false;
+      this.vpBottomHidden = false;
+      // 防御：若页面曾被程序化滚动（如 scrollIntoView），进入全屏前归位
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      this._vpBoundHandler = (e) => {
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); this.vpNextQuestion(); }
+        else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); this.vpPrevQuestion(); }
+        else if (e.key === "Escape") { this.vpCloseFullscreen(); }
+      };
+      document.addEventListener("keydown", this._vpBoundHandler);
+      // 锁住 body 滚动，全屏层内部左右分栏各自滚动
+      document.documentElement.style.overflow = "hidden";
+      // 指针活动（移动 / 点击 / 触摸）都会唤醒控制台并重置自动隐藏计时；
+      // 指针触及屏幕顶缘时，顶栏作为覆盖层自动浮现（底部控制台不受影响）
+      this._vpActivityHandler = (e) => {
+        if (e.clientY != null && e.clientY <= 12) this.vpWakeTop();
+        this.vpScheduleChromeHide();
+      };
+      ["pointermove", "pointerdown", "touchstart"].forEach((t) =>
+        document.addEventListener(t, this._vpActivityHandler, { passive: true }));
+      // 滚动唤出顶栏：滚到最顶部（或到顶后再向上滚）时，顶栏作为覆盖层浮现，不改布局
+      this._vpScrollReveal = (e) => {
+        if (e.type === "wheel") {
+          if (e.deltaY >= 0) return;
+          const el = e.target;
+          for (let n = el && el.parentElement ? el : null; n && n !== document.body; n = n.parentElement) {
+            if (n.scrollHeight > n.clientHeight + 1 && n.scrollTop > 0) return; // 上方还有内容可滚
+          }
+          this.vpWakeTop();
+          return;
+        }
+        const t = e.target;
+        if (t && t.classList && t.classList.contains("vp-pane") && t.scrollTop === 0) this.vpWakeTop();
+      };
+      document.addEventListener("wheel", this._vpScrollReveal, { passive: true, capture: true });
+      document.addEventListener("scroll", this._vpScrollReveal, { passive: true, capture: true });
+      this.vpScheduleChromeHide();
+      // best-effort 进入浏览器全屏（隐藏地址栏/标签栏）；失败静默降级为应用内全屏
+      if (document.fullscreenEnabled && !document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.().catch(() => {});
       }
     },
     vpCloseFullscreen() {
       this.vpFullscreen = false;
+      this.vpOverviewOpen = false;
+      this.vpTopHidden = false;
+      this.vpBottomHidden = false;
+      this._vpStopChromeTimer();
       if (this._vpBoundHandler) { document.removeEventListener("keydown", this._vpBoundHandler); this._vpBoundHandler = null; }
+      if (this._vpActivityHandler) {
+        ["pointermove", "pointerdown", "touchstart"].forEach((t) =>
+          document.removeEventListener(t, this._vpActivityHandler));
+        this._vpActivityHandler = null;
+      }
+      if (this._vpScrollReveal) {
+        document.removeEventListener("wheel", this._vpScrollReveal, { capture: true });
+        document.removeEventListener("scroll", this._vpScrollReveal, { capture: true });
+        this._vpScrollReveal = null;
+      }
       document.documentElement.style.overflow = "";
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    },
+
+    /* --- 全屏讲解：控制台自动隐藏（顶栏 / 底部控制台两半独立） --- */
+    vpScheduleChromeHide() {
+      if (!this.vpFullscreen || this.vpChromePinned) return;
+      clearTimeout(this._vpChromeTimer);
+      this._vpChromeTimer = setTimeout(() => {
+        if (!this.vpFullscreen || this.vpChromePinned || this.vpOverviewOpen) return;
+        this.vpTopHidden = true;
+        this.vpBottomHidden = true;
+      }, 4000);
+    },
+    vpWakeTop() {
+      if (!this.vpFullscreen) return;
+      this.vpTopHidden = false;
+      this.vpScheduleChromeHide();
+    },
+    vpWakeBottom() {
+      if (!this.vpFullscreen) return;
+      this.vpBottomHidden = false;
+      this.vpScheduleChromeHide();
+    },
+    _vpStopChromeTimer() {
+      clearTimeout(this._vpChromeTimer);
+      this._vpChromeTimer = null;
+    },
+    vpTogglePin() {
+      this.vpChromePinned = !this.vpChromePinned;
+      if (this.vpChromePinned) { this.vpTopHidden = false; this.vpBottomHidden = false; this._vpStopChromeTimer(); }
+      else this.vpScheduleChromeHide();
+      this.persistUI();
+    },
+    vpToggleOverview() {
+      this.vpOverviewOpen = !this.vpOverviewOpen;
+      if (this.vpOverviewOpen) {
+        this.vpTopHidden = false;
+        this.vpBottomHidden = false;
+        this._vpStopChromeTimer();
+        // 只在总览面板内部滚动定位当前题；scrollIntoView 会连 overflow:hidden 的文档一起滚，
+        // 把页面滚出一条无法滚回的白边
+        this.$nextTick(() => {
+          const body = document.querySelector(".vp-overview-body");
+          const chip = body && body.querySelector(".vp-overview-chip.active");
+          if (body && chip) body.scrollTop = chip.offsetTop - body.clientHeight / 2 + chip.clientHeight / 2;
+          else if (body) body.scrollTop = 0;
+        });
+      } else {
+        this.vpScheduleChromeHide();
+      }
+    },
+    vpJumpFromOverview(gIdx, qIdx) {
+      this.vpSelectQuestion(gIdx, qIdx);
+      this.vpOverviewOpen = false;
+      this.vpScheduleChromeHide();
+    },
+
+    /* --- 全屏讲解：触屏左右滑动翻题 --- */
+    vpTouchStart(e) {
+      if (!this.vpFullscreen) return;
+      const t = e.changedTouches && e.changedTouches[0];
+      if (!t) return;
+      this._vpTouch = { x: t.clientX, y: t.clientY };
+    },
+    vpTouchEnd(e) {
+      if (!this._vpTouch) return;
+      const t = e.changedTouches && e.changedTouches[0];
+      const start = this._vpTouch;
+      this._vpTouch = null;
+      if (!t) return;
+      const dx = t.clientX - start.x, dy = t.clientY - start.y;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 2) {
+        if (dx < 0) this.vpNextQuestion(); else this.vpPrevQuestion();
+      }
     },
     get mascotAnchorName() {
       if (!this.currentTool) return "home";
@@ -2215,6 +2380,12 @@ function nbx() {
       this.collapsedGroups = ui.collapsedGroups || {};
       this.rightCollapsed = !!ui.rightCollapsed;
       this.rightTab = ui.rightTab === "fav" ? "fav" : "history";
+      this.vpChromePinned = !!ui.vpChromePinned;
+
+      // 全屏讲解：用户在浏览器层按 Esc 退出全屏时，同步关闭讲解模式
+      document.addEventListener("fullscreenchange", () => {
+        if (!document.fullscreenElement && this.vpFullscreen) this.vpCloseFullscreen();
+      });
 
       // 恢复认证
       this.loadAuth();
@@ -2638,6 +2809,7 @@ function nbx() {
         collapsedGroups: this.collapsedGroups,
         rightCollapsed: this.rightCollapsed,
         rightTab: this.rightTab,
+        vpChromePinned: this.vpChromePinned,
       });
     },
     setRightTab(tab) {

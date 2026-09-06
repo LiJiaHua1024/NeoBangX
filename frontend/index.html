@@ -9,7 +9,7 @@
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=sora260824d">
+  <link rel="stylesheet" href="/static/styles.css?v=sora260906d">
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -34,7 +34,7 @@
   <script defer src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.15.12/dist/cdn.min.js"></script>
   <script defer src="/static/vendor/thumbmark.umd.js"></script>
-  <script defer src="/static/script.js?v=fp260905a"></script>
+  <script defer src="/static/script.js?v=fp260906e"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
 </head>
 
@@ -694,7 +694,7 @@
         <template x-if="currentTool && isVisualPaperTool">
           <div class="flex-1 min-h-0 flex flex-col" :class="vpFullscreen ? 'vp-embed-full' : ''">
             <!-- 工具头部 -->
-            <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
+            <div x-show="!vpFullscreen" class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
               <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
@@ -738,7 +738,7 @@
             </div>
 
             <!-- 试卷标题条（有数据时） -->
-            <div x-show="vpHasData" class="vp-paper-bar px-4 sm:px-5 py-2.5 flex items-center gap-3 flex-wrap shrink-0" style="border-bottom:1px solid var(--border);background:color-mix(in srgb, var(--accent) 4%, transparent)">
+            <div x-show="vpHasData && !vpFullscreen" class="vp-paper-bar px-4 sm:px-5 py-2.5 flex items-center gap-3 flex-wrap shrink-0" style="border-bottom:1px solid var(--border);background:color-mix(in srgb, var(--accent) 4%, transparent)">
               <div class="min-w-0 flex-1">
                 <div class="font-semibold text-sm truncate" x-text="visualPaper && visualPaper.paper ? visualPaper.paper.title : ''"></div>
                 <div class="text-xs text-dim truncate" x-show="visualPaper && visualPaper.notice" x-text="visualPaper.notice"></div>
@@ -779,7 +779,7 @@
             </div>
 
             <!-- 进度条（B方案增量解析，实时追踪） -->
-            <div x-show="vpTotal > 0 && (vpHasData || streaming)" class="px-4 sm:px-5 py-2 shrink-0" style="border-bottom:1px solid var(--border);background:color-mix(in srgb, var(--accent) 3%, transparent)">
+            <div x-show="vpTotal > 0 && (vpHasData || streaming) && !vpFullscreen" class="px-4 sm:px-5 py-2 shrink-0" style="border-bottom:1px solid var(--border);background:color-mix(in srgb, var(--accent) 3%, transparent)">
               <div class="flex items-center gap-3">
                 <div class="flex-1 h-1.5 rounded-full overflow-hidden" style="background:var(--border)">
                   <div class="h-full transition-all duration-500" style="background:linear-gradient(90deg,var(--accent),var(--accent-2))" :style="'width:' + vpProgressPercent + '%'"></div>
@@ -792,7 +792,7 @@
             </div>
 
             <!-- 续写按钮（中断恢复） -->
-            <div x-show="vpHasData && vpRemaining > 0 && !streaming" class="px-4 sm:px-5 py-2 flex justify-center shrink-0" style="border-bottom:1px solid var(--border)">
+            <div x-show="vpHasData && vpRemaining > 0 && !streaming && !vpFullscreen" class="px-4 sm:px-5 py-2 flex justify-center shrink-0" style="border-bottom:1px solid var(--border)">
               <button class="btn-primary" @click="continueVisualPaper()">
                 <span x-html="icon('refresh','w-4 h-4')"></span>
                 <span x-text="'继续生成剩余 ' + vpRemaining + ' 题'"></span>
@@ -874,11 +874,12 @@
               </div>
 
               <!-- 有数据：左右分栏 -->
-              <div x-show="vpHasData" class="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+              <div x-show="vpHasData" class="vp-split flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden"
+                   @touchstart="vpTouchStart($event)" @touchend="vpTouchEnd($event)">
                 <!-- 左：题库导航 + 语篇 -->
                 <div class="w-full lg:w-[42%] xl:w-[44%] flex flex-col border-b lg:border-b-0 lg:border-r shrink-0" style="border-color:var(--border)">
                   <!-- 题库导航 -->
-                  <div class="shrink-0 max-h-[38%] lg:max-h-[42%] overflow-y-auto scroll-thin border-b" style="border-color:var(--border)">
+                  <div x-show="!vpFullscreen" class="shrink-0 max-h-[38%] lg:max-h-[42%] overflow-y-auto scroll-thin border-b" style="border-color:var(--border)">
                     <template x-for="(g, gIdx) in vpGroups" :key="gIdx">
                       <div class="px-3 py-2">
                         <div class="flex items-center gap-2 mb-1.5">
@@ -898,7 +899,7 @@
                     </template>
                   </div>
                   <!-- 语篇阅读区 -->
-                  <div x-ref="vpLeftPane" class="flex-1 min-h-0 overflow-y-auto scroll-thin p-4 sm:p-5">
+                  <div x-ref="vpLeftPane" class="vp-pane flex-1 min-h-0 overflow-y-auto scroll-thin p-4 sm:p-5">
                     <div x-show="vpCurrentQuestion && vpCurrentQuestion.passage" class="vp-passage text-sm leading-relaxed whitespace-pre-wrap" x-text="vpCurrentQuestion.passage"></div>
                     <div x-show="vpCurrentQuestion && !vpCurrentQuestion.passage" class="text-sm text-dim">该题无独立语篇（写作题或语法填空）</div>
                     <div x-show="visualPaper && visualPaper.answerMap && Object.keys(visualPaper.answerMap).length" class="mt-6 pt-4 border-t" style="border-color:var(--border)">
@@ -913,7 +914,7 @@
                 </div>
 
                 <!-- 右：题目 + 四维 Tab -->
-                <div x-ref="vpRightPane" class="flex-1 min-h-0 overflow-y-auto scroll-thin p-4 sm:p-5">
+                <div x-ref="vpRightPane" class="vp-pane vp-pane-right flex-1 min-h-0 overflow-y-auto scroll-thin p-4 sm:p-5">
                   <template x-if="vpCurrentQuestion">
                     <div>
                       <!-- 题干 + 选项 2x2 -->
@@ -925,7 +926,7 @@
                           <span class="text-xs text-dim mt-0.5" x-text="vpCurrentGroup ? vpCurrentGroup.title : ''"></span>
                           <span class="ml-auto text-xs text-faint" x-show="vpQuestionCount" x-text="vpCurrentGlobalIndex + ' / ' + vpQuestionCount"></span>
                         </div>
-                        <div class="font-medium text-sm leading-relaxed mb-3" x-text="vpCurrentQuestion.stem"></div>
+                        <div class="vp-stem font-medium text-sm leading-relaxed mb-3" x-text="vpCurrentQuestion.stem"></div>
                         <!-- 选项网格 -->
                         <div x-show="vpCurrentQuestion.options && vpCurrentQuestion.options.length" class="vp-options-grid">
                           <template x-for="opt in (vpCurrentQuestion.options || [])" :key="opt.label">
@@ -1031,8 +1032,103 @@
               </div>
             </div>
 
+            <!-- ===== 全屏讲解舞台 Chrome（大屏触控演示模式） ===== -->
+            <template x-if="vpFullscreen">
+              <div class="vp-stage" :class="{ 'top-hidden': vpTopHidden, 'bottom-hidden': vpBottomHidden }">
+                <!-- 顶栏：试卷信息 + 生成中/退出 -->
+                <header class="vp-stage-top glass-deep">
+                  <div class="vp-stage-title min-w-0">
+                    <div class="font-semibold truncate" x-text="(visualPaper && visualPaper.paper && visualPaper.paper.title) || '试卷讲解'"></div>
+                    <div class="vp-stage-pos">
+                      <span class="vp-stage-no" x-text="'第 ' + vpCurrentGlobalIndex + ' / ' + vpQuestionCount + ' 题'"></span>
+                      <span class="truncate" x-show="vpCurrentGroup" x-text="vpCurrentGroup ? vpCurrentGroup.title : ''"></span>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2 shrink-0">
+                    <span x-show="streaming" class="vp-stage-live">
+                      <span class="status-dot live"></span>
+                      <span class="whitespace-nowrap" x-text="'生成中 ' + vpQuestionCount + ' / ' + (vpTotal || '…')"></span>
+                      <button class="vp-stage-live-stop" @click="stop()" title="停止生成，已生成题目会保留">停止</button>
+                    </span>
+                    <button class="vp-stage-exit" @click="vpCloseFullscreen()" title="退出全屏（Esc）">
+                      <span x-html="icon('x','w-4 h-4')"></span><span>退出全屏</span>
+                    </button>
+                  </div>
+                </header>
+
+                <!-- 左下：上一题 -->
+                <button class="vp-stage-nav prev" @click="vpPrevQuestion()" :disabled="vpIsFirstQuestion" title="上一题（←）">
+                  <span x-html="icon('chevron-left','w-5 h-5')"></span><span>上一题</span>
+                </button>
+
+                <!-- 右下：下一题（主操作） -->
+                <button class="vp-stage-nav next" @click="vpNextQuestion()" :disabled="vpIsLastQuestion" title="下一题（→）">
+                  <span>下一题</span><span x-html="icon('chevron-right','w-5 h-5')"></span>
+                </button>
+
+                <!-- 中央坞：题号位置 + 隐藏答案 + 题目总览 + 固定 -->
+                <div class="vp-stage-dock glass-deep">
+                  <span class="vp-dock-pos" x-text="vpCurrentGlobalIndex + ' / ' + vpQuestionCount"></span>
+                  <span class="vp-dock-sep"></span>
+                  <button class="vp-dock-btn vp-dock-icon" :class="{ 'on': maskOn }" @click="toggleMask()"
+                          :title="maskOn ? '显示答案' : '隐藏答案'" x-html="icon(maskOn ? 'eye-off' : 'eye','w-5 h-5')"></button>
+                  <button class="vp-dock-btn" :class="{ 'on': vpOverviewOpen }" @click="vpToggleOverview()">
+                    <span x-html="icon('grid','w-4 h-4')"></span><span>题目总览</span>
+                  </button>
+                  <span class="vp-dock-sep"></span>
+                  <button class="vp-dock-btn vp-dock-icon" :class="{ 'on': vpChromePinned }" @click="vpTogglePin()"
+                          :title="vpChromePinned ? '取消固定（恢复自动隐藏）' : '固定控制台（不再自动隐藏）'"
+                          x-html="icon('pin','w-5 h-5')"></button>
+                </div>
+
+                <!-- 题目总览面板（bottom sheet） -->
+                <div class="vp-overview-mask" x-show="vpOverviewOpen" x-transition.opacity @click="vpToggleOverview()"></div>
+                <div class="vp-overview glass-deep" x-show="vpOverviewOpen" x-cloak
+                     x-transition:enter="vp-ov-anim" x-transition:enter-start="vp-ov-anim-from" x-transition:enter-end="vp-ov-anim-to"
+                     x-transition:leave="vp-ov-anim-leave" x-transition:leave-start="vp-ov-anim-to" x-transition:leave-end="vp-ov-anim-from">
+                  <div class="vp-overview-head">
+                    <span class="font-bold" style="font-size:.95rem">题目总览</span>
+                    <span class="text-xs text-faint" x-text="'已生成 ' + vpQuestionCount + (vpTotal > vpQuestionCount ? ' / ' + vpTotal : '') + ' 题'"></span>
+                    <button class="icon-btn ml-auto" style="width:1.9rem;height:1.9rem" @click="vpToggleOverview()" title="收起"
+                            x-html="icon('chevron-down','w-4 h-4')"></button>
+                  </div>
+                  <div class="vp-overview-body scroll-thin">
+                    <template x-for="g in vpOverviewGroups" :key="g.gIdx">
+                      <div class="vp-overview-group">
+                        <div class="flex items-baseline gap-2 mb-2">
+                          <span class="text-xs font-bold tracking-wide" style="color:var(--accent)" x-text="g.title"></span>
+                          <span class="text-[11px] text-faint" x-text="g.questions.length + ' 题'"></span>
+                        </div>
+                        <div class="text-xs text-dim leading-relaxed mb-2" x-show="g.intro" x-text="g.intro"></div>
+                        <div class="vp-overview-grid">
+                          <template x-for="q in g.questions" :key="g.gIdx + '-' + q.qIdx">
+                            <button class="vp-overview-chip" :class="{ 'active': q.current }" @click="vpJumpFromOverview(g.gIdx, q.qIdx)">
+                              <span x-text="q.no"></span>
+                              <span class="vp-q-chip-ans" x-show="q.answer" :class="{ 'masked': maskOn }" x-text="q.answer"></span>
+                            </button>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
+                    <div class="vp-overview-placeholders" x-show="vpPlaceholderCount > 0">
+                      <span class="text-[11px] text-faint self-center mr-1">未生成</span>
+                      <template x-for="i in vpPlaceholderCount" :key="'vp-ph-' + i">
+                        <span class="vp-overview-ph" x-text="vpQuestionCount + i"></span>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 控制台隐藏后的唤出把手：上、下各一，各自唤回对应一侧（质感对齐历史侧栏收起钮） -->
+                <button class="vp-stage-handle top glass-deep" :class="{ 'show': vpTopHidden && !vpOverviewOpen }"
+                        @click="vpWakeTop()" title="显示顶栏" x-html="icon('chevron-down','w-5 h-5')"></button>
+                <button class="vp-stage-handle glass-deep" :class="{ 'show': vpBottomHidden && !vpOverviewOpen }"
+                        @click="vpWakeBottom()" title="显示讲解控制台" x-html="icon('chevron-up','w-5 h-5')"></button>
+              </div>
+            </template>
+
             <!-- 状态条 -->
-            <div class="px-4 sm:px-5 py-1.5 flex items-center gap-2 text-xs text-dim border-t shrink-0" style="border-color:var(--border)">
+            <div x-show="!vpFullscreen" class="px-4 sm:px-5 py-1.5 flex items-center gap-2 text-xs text-dim border-t shrink-0" style="border-color:var(--border)">
               <span :class="status === 'streaming' ? 'status-dot live' : (status === 'done' ? 'status-dot ok' : (status === 'error' ? 'status-dot err' : 'status-dot'))"></span>
               <span x-text="status === 'streaming' ? '生成中… ' + elapsed + 's' : (status === 'done' ? '已完成 · ' + vpQuestionCount + ' 题' : (status === 'error' ? '生成失败' : (status === 'history' ? '历史记录' : '就绪')))"></span>
               <span class="text-faint hidden sm:inline" x-show="vpHasData" x-text="'· ' + vpQuestionCount + ' 题'"></span>
@@ -1069,7 +1165,7 @@
             </div>
 
             <!-- 输入区（复用通用输入：粘贴/Word） -->
-            <div class="p-3 sm:p-4 pt-2 shrink-0">
+            <div x-show="!vpFullscreen" class="p-3 sm:p-4 pt-2 shrink-0">
               <div x-show="inputCollapsed && vpHasData" x-transition class="flex justify-center">
                 <button class="btn-new-topic" @click="startNewTopic()">
                   <span x-html="icon('plus','w-4 h-4')"></span>
