@@ -601,6 +601,34 @@ select option { background: var(--bg); color: var(--text); }
 .custom-select-item:hover { background: var(--hover); }
 .custom-select-item.on { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 
+/* 工具推理规则弹窗：分组工具多选 + 不支持策略选择 */
+.rule-tool-groups { display: flex; flex-direction: column; gap: 0.7rem; max-height: 300px; overflow: auto; padding-right: 2px; }
+.rule-tool-group { border: 1px solid var(--border); border-radius: 0.65rem; padding: 0.55rem 0.7rem 0.7rem; }
+.rule-tool-group-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.45rem; }
+.rule-tool-options { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.rule-tool-option {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border); border-radius: 999px;
+  font-size: 0.78rem; color: var(--text);
+  cursor: pointer; user-select: none;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.rule-tool-option:hover { background: var(--hover); }
+.rule-tool-option.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.rule-tool-option input { display: none; }
+.rule-action-options { display: flex; flex-direction: column; gap: 0.5rem; }
+.rule-action-option {
+  display: flex; align-items: flex-start; gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border); border-radius: 0.65rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.rule-action-option:hover { background: var(--hover); }
+.rule-action-option.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.rule-action-option input { margin-top: 0.25rem; }
+
 /* 主题切换圆点 */
 .theme-dots { display: flex; align-items: center; gap: 0.45rem; }
 .theme-dot {

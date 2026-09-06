@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,7 @@ CONFIG_KEYS = [
     "mineru_mode",
     "mineru_model",
     "mineru_token",
+    "tool_reasoning_rules",
 ]
 
 # MinerU 文档解析合法取值
@@ -33,6 +35,9 @@ SENSITIVE_KEYS = {"llm_api_key", "chores_api_key", "openrouter_api_key", "mineru
 
 # LiteLLM reasoning_effort 合法取值（none = 关闭思考）
 REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high"}
+
+# 工具推理规则：模型不支持规则强度时的处理方式
+TOOL_REASONING_UNSUPPORTED_ACTIONS = {"fallback", "fail"}
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +150,66 @@ def serialize_models(models: list[dict]) -> str:
     """将结构化模型列表序列化为存储用 JSON 字符串（先规范化过滤非法项）。"""
     normalized = parse_models(json.dumps(models, ensure_ascii=False))
     return json.dumps(normalized, ensure_ascii=False)
+
+
+def _new_rule_id() -> str:
+    return "r_" + uuid.uuid4().hex[:12]
+
+
+def parse_tool_reasoning_rules(raw: str) -> list[dict]:
+    """解析工具推理规则配置。
+
+    JSON 数组，每项含 id / tool_ids / reasoning_effort / on_unsupported；
+    工具 ID 为字符串（"1"~"26"），数值型自动转字符串以兼容前端提交。
+    非法条目（tool_ids 为空或 effort 非法）跳过；id 缺省时生成，
+    经 serialize 往返一次后固定。
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        tool_ids: list[str] = []
+        for tid in item.get("tool_ids") or []:
+            s = str(tid).strip()
+            if s and s not in tool_ids:
+                tool_ids.append(s)
+        effort = item.get("reasoning_effort")
+        if not tool_ids or effort not in REASONING_EFFORTS:
+            continue
+        action = item.get("on_unsupported")
+        if action not in TOOL_REASONING_UNSUPPORTED_ACTIONS:
+            action = "fallback"
+        rule_id = str(item.get("id") or "").strip() or _new_rule_id()
+        out.append({
+            "id": rule_id,
+            "tool_ids": tool_ids,
+            "reasoning_effort": effort,
+            "on_unsupported": action,
+        })
+    return out
+
+
+def serialize_tool_reasoning_rules(rules: list[dict]) -> str:
+    """将结构化规则列表序列化为存储用 JSON 字符串（先规范化过滤非法项）。"""
+    normalized = parse_tool_reasoning_rules(json.dumps(rules, ensure_ascii=False))
+    return json.dumps(normalized, ensure_ascii=False)
+
+
+def find_tool_reasoning_rule(rules: list[dict], tool_id: str) -> dict | None:
+    """按列表顺序返回第一条适用于该工具的规则，未配置则返回 None。"""
+    for rule in rules or []:
+        if tool_id in (rule.get("tool_ids") or []):
+            return rule
+    return None
 
 
 def find_model_entry(models: list[dict], model_id: str) -> dict | None:
@@ -428,6 +493,8 @@ def resolve_llm_settings(db: Session) -> dict:
         mineru_model = "pipeline"
     mineru_token = (cfg.get("mineru_token") or "").strip()
 
+    tool_reasoning_rules = parse_tool_reasoning_rules(cfg.get("tool_reasoning_rules", ""))
+
     return {
         "models": model_list,
         "default_model": default_model,
@@ -451,4 +518,5 @@ def resolve_llm_settings(db: Session) -> dict:
             "model": mineru_model,
             "has_token": bool(mineru_token),
         },
+        "tool_reasoning_rules": tool_reasoning_rules,
     }

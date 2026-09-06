@@ -516,9 +516,24 @@ function adminApp() {
       timeout: 120,
       log_payload: false,
       log_retention_days: 0,
+      tool_reasoning_rules: [],
     },
     savingConfig: false,
     choresModelMenuOpen: false,
+    // 工具推理规则（工具注册表来自 GET /api/admin/tools，与用户端分组一致）
+    adminToolGroups: [],
+    adminToolsLoaded: false,
+    ruleModalOpen: false,
+    ruleModalIndex: null,
+    ruleForm: { id: "", tool_ids: [], reasoning_effort: "high", on_unsupported: "fallback" },
+    ruleEffortMenuOpen: false,
+    ruleEffortModes: [
+      { id: "none", label: "关闭思考" },
+      { id: "minimal", label: "最低强度" },
+      { id: "low", label: "低强度" },
+      { id: "medium", label: "中强度" },
+      { id: "high", label: "高强度" },
+    ],
     // MinerU 文档解析
     parseConfig: { mode: "precision", model: "pipeline", has_token: false, token_masked: "" },
     parseTokenInput: "",
@@ -1977,7 +1992,23 @@ function adminApp() {
           timeout: Number(cfg.timeout) || 120,
           log_payload: /^(1|true|yes|on)$/i.test(String(cfg.log_payload ?? "")),
           log_retention_days: Number(cfg.log_retention_days) || 0,
+          tool_reasoning_rules: Array.isArray(cfg.tool_reasoning_rules)
+            ? cfg.tool_reasoning_rules.map((r) => ({
+                id: r.id || "",
+                tool_ids: Array.isArray(r.tool_ids) ? r.tool_ids.map(String) : [],
+                reasoning_effort: r.reasoning_effort || "high",
+                on_unsupported: r.on_unsupported === "fail" ? "fail" : "fallback",
+              }))
+            : [],
         };
+        // 工具注册表（静态，仅首次拉取）
+        if (!this.adminToolsLoaded) {
+          try {
+            const toolsData = await this.api("/api/admin/tools");
+            this.adminToolGroups = Array.isArray(toolsData.groups) ? toolsData.groups : [];
+            this.adminToolsLoaded = true;
+          } catch {}
+        }
         this.payloadRecording = this.configForm.log_payload;
         // 多 Provider 聚合
         this.providers = Array.isArray(data.providers) ? data.providers : [];
@@ -2142,6 +2173,88 @@ function adminApp() {
       [arr[i], arr[j]] = [arr[j], arr[i]];
     },
 
+    /* ============ 工具推理规则 ============ */
+    toolName(tid) {
+      const id = String(tid);
+      for (const g of this.adminToolGroups) {
+        const t = (g.tools || []).find((x) => x.id === id);
+        if (t) return t.name;
+      }
+      return `工具 ${id}`;
+    },
+    ruleEffortLabel(mode) {
+      const opt = this.ruleEffortModes.find((o) => o.id === mode);
+      return opt ? opt.label : mode;
+    },
+    groupAllSelected(g) {
+      return (g.tools || []).length > 0 && (g.tools || []).every((t) => this.ruleForm.tool_ids.includes(t.id));
+    },
+    toggleGroup(g) {
+      const ids = (g.tools || []).map((t) => t.id);
+      if (this.groupAllSelected(g)) {
+        this.ruleForm.tool_ids = this.ruleForm.tool_ids.filter((id) => !ids.includes(id));
+      } else {
+        this.ruleForm.tool_ids = [...new Set([...this.ruleForm.tool_ids, ...ids])];
+      }
+    },
+    openAddRule() {
+      this.ruleModalIndex = null;
+      this.ruleForm = { id: "", tool_ids: [], reasoning_effort: "high", on_unsupported: "fallback" };
+      this.ruleEffortMenuOpen = false;
+      this.ruleModalOpen = true;
+    },
+    openEditRule(i) {
+      const r = this.configForm.tool_reasoning_rules[i];
+      if (!r) return;
+      this.ruleModalIndex = i;
+      this.ruleForm = {
+        id: r.id || "",
+        tool_ids: [...r.tool_ids],
+        reasoning_effort: r.reasoning_effort || "high",
+        on_unsupported: r.on_unsupported === "fail" ? "fail" : "fallback",
+      };
+      this.ruleEffortMenuOpen = false;
+      this.ruleModalOpen = true;
+    },
+    async saveRuleModal() {
+      if (!this.ruleForm.tool_ids.length) {
+        this.toast("请至少选择一个适用工具", "error");
+        return;
+      }
+      const entry = {
+        // 新规则前端即生成 ID（表格 key 用），后端会原样保留
+        id: this.ruleForm.id || "r_" + Math.random().toString(16).slice(2, 10) + Date.now().toString(16).slice(-4),
+        tool_ids: [...this.ruleForm.tool_ids],
+        reasoning_effort: this.ruleForm.reasoning_effort,
+        on_unsupported: this.ruleForm.on_unsupported === "fail" ? "fail" : "fallback",
+      };
+      if (this.ruleModalIndex === null) {
+        this.configForm.tool_reasoning_rules.push(entry);
+      } else {
+        this.configForm.tool_reasoning_rules.splice(this.ruleModalIndex, 1, entry);
+      }
+      this.ruleModalOpen = false;
+      // 与保存模型弹窗一致：自动保存
+      try {
+        await this.saveConfig();
+      } catch (e) {
+        // saveConfig 已 toast
+      }
+    },
+    removeRule(i) {
+      const r = this.configForm.tool_reasoning_rules[i];
+      if (!r) return;
+      const names = r.tool_ids.map((t) => this.toolName(t)).join("、");
+      if (!confirm(`确定删除覆盖「${names}」的推理规则？删除后需点击“保存配置”生效。`)) return;
+      this.configForm.tool_reasoning_rules.splice(i, 1);
+    },
+    moveRule(i, dir) {
+      const j = i + dir;
+      if (j < 0 || j >= this.configForm.tool_reasoning_rules.length) return;
+      const arr = this.configForm.tool_reasoning_rules;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    },
+
     /* ============ 模型拖拽排序 ============ */
     startModelDrag(i, e) {
       this.dragIndex = i;
@@ -2251,6 +2364,12 @@ function adminApp() {
           return;
         }
       }
+      for (const r of this.configForm.tool_reasoning_rules) {
+        if (!r.tool_ids.length) {
+          this.toast("工具推理规则至少需要选择一个工具", "error");
+          return;
+        }
+      }
       this.savingConfig = true;
       try {
         const body = {
@@ -2260,6 +2379,12 @@ function adminApp() {
           timeout: this.configForm.timeout,
           log_payload: !!this.configForm.log_payload,
           log_retention_days: Math.max(0, Math.floor(Number(this.configForm.log_retention_days) || 0)),
+          tool_reasoning_rules: this.configForm.tool_reasoning_rules.map((r) => ({
+            id: r.id || "",
+            tool_ids: r.tool_ids.map(String),
+            reasoning_effort: r.reasoning_effort,
+            on_unsupported: r.on_unsupported === "fail" ? "fail" : "fallback",
+          })),
           models: this.configForm.models.map((m) => ({
             id: m.id,
             name: m.name || "",

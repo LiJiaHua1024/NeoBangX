@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import case, desc, func, or_
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,12 @@ from app.config import settings
 from app.database import get_db
 from app.models import Device, LogPayload, UsageCode, UsageLog
 from app.routers.chat import _build_llm, _load_cfg
+from app.routers.tools import (
+    EXCLUSIVE_TOOLS,
+    PROPOSITION_TOOLS,
+    REFERENCE_TOOLS,
+    TEACHING_TOOLS,
+)
 from app.services.llm_router import LLMRouter
 from app.services.provider_config import (
     create_provider,
@@ -49,12 +55,15 @@ from app.services.runtime_config import (
     MINERU_MODES,
     MINERU_MODELS,
     REASONING_EFFORTS,
+    TOOL_REASONING_UNSUPPORTED_ACTIONS,
     get_config_map,
     get_config_value,
     mask_config,
     parse_models,
+    parse_tool_reasoning_rules,
     resolve_llm_settings,
     serialize_models,
+    serialize_tool_reasoning_rules,
     set_config_values,
 )
 from app.services.usage_code import create_codes, write_jwt_secret_file
@@ -92,6 +101,28 @@ class ModelEntry(BaseModel):
     enabled: bool = Field(True, description="是否启用，禁用后用户端与 Chores 均不可用")
 
 
+class ToolReasoningRuleEntry(BaseModel):
+    id: str = Field("", max_length=40, description="规则 ID，留空由后端生成")
+    tool_ids: List[str] = Field(
+        ..., min_length=1, description="适用的工具 ID 列表（字符串，如 \"1\"）"
+    )
+    reasoning_effort: str = Field(
+        ..., description="思考强度：none/minimal/low/medium/high"
+    )
+    on_unsupported: str = Field(
+        "fallback",
+        description="模型不支持规则强度时的处理：fallback=回退模型配置，fail=直接失败并提示",
+    )
+
+    @field_validator("tool_ids", mode="before")
+    @classmethod
+    def _stringify_tool_ids(cls, v):
+        """兼容数值型工具 ID（工具注册表为字符串，历史/手工调用可能传数字）。"""
+        if isinstance(v, list):
+            return [str(t) for t in v]
+        return v
+
+
 class ConfigUpdateRequest(BaseModel):
     default_model: Optional[str] = None
     models: Optional[List[ModelEntry]] = None
@@ -100,6 +131,7 @@ class ConfigUpdateRequest(BaseModel):
     timeout: Optional[int] = None
     log_payload: Optional[bool] = Field(None, description="是否记录原始输入/输出数据")
     log_retention_days: Optional[int] = Field(None, ge=0, le=36500, description="日志保留天数，0=永久")
+    tool_reasoning_rules: Optional[List[ToolReasoningRuleEntry]] = None
 
 
 class ProviderCreateRequest(BaseModel):
@@ -1704,6 +1736,8 @@ async def get_admin_config(db: Annotated[Session, Depends(get_db)]):
     masked = mask_config(cfg)
     # 模型列表以结构化形式返回（兼容旧逗号格式自动升级，含 chores_only）
     masked["models"] = parse_models(cfg.get("models", ""))
+    # 工具推理规则以结构化形式返回
+    masked["tool_reasoning_rules"] = parse_tool_reasoning_rules(cfg.get("tool_reasoning_rules", ""))
     # 多 Provider 聚合信息
     try:
         from app.services.provider_config import get_model_provider_details
@@ -1750,6 +1784,26 @@ async def update_admin_config(
                     detail=f"非法思考强度：{effort}",
                 )
         pending_models = parse_models(serialize_models([m.model_dump() if hasattr(m, "model_dump") else m for m in raw["models"]]))
+    # 预校验工具推理规则（若本次同时提交）
+    if "tool_reasoning_rules" in raw and raw["tool_reasoning_rules"] is not None:
+        known_tool_ids = {
+            str(t["id"])
+            for group in (EXCLUSIVE_TOOLS, TEACHING_TOOLS, PROPOSITION_TOOLS, REFERENCE_TOOLS)
+            for t in group
+        }
+        for item in raw["tool_reasoning_rules"]:
+            effort = item.get("reasoning_effort")
+            if effort not in REASONING_EFFORTS:
+                raise HTTPException(status_code=400, detail=f"非法思考强度：{effort}")
+            action = item.get("on_unsupported")
+            if action not in TOOL_REASONING_UNSUPPORTED_ACTIONS:
+                raise HTTPException(status_code=400, detail=f"非法的不支持处理策略：{action}")
+            rule_tool_ids = [str(t).strip() for t in (item.get("tool_ids") or []) if str(t).strip()]
+            if not rule_tool_ids:
+                raise HTTPException(status_code=400, detail="工具推理规则至少需要选择一个工具")
+            unknown = [t for t in rule_tool_ids if t not in known_tool_ids]
+            if unknown:
+                raise HTTPException(status_code=400, detail=f"未知工具 ID：{', '.join(unknown)}")
     for key, value in raw.items():
         if value is None:
             continue
@@ -1758,6 +1812,9 @@ async def update_admin_config(
             continue
         if key == "models":
             updates[key] = serialize_models([m.model_dump() if hasattr(m, "model_dump") else m for m in value])
+            continue
+        if key == "tool_reasoning_rules":
+            updates[key] = serialize_tool_reasoning_rules([r.model_dump() if hasattr(r, "model_dump") else r for r in value])
             continue
         if key == "default_model":
             dm = str(value or "").strip()
@@ -1815,6 +1872,7 @@ async def update_admin_config(
         cfg = get_config_map(db)
         masked = mask_config(cfg)
         masked["models"] = parse_models(cfg.get("models", ""))
+        masked["tool_reasoning_rules"] = parse_tool_reasoning_rules(cfg.get("tool_reasoning_rules", ""))
         try:
             providers = list_providers(db, mask=True)
             model_provider_map = get_model_provider_map(db)
@@ -1834,6 +1892,7 @@ async def update_admin_config(
             pass
     masked = mask_config(cfg)
     masked["models"] = parse_models(cfg.get("models", ""))
+    masked["tool_reasoning_rules"] = parse_tool_reasoning_rules(cfg.get("tool_reasoning_rules", ""))
     try:
         providers = list_providers(db, mask=True)
         model_provider_map = get_model_provider_map(db)
@@ -1845,6 +1904,19 @@ async def update_admin_config(
         "providers": providers,
         "model_provider_map": model_provider_map,
         "updated": list(updates.keys()),
+    }
+
+
+@router.get("/tools")
+async def list_admin_tools():
+    """工具注册表（供工具推理规则编辑器选择适用工具；id 与用户端 /api/tools 一致）。"""
+    return {
+        "groups": [
+            {"id": "exclusive", "title": "独家功能", "tools": EXCLUSIVE_TOOLS},
+            {"id": "teaching", "title": "辅助教学功能", "tools": TEACHING_TOOLS},
+            {"id": "proposition", "title": "辅助命题功能", "tools": PROPOSITION_TOOLS},
+            {"id": "reference", "title": "参考技能", "tools": REFERENCE_TOOLS},
+        ],
     }
 
 

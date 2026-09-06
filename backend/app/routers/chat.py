@@ -25,6 +25,7 @@ from app.services.migration import (
     migration_charge_units,
     parse_error_causes,
 )
+from app.services.model_capabilities import supports_reasoning
 from app.services.prompt_loader import PromptLoader
 from app.services.provider_config import get_model_provider_map, get_providers_for_model
 from app.services.request_log import (
@@ -35,7 +36,11 @@ from app.services.request_log import (
     get_fingerprint_info,
     record_usage_log,
 )
-from app.services.runtime_config import find_model_entry, resolve_llm_settings
+from app.services.runtime_config import (
+    find_model_entry,
+    find_tool_reasoning_rule,
+    resolve_llm_settings,
+)
 from app.services.usage_code import assert_can_generate, consume_quota
 from app.services.vocab_check import check_over_words
 
@@ -649,6 +654,27 @@ async def chat_stream(
     model_entry = find_model_entry(cfg["models"], model_used)
     reasoning_effort = model_entry.get("reasoning_effort") if model_entry else None
     thinking_budget = model_entry.get("thinking_budget") if model_entry else None
+    # 工具推理规则：按列表顺序取第一条命中该工具的规则，强制覆盖思考强度
+    tool_rule = find_tool_reasoning_rule(cfg.get("tool_reasoning_rules") or [], req.tool_id)
+    if tool_rule is not None:
+        # 支持性按首选 Provider 的实际模型 ID 判定（provider_model_id 可与逻辑 ID 不同）
+        provider_chain = getattr(llm, "providers", None) or []
+        actual_model = (provider_chain[0].get("provider_model_id") if provider_chain else "") or model_used
+        supported = supports_reasoning(actual_model)
+        if supported is False and tool_rule.get("on_unsupported") == "fail":
+            # 在注册停止事件、建立 SSE 之前拦截，走 HTTP 错误路径（前端错误卡自带换模型重试）
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"当前模型「{model_used}」不支持推理强度「{tool_rule['reasoning_effort']}」，"
+                    "本次生成已被工具推理规则拦截，可更换模型重试"
+                ),
+            )
+        if supported is not False:
+            # 明确支持或能力未知（未知时交由 litellm.drop_params 兜底，不会报错）时应用规则强度；
+            # 同时清掉模型级思考预算，避免 budget 优先级高于档位而架空规则
+            reasoning_effort = tool_rule.get("reasoning_effort")
+            thinking_budget = None
     # 试卷可视化全解使用自定义分隔格式，无需 JSON mode，兼容性更强（忠于原始模型配置，不强制覆盖 reasoning/max_tokens）
     visual_response_format = None
     # 日志元数据：客户端信息与原始数据开关（开关随请求读取，改配置即时生效）
