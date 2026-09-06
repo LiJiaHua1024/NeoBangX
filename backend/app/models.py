@@ -102,7 +102,11 @@ class Device(Base):
     auto_name: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     note: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     color: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    device_summary: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    device_summary: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    # AI 用户画像：仅手动触发生成（Chores 模型），一次生成保存、点「重新生成」才刷新
+    ai_profile: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    ai_profile_at: Mapped[datetime | None] = mapped_column(UTCDateTime(timezone=True), nullable=True)
+    ai_profile_model: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(timezone=True), default=utcnow)
     seen_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -122,6 +126,9 @@ class Device(Base):
             "note": self.note or "",
             "color": self.color or "",
             "device_summary": self.device_summary or "",
+            "has_ai_profile": bool(self.ai_profile),
+            "ai_profile_at": self.ai_profile_at.isoformat() if self.ai_profile_at else None,
+            "ai_profile_model": self.ai_profile_model or "",
             "first_seen_at": self.first_seen_at.isoformat() if self.first_seen_at else None,
             "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
             "seen_count": self.seen_count or 0,

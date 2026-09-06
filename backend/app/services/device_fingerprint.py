@@ -17,10 +17,13 @@ from __future__ import annotations
 import hashlib
 import re
 
+from app.services.device_profile import identify_device, parse_summary
+
 # 指纹合法字符：ThumbmarkJS 返回十六进制哈希，放宽到常见的 base64url/UUID 形态
 _FINGERPRINT_RE = re.compile(r"^[A-Za-z0-9_\-:+=/\.]+$")
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
+# 诗意外号（识别不出设备时的兜底命名）
 _ADJECTIVES = [
     "青", "晓", "墨", "澄", "朗", "静", "遥", "暖",
     "澈", "昭", "恬", "蔚", "熠", "安", "睿", "淳",
@@ -30,8 +33,11 @@ _NOUNS = [
     "桐", "梅", "枫", "荷", "杉", "桦", "薇", "蒲",
 ]
 
+# 诗意外号形态：两个汉字 + · + 4 位大写十六进制（用于判断昵称可否升级为识别名）
+_POETIC_NAME_RE = re.compile(r"^[一-龥]{2}·[0-9A-F]{4}$")
+
 MAX_FINGERPRINT_CHARS = 128
-MAX_FP_SUMMARY_CHARS = 1000
+MAX_FP_SUMMARY_CHARS = 2000
 
 
 def normalize_fingerprint(raw: str | None) -> str:
@@ -64,13 +70,47 @@ def short_code_for(fingerprint: str) -> str:
     return f"FP-{code[:4]}-{code[4:]}"
 
 
-def auto_name_for(fingerprint: str) -> str:
-    """按指纹确定性生成 `青鹭·3F2A` 风格昵称；同一指纹永远同一昵称。"""
+def auto_name_for(fingerprint: str, summary: str = "") -> str:
+    """按指纹确定性生成昵称；同一指纹永远同一昵称。
+
+    摘要能识别出设备时用识别名（如 `iPhone·3F2A`、`Win笔电·3F2A`），
+    识别不出或摘要缺失时沿用 `青鹭·3F2A` 风格诗意外号兜底。
+    """
     digest = _digest(f"FINGERPRINT-NAME:{fingerprint}")
+    suffix = f"{digest[2]:02X}{digest[3]:02X}"
+    try:
+        ident = identify_device(parse_summary(summary))
+        short_name = str(ident.get("short_name") or "").strip()
+    except Exception:
+        short_name = ""
+    if short_name:
+        return f"{short_name}·{suffix}"
     adj = _ADJECTIVES[digest[0] % len(_ADJECTIVES)]
     noun = _NOUNS[digest[1] % len(_NOUNS)]
-    suffix = f"{digest[2]:02X}{digest[3]:02X}"
     return f"{adj}{noun}·{suffix}"
+
+
+def is_poetic_name(name: str | None) -> bool:
+    """判断昵称是否为诗意外号形态（可被识别名升级替换）。"""
+    return bool(name) and bool(_POETIC_NAME_RE.fullmatch(name.strip()))
+
+
+def refresh_auto_name(current: str | None, fingerprint: str, summary: str) -> str:
+    """已有设备昵称升级：仅当当前仍是诗意外号且新摘要识别成功时替换。
+
+    用户手写 note 展示优先级更高，不受影响；已是识别名的保持稳定。
+    """
+    current = (current or "").strip()
+    if not is_poetic_name(current):
+        return current
+    try:
+        ident = identify_device(parse_summary(summary))
+    except Exception:
+        return current
+    short_name = str(ident.get("short_name") or "").strip()
+    if short_name:
+        return auto_name_for(fingerprint, summary)
+    return current
 
 
 def color_for(fingerprint: str) -> str:

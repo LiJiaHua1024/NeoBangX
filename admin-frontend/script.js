@@ -519,7 +519,7 @@ function adminApp() {
     devices: [],
     devicesTotal: 0,
     devicesPage: 1,
-    devicesPageSize: 20,
+    devicesPageSize: 50,
     deviceQuery: "",
     // 设备编辑弹窗（备注 + 自选颜色）
     deviceModalOpen: false,
@@ -530,6 +530,10 @@ function adminApp() {
     deviceDetail: null,
     deviceDetailLoading: false,
     deviceDetailError: "",
+    // AI 用户画像（POST /api/admin/devices/{id}/ai-profile，Chores 模型生成并落库）
+    aiProfileGenerating: false,
+    aiProfileError: "",
+    aiProfileHtml: "",
     deviceColors: [
       "#c0392b", "#d35400", "#b7791f", "#1e8449", "#0e6e5f", "#148f77",
       "#2471a3", "#2e86c1", "#6c3483", "#884ea0", "#ad1457", "#ca6f1e",
@@ -1631,14 +1635,43 @@ function adminApp() {
     },
 
     /* ============ 设备画像 ============ */
+    renderAiProfile(md) {
+      // marked + DOMPurify 渲染；库未加载（如内网无 CDN）时返回空串，UI 回退纯文本
+      const text = (md || "").trim();
+      if (!text) return "";
+      try {
+        if (window.marked && window.DOMPurify) {
+          return window.DOMPurify.sanitize(window.marked.parse(text, { gfm: true, breaks: true }));
+        }
+      } catch { /* 降级纯文本 */ }
+      return "";
+    },
+
+    identityLabel(identity) {
+      if (!identity) return "";
+      const parts = [];
+      const type = identity.device_type || "";
+      if (type && type !== "未知") parts.push(type.split("（")[0]);
+      const brand = identity.brand || "";
+      if (brand && brand !== "未知" && !type.includes(brand)) parts.push(brand);
+      const model = identity.model || "";
+      if (model) parts.push(model);
+      return parts.join(" · ");
+    },
+
     async openDeviceDetail(d) {
       if (!d || d.id == null) return;
       this.deviceDetail = null;
       this.deviceDetailError = "";
+      this.aiProfileError = "";
+      this.aiProfileHtml = "";
+      this.aiProfileGenerating = false;
       this.deviceDetailLoading = true;
       this.deviceDetailOpen = true;
       try {
-        this.deviceDetail = await this.api(`/api/admin/devices/${d.id}`);
+        const det = await this.api(`/api/admin/devices/${d.id}`);
+        this.deviceDetail = det;
+        this.aiProfileHtml = this.renderAiProfile(det.ai_profile);
       } catch (e) {
         this.deviceDetailError = e.message || "加载设备画像失败";
         this.toast(this.deviceDetailError, "error");
@@ -1647,10 +1680,35 @@ function adminApp() {
       }
     },
 
+    async generateAiProfile() {
+      const det = this.deviceDetail;
+      if (!det || !det.device || this.aiProfileGenerating) return;
+      this.aiProfileGenerating = true;
+      this.aiProfileError = "";
+      try {
+        const data = await this.api(`/api/admin/devices/${det.device.id}/ai-profile`, { method: "POST" });
+        this.deviceDetail = {
+          ...det,
+          ai_profile: data.ai_profile || "",
+          ai_profile_at: data.ai_profile_at || null,
+          ai_profile_model: data.ai_profile_model || "",
+          device: { ...det.device, has_ai_profile: true, ai_profile_at: data.ai_profile_at || null },
+        };
+        this.aiProfileHtml = this.renderAiProfile(data.ai_profile);
+        this.toast("AI 用户画像已生成并保存", "success");
+      } catch (e) {
+        this.aiProfileError = e.message || "生成失败";
+      } finally {
+        this.aiProfileGenerating = false;
+      }
+    },
+
     closeDeviceDetail() {
       this.deviceDetailOpen = false;
       this.deviceDetail = null;
       this.deviceDetailError = "";
+      this.aiProfileHtml = "";
+      this.aiProfileError = "";
     },
 
     openDeviceDetailFromLog() {
@@ -1694,6 +1752,13 @@ function adminApp() {
       ];
       if ((det.signals || []).length) {
         lines.push("", "风险提示（仅供参考）：", ...det.signals.map((s) => `· ${s}`));
+      }
+      if (det.ai_profile) {
+        lines.push(
+          "",
+          `AI 用户画像（${this.fmtTime(det.ai_profile_at)} · ${det.ai_profile_model || "Chores 模型"}）：`,
+          det.ai_profile,
+        );
       }
       await this.copyText(lines.join("\n"));
     },

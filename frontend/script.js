@@ -174,14 +174,16 @@ const CARD_REASONING_LIMIT = 2000;
 
 /* ---------------- 浏览器指纹（ThumbmarkJS，仅用于识别共享，不做拦截） ----------------
    UMD 经 CDN 引入（frontend/index.html），计算失败/被拦截时静默降级为空，
-   绝不阻塞业务。结果缓存到 localStorage，请求时经请求头上报。 */
-const NBX_FP_KEY = "nbx_fp";
+   绝不阻塞业务。结果缓存到 localStorage，请求时经请求头上报。
+   v2：摘要扩到 16 字段（型号/系统版本/GPU/触屏/内存/色深/语言列表/电池），
+   键名升级强制重算一次，老缓存作废。 */
+const NBX_FP_KEY = "nbx_fp_v2";
 const nbxFp = { hash: "", summary: "", ready: false };
 try {
   const cached = JSON.parse(localStorage.getItem(NBX_FP_KEY) || "null");
   if (cached && typeof cached.hash === "string" && cached.hash) {
     nbxFp.hash = cached.hash.slice(0, 128);
-    nbxFp.summary = String(cached.summary || "").slice(0, 1000);
+    nbxFp.summary = String(cached.summary || "").slice(0, 2000);
   }
 } catch { /* 缓存损坏时忽略 */ }
 function nbxFpHeaders() {
@@ -197,10 +199,12 @@ function nbxFpHeaders() {
     return {};
   }
 }
-function nbxFpSummarize(components) {
-  // 精简设备摘要：优先用 ThumbmarkJS components，缺字段时用 navigator 兜底
+function nbxFpSummarize(components, uach) {
+  // 精简设备摘要：优先用 ThumbmarkJS components，缺字段时用 navigator 兜底；
+  // uach 为 userAgentData.getHighEntropyValues 结果（仅 Chromium），用于型号与系统版本
   try {
     const c = components || {};
+    const u = uach || {};
     const plat = (c.system && (c.system.platform || c.system.os)) || c.platform
       || (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
     const lang = (c.locales && (c.locales.language || c.locales[0])) || navigator.language || "";
@@ -209,7 +213,35 @@ function nbxFpSummarize(components) {
     const dpr = window.devicePixelRatio || 1;
     const cores = navigator.hardwareConcurrency || "";
     const tz = (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone || "";
-    const raw = JSON.stringify({ os: String(plat).slice(0, 64), lang: String(lang).slice(0, 16), scr: `${w}x${h}`, dpr, cores, tz: String(tz).slice(0, 64) });
+    const data = {
+      os: String(plat).slice(0, 64),
+      lang: String(lang).slice(0, 16),
+      scr: `${w}x${h}`,
+      dpr,
+      cores,
+      tz: String(tz).slice(0, 64),
+    };
+    // 安卓真实型号串；Windows 11/10、macOS/iOS 大版本靠 platformVersion 区分
+    const model = String(u.model || "").trim();
+    if (model) data.model = model.slice(0, 40);
+    const pv = String(u.platformVersion || "").trim();
+    if (pv) data.pv = pv.slice(0, 20);
+    const arch = String(u.architecture || "").trim();
+    if (arch) data.arch = arch.slice(0, 16);
+    const bit = String(u.bitness || "").trim();
+    if (bit) data.bit = bit.slice(0, 8);
+    // GPU 渲染器（webgl 组件已采集，此前被丢弃）；纯哈希值没有可读性，跳过
+    const wg = c.webgl && typeof c.webgl === "object" ? c.webgl : {};
+    const gpu = String(wg.rendererUnmasked || wg.renderer || "").trim();
+    if (gpu && !/^[0-9a-f]{16,}$/i.test(gpu)) data.gpu = gpu.slice(0, 160);
+    data.touch = navigator.maxTouchPoints || 0;
+    const mem = Number(navigator.deviceMemory || (c.device && c.device.deviceMemory) || 0);
+    if (mem > 0) data.mem = mem;
+    const cd = (window.screen && window.screen.colorDepth) || 0;
+    if (cd) data.cd = cd;
+    const langs = (navigator.languages || []).slice(0, 6).join(",");
+    if (langs) data.langs = String(langs).slice(0, 100);
+    const raw = JSON.stringify(data);
     // 请求头只允许 Latin1，非 ASCII 会导致 fetch 抛错，直接剥离
     return raw.replace(/[^\x20-\x7E]/g, "");
   } catch {
@@ -219,6 +251,27 @@ function nbxFpSummarize(components) {
 async function nbxFpInit() {
   if (nbxFp.ready) return;
   nbxFp.ready = true;
+  // 高熵 UA-CH + 电池信号（均防御式，不支持就空着，绝不阻塞）
+  const collectExtra = async () => {
+    const extra = {};
+    try {
+      const uad = navigator.userAgentData;
+      if (uad && typeof uad.getHighEntropyValues === "function") {
+        const v = await uad.getHighEntropyValues(["model", "platformVersion", "architecture", "bitness"]);
+        if (v) Object.assign(extra, v);
+      }
+    } catch { /* 不支持则跳过 */ }
+    try {
+      if (navigator.getBattery) {
+        const b = await navigator.getBattery();
+        // 无电池的台式机返回恒定默认值（charging=true、dischargingTime=Infinity），据此区分
+        if (b && (b.charging === false || (isFinite(b.dischargingTime) && b.dischargingTime > 0))) {
+          extra.bat = 1;
+        }
+      }
+    } catch { /* 不支持则跳过 */ }
+    return extra;
+  };
   const collect = async () => {
     try {
       const NS = window.ThumbmarkJS;
@@ -234,7 +287,7 @@ async function nbxFpInit() {
         return false;
       }
       nbxFp.hash = hash;
-      nbxFp.summary = (nbxFpSummarize(r.components) || "").slice(0, 1000);
+      nbxFp.summary = (nbxFpSummarize(r.components, await collectExtra()) || "").slice(0, 2000);
       try {
         localStorage.setItem(NBX_FP_KEY, JSON.stringify({ hash: nbxFp.hash, summary: nbxFp.summary }));
       } catch { /* 配额不足时忽略 */ }

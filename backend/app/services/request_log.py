@@ -20,10 +20,12 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models import Device, LogPayload, UsageLog
 from app.services.device_fingerprint import (
+    MAX_FP_SUMMARY_CHARS,
     auto_name_for,
     clip_summary,
     color_for,
     normalize_fingerprint,
+    refresh_auto_name,
     short_code_for,
 )
 from app.services.runtime_config import get_config_value
@@ -121,7 +123,9 @@ def get_or_create_device(
             device.last_seen_at = now
             device.seen_count = (device.seen_count or 0) + 1
             if summary and summary != (device.device_summary or ""):
-                device.device_summary = summary[:1000]
+                device.device_summary = summary[:MAX_FP_SUMMARY_CHARS]
+                # 摘要更新后，诗意外号昵称可升级为识别名（已是识别名则保持稳定）
+                device.auto_name = refresh_auto_name(device.auto_name, fp, summary)
             db.flush()
             return device
         short_code = short_code_for(fp)
@@ -131,10 +135,10 @@ def get_or_create_device(
         device = Device(
             fingerprint=fp,
             short_code=short_code,
-            auto_name=auto_name_for(fp),
+            auto_name=auto_name_for(fp, summary),
             note="",
             color=color_for(fp),
-            device_summary=(summary or "")[:1000],
+            device_summary=(summary or "")[:MAX_FP_SUMMARY_CHARS],
             first_seen_at=now,
             last_seen_at=now,
             seen_count=1,

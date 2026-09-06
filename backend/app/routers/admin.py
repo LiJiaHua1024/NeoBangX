@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import re
 import secrets as secrets_lib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from typing import Annotated, List, Optional
 
@@ -17,6 +19,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models import Device, LogPayload, UsageCode, UsageLog
+from app.routers.chat import _build_llm, _load_cfg
+from app.services.llm_router import LLMRouter
 from app.services.provider_config import (
     create_provider,
     delete_provider,
@@ -28,8 +32,10 @@ from app.services.provider_config import (
     update_provider,
 )
 from app.services.device_profile import (
+    beijing_hour,
     build_profile,
     build_signals,
+    identify_device,
     parse_summary,
     parse_user_agent,
 )
@@ -1093,7 +1099,7 @@ async def list_devices(
     db: Annotated[Session, Depends(get_db)],
     q: str = Query("", description="按短码/备注/昵称/指纹搜索"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=500),
 ):
     query = db.query(Device)
     if q and q.strip():
@@ -1154,8 +1160,29 @@ async def list_devices(
         item["last_ip"] = info.get("last_ip", "")
         item["last_code"] = info.get("last_code", "")
         item["last_log_at"] = info.get("last_log_at")
+        # 确定性识别（纯查表）；top_ua 列表未在此查询，UA 线索留到详情页
+        try:
+            item["identity"] = identify_device(parse_summary(d.device_summary))
+        except Exception:
+            item["identity"] = {}
         items.append(item)
     return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+def _device_hour_histogram(base) -> list[int]:
+    """设备请求的活跃时段直方图（按北京时间 0-23 小时分桶）。"""
+    hours = [0] * 24
+    try:
+        rows = base.with_entities(UsageLog.created_at).all()
+        for (created,) in rows:
+            if created is None:
+                continue
+            h = beijing_hour(created)
+            if h is not None:
+                hours[h] += 1
+    except Exception:
+        return [0] * 24
+    return hours
 
 
 @router.get("/devices/{device_id}")
@@ -1222,7 +1249,7 @@ async def device_detail(
             )
             .group_by(UsageLog.code)
             .order_by(desc("count"))
-            .limit(20)
+            .limit(50)
             .all()
         )
         code_names = [r[0] for r in rows if r[0]]
@@ -1258,7 +1285,7 @@ async def device_detail(
             )
             .group_by(UsageLog.ip)
             .order_by(desc("count"))
-            .limit(10)
+            .limit(30)
             .all()
         )
         ips = [
@@ -1283,7 +1310,7 @@ async def device_detail(
             )
             .group_by(UsageLog.user_agent)
             .order_by(desc("count"))
-            .limit(5)
+            .limit(20)
             .all()
         )
         for ua, count, last_at in rows:
@@ -1311,7 +1338,7 @@ async def device_detail(
             )
             .group_by(UsageLog.tool_id, UsageLog.tool_name)
             .order_by(desc("count"))
-            .limit(10)
+            .limit(30)
             .all()
         )
         tools = [
@@ -1328,7 +1355,7 @@ async def device_detail(
             .with_entities(UsageLog.model, func.count(UsageLog.id).label("count"))
             .group_by(UsageLog.model)
             .order_by(desc("count"))
-            .limit(10)
+            .limit(30)
             .all()
         )
         models = [{"model": r[0] or "", "count": int(r[1] or 0)} for r in rows]
@@ -1337,7 +1364,7 @@ async def device_detail(
 
     recent_logs: list[dict] = []
     try:
-        for log in base.order_by(desc(UsageLog.id)).limit(20).all():
+        for log in base.order_by(desc(UsageLog.id)).limit(50).all():
             recent_logs.append(
                 {
                     "id": log.id,
@@ -1361,10 +1388,13 @@ async def device_detail(
         "device": device.to_dict(),
         "summary_parsed": summary,
         "summary_raw": device.device_summary or "",
+        "identity": identify_device(summary, top_ua),
+        "ai_profile": device.ai_profile or "",
         "profile": build_profile(summary, top_ua),
         "signals": build_signals(
             code_count=len(codes), ip_count=len(ips), ua_count=len(user_agents)
         ),
+        "hour_histogram": _device_hour_histogram(base),
         "stats": {
             "total_logs": int(total),
             "success": int(success),
@@ -1409,6 +1439,256 @@ async def update_device(
     db.commit()
     db.refresh(row)
     return row.to_dict()
+
+
+AI_PROFILE_SYSTEM_PROMPT = (
+    "任务：根据一台设备的后台使用数据，直接告诉管理员这台设备最可能是谁的、正在被用来干什么。\n"
+    "背景：管理员线下发放使用码、认识这些人，但没有登记谁在用哪台设备；你的判断是他唯一的"
+    "新信息来源。\n"
+    "关键事实：输入里的所有原始数据（设备参数、UA、IP、使用码、时段直方图、模型清单）在管理"
+    "界面上都能看到，一个字都不要复述；也永远不要展示你的推理步骤，只给推完的结果。\n"
+    "\n"
+    "输出契约（严格遵守）：\n"
+    "- 简体中文，只有两个自然段。不用标题、列表、表格、加粗、分隔线、标签。\n"
+    "- 第一段，直白结论：这台设备是谁的、在干什么、把握多大。像跟同事当面说话一样，例如："
+    "「这台基本可以确定是小张自己的工作机——工作日下午高强度产文、偶尔晚间接着用，"
+    "写的东西反复改标题，是典型的个人干活设备。」（此句仅为语气示意，禁止照抄）\n"
+    "- 第二段，一到两句：给出最省事的对号入座动作——查哪条登记信息，或当面问哪句话。\n"
+    "- 有共享、转借、盗码迹象时，在第一段末尾用一句话点破；没有就完全不提风险，"
+    "禁止写「未发现」「无风险」这类空话。\n"
+    "- 把握程度融进语气里：基本可以确定 / 大概率 / 更像是 / 数据还太少暂时判断不了"
+    "（拿不准时就说建议再观察，别的不要写）。\n"
+    "- 全文 150 字以内。每句话都是结论，不写论证。"
+)
+
+
+def _gather_device_evidence(db: Session, device: Device, recent_limit: int = 30) -> dict:
+    """聚合设备全部后台数据，作为 AI 画像的输入（与详情接口口径一致）。"""
+    base = db.query(UsageLog).filter(UsageLog.device_id == device.id)
+    summary = parse_summary(device.device_summary)
+
+    def _count(matcher) -> int:
+        try:
+            return int(base.filter(matcher).count())
+        except Exception:
+            return 0
+
+    codes: list[dict] = []
+    try:
+        rows = (
+            base.with_entities(
+                UsageLog.code,
+                func.count(UsageLog.id).label("count"),
+                func.max(UsageLog.created_at).label("last_at"),
+            )
+            .group_by(UsageLog.code)
+            .order_by(desc("count"))
+            .limit(50)
+            .all()
+        )
+        code_names = [r[0] for r in rows if r[0]]
+        notes: dict[str, str] = {}
+        if code_names:
+            try:
+                for c in db.query(UsageCode).filter(UsageCode.code.in_(code_names)).all():
+                    notes[c.code] = c.note or ""
+            except Exception:
+                notes = {}
+        codes = [
+            {"code": r[0] or "", "note": notes.get(r[0] or "", ""), "count": int(r[1] or 0)}
+            for r in rows
+        ]
+    except Exception:
+        codes = []
+
+    ips: list[dict] = []
+    try:
+        rows = (
+            base.filter(UsageLog.ip != "")
+            .with_entities(UsageLog.ip, func.count(UsageLog.id).label("count"))
+            .group_by(UsageLog.ip)
+            .order_by(desc("count"))
+            .limit(30)
+            .all()
+        )
+        ips = [{"ip": r[0] or "", "count": int(r[1] or 0)} for r in rows]
+    except Exception:
+        ips = []
+
+    user_agents: list[dict] = []
+    try:
+        rows = (
+            base.filter(UsageLog.user_agent != "")
+            .with_entities(
+                UsageLog.user_agent,
+                func.count(UsageLog.id).label("count"),
+            )
+            .group_by(UsageLog.user_agent)
+            .order_by(desc("count"))
+            .limit(20)
+            .all()
+        )
+        for ua, count in rows:
+            parsed = parse_user_agent(ua or "")
+            user_agents.append(
+                {
+                    "browser": parsed["browser"],
+                    "os": parsed["os"],
+                    "device_type": parsed["device_type"],
+                    "count": int(count or 0),
+                    "user_agent": (ua or "")[:255],
+                }
+            )
+    except Exception:
+        user_agents = []
+
+    tools: list[dict] = []
+    try:
+        rows = (
+            base.with_entities(
+                UsageLog.tool_name, UsageLog.tool_id, func.count(UsageLog.id).label("count")
+            )
+            .group_by(UsageLog.tool_name, UsageLog.tool_id)
+            .order_by(desc("count"))
+            .limit(30)
+            .all()
+        )
+        tools = [
+            {"tool": r[0] or r[1] or "未知", "count": int(r[2] or 0)} for r in rows
+        ]
+    except Exception:
+        tools = []
+
+    models: list[dict] = []
+    try:
+        rows = (
+            base.filter(UsageLog.model != "")
+            .with_entities(UsageLog.model, func.count(UsageLog.id).label("count"))
+            .group_by(UsageLog.model)
+            .order_by(desc("count"))
+            .limit(30)
+            .all()
+        )
+        models = [{"model": r[0] or "", "count": int(r[1] or 0)} for r in rows]
+    except Exception:
+        models = []
+
+    recent_logs: list[dict] = []
+    try:
+        for log in base.order_by(desc(UsageLog.id)).limit(recent_limit).all():
+            recent_logs.append(
+                {
+                    "time": log.created_at.isoformat() if log.created_at else "",
+                    "code": log.code or "",
+                    "tool": log.tool_name or log.tool_id or "",
+                    "model": log.model or "",
+                    "status": log.status or "",
+                    "ip": log.ip or "",
+                }
+            )
+    except Exception:
+        recent_logs = []
+
+    try:
+        active_days = int(
+            base.with_entities(func.count(func.distinct(func.date(UsageLog.created_at))))
+            .scalar()
+            or 0
+        )
+    except Exception:
+        active_days = 0
+    try:
+        tokens = int(
+            base.with_entities(func.coalesce(func.sum(UsageLog.total_tokens), 0)).scalar() or 0
+        )
+    except Exception:
+        tokens = 0
+    try:
+        total = int(base.count())
+    except Exception:
+        total = 0
+
+    return {
+        "设备短码": device.short_code,
+        "自动昵称": device.auto_name or "",
+        "管理员备注": device.note or "",
+        "首次出现": device.first_seen_at.isoformat() if device.first_seen_at else "",
+        "末次活跃": device.last_seen_at.isoformat() if device.last_seen_at else "",
+        "指纹上报次数": device.seen_count or 0,
+        "请求总数": total,
+        "活跃天数": active_days,
+        "累计 tokens": tokens,
+        "设备识别结论": identify_device(summary),
+        "设备摘要字段": {k: v for k, v in summary.items() if v},
+        "关联使用码": codes,
+        "IP 列表": ips,
+        "浏览器与 UA": user_agents,
+        "常用工具": tools,
+        "常用模型": models,
+        "活跃时段直方图（北京时间 0-23 点）": _device_hour_histogram(base),
+        "最近请求样本": recent_logs,
+    }
+
+
+@router.post("/devices/{device_id}/ai-profile")
+async def generate_device_ai_profile(
+    device_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """用 Chores 模型基于设备全部数据生成用户画像并落库。
+
+    一次生成保存；仅手动调用本端点才重新生成，GET 详情永远只返回已存结果。
+    """
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="设备不存在")
+
+    evidence = _gather_device_evidence(db, device)
+    user_prompt = (
+        "以下是某台设备的后台数据（JSON，活跃时段为北京时间）：\n\n"
+        f"{json.dumps(evidence, ensure_ascii=False, default=str)}\n\n"
+        "请按系统要求输出该设备的用户画像。"
+    )
+
+    cfg = await asyncio.to_thread(_load_cfg)
+    llm = _build_llm(cfg, chores=True)
+    if isinstance(llm, LLMRouter) and not llm.providers:
+        raise HTTPException(
+            status_code=503,
+            detail="Chores 模型未绑定可用 Provider，请先到「配置」页设置 chores 模型与 Provider",
+        )
+    try:
+        content = await llm.chat(
+            system_prompt=AI_PROFILE_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            max_tokens=1500,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("AI device profile generation failed")
+        raise HTTPException(status_code=502, detail=f"AI 画像生成失败：{e}")
+    content = (content or "").strip()
+    if not content:
+        raise HTTPException(status_code=502, detail="AI 返回了空内容，请稍后重试")
+
+    model_used = str(cfg.get("chores_model") or "")
+    try:
+        if isinstance(llm, LLMRouter) and llm.provider_used:
+            model_used = llm.provider_used.get("provider_model_id") or model_used
+    except Exception:
+        pass
+
+    device.ai_profile = content[:20000]
+    device.ai_profile_at = datetime.now(timezone.utc)
+    device.ai_profile_model = model_used[:128]
+    db.commit()
+    db.refresh(device)
+    return {
+        "ai_profile": device.ai_profile,
+        "ai_profile_at": device.ai_profile_at.isoformat() if device.ai_profile_at else None,
+        "ai_profile_model": device.ai_profile_model,
+    }
 
 
 @router.get("/config")
