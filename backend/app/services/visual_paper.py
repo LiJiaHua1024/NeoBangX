@@ -23,8 +23,23 @@ MULTILINE_TAGS = {
 }
 ALL_TAGS = SINGLE_VALUE_TAGS | MULTILINE_TAGS | {"END_Q"}
 
-# 兼容两种写法：@@TAG@@ 内容 与 @@TAG=内容（部分模型会输出后者，含义相同）
-TAG_RE = re.compile(r"^@@([A-Z_]+)(@@|=)\s*(.*)$")
+# 兼容模型的多种漂移写法：@@TAG@@ 值 / @@TAG=值 / @@TAG:: 值 / @@TAG: 值，
+# 开头允许 2+ 个 @（含全角＠），名字大小写不敏感；白名单外的 @@xx 一律视为普通正文。
+# 实测部分模型会输出 @@@PITFALLS:: 这类变形，严格只认 @@TAG@@ 会整段漏识别，
+# 导致易错点丢失、原始标记泄露进上一字段正文、选项/答案被吞。
+_TAG_NAMES = [
+    "TRANSFER_PASSAGE", "TRANSFER_STEM", "TRANSFER_OPTIONS", "TRANSFER_ANSWER", "TRANSFER_EXPL",
+    "WRITING_POINTS", "WRITING_OUTLINE", "WRITING_SAMPLE", "PATTERN_NAME", "PATTERN_STEPS",
+    "PITFALLS", "DISTRACTOR", "EVIDENCE", "OPTIONS", "PASSAGE", "ANSWER", "REASON",
+    "QTYPE", "GROUP", "NOTICE", "TOTAL", "PAPER", "STEM", "END_Q", "Q",
+]
+_TAG_DELIM = r"([＠@]{2,}|[=＝]|[:：]{1,2})"
+# 行首标签：group 1=标签名 2=定界符 3=同行值
+TAG_LINE_RE = re.compile(r"^[＠@]{2,}\s*(" + "|".join(_TAG_NAMES) + r")\s*" + _TAG_DELIM + r"[ \t]*(.*)$", re.IGNORECASE)
+# 行内标签定位：在任意位置找下一个标签标记
+TAG_FIND_RE = re.compile(r"[＠@]{2,}\s*(?:" + "|".join(_TAG_NAMES) + r")\s*" + _TAG_DELIM, re.IGNORECASE)
+# 门卫：raw 中是否出现过自定义标签（解析入口分流共用）
+HAS_TAG_RE = re.compile(r"[＠@]{2,}\s*(?:" + "|".join(_TAG_NAMES) + r")\s*" + _TAG_DELIM, re.IGNORECASE)
 
 def _is_nonempty_str(v: Any) -> bool:
     return isinstance(v, str) and v.strip() != ""
@@ -74,7 +89,7 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
     增量友好：仅当遇到 @@END_Q@@ 时才提交一道题；截断导致无 END_Q 的题被丢弃，已完成题保留。
     若 raw 中无任何 @@TAG@@，返回 None 供调用方回退 JSON。
     """
-    if not raw or "@@" not in raw:
+    if not raw or not HAS_TAG_RE.search(raw):
         return None
     lines = raw.splitlines()
     # 状态
@@ -298,14 +313,36 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
         # 重置 current_q
         current_q = None
 
-    # 逐行解析
+    # 逐行解析；一行内出现多个标签时逐段切分，前段文本归入当前字段
     for raw_line in lines:
-        line = raw_line.rstrip("\r")
-        m = TAG_RE.match(line.strip())
-        if m:
-            tag = m.group(1)
-            value = m.group(3).strip()
-            if m.group(2) == "@@" and value.startswith("="):
+        work = raw_line.rstrip("\r")
+        while True:
+            fm = TAG_FIND_RE.search(work)
+            if fm is None:
+                if current_field is not None and current_q is not None:
+                    field_buf.append(work)
+                break
+            if fm.start() > 0:
+                prefix = work[: fm.start()]
+                if current_field is not None and current_q is not None and prefix:
+                    field_buf.append(prefix)
+                work = work[fm.start():]
+            m = TAG_LINE_RE.match(work)
+            if m is None:
+                # 理论不可达（find 与 line 同一定界符规则），防御性兜底
+                if current_field is not None and current_q is not None:
+                    field_buf.append(work)
+                break
+            tag = m.group(1).upper()
+            # 同行值只取到下一个标签标记为止，行内剩余标签留给下一轮
+            value = m.group(3)
+            vm = TAG_FIND_RE.search(value)
+            rest = ""
+            if vm is not None:
+                rest = value[vm.start():]
+                value = value[: vm.start()]
+            value = value.strip()
+            if re.fullmatch(r"[＠@]{2,}", m.group(2)) and value.startswith("="):
                 value = value[1:].strip()
             # 先 flush 前一字段
             if current_field is not None:
@@ -371,17 +408,10 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 if value:
                     field_buf.append(value)
             else:
-                # 未知标签，视为普通内容（容错）
-                if current_field is not None:
-                    field_buf.append(line)
-                continue
-        else:
-            # 非标签行：属于当前字段的内容
-            if current_field is not None and current_q is not None:
-                field_buf.append(line)
-            else:
-                # 不在任何字段内，忽略（可能是空行）
-                continue
+                # 白名单已保证不可达，防御性兜底
+                if current_field is not None and current_q is not None:
+                    field_buf.append(work)
+            work = rest
 
     # 结束时若有未提交的题（无 END_Q），丢弃（保证已提交的都是完整题）
     # 不 commit 不完整题
@@ -414,7 +444,7 @@ def try_parse_visual_paper(raw: str) -> tuple[dict | None, str]:
     if not raw or not raw.strip():
         return None, "empty output"
     # 若包含自定义标签，优先走自定义解析
-    if re.search(r"@@[A-Z_]+(@@|=)", raw):
+    if HAS_TAG_RE.search(raw):
         data = parse_custom_visual_paper(raw)
         if data is not None:
             # 即使 groups 为空但 total 为 0 也是合法（例外）

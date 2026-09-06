@@ -178,6 +178,29 @@ const FAVORITES_LIMIT = 100;
 const REASONING_LIMIT = 3000;
 const CARD_REASONING_LIMIT = 2000;
 
+/* ---------------- 试卷可视化全解：@@TAG@@ 标签识别（宽松版） ----------------
+   契约要求标签独占一行且 @@TAG@@ 双向闭合，但实测模型会漂移：@@@PITFALLS::（多打一个 @、
+   用冒号收尾）、@@ANSWER=D、标签粘在上一字段行尾等，严格正则会整段漏识别，导致易错点丢失、
+   原始标记泄露进正文、选项/答案被吞进上一字段。识别统一放宽：开头 2+ 个 @/＠、名字大小写
+   不敏感、收尾 @@ = : ： :: 均可；一行内出现多个标签时逐段切分，前段文本归当前字段。
+   下面的名单即白名单：不在名单里的 @@xx 一律当普通正文，避免误伤语篇内容。 */
+const VP_TAG_NAMES = [
+  "TRANSFER_PASSAGE", "TRANSFER_STEM", "TRANSFER_OPTIONS", "TRANSFER_ANSWER", "TRANSFER_EXPL",
+  "WRITING_POINTS", "WRITING_OUTLINE", "WRITING_SAMPLE", "PATTERN_NAME", "PATTERN_STEPS",
+  "PITFALLS", "DISTRACTOR", "EVIDENCE", "OPTIONS", "PASSAGE", "ANSWER", "REASON",
+  "QTYPE", "GROUP", "NOTICE", "TOTAL", "PAPER", "STEM", "END_Q", "Q",
+];
+const _VP_TAG_DELIM = String.raw`([＠@]{2,}|[=＝]|[:：]{1,2})`;
+// 行首标签：捕获组 1=标签名 2=定界符 3=同行值
+const VP_TAG_LINE_RE = new RegExp(`^[＠@]{2,}\\s*(${VP_TAG_NAMES.join("|")})\\s*${_VP_TAG_DELIM}[ \\t]*(.*)$`, "i");
+// 行内标签定位：在任意位置找下一个标签标记
+const VP_TAG_FIND_RE = new RegExp(`[＠@]{2,}\\s*(?:${VP_TAG_NAMES.join("|")})\\s*${_VP_TAG_DELIM}`, "i");
+// 门卫：输出残片里是否出现过自定义标签（解析入口分流用，只认白名单标签名）
+const VP_HAS_TAG_RE = new RegExp(`[＠@]{2,}\\s*(?:${VP_TAG_NAMES.join("|")})\\s*${_VP_TAG_DELIM}`, "i");
+// 广义残片判定：任何形如 @@词@@ / @@词= / @@词: 的 token（含白名单外的自造标签）。
+// 仅供"不裸奔原文"的门卫使用——宁可置空显示也不能把原始标记当 Markdown 泄露出去。
+const VP_ANY_TAG_RE = /[＠@]{2,}[A-Za-z_]{1,}\s*(?:[＠@]{2,}|[=＝]|[:：])/;
+
 /* ---------------- 浏览器指纹（ThumbmarkJS，仅用于识别共享，不做拦截） ----------------
    UMD 经 CDN 引入（frontend/index.html），计算失败/被拦截时静默降级为空，
    绝不阻塞业务。结果缓存到 localStorage，请求时经请求头上报。
@@ -1447,7 +1470,7 @@ function nbx() {
     // 输出残片是否含自定义 @@TAG@@（中断残片绝不直接展示原文）
     get vpHasCustomFragment() {
       const raw = this.output || "";
-      return /@@[A-Z_]+(@@|=)/.test(raw);
+      return VP_ANY_TAG_RE.test(raw);
     },
     // 生成中断且无完整题：展示中断卡，不裸奔原文
     get vpInterrupted() {
@@ -1461,7 +1484,7 @@ function nbx() {
       this._vpRenderPending = false;
     },
     parseCustomVisualPaper(raw) {
-      if (!raw || raw.indexOf("@@") === -1) return null;
+      if (!raw || !VP_HAS_TAG_RE.test(raw)) return null;
       const lines = raw.split(/\r?\n/);
       const ALLOWED = new Set(["reading","cloze7","cloze","grammar","writing_app","writing_cont","other"]);
       let totalDeclared = null;
@@ -1472,8 +1495,6 @@ function nbx() {
       let currentQ = null;
       let currentField = null;
       let fieldBuf = [];
-      // 兼容两种写法：@@TAG@@ 内容 与 @@TAG=内容（部分模型会输出后者，含义相同）
-      const TAG_RE = /^@@([A-Z_]+)(@@|=)\s*(.*)$/;
       const flushField = () => {
         if (currentField === null || currentQ === null) { fieldBuf = []; currentField = null; return; }
         const content = fieldBuf.join("\n").trim();
@@ -1599,13 +1620,34 @@ function nbx() {
         currentGroup.questions.push(qObj);
         currentQ = null;
       };
+      // 逐行解析；一行内出现多个标签时逐段切分，前段文本归入当前字段
       for (let rawLine of lines) {
-        const line = rawLine.replace(/\r$/, "");
-        const m = line.trim().match(TAG_RE);
-        if (m) {
-          const tag = m[1];
-          let value = m[3].trim();
-          if (m[2] === "@@" && value.startsWith("=")) value = value.slice(1).trim();
+        let work = rawLine.replace(/\r$/, "");
+        while (true) {
+          const fm = work.match(VP_TAG_FIND_RE);
+          if (!fm) {
+            if (currentField !== null && currentQ !== null) fieldBuf.push(work);
+            break;
+          }
+          if (fm.index > 0) {
+            const prefix = work.slice(0, fm.index);
+            if (currentField !== null && currentQ !== null && prefix) fieldBuf.push(prefix);
+            work = work.slice(fm.index);
+          }
+          const m = work.match(VP_TAG_LINE_RE);
+          if (!m) {
+            // 理论不可达（find 与 line 同一定界符规则），防御性兜底
+            if (currentField !== null && currentQ !== null) fieldBuf.push(work);
+            break;
+          }
+          const tag = m[1].toUpperCase();
+          // 同行值只取到下一个标签标记为止，行内剩余标签留给下一轮
+          let value = m[3];
+          const vm = value.match(VP_TAG_FIND_RE);
+          let rest = "";
+          if (vm) { rest = value.slice(vm.index); value = value.slice(0, vm.index); }
+          value = value.trim();
+          if (/^[＠@]{2,}$/.test(m[2]) && value.startsWith("=")) value = value.slice(1).trim();
           if (currentField !== null) flushField();
           if (tag === "TOTAL") {
             const num = value.match(/\d+/);
@@ -1645,15 +1687,13 @@ function nbx() {
             commitQuestion();
             currentField = null;
             fieldBuf = [];
-          } else if (["PASSAGE","STEM","OPTIONS","ANSWER","EVIDENCE","REASON","DISTRACTOR","PITFALLS","PATTERN_NAME","PATTERN_STEPS","TRANSFER_PASSAGE","TRANSFER_STEM","TRANSFER_OPTIONS","TRANSFER_ANSWER","TRANSFER_EXPL","WRITING_POINTS","WRITING_OUTLINE","WRITING_SAMPLE"].includes(tag)) {
+          } else {
+            // 白名单剩余均为多行内容标签；同行有值则作为首行内容
             currentField = tag;
             fieldBuf = [];
             if (value) fieldBuf.push(value);
-          } else {
-            if (currentField !== null) fieldBuf.push(line);
           }
-        } else {
-          if (currentField !== null && currentQ !== null) fieldBuf.push(line);
+          work = rest;
         }
       }
       if (!groups.length && totalDeclared === null && !paperTitle && !notice) return null;
@@ -1667,7 +1707,7 @@ function nbx() {
     tryParseVisualPaper(raw) {
       if (!raw || !raw.trim()) return { data: null, error: "empty" };
       // 优先自定义分隔格式（B方案）
-      if (/@@[A-Z_]+(@@|=)/.test(raw)) {
+      if (VP_HAS_TAG_RE.test(raw)) {
         const custom = this.parseCustomVisualPaper(raw);
         if (custom && Array.isArray(custom.groups)) {
           // 即使 groups 为空但 total 为 0 也是合法（例外）
@@ -4155,7 +4195,7 @@ function nbx() {
         }
       }
       // 自定义格式残片但整体解析失败：同样不展示原文裸 @@ 标签
-      if (/@@[A-Z_]+(@@|=)/.test(raw)) {
+      if (VP_ANY_TAG_RE.test(raw)) {
         if (this.visualPaper) this.visualPaper.isJson = false;
         this.vpParseError = "";
         this.rendered = "";
@@ -4706,6 +4746,17 @@ function nbx() {
       this.vpActiveTab = "reference";
       if (item.visualPaper && item.visualPaper.groups) {
         this.visualPaper = JSON.parse(JSON.stringify(item.visualPaper));
+        // 旧记录可能存的是解析器修复前的坏快照（标签漂移导致易错点丢失等）：
+        // 原文 output 完好，优先用当前解析器重解析，重解析不出题目再回退快照
+        const re = this.tryParseVisualPaper(item.output || "");
+        const norm = re.data && this.normalizeVisualPaper(re.data);
+        if (norm && (norm.groups.length > 0 || norm.total != null)) {
+          this.visualPaper.paper = norm.paper;
+          this.visualPaper.groups = norm.groups;
+          this.visualPaper.answerMap = norm.answerMap;
+          this.visualPaper.notice = norm.notice;
+          this.visualPaper.total = norm.total;
+        }
         this.visualPaper.rawJson = item.output || "";
         this.visualPaper.isJson = true;
         this.visualPaper.historyId = item.id;
@@ -4729,7 +4780,7 @@ function nbx() {
         } else {
           // 保留为非 JSON；自定义格式残片走中断卡，绝不展示原文裸标签
           this.visualPaper.isJson = false;
-          if (/@@[A-Z_]+(@@|=)/.test(item.output || "")) {
+          if (VP_ANY_TAG_RE.test(item.output || "")) {
             this.vpParseError = "";
             this.rendered = "";
           } else {
