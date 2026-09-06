@@ -48,6 +48,11 @@ TEACHING_TOOLS = [
     {"id": "14", "name": "榨干一套英语试卷", "icon": "sparkle", "description": "词类活用 / 熟词生义 / 长难句 / 画面感"},
     {"id": "15", "name": "阅读课教学设计", "icon": "book-open", "description": "课堂教学方案设计"},
     {"id": "16", "name": "读写整合教学设计", "icon": "read-write", "description": "读后续写 / 读写整合课设计"},
+    {"id": "27", "name": "教考衔接文本解读", "icon": "link", "description": "文本解读 / 教学设计 / 语用设问 / 思维培养四层面分析"},
+    {"id": "28", "name": "优质例句创研工坊", "icon": "lightbulb", "description": "贴近学生生活、对接写作场景的例句创作"},
+    {"id": "29", "name": "依托语境的词汇练习", "icon": "list-checks", "description": "每词一道依托完整语境的词汇选择题"},
+    {"id": "30", "name": "隐性写作知识显性化", "icon": "eye", "description": "Meaning→Structure→Language 显化写作知识"},
+    {"id": "31", "name": "读后续写审题指导", "icon": "route", "description": "六个 W 梳理情节 + 两段续写功能规划"},
 ]
 
 PROPOSITION_TOOLS = [
@@ -85,6 +90,11 @@ def _resolve_prompt_filename(tool_id: str) -> str:
         "14": "榨干一套英语试卷",
         "15": "阅读课教学设计",
         "16": "读写整合教学设计",
+        "27": "教考衔接文本解读",
+        "28": "优质例句创研工坊",
+        "29": "依托语境的词汇练习",
+        "30": "隐性写作知识显性化",
+        "31": "读后续写审题指导",
         "17": "阅读文本改编",
         "18": "阅读文本改编 2",
         "19": "阅读理解设问",
