@@ -172,12 +172,19 @@ async def usage_analytics(
     按模型/工具/Provider/使用码/设备/小时/星期的分布、
     耗时分位数与直方图、工具×模型组合、错误 Top、慢请求与最近异常、
     Fallback 与 Token 数据质量。前端只做展示，不做全量拉取。
-    """
-    from collections import Counter
-    from datetime import timedelta
 
+    聚合体是十余条顺序同步查询 + 全量耗时排序，放线程池执行，
+    避免阻塞事件循环拖慢同进程内正在转发的 LLM 请求。
+    """
     if days not in (0, 7, 14, 30, 90):
         raise HTTPException(status_code=400, detail="days 仅支持 7/14/30/90/0（0=全部）")
+    return await asyncio.to_thread(_usage_analytics_impl, db, days)
+
+
+def _usage_analytics_impl(db: Session, days: int) -> dict:
+    """usage_analytics 的同步聚合体，仅供 asyncio.to_thread 调用。"""
+    from collections import Counter
+    from datetime import timedelta
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     if days == 0:

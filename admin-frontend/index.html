@@ -7,10 +7,10 @@
   <meta name="description" content="NeoBangX 使用码与配置管理后台">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23b4502a'/%3E%3Cstop offset='1' stop-color='%238c3316'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=admin260906a">
+  <link rel="stylesheet" href="/static/styles.css?v=admin260906b">
   <script defer src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.4.12/dist/purify.min.js"></script>
-  <script defer src="/static/script.js?v=admin260906a"></script>
+  <script defer src="/static/script.js?v=admin260906b"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -28,7 +28,10 @@
 <body>
   <canvas id="bgfx" aria-hidden="true"></canvas>
 
-  <div x-data="adminApp()" x-init="init()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen)">
+  <!-- init() 由 Alpine 3 自动调用（组件含 init 方法时）；不要再写 x-init="init()"，
+       否则 init 双跑：背景 canvas 会出现两条动画链轮流重绘同一画布（高频闪烁），
+       还会泄漏定时器与监听器、双倍发起初始请求 -->
+  <div x-data="adminApp()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen)">
     <!-- 侧栏 -->
     <aside class="sidebar glass">
       <div class="brand">
@@ -175,7 +178,7 @@
         </div>
 
         <template x-if="analyticsData">
-          <div class="ana-stack">
+          <div class="ana-stack" :class="{ 'ana-updating': analyticsLoading }">
             <!-- KPI 总览（含环比） -->
             <div class="stat-grid ana-kpi-grid">
               <div class="stat-card glass">
@@ -243,7 +246,7 @@
                 <p class="muted" x-show="!anaDaily().length">该窗口暂无请求。</p>
                 <p class="field-hint">柱高 = 当日请求量；柱顶红色段 = 异常占比。悬停查看明细。</p>
                 <svg class="ana-spark" viewBox="0 0 300 36" preserveAspectRatio="none" x-show="anaDaily().length">
-                  <polyline :points="anaSparkPoints(anaDaily().map(d => d.total), 300, 36)" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>
+                  <polyline :points="anaSparkCached('req', anaDaily().map(d => d.total), 300, 36)" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>
                 </svg>
               </div>
               <div class="glass card">
@@ -270,7 +273,7 @@
               <div class="glass card">
                 <h2 class="card-title">成功率 / 错误率趋势</h2>
                 <svg class="ana-spark ana-spark-lg" viewBox="0 0 300 64" preserveAspectRatio="none" x-show="anaDaily().length">
-                  <polyline :points="anaSparkPoints(anaDaily().map(d => d.error_rate * 100), 300, 64)" fill="none" stroke="var(--danger)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>
+                  <polyline :points="anaSparkCached('errRate', anaDaily().map(d => d.error_rate * 100), 300, 64)" fill="none" stroke="var(--danger)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>
                 </svg>
                 <div class="ana-legend"><span class="lg-dot" style="background:var(--danger)"></span>每日错误率（%）</div>
                 <p class="field-hint" x-text="anaDaily().length ? `窗口内最高 ${fmtPct(Math.max(...anaDaily().map(d => d.error_rate || 0)))}，平均 ${fmtPct((anaDaily().reduce((a, d) => a + (d.error_rate || 0), 0) / Math.max(1, anaDaily().length)))}` : ''"></p>
@@ -278,7 +281,7 @@
               <div class="glass card">
                 <h2 class="card-title">平均耗时趋势</h2>
                 <svg class="ana-spark ana-spark-lg" viewBox="0 0 300 64" preserveAspectRatio="none" x-show="anaDaily().length">
-                  <polyline :points="anaSparkPoints(anaDaily().map(d => d.avg_duration_ms || 0), 300, 64)" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>
+                  <polyline :points="anaSparkCached('dur', anaDaily().map(d => d.avg_duration_ms || 0), 300, 64)" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>
                 </svg>
                 <div class="ana-legend"><span class="lg-dot" style="background:var(--accent)"></span>每日平均耗时（ms）</div>
                 <p class="field-hint">只统计 duration_ms 非空的请求；超时与异常拉高均值时结合 P95 看。</p>

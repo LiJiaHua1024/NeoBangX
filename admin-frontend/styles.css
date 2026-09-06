@@ -1760,7 +1760,9 @@ body.modal-open .panel-stack {
 }
 .ana-toolbar-right { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .ana-range { font-size: 0.76rem; }
-.ana-stack { display: flex; flex-direction: column; gap: 12px; }
+.ana-stack { display: flex; flex-direction: column; gap: 12px; transition: opacity 0.25s ease; }
+/* 换窗请求进行中：整块轻压暗给出即时反馈；opacity 走合成器，不加重排 */
+.ana-stack.ana-updating { opacity: 0.55; pointer-events: none; }
 .ana-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .ana-kpi-grid { grid-template-columns: repeat(3, 1fr); }
 .delta { display: inline-block; margin-left: 0.5rem; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; }
@@ -1784,7 +1786,8 @@ body.modal-open .panel-stack {
 .ana-legend { display: flex; align-items: center; gap: 0.4rem; font-size: 0.76rem; color: var(--dim); margin-top: 0.4rem; }
 .lg-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 .ana-hbar { display: flex; align-items: center; gap: 0.5rem; min-width: 120px; background: color-mix(in srgb, var(--accent) 8%, transparent); border: 1px solid var(--border); border-radius: 999px; padding: 2px; }
-.ana-hbar-fill { height: 8px; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); flex-shrink: 0; transition: width 0.3s var(--ease); }
+/* 不做 width 过渡：换窗时 50+ 条形同时过渡会引发连续全量重排（首挂载本就不触发） */
+.ana-hbar-fill { height: 8px; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); flex-shrink: 0; }
 .ana-hbar-fill.tok { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 55%, var(--ok)), var(--ok)); }
 .ana-hbar > span { font-size: 0.72rem; padding-right: 0.4rem; }
 .ana-row { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }

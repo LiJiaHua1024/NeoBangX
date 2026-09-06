@@ -141,9 +141,38 @@ function createBackground(canvas) {
     mouse.x = e.clientX; mouse.y = e.clientY;
     halo.tx = e.clientX; halo.ty = e.clientY;
   }, { passive: true });
+  /* 帧循环与暂停：两个独立开关——页面隐藏（visibilitychange）与数据刷新
+     期间的程序性暂停（pauseBackgroundForFlush），互不覆盖；循环在任一开关
+     置位后的下一跳自行退出（不依赖 cancelAnimationFrame 的可靠性），两者
+     都清除后才由对应路径重新拉起。 */
+  let hiddenPause = false;
+  let flushPause = false;
+
+  function loop() {
+    if (hiddenPause || flushPause) { raf = null; return; }
+    t += 0.0035;
+    frame(false);
+    raf = requestAnimationFrame(loop);
+  }
+
+  function stopChain() {
+    if (raf) { cancelAnimationFrame(raf); raf = null; }
+  }
+  function suspend() {
+    flushPause = true;
+    stopChain();
+  }
+  function resume() {
+    flushPause = false;
+    if (!raf && !hiddenPause && !reduced && !document.hidden) loop();
+  }
+
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) { if (raf) cancelAnimationFrame(raf), (raf = null); }
-    else if (!raf && !reduced) loop();
+    if (document.hidden) { hiddenPause = true; stopChain(); }
+    else {
+      hiddenPause = false;
+      if (!raf && !flushPause && !reduced) loop();
+    }
   });
 
   function glowSpot(x, y, r, color, alpha) {
@@ -361,16 +390,12 @@ function createBackground(canvas) {
 
   }
 
-  function loop() {
-    t += 0.0035;
-    frame(false);
-    raf = requestAnimationFrame(loop);
-  }
-
   if (reduced) { frame(true); }
   else { loop(); }
 
   return {
+    /* 数据刷新等重排突发期间由调用方暂停渲染，把合成器让给主线程 */
+    suspend, resume,
     attract(x, y) {
       halo.tx = x; halo.ty = y;
       pulses.push({ x, y, r: 6, a: 0.7 });
@@ -390,6 +415,23 @@ function createBackground(canvas) {
     },
     themeChanged() { tgt = readTheme(); if (reduced) frame(true); },
   };
+}
+
+/* ============ 用量分析绑定缓存 ============
+   Alpine 的 x-data 是深层响应式代理：缓存若放组件 this 上，重绑定 flush
+   期间写入会再次触发依赖它的 effect 造成循环。因此放模块顶层，以
+   analyticsData 的对象引用为失效条件，只用于消除一次 flush 内的重复
+   计算（柱高 max、环形图几何、错误分类正则），不承载任何响应式状态。 */
+const anaMemo = { ref: null, map: {} };
+const anaErrCache = new Map();
+
+function anaMemoized(self, key, fn) {
+  if (anaMemo.ref !== self.analyticsData) {
+    anaMemo.ref = self.analyticsData;
+    anaMemo.map = {};
+  }
+  if (!(key in anaMemo.map)) anaMemo.map[key] = fn();
+  return anaMemo.map[key];
 }
 
 function adminApp() {
@@ -1281,10 +1323,21 @@ function adminApp() {
       this.analyticsDays = d;
       this.loadAnalytics();
     },
+    /* 数据落地会触发整个分析 tab 的同步重绑定 + 大量内联样式重写；
+       期间暂停背景 canvas，让合成器与 GPU 完全让路，800ms 后恢复
+       （背景是缓慢漂移的光斑云絮，定格不到一秒无可感知差异） */
+    pauseBackgroundForFlush() {
+      const bg = this._bg;
+      if (!bg || !bg.suspend) return;
+      bg.suspend();
+      clearTimeout(this._bgResumeTimer);
+      this._bgResumeTimer = setTimeout(() => bg.resume(), 800);
+    },
     async loadAnalytics() {
       this.analyticsLoading = true;
       this.analyticsError = "";
       this.donutHover = null;
+      this.pauseBackgroundForFlush();
       try {
         this.analyticsData = await this.api(`/api/admin/analytics?days=${this.analyticsDays}`);
       } catch (e) {
@@ -1321,28 +1374,22 @@ function adminApp() {
       return (this.analyticsData && this.analyticsData.daily) || [];
     },
     anaMaxDaily() {
-      const arr = this.anaDaily();
-      return Math.max(1, ...arr.map((d) => d.total || 0));
+      return anaMemoized(this, "maxDaily", () => Math.max(1, ...this.anaDaily().map((d) => d.total || 0)));
     },
     anaMaxDailyTokens() {
-      const arr = this.anaDaily();
-      return Math.max(1, ...arr.map((d) => d.total_tokens || 0));
+      return anaMemoized(this, "maxDailyTokens", () => Math.max(1, ...this.anaDaily().map((d) => d.total_tokens || 0)));
     },
     anaMaxDailyLatency() {
-      const arr = this.anaDaily().map((d) => d.avg_duration_ms || 0);
-      return Math.max(1, ...arr);
+      return anaMemoized(this, "maxDailyLatency", () => Math.max(1, ...this.anaDaily().map((d) => d.avg_duration_ms || 0)));
     },
     anaMaxHour() {
-      const arr = (this.analyticsData && this.analyticsData.by_hour) || [];
-      return Math.max(1, ...arr.map((h) => h.requests || 0));
+      return anaMemoized(this, "maxHour", () => Math.max(1, ...((this.analyticsData && this.analyticsData.by_hour) || []).map((h) => h.requests || 0)));
     },
     anaMaxWeek() {
-      const arr = (this.analyticsData && this.analyticsData.by_weekday) || [];
-      return Math.max(1, ...arr.map((w) => w.requests || 0));
+      return anaMemoized(this, "maxWeek", () => Math.max(1, ...((this.analyticsData && this.analyticsData.by_weekday) || []).map((w) => w.requests || 0)));
     },
     anaMaxBucket() {
-      const b = (this.analyticsData && this.analyticsData.latency && this.analyticsData.latency.buckets) || [];
-      return Math.max(1, ...b.map((x) => x.count || 0));
+      return anaMemoized(this, "maxBucket", () => Math.max(1, ...(((this.analyticsData && this.analyticsData.latency) || {}).buckets || []).map((x) => x.count || 0)));
     },
     anaBarH(v, max) {
       const m = Math.max(1, Number(max) || 1);
@@ -1356,32 +1403,34 @@ function adminApp() {
        which is unreliable inside the SVG namespace. Empty segments yield a
        zero-length dash and stay invisible. */
     donutSeg(key) {
-      const k = this.anaKpis();
-      const total = Math.max(1, Number(k.total) || 0);
-      const C = 2 * Math.PI * 44;
-      const vals = {
-        success: Number(k.success) || 0,
-        cancelled: Number(k.cancelled) || 0,
-        error: Number(k.error) || 0,
-      };
-      const order = ["success", "cancelled", "error"];
-      let acc = 0;
-      for (const o of order) {
-        const frac = vals[o] / total;
-        if (o === key) {
-          if (vals[o] <= 0) return { dash: `0 ${C.toFixed(1)}`, offset: "0", acc: 0, frac: 0 };
-          const len = frac * C;
-          const gap = frac < 1 ? 2.5 : 0;
-          return {
-            dash: `${Math.max(0.1, len - gap).toFixed(1)} ${(C - len + gap).toFixed(1)}`,
-            offset: (-acc * C).toFixed(1),
-            acc,
-            frac,
-          };
+      return anaMemoized(this, "seg-" + key, () => {
+        const k = this.anaKpis();
+        const total = Math.max(1, Number(k.total) || 0);
+        const C = 2 * Math.PI * 44;
+        const vals = {
+          success: Number(k.success) || 0,
+          cancelled: Number(k.cancelled) || 0,
+          error: Number(k.error) || 0,
+        };
+        const order = ["success", "cancelled", "error"];
+        let acc = 0;
+        for (const o of order) {
+          const frac = vals[o] / total;
+          if (o === key) {
+            if (vals[o] <= 0) return { dash: `0 ${C.toFixed(1)}`, offset: "0", acc: 0, frac: 0 };
+            const len = frac * C;
+            const gap = frac < 1 ? 2.5 : 0;
+            return {
+              dash: `${Math.max(0.1, len - gap).toFixed(1)} ${(C - len + gap).toFixed(1)}`,
+              offset: (-acc * C).toFixed(1),
+              acc,
+              frac,
+            };
+          }
+          acc += frac;
         }
-        acc += frac;
-      }
-      return { dash: `0 ${C.toFixed(1)}`, offset: "0", acc: 0, frac: 0 };
+        return { dash: `0 ${C.toFixed(1)}`, offset: "0", acc: 0, frac: 0 };
+      });
     },
     donutKeyColor(key) {
       return { success: "var(--ok)", cancelled: "var(--faint)", error: "var(--danger)" }[key] || "var(--faint)";
@@ -1401,56 +1450,58 @@ function adminApp() {
        two-line value label outside the ring. Line and label come from one
        computation, so they can never disconnect. */
     donutLabels() {
-      const k = this.anaKpis();
-      const total = Number(k.total) || 0;
-      const defs = [
-        { key: "success", name: "成功", value: Number(k.success) || 0 },
-        { key: "cancelled", name: "用户停止", value: Number(k.cancelled) || 0 },
-        { key: "error", name: "异常", value: Number(k.error) || 0 },
-      ];
-      let acc = 0;
-      const out = [];
-      for (const d of defs) {
-        const frac = total ? d.value / total : 0;
-        if (d.value > 0 && frac > 0) {
-          const mid = acc + frac / 2;
-          const ang = ((-90 + mid * 360) * Math.PI) / 180;
-          const cos = Math.cos(ang), sin = Math.sin(ang);
-          out.push({
-            key: d.key,
-            show: true,
-            side: cos >= 0 ? 1 : -1,
-            line1: `${d.name} ${this.fmtCompact(d.value)}次`,
-            line2: this.fmtPct(total ? d.value / total : 0),
-            ax: +(60 + 54 * cos).toFixed(1),
-            ay: +(60 + 54 * sin).toFixed(1),
-            ex: +(60 + 58 * cos).toFixed(1),
-            ey: +(60 + 58 * sin).toFixed(1),
-          });
+      return anaMemoized(this, "donutLabels", () => {
+        const k = this.anaKpis();
+        const total = Number(k.total) || 0;
+        const defs = [
+          { key: "success", name: "成功", value: Number(k.success) || 0 },
+          { key: "cancelled", name: "用户停止", value: Number(k.cancelled) || 0 },
+          { key: "error", name: "异常", value: Number(k.error) || 0 },
+        ];
+        let acc = 0;
+        const out = [];
+        for (const d of defs) {
+          const frac = total ? d.value / total : 0;
+          if (d.value > 0 && frac > 0) {
+            const mid = acc + frac / 2;
+            const ang = ((-90 + mid * 360) * Math.PI) / 180;
+            const cos = Math.cos(ang), sin = Math.sin(ang);
+            out.push({
+              key: d.key,
+              show: true,
+              side: cos >= 0 ? 1 : -1,
+              line1: `${d.name} ${this.fmtCompact(d.value)}次`,
+              line2: this.fmtPct(total ? d.value / total : 0),
+              ax: +(60 + 54 * cos).toFixed(1),
+              ay: +(60 + 54 * sin).toFixed(1),
+              ex: +(60 + 58 * cos).toFixed(1),
+              ey: +(60 + 58 * sin).toFixed(1),
+            });
+          }
+          acc += frac;
         }
-        acc += frac;
-      }
-      // 同侧标签纵向防重叠：按肘部高度排序并推开，最后整体钳制进画布
-      for (const side of [1, -1]) {
-        const group = out.filter((l) => l.side === side).sort((a, b) => a.ey - b.ey);
-        let prev = -Infinity;
-        for (const l of group) {
-          l.ly = Math.max(l.ey, prev + 17);
-          prev = l.ly;
+        // 同侧标签纵向防重叠：按肘部高度排序并推开，最后整体钳制进画布
+        for (const side of [1, -1]) {
+          const group = out.filter((l) => l.side === side).sort((a, b) => a.ey - b.ey);
+          let prev = -Infinity;
+          for (const l of group) {
+            l.ly = Math.max(l.ey, prev + 17);
+            prev = l.ly;
+          }
+          const over = prev - 110;
+          if (group.length && over > 0) {
+            for (const l of group) l.ly -= over;
+          }
+          for (const l of group) {
+            l.ly = +Math.max(6, Math.min(110, l.ly)).toFixed(1);
+            l.ly2 = +(l.ly + 14).toFixed(1);
+            l.tx = +(l.ex + side * 8).toFixed(1);
+            l.anchor = side > 0 ? "start" : "end";
+            l.points = `${l.ax},${l.ay} ${l.ex},${l.ey} ${l.tx},${l.ly}`;
+          }
         }
-        const over = prev - 110;
-        if (group.length && over > 0) {
-          for (const l of group) l.ly -= over;
-        }
-        for (const l of group) {
-          l.ly = +Math.max(6, Math.min(110, l.ly)).toFixed(1);
-          l.ly2 = +(l.ly + 14).toFixed(1);
-          l.tx = +(l.ex + side * 8).toFixed(1);
-          l.anchor = side > 0 ? "start" : "end";
-          l.points = `${l.ax},${l.ay} ${l.ex},${l.ey} ${l.tx},${l.ly}`;
-        }
-      }
-      return out;
+        return out;
+      });
     },
     donutLabel(key) {
       const hit = this.donutLabels().find((l) => l.key === key);
@@ -1487,6 +1538,16 @@ function adminApp() {
     anaErrInfo(msg) {
       const s = String(msg || "").trim();
       if (!s) return { kind: "未知错误", why: "错误信息为空，请点击编号查看该条日志的详情与上下文。" };
+      // 同一 flush 里每张错误卡会查询 kind 和 why 各一次，按原文缓存正则结果
+      let hit = anaErrCache.get(s);
+      if (!hit) {
+        hit = this._computeErrInfo(s);
+        if (anaErrCache.size >= 200) anaErrCache.clear();
+        anaErrCache.set(s, hit);
+      }
+      return hit;
+    },
+    _computeErrInfo(s) {
       if (/429|ratelimit|rate-limited|temporarily.*limited/i.test(s)) {
         return { kind: "限流 429", why: "上游供应商暂时限流：可稍后重试，或自备 Key 分散限额；限流集中在某一模型时可临时切换优先级。" };
       }
@@ -1522,6 +1583,11 @@ function adminApp() {
         const y = h - 3 - ((v - min) / span) * (h - 6);
         return `${x.toFixed(1)},${y.toFixed(1)}`;
       }).join(" ");
+    },
+    /* 带 key 的缓存版：values 总是从当前 analyticsData 派生（同一数据必然
+       同一结果），按 key 记住折线点串即可，markup 每次重建的小数组无妨 */
+    anaSparkCached(key, values, w, h) {
+      return anaMemoized(this, "spark-" + key, () => this.anaSparkPoints(values, w, h));
     },
     anaRangeLabel() {
       const d = this.analyticsData;
