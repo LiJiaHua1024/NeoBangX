@@ -896,6 +896,23 @@ html[data-theme="sora"] .mascot-peeking {
 .ms-item .ms-ring + .ck { margin-left: 0.35rem; }
 .ms-item .ck { margin-left: auto; color: var(--accent); flex: none; }
 
+/* 换个模型重试弹窗：静态滚动的模型列表 */
+.retry-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.35rem;
+  margin: -0.35rem;
+  border-radius: 0.9rem;
+}
+.ms-item:disabled { opacity: 0.6; cursor: not-allowed; }
+.ms-item:disabled:hover { background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.ms-item:disabled:active { transform: none; }
+.ms-item .ms-item-failed { color: #f0958a; font-weight: 550; }
+
 /* ============================================================
    输入区
    ============================================================ */
@@ -1994,6 +2011,19 @@ html[data-theme="sora"] .mascot-peeking {
   color: #f0958a;
   background: color-mix(in srgb, #c03e2a 10%, transparent);
   border: 1px solid color-mix(in srgb, #c03e2a 32%, transparent);
+}
+
+/* 错误卡上的恢复操作：重试 / 换模型 / 编辑输入 */
+.error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.error-actions .btn-primary,
+.error-actions .btn-ghost {
+  font-size: 0.82rem;
+  padding: 0.45rem 0.85rem;
 }
 
 /* ============================================================

@@ -1227,6 +1227,9 @@ function nbx() {
     thinking: false,
     status: "idle",
     errorMsg: "",
+    // 登录过期/额度用尽类错误不可通过重试解决，错误卡上隐藏重试按钮
+    errorRetryable: true,
+    retryModelOpen: false,
     elapsed: "0.0",
     // 等待阶段计时：请求发出 → 首个事件到达（此期间还没在思考，只是等响应）
     thinkingSec: 0,
@@ -3789,6 +3792,7 @@ function nbx() {
     },
 
     /* ============ 流式生成（SSE） ============ */
+    /* 返回值：true = 已发起生成请求；false = 守卫阶段提前返回（未发起） */
     async run() {
       if (!this.requireAuth("请先输入使用码")) return;
       if (this.isMigrationTool) {
@@ -3803,19 +3807,19 @@ function nbx() {
         await this.runVisualPaper();
         return;
       }
-      if (this.streaming) return;
+      if (this.streaming) return false;
       if (!this.currentTool) {
         this.toast("请先在左侧选择一个工具", "warn");
-        return;
+        return false;
       }
       const text = this.input.trim();
       if (!text) {
         this.toast("请先粘贴或输入内容", "warn");
         this.shakeComposer();
-        return;
+        return false;
       }
       if (!this.currentTool.prompt_loaded) {
-        if (!confirm(`「${this.currentTool.name}」的提示词文件尚未加载，生成效果可能不完整。仍要继续吗？`)) return;
+        if (!confirm(`「${this.currentTool.name}」的提示词文件尚未加载，生成效果可能不完整。仍要继续吗？`)) return false;
       }
 
       this.retreatMascot();
@@ -3861,9 +3865,11 @@ function nbx() {
         if (e && e.name === "AbortError") {
           this.finalize("stopped");
         } else {
+          this.errorRetryable = !(e && e.authIssue);
           this.finalize("error", (e && e.message) || "网络请求失败");
         }
       }
+      return true;
     },
 
     /* 通用 SSE 流式调用：返回 { state: "done" | "stopped" }，出错时抛出 Error */
@@ -3886,10 +3892,10 @@ function nbx() {
       if (!res.ok) {
         if (res.status === 401) {
           this.clearAuth();
-          throw new Error("登录已过期，请重新输入使用码");
+          throw Object.assign(new Error("登录已过期，请重新输入使用码"), { authIssue: true });
         }
         if (res.status === 403) {
-          throw new Error("额度已用尽或使用码已被禁用");
+          throw Object.assign(new Error("额度已用尽或使用码已被禁用"), { authIssue: true });
         }
         let msg = "HTTP " + res.status;
         try {
@@ -3987,6 +3993,72 @@ function nbx() {
       try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
     },
 
+    /* ============ 失败恢复：错误卡上的重试 / 换模型 / 编辑输入 ============ */
+    async retryChat() {
+      if (this.streaming) return;
+      if (!this.submittedInput) {
+        this.toast("没有可重试的输入内容", "warn");
+        return;
+      }
+      this.input = this.submittedInput;
+      // run() 返回 false = 守卫阶段提前返回、请求根本没发出（如提示词确认被取消），
+      // 此时把内容放回可见的输入框；只要请求真的发起了，无论成败都保持折叠——
+      // 失败走错误卡，与首次失败的表现一致。
+      const started = (await this.run()) !== false;
+      if (!started) {
+        this.inputCollapsed = false;
+        this.$nextTick(() => {
+          this.autoGrow();
+          const el = this.$refs.inputEl;
+          if (el) el.focus();
+        });
+      }
+    },
+
+    async retryVisualPaper() {
+      if (this.streaming) return;
+      if (!this.submittedInput) {
+        this.toast("没有可重试的试卷内容", "warn");
+        return;
+      }
+      const text = this.submittedInput;
+      this.resetVisualPaper();
+      this.output = "";
+      this.rendered = "";
+      this.errorMsg = "";
+      this._nearBottom = true;
+      await this._runVisualStream(text, null);
+    },
+
+    chooseModelAndRetry(modelId) {
+      if (modelId && modelId !== this.selectedModel) this.chooseModel(modelId);
+      this.retryModelOpen = false;
+      if (this.isVisualPaperTool) {
+        this.retryVisualPaper();
+      } else {
+        this.retryChat();
+      }
+    },
+
+    editSubmittedInput() {
+      if (this.streaming) return;
+      const fileName = this.submittedFileName;
+      this.input = this.submittedInput;
+      this.submittedInput = "";
+      this.submittedFileName = "";
+      this.submittedExpanded = false;
+      this.errorMsg = "";
+      this.status = "idle";
+      this.inputCollapsed = false;
+      this.$nextTick(() => {
+        this.autoGrow();
+        const el = this.$refs.inputEl;
+        if (el) el.focus();
+        this.scheduleMascotCheck(80);
+      });
+      if (fileName) this.toast(`文件「${fileName}」的内容已转回文本，可直接编辑后重新执行`);
+    },
+
     finalize(state, errMsg) {
       this.streaming = false;
       this.thinking = false;
@@ -4072,6 +4144,7 @@ function nbx() {
         if (e && e.name === "AbortError") {
           this.finalizeVisualPaper("stopped", "", updateId ? { updateId } : {});
         } else {
+          this.errorRetryable = !(e && e.authIssue);
           this.finalizeVisualPaper("error", (e && e.message) || "网络请求失败");
         }
       }
