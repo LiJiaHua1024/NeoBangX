@@ -1001,6 +1001,9 @@
                   <td data-label="显示名称" data-span="full">
                     <span x-text="m.name || m.id"></span>
                     <span class="badge badge-admin ml-1.5" x-show="m.id === configForm.default_model">默认</span>
+                    <span class="badge badge-free ml-1.5" x-show="m.is_free"
+                          :title="m.free_no_code ? '免费模型：不消耗次数，且无码/次数用尽也可用' : '免费模型：不消耗次数'"
+                          x-text="m.is_free && m.free_no_code ? '免费 · 无码可用' : '免费'"></span>
                     <span class="badge badge-user ml-1.5" x-show="m.chores_only">仅 Chores</span>
                     <span class="badge ml-1.5" x-show="m.enabled === false" style="color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 40%, transparent);background:color-mix(in srgb, var(--danger) 12%, transparent)">已禁用</span>
                     <div class="mono dim" style="font-size:0.7rem; margin-top:2px;" x-text="m.id"></div>
@@ -1486,6 +1489,54 @@
             </div>
             <span class="field-hint">禁用后该模型不在用户端展示，Chores 也不可选；区别于“仅用于 Chores”</span>
           </label>
+          <label class="field mb-3">
+            <span>免费模型</span>
+            <div class="switch-row" style="align-items:center">
+              <label class="switch">
+                <input type="checkbox" x-model="modelForm.is_free">
+                <span class="switch-slider"></span>
+              </label>
+              <span class="dim" x-text="modelForm.is_free ? '免费：调用不消耗次数，用户端显示「免费」标签' : '正常计费：每次调用消耗 1 次额度'"></span>
+            </div>
+            <span class="field-hint">免费模型的调用成本由运营方承担，建议同时配置下方防滥用限额</span>
+          </label>
+          <div x-show="modelForm.is_free" x-cloak>
+            <label class="field mb-3">
+              <span>无码可用</span>
+              <div class="switch-row" style="align-items:center">
+                <label class="switch">
+                  <input type="checkbox" x-model="modelForm.free_no_code">
+                  <span class="switch-slider"></span>
+                </label>
+                <span class="dim" x-text="modelForm.free_no_code ? '没有使用码或次数已用尽也能调用' : '仍需有效使用码且有余次'"></span>
+              </div>
+              <span class="field-hint">开启后，未输入使用码或额度已耗尽的用户也能使用该免费模型；关闭则必须有可用使用码</span>
+            </label>
+            <div class="provider-binding-section mb-3">
+              <div class="provider-binding-head" @click="freeLimitsOpen = !freeLimitsOpen">
+                <div>
+                  <div class="provider-binding-title">
+                    防滥用限额
+                    <span class="dim">— 0 或 -1 表示不限制</span>
+                  </div>
+                  <div class="field-hint" x-text="freeLimitsSummary()"></div>
+                </div>
+                <span class="chev" :style="freeLimitsOpen ? 'transform:rotate(180deg)' : ''">▼</span>
+              </div>
+              <div x-show="freeLimitsOpen" x-transition style="margin-top:0.6rem">
+                <div class="free-limit-grid">
+                  <template x-for="item in freeLimitKeys" :key="item.key">
+                    <label class="field">
+                      <span x-text="item.label"></span>
+                      <input type="number" min="-1" step="1" placeholder="0（不限制）"
+                             x-model.number="modelForm.free_limits[item.key]">
+                    </label>
+                  </template>
+                </div>
+                <p class="field-hint">按模型调用次数计数（智能错题迁移按卡片逐张计入，10 张卡片即 10 次）。主体为使用码，未登录用户按浏览器指纹（缺失时按 IP）。超出后返回「请求过于频繁」，请调大限额或稍后再试。</p>
+              </div>
+            </div>
+          </div>
           <label class="field mb-3">
             <span>推荐评分（0-10）</span>
             <input type="number" x-model.number="modelForm.score" min="0" max="10" step="0.5" placeholder="留空不展示推荐环">

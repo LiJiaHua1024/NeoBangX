@@ -189,7 +189,15 @@ async def list_tools(
     return {
         "groups": groups,
         "models": [
-            {"id": m["id"], "name": m["name"], "description": m["description"], "score": m["score"]}
+            {
+                "id": m["id"],
+                "name": m["name"],
+                "description": m["description"],
+                "score": m["score"],
+                # 免费模型：用户端展示「免费」标签；free_no_code 表示无码/次数用尽也可直接调用
+                "is_free": bool(m.get("is_free")),
+                "free_no_code": bool(m.get("is_free") and m.get("free_no_code")),
+            }
             for m in filtered_models
         ],
         "default_model": llm_cfg["default_model"],
@@ -218,6 +226,8 @@ async def list_models(db: Annotated[Session, Depends(get_db)]):
                 "label": m["name"],
                 "description": m["description"],
                 "score": m["score"],
+                "is_free": bool(m.get("is_free")),
+                "free_no_code": bool(m.get("is_free") and m.get("free_no_code")),
             }
             for m in filtered_models
         ],

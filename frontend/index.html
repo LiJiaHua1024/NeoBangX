@@ -179,7 +179,8 @@
 
             <p class="fade-up mt-5 max-w-xl text-dim leading-relaxed" style="font-size:1.02rem;animation-delay:.15s">
               31 个中学英语教学 AI 工具。<br>
-              输入使用码即可开始，额度用完自动锁定。
+              <span x-show="hasFreeTrial">带「免费」标签的模型无需使用码即可试用，其他工具输入使用码开始。</span>
+              <span x-show="!hasFreeTrial">输入使用码即可开始，额度用完自动锁定。</span>
             </p>
 
             <!-- 首页使用码入口 -->
@@ -204,6 +205,12 @@
                       <span x-html="icon('check','w-4 h-4')"></span>
                       <span x-text="codeActivating ? '验证中…' : '验证并开始'"></span>
                     </button>
+                    <button class="btn-ghost w-full justify-center" @click="startFirst()">
+                      <span x-html="icon('book-open','w-4 h-4')"></span>先逛逛 31 个工具
+                    </button>
+                    <p class="text-[11px] text-faint leading-relaxed">
+                      无需使用码即可浏览全部工具<span x-show="hasFreeTrial">；带「免费」标签的模型可直接试用</span>。
+                    </p>
                     <p class="text-[11px] text-faint leading-relaxed">为识别使用码共享，本工具会采集匿名浏览器指纹，不含个人身份信息。</p>
                   </div>
                 </template>
@@ -233,7 +240,7 @@
                 <div class="font-semibold text-sm flex items-center gap-1.5">
                   <span x-html="icon('key','w-4 h-4')"></span>输入使用码
                 </div>
-                <p class="text-xs text-dim mt-1.5 leading-relaxed">在首页或左下角输入使用码，验证后自动保存在本机。</p>
+                <p class="text-xs text-dim mt-1.5 leading-relaxed">在首页或左下角输入使用码，验证后自动保存在本机<span x-show="hasFreeTrial">；带「免费」标签的模型可直接试用</span>。</p>
               </div>
               <div class="glass-soft rounded-2xl p-5">
                 <div class="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm mb-3"
@@ -299,6 +306,7 @@
                           @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
                     <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
                     <span class="truncate" x-text="shortModel(selectedModel)"></span>
+                    <span class="ms-free" x-show="isFreeModel()" title="免费模型：调用不消耗使用码次数">免费</span>
                     <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
                   </button>
                   <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
@@ -307,7 +315,10 @@
                     <template x-for="m in allModels" :key="m.id">
                       <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
                         <div class="min-w-0">
-                          <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
+                          <div class="ms-item-title">
+                            <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
+                            <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                          </div>
                           <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                         </div>
                         <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
@@ -443,10 +454,17 @@
                     <div class="migration-range-labels"><span>1</span><span>10</span></div>
                   </label>
                 </div>
-                <div class="migration-charge-note">
+                <div class="migration-charge-note" x-show="willConsumeQuota">
                   <span x-html="icon('shield','w-4 h-4')"></span>
                    <span>本次生成将消耗 <b x-text="migrationChargeUnits"></b> 次额度</span>
                 </div>
+                <div class="migration-charge-note" x-show="!willConsumeQuota && chargeNote">
+                  <span x-html="icon('sparkle','w-4 h-4')"></span>
+                  <span x-text="chargeNote"></span>
+                </div>
+                <!-- 生成前预检失败（额度不足 / 免费模型限额 / 限速）留在本步骤上，不只飘一个 toast -->
+                <div x-show="migration.analysisError && !migration.prechecking && !migration.generating"
+                     class="error-card mt-4" x-text="migration.analysisError"></div>
                 <div class="flex items-center justify-between gap-3 mt-6">
                   <button class="btn-ghost" @click="backMigrationStep(2)">返回修改错因</button>
                   <button class="btn-primary" @click="beginMigration()" :disabled="migration.prechecking || migration.generating">
@@ -546,6 +564,7 @@
                           @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
                     <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
                     <span class="truncate" x-text="shortModel(selectedModel)"></span>
+                    <span class="ms-free" x-show="isFreeModel()" title="免费模型：调用不消耗使用码次数">免费</span>
                     <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
                   </button>
                   <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
@@ -554,7 +573,10 @@
                     <template x-for="m in allModels" :key="m.id">
                       <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
                         <div class="min-w-0">
-                          <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
+                          <div class="ms-item-title">
+                            <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
+                            <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                          </div>
                           <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                         </div>
                         <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
@@ -643,7 +665,7 @@
                     <button class="btn-primary" @click="replaceVocab()"
                             :disabled="vocab.replacing || vocab.result.over_words.length === 0">
                       <span x-html="icon('replace','w-4 h-4')"></span>
-                      <span x-text="vocab.replacing ? '替换中…' : '全部替换（消耗 1 次额度）'"></span>
+                      <span x-text="vocab.replacing ? '替换中…' : (isFreeModel() ? '全部替换（免费）' : '全部替换（消耗 1 次额度）')"></span>
                     </button>
                     <span class="text-[11px] text-faint">由 AI 逐词替换为常用同义词；无法替换的词会保留并加中文注释</span>
                   </div>
@@ -709,6 +731,7 @@
                           @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
                     <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
                     <span class="truncate" x-text="shortModel(selectedModel)"></span>
+                    <span class="ms-free" x-show="isFreeModel()" title="免费模型：调用不消耗使用码次数">免费</span>
                     <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
                   </button>
                   <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
@@ -717,7 +740,10 @@
                     <template x-for="m in allModels" :key="m.id">
                       <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
                         <div class="min-w-0">
-                          <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
+                          <div class="ms-item-title">
+                            <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
+                            <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                          </div>
                           <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                         </div>
                         <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
@@ -1027,10 +1053,11 @@
                 <div class="error-card">
                   <div class="font-semibold mb-1">这次生成没有成功</div>
                   <div x-text="errorMsg"></div>
-                  <div class="mt-2 text-xs opacity-80" x-show="errorRetryable">试卷内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
-                  <div class="mt-2 text-xs opacity-80" x-show="!errorRetryable">请先解决账号或额度问题，再重新解析。</div>
+                  <div class="mt-2 text-xs opacity-80" x-show="errorLimited">这是调用频次限制（免费模型的防滥用限额或接口限速）。等一会儿再试即可；如果经常遇到，可以改用其他模型，或让管理员调大该免费模型的限额。</div>
+                  <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && errorRetryable">试卷内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
+                  <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && !errorRetryable">请先输入使用码（或改选免费模型）并确认额度充足，再重新解析。</div>
                   <div class="error-actions mt-3" x-show="errorRetryable && submittedInput && !streaming">
-                    <button class="btn-primary" @click="retryVisualPaper()"
+                    <button class="btn-primary" x-show="!errorLimited" @click="retryVisualPaper()"
                             :title="'用当前选中的模型（' + shortModel(selectedModel) + '）重新解析整份试卷，内容不变'">
                       <span x-html="icon('refresh','w-4 h-4')"></span>直接重试
                     </button>
@@ -1239,6 +1266,7 @@
                           @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
                     <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
                     <span class="truncate" x-text="shortModel(selectedModel)"></span>
+                    <span class="ms-free" x-show="isFreeModel()" title="免费模型：调用不消耗使用码次数">免费</span>
                     <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
                   </button>
                     <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
@@ -1251,7 +1279,10 @@
                     <template x-for="m in allModels" :key="m.id">
                       <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
                         <div class="min-w-0">
-                          <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
+                          <div class="ms-item-title">
+                            <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
+                            <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                          </div>
                           <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                         </div>
                         <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
@@ -1341,10 +1372,11 @@
                 <div class="error-card">
                   <div class="font-semibold mb-1">这次生成没有成功</div>
                   <div x-text="errorMsg"></div>
-                  <div class="mt-2 text-xs opacity-80" x-show="errorRetryable">输入内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
-                  <div class="mt-2 text-xs opacity-80" x-show="!errorRetryable">请先解决账号或额度问题，再重新执行。</div>
+                  <div class="mt-2 text-xs opacity-80" x-show="errorLimited">这是调用频次限制（免费模型的防滥用限额或接口限速）。等一会儿再试即可；如果经常遇到，可以改用其他模型，或让管理员调大该免费模型的限额。</div>
+                  <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && errorRetryable">输入内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
+                  <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && !errorRetryable">请先输入使用码（或改选免费模型）并确认额度充足，再重新执行。</div>
                   <div class="error-actions mt-3" x-show="errorRetryable && submittedInput && !streaming">
-                    <button class="btn-primary" @click="retryChat()"
+                    <button class="btn-primary" x-show="!errorLimited" @click="retryChat()"
                             :title="'用当前选中的模型（' + shortModel(selectedModel) + '）重新生成，输入内容不变'">
                       <span x-html="icon('refresh','w-4 h-4')"></span>直接重试
                     </button>
@@ -1683,7 +1715,10 @@
                       :title="m.id === failedModel ? '刚才失败的模型，请选择其他模型重试' : '切换到该模型并重新生成'"
                       @click="chooseModelAndRetry(m.id)">
                 <div class="min-w-0">
-                  <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
+                  <div class="ms-item-title">
+                    <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
+                    <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                  </div>
                   <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                   <div class="ms-item-sub ms-item-failed" x-show="m.id === failedModel">刚才失败</div>
                   <div class="ms-item-sub" x-show="m.id === selectedModel && m.id !== failedModel">当前使用中</div>
@@ -1715,6 +1750,8 @@
         </div>
 
         <div class="p-5 space-y-4">
+          <!-- 为什么被要求输入使用码（弹窗遮罩会盖住 toast，提示必须放在这里） -->
+          <p class="code-hint" x-show="codeHint && !isAuthenticated" x-cloak x-text="codeHint"></p>
           <template x-if="!isAuthenticated">
             <div class="space-y-3">
               <p class="text-xs text-dim leading-relaxed">使用码即登录凭据，由管理后台生成。验证后自动保存在本机浏览器。</p>

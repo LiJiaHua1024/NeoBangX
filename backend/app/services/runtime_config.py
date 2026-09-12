@@ -39,6 +39,12 @@ REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high"}
 # 工具推理规则：模型不支持规则强度时的处理方式
 TOOL_REASONING_UNSUPPORTED_ACTIONS = {"fallback", "fail"}
 
+# 免费模型防滥用限额窗口（键顺序即校验顺序，由短到长）
+FREE_LIMIT_KEYS = ("minute", "hour", "day", "week", "month")
+
+# 限额取值上限：纯防误填天文数字导致 SQL 计数形同虚设
+FREE_LIMIT_MAX = 1_000_000
+
 logger = logging.getLogger(__name__)
 
 
@@ -82,12 +88,55 @@ def _parse_enabled(item: dict) -> bool:
     return True
 
 
+def _parse_flag(item: dict, *names: str, default: bool = False) -> bool:
+    """按名称顺序解析布尔开关，缺省返回 default。"""
+    for name in names:
+        raw = item.get(name)
+        if raw is None:
+            continue
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return bool(raw)
+        s = str(raw).strip().lower()
+        if s in ("1", "true", "yes", "on", "enabled", "enable"):
+            return True
+        if s in ("0", "false", "no", "off", "disabled", "disable", ""):
+            return False
+        return default
+    return default
+
+
+def parse_free_limits(raw) -> dict[str, int]:
+    """解析免费模型的防滥用限额（每分钟/小时/天/周/月）。
+
+    0 或负数 = 不限制，非法值同样归零；上限截断为 FREE_LIMIT_MAX。
+    键缺失补 0，保证序列化往返后结构稳定。
+    """
+    out: dict[str, int] = {key: 0 for key in FREE_LIMIT_KEYS}
+    if not isinstance(raw, dict):
+        return out
+    for key in FREE_LIMIT_KEYS:
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        number = int(value)
+        if number <= 0:
+            continue
+        out[key] = min(number, FREE_LIMIT_MAX)
+    return out
+
+
 def parse_models(raw: str) -> list[dict]:
     """解析模型配置。
 
-    新格式：JSON 数组，每项含 id / name / description / score / reasoning_effort / thinking_budget / chores_only / enabled；
+    新格式：JSON 数组，每项含 id / name / description / score / reasoning_effort / thinking_budget /
+    chores_only / enabled / is_free / free_no_code / free_limits；
     旧格式：逗号分隔的模型 ID 字符串，自动升级为结构化条目。
     enabled 缺省为 True（兼容老数据）；禁用后用户端与 Chores 均不可用。
+    is_free = 免费模型（不扣次数、用户端展示「免费」标签）；
+    free_no_code 仅在 is_free 为真时生效，表示无使用码或额度用尽时也可调用；
+    free_limits 为防滥用限额，0 = 不限制。
     """
     raw = (raw or "").strip()
     if not raw:
@@ -118,6 +167,9 @@ def parse_models(raw: str) -> list[dict]:
                 chores_only_raw = item.get("choresOnly")
             chores_only = bool(chores_only_raw) if isinstance(chores_only_raw, bool) else str(chores_only_raw).lower() in ("1", "true", "yes", "on") if chores_only_raw is not None else False
             enabled = _parse_enabled(item)
+            # 免费模型：兼容 is_free / free 两种写法；未标记免费时无码开关强制归零
+            is_free = _parse_flag(item, "is_free", "free")
+            free_no_code = is_free and _parse_flag(item, "free_no_code", "free_without_code")
             out.append({
                 "id": model_id,
                 "name": str(item.get("name") or "").strip() or model_id,
@@ -127,6 +179,9 @@ def parse_models(raw: str) -> list[dict]:
                 "thinking_budget": int(budget) if isinstance(budget, (int, float)) and int(budget) > 0 else None,
                 "chores_only": chores_only,
                 "enabled": enabled,
+                "is_free": is_free,
+                "free_no_code": free_no_code,
+                "free_limits": parse_free_limits(item.get("free_limits")),
             })
         return out
     # 旧版逗号分隔格式
@@ -140,6 +195,9 @@ def parse_models(raw: str) -> list[dict]:
             "thinking_budget": None,
             "chores_only": False,
             "enabled": True,
+            "is_free": False,
+            "free_no_code": False,
+            "free_limits": parse_free_limits(None),
         }
         for m in raw.split(",")
         if m.strip()
@@ -393,6 +451,9 @@ def resolve_llm_settings(db: Session) -> dict:
             "thinking_budget": None,
             "chores_only": False,
             "enabled": True,
+            "is_free": False,
+            "free_no_code": False,
+            "free_limits": parse_free_limits(None),
         }]
 
     # Chores 模型若指向已禁用模型则回退到默认（默认可用才回退，否则保留原值由上层报错，

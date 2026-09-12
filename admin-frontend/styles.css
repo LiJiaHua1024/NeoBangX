@@ -694,6 +694,15 @@ select option { background: var(--bg); color: var(--text); }
 }
 .badge-admin { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
 .badge-user { background: var(--panel-soft); color: var(--dim); }
+/* 免费模型标记：与用户端「免费」标签同色系 */
+.badge-free { background: color-mix(in srgb, #10b981 16%, transparent); color: #34d399; }
+
+/* 免费模型防滥用限额：五个窗口并排，窄屏自动换行 */
+.free-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 0.5rem;
+}
 
 .dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;

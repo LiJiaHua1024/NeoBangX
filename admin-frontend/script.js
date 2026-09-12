@@ -599,7 +599,20 @@ function adminApp() {
     // 模型添加/编辑弹窗
     modelModalOpen: false,
     modelModalIndex: null,
-    modelForm: { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null, chores_only: false, enabled: true },
+    modelForm: {
+      id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null,
+      chores_only: false, enabled: true,
+      is_free: false, free_no_code: false,
+      free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
+    },
+    freeLimitsOpen: false,
+    freeLimitKeys: [
+      { key: "minute", label: "每分钟" },
+      { key: "hour", label: "每小时" },
+      { key: "day", label: "每天" },
+      { key: "week", label: "每周" },
+      { key: "month", label: "每月" },
+    ],
     thinkingMenuOpen: false,
     // 模型拖拽排序
     dragIndex: null,
@@ -1985,6 +1998,15 @@ function adminApp() {
                 thinking_budget: m.thinking_budget || null,
                 chores_only: !!m.chores_only,
                 enabled: m.enabled !== false,
+                is_free: !!m.is_free,
+                free_no_code: !!m.is_free && !!m.free_no_code,
+                free_limits: {
+                  minute: Number(m.free_limits && m.free_limits.minute) || 0,
+                  hour: Number(m.free_limits && m.free_limits.hour) || 0,
+                  day: Number(m.free_limits && m.free_limits.day) || 0,
+                  week: Number(m.free_limits && m.free_limits.week) || 0,
+                  month: Number(m.free_limits && m.free_limits.month) || 0,
+                },
               }))
             : [],
           chores_model: cfg.chores_model || "",
@@ -2056,8 +2078,14 @@ function adminApp() {
 
     openAddModel() {
       this.modelModalIndex = null;
-      this.modelForm = { id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null, chores_only: false, enabled: true };
+      this.modelForm = {
+        id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null,
+        chores_only: false, enabled: true,
+        is_free: false, free_no_code: false,
+        free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
+      };
       this.thinkingMenuOpen = false;
+      this.freeLimitsOpen = false;
       this.modelModalOpen = true;
     },
 
@@ -2074,9 +2102,38 @@ function adminApp() {
         thinking_budget: m.thinking_budget || null,
         chores_only: !!m.chores_only,
         enabled: m.enabled !== false,
+        is_free: !!m.is_free,
+        free_no_code: !!m.is_free && !!m.free_no_code,
+        free_limits: {
+          minute: Number(m.free_limits && m.free_limits.minute) || 0,
+          hour: Number(m.free_limits && m.free_limits.hour) || 0,
+          day: Number(m.free_limits && m.free_limits.day) || 0,
+          week: Number(m.free_limits && m.free_limits.week) || 0,
+          month: Number(m.free_limits && m.free_limits.month) || 0,
+        },
       };
       this.thinkingMenuOpen = false;
+      this.freeLimitsOpen = false;
       this.modelModalOpen = true;
+    },
+
+    /* 防滥用限额：-1/0/空 视为不限制，其余取非负整数 */
+    normalizeFreeLimit(value) {
+      const n = Math.floor(Number(value));
+      if (!Number.isFinite(n) || n <= 0) return 0;
+      return Math.min(n, 1000000);
+    },
+
+    /* 折叠头摘要：把已配置的限额列成一句话，未配置则提示当前不限制 */
+    freeLimitsSummary() {
+      const limits = (this.modelForm && this.modelForm.free_limits) || {};
+      const parts = this.freeLimitKeys
+        .map((item) => {
+          const n = this.normalizeFreeLimit(limits[item.key]);
+          return n > 0 ? `${item.label} ${n} 次` : "";
+        })
+        .filter(Boolean);
+      return parts.length ? `当前限制：${parts.join(" · ")}` : "当前不限制调用频次";
     },
 
     async saveModelModal() {
@@ -2105,6 +2162,14 @@ function adminApp() {
       }
       const chordsOnly = !!this.modelForm.chores_only;
       const enabled = this.modelForm.enabled !== false;
+      const isFree = !!this.modelForm.is_free;
+      // 无码可用只在免费模型下有意义；限额未填/0/-1 一律归零（= 不限制）
+      const freeNoCode = isFree && !!this.modelForm.free_no_code;
+      const rawLimits = this.modelForm.free_limits || {};
+      const freeLimits = {};
+      for (const item of this.freeLimitKeys) {
+        freeLimits[item.key] = this.normalizeFreeLimit(rawLimits[item.key]);
+      }
       const editingOldId = this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
       const targetId = id;
       if (chordsOnly && targetId && this.configForm.default_model === targetId) {
@@ -2128,6 +2193,9 @@ function adminApp() {
         thinking_budget: mode === "budget" ? parseInt(this.modelForm.thinking_budget, 10) : null,
         chores_only: chordsOnly,
         enabled,
+        is_free: isFree,
+        free_no_code: freeNoCode,
+        free_limits: freeLimits,
       };
       const oldId =
         this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
@@ -2394,6 +2462,15 @@ function adminApp() {
             thinking_budget: m.thinking_budget || null,
             chores_only: !!m.chores_only,
             enabled: m.enabled !== false,
+            is_free: !!m.is_free,
+            free_no_code: !!m.is_free && !!m.free_no_code,
+            free_limits: {
+              minute: this.normalizeFreeLimit(m.free_limits && m.free_limits.minute),
+              hour: this.normalizeFreeLimit(m.free_limits && m.free_limits.hour),
+              day: this.normalizeFreeLimit(m.free_limits && m.free_limits.day),
+              week: this.normalizeFreeLimit(m.free_limits && m.free_limits.week),
+              month: this.normalizeFreeLimit(m.free_limits && m.free_limits.month),
+            },
           })),
         };
         await this.api("/api/admin/config", {

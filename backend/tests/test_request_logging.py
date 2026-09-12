@@ -524,7 +524,8 @@ def stream(tmp_path):
     loader = PromptLoader(loader_dir)  # 临时目录：避免 prompts_dir 相对路径依赖运行目录
     harness = _StreamHarness()
 
-    app.dependency_overrides[deps.get_current_code] = lambda: harness.code
+    # /stream 改走可选认证：harness.code 为 None 即免码调用（免费模型无码可用）
+    app.dependency_overrides[deps.get_code_context] = lambda: deps.CodeContext(code=harness.code, reason="")
     app.dependency_overrides[tools_router.get_prompt_loader] = lambda: loader
     original_build_llm = chat_router._build_llm
     chat_router._build_llm = lambda *_a, **_kw: harness.llm
@@ -747,6 +748,8 @@ def test_title_generation_logs_without_charging(stream):
     finally:
         db.close()
     harness.code = code
+    # /api/chat/title 仍是严格认证（模型不可选，无免码语义），单独覆盖严格依赖
+    app.dependency_overrides[deps.get_current_code] = lambda: code
 
     response = client.post(
         "/api/chat/title",

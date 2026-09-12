@@ -1233,6 +1233,9 @@ function nbx() {
     errorMsg: "",
     // 登录过期/额度用尽类错误不可通过重试解决，错误卡上隐藏重试按钮
     errorRetryable: true,
+    // 本次失败是频次限制（免费模型限额 / 接口限速 429）：错误卡上给专门的解释，
+    // 避免用户按「模型服务繁忙」反复重试
+    errorLimited: false,
     // 刚才实际失败的模型，与 selectedModel 分离：失败后用户手动换模型时，
     // 换模型弹窗仍应禁用真正失败的那个，而不是新的当前模型
     failedModel: "",
@@ -1301,6 +1304,8 @@ function nbx() {
     quotaLabel: "",
     codeInput: "",
     codeError: "",
+    /* 弹窗里的一句「为什么被要求输入使用码」：弹窗遮罩会盖住 toast，提示必须放在弹窗内 */
+    codeHint: "",
     codeActivating: false,
     codeModal: false,
 
@@ -2243,7 +2248,7 @@ function nbx() {
       return this.vocab && this.vocab.result ? (this.vocab.result.over_words || []).length : 0;
     },
     async checkVocab() {
-      if (!this.requireAuth("请先输入使用码")) return;
+      // 纯本地词汇排查，不调模型也不消耗次数，无码可直接用
       const text = (this.vocab.text || "").trim();
       if (!text) {
         this.toast("请先粘贴要排查的英语文本", "warn");
@@ -2252,6 +2257,8 @@ function nbx() {
       this.retreatMascot();
       this.vocab.checking = true;
       this.vocab.checkError = "";
+      // 上次的失败提示随新一次排查清掉（错误行由 vocab.status === 'error' 控制显示）
+      if (this.vocab.status === "error") this.vocab.status = "";
       this.vocab.result = null;
       this.vocab.checked = false;
       try {
@@ -2265,8 +2272,9 @@ function nbx() {
         });
         if (!res.ok) {
           if (res.status === 401) {
-            this.clearAuth();
-            throw new Error("登录已过期，请重新输入使用码");
+            const msg = "请先输入使用码，或改用带「免费」标签的模型";
+            this.handleAuthFailure(msg);
+            throw new Error(msg);
           }
           if (res.status === 403) throw new Error("额度已用尽或使用码已被禁用");
           let msg = "HTTP " + res.status;
@@ -2285,7 +2293,9 @@ function nbx() {
           this.toast("排查完成，发现 " + data.over_words.length + " 个疑似超标词", "ok");
         }
       } catch (e) {
+        // 排查失败（含 429 限速）要留在面板上，不只飘一个 toast
         this.vocab.checkError = (e && e.message) || "排查失败";
+        this.vocab.status = "error";
         this.toast("排查失败：" + this.vocab.checkError, "error");
       } finally {
         this.vocab.checking = false;
@@ -2300,6 +2310,7 @@ function nbx() {
       return ["<over_words>", ...lines, "</over_words>", "", this.vocab.text].join("\n");
     },
     async replaceVocab() {
+      if (!this.ensureCanRun("当前模型需要输入使用码后才能替换")) return;
       if (this.vocab.replacing) return;
       if (!this.vocab.result || !this.vocab.result.over_words || !this.vocab.result.over_words.length) {
         this.toast("没有超标词，无需替换", "warn");
@@ -2629,6 +2640,7 @@ function nbx() {
         this.saveAuth(data.token, data.user);
         this.codeInput = "";
         this.codeModal = false;
+        this.codeHint = "";
         this.toast(`使用码已激活：${data.user.is_unlimited ? "无限额度" : "剩余 " + data.user.remaining + " 次"}`);
         this.verifyAuth();
       } catch (e) {
@@ -2641,12 +2653,15 @@ function nbx() {
       this.saveAuth(null, null);
       this.codeInput = "";
       this.codeError = "";
+      this.codeHint = "";
       this.codeModal = false;
       this.toast("已清除本机使用码");
     },
-    openCodeModal() {
+    /* hint：为什么被要求输入使用码。弹窗遮罩会糊住 toast，这类提示只能写在弹窗里 */
+    openCodeModal(hint) {
       this.codeModal = true;
       this.codeError = "";
+      this.codeHint = (hint || "").trim();
       this.$nextTick(() => {
         const el = this.$refs.codeInputEl;
         if (el) el.focus();
@@ -2655,14 +2670,57 @@ function nbx() {
     closeCodeModal() {
       this.codeModal = false;
       this.codeError = "";
+      this.codeHint = "";
     },
-    requireAuth(message) {
-      if (!this.isAuthenticated) {
-        this.toast(message || "请先输入使用码", "warn");
-        this.openCodeModal();
-        return false;
-      }
+    /* ============ 免费模型 ============ */
+    /* 指定（默认当前选中）模型是否免费：调用不消耗次数 */
+    isFreeModel(id) {
+      const target = id || this.selectedModel;
+      const m = this.models.find((x) => x.id === target);
+      return !!(m && m.is_free);
+    },
+    /* 当前模型是否允许无码调用（免费 + 无码可用） */
+    get modelNoCodeAllowed() {
+      const m = this.models.find((x) => x.id === this.selectedModel);
+      return !!(m && m.is_free && m.free_no_code);
+    },
+    /* 是否存在可无码试用的免费模型（决定首页文案与默认模型） */
+    get hasFreeTrial() {
+      return this.models.some((m) => m.is_free && m.free_no_code);
+    },
+    /* 本次调用是否真的会扣次数（用于隐藏消耗提示） */
+    get willConsumeQuota() {
+      if (!this.isAuthenticated) return false;
+      if (this.isFreeModel()) return false;
       return true;
+    },
+    /* 不扣次数时的提示文案（免费模型 / 需使用码），扣次数时为空串 */
+    get chargeNote() {
+      if (this.willConsumeQuota) return "";
+      if (this.isFreeModel()) {
+        return this.isAuthenticated
+          ? "免费模型，本次生成不消耗额度"
+          : "免费模型，无需使用码，本次生成不消耗额度";
+      }
+      if (!this.isAuthenticated) return "当前模型需要输入使用码，或改选带「免费」标签的模型";
+      return "";
+    },
+    /* 401/403 统一处理：已登录视为本机凭证失效/额度耗尽，清掉本地登录态
+       （原因由错误卡与 toast 呈现）；未登录（免码试用）则引导输入使用码，
+       并把原因写进弹窗 —— toast 会被弹窗遮罩糊住，等于看不见 */
+    handleAuthFailure(hint) {
+      if (this.isAuthenticated) this.clearAuth();
+      else this.openCodeModal(hint);
+    },
+    /* 执行类动作的统一门禁：已登录直接放行；无码时仅免费（无码可用）模型放行。
+       提示写进使用码弹窗（toast 会被弹窗遮罩糊住，等于看不见），
+       并在存在可免码试用的模型时给出替代方案 */
+    ensureCanRun(message) {
+      if (this.isAuthenticated || this.modelNoCodeAllowed) return true;
+      const parts = [message || "请先输入使用码"];
+      if (this.hasFreeTrial) parts.push("也可在模型列表切换带「免费」标签的模型直接试用");
+      this.openCodeModal(parts.join("；"));
+      return false;
     },
 
     /* ============ API：工具与模型 ============ */
@@ -2676,16 +2734,26 @@ function nbx() {
           if (res.status === 401) {
             this.clearAuth();
             this.toolsError = "请先输入使用码";
-            this.openCodeModal();
+            this.openCodeModal("工具列表需要登录后加载，请先输入使用码");
             return;
           }
           throw new Error("HTTP " + res.status);
         }
         const data = await res.json();
         this.groups = data.groups || [];
-        // models 为结构化列表：[{ id, name }]
+        // models 为结构化列表：[{ id, name, description, score, is_free, free_no_code }]
         this.models = data.models || [];
-        this.selectedModel = data.default_model || (this.models[0] && this.models[0].id) || "";
+        // 默认模型优先级：本机保存的选择 > 未登录时的免费（无码可用）模型 > 后端默认模型；
+        // 无码用户若默认落在收费模型上，一执行就被要求输码，免费试用形同虚设
+        const saved = localStorage.getItem(LS.model);
+        const savedValid = saved && this.models.some((m) => m.id === saved) ? saved : "";
+        const freeNoCode = (this.models.find((m) => m.is_free && m.free_no_code) || {}).id || "";
+        this.selectedModel =
+          savedValid ||
+          (!this.isAuthenticated && freeNoCode ? freeNoCode : "") ||
+          data.default_model ||
+          (this.models[0] && this.models[0].id) ||
+          "";
         this.toolsLoaded = true;
       } catch (e) {
         this.toolsError = "工具列表加载失败，请确认后端服务已启动。";
@@ -2707,7 +2775,7 @@ function nbx() {
     },
 
     selectTool(tool, ev) {
-      if (!this.requireAuth("请先输入使用码再选择工具")) return;
+      // 工具列表与工具界面始终可预览；是否需要使用码在执行时按所选模型判定
       if (this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing)) {
         if (!confirm("正在生成中，切换工具将停止本次生成。确定切换吗？")) return;
         if (this.streaming) this.stop();
@@ -2755,7 +2823,7 @@ function nbx() {
     },
 
     startFirst() {
-      if (!this.requireAuth("请先输入使用码")) return;
+      // 未登录也能先逛工具：直接把用户带进第一个工具（执行时再按模型判定是否需码）
       const first = this.groups.flatMap((g) => g.tools || [])[0];
       if (window.innerWidth < 1024) {
         this.leftOpen = true;
@@ -3065,7 +3133,7 @@ function nbx() {
       }
     },
     async _uploadPdf(file, confirmScanned) {
-      if (!this.requireAuth("请先输入使用码再上传 PDF")) return;
+      // PDF 解析不消耗次数，无码也可用（服务端对匿名调用按指纹/IP 限流）
       const cfg = this.parseConfig || {};
       const limits = cfg.limits || {};
       const limitMB = Number(limits.current_mb) || (cfg.mode === "agent" ? 10 : 200);
@@ -3104,8 +3172,9 @@ function nbx() {
           return;
         }
         if (res.status === 401) {
-          this.clearAuth();
-          this.openUploadError("文件上传失败", "登录已过期，请重新输入使用码。", this._uploadErrDetail(file, "登录过期 HTTP 401"));
+          // 只清失效登录态：这里已经有上传错误面板，再叠一个使用码弹窗会互相遮挡
+          if (this.isAuthenticated) this.clearAuth();
+          this.openUploadError("文件上传失败", "需要输入使用码后再上传 PDF。", this._uploadErrDetail(file, "未认证 HTTP 401"));
           return;
         }
         let data = null;
@@ -3215,7 +3284,7 @@ function nbx() {
       })).filter((cause) => cause.label);
     },
     async analyzeMigration(retry = false) {
-      if (!this.requireAuth("请先输入使用码")) return;
+      if (!this.ensureCanRun("当前模型需要输入使用码后才能分析错因")) return;
       if (!this.migration || this.migration.analyzing) return;
       const state = this.migration;
       if (!state.form.question.trim()) {
@@ -3254,8 +3323,9 @@ function nbx() {
           }),
         });
         if (!res.ok) {
-          if (res.status === 401) this.clearAuth();
-          throw new Error(await this.migrationReadError(res, "错因分析失败"));
+          const msg = await this.migrationReadError(res, "错因分析失败");
+          if (res.status === 401 || res.status === 403) this.handleAuthFailure(msg);
+          throw new Error(msg);
         }
         const data = await res.json();
         const causes = this.migrationParseCauses(data.causes);
@@ -3273,7 +3343,7 @@ function nbx() {
       }
     },
     async loadMoreMigrationCauses() {
-      if (!this.requireAuth("请先输入使用码")) return;
+      if (!this.ensureCanRun("当前模型需要输入使用码后才能继续分析")) return;
       if (!this.migration || this.migration.analyzing || this.migration.moreAnalyzing) return;
       const state = this.migration;
       if (!state.causes.length || !state.analysisHistory.length) {
@@ -3303,8 +3373,9 @@ function nbx() {
           }),
         });
         if (!res.ok) {
-          if (res.status === 401) this.clearAuth();
-          throw new Error(await this.migrationReadError(res, "继续生成错因失败"));
+          const msg = await this.migrationReadError(res, "继续生成错因失败");
+          if (res.status === 401 || res.status === 403) this.handleAuthFailure(msg);
+          throw new Error(msg);
         }
         const data = await res.json();
         const existing = new Set(state.causes.map((cause) => this.migrationCauseKey(cause.label)));
@@ -3338,6 +3409,8 @@ function nbx() {
         this.toast("请至少勾选一个需要处理的错因", "warn");
         return;
       }
+      // 进入生成步骤：清掉错因分析阶段留下的旧报错，本步骤只显示生成前的预检失败
+      this.migration.analysisError = "";
       this.migration.step = 3;
     },
     backMigrationStep(step) {
@@ -3345,7 +3418,7 @@ function nbx() {
       this.migration.step = step;
     },
     async beginMigration() {
-      if (!this.requireAuth("请先输入使用码")) return;
+      if (!this.ensureCanRun("当前模型需要输入使用码后才能生成迁移练习")) return;
       if (this.migration.generating || this.migration.prechecking) return;
       const selected = this.migrationSelectedCauses;
       if (!selected.length) {
@@ -3358,17 +3431,20 @@ function nbx() {
       this.retreatMascot();
       state.prechecking = true;
       try {
-        const quotaRes = await fetch("/api/chat/migration/quota", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...this.authHeaders(),
-          },
-          body: JSON.stringify({ cause_count: selected.length }),
-        });
-        if (!quotaRes.ok) {
-          if (quotaRes.status === 401) this.clearAuth();
-          throw new Error(await this.migrationReadError(quotaRes, "额度不足，无法开始生成"));
+        // 免费模型与免码调用不扣次数，跳过额度预检（否则额度不足的用户会被误拦）
+        if (this.willConsumeQuota) {
+          const quotaRes = await fetch("/api/chat/migration/quota", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...this.authHeaders(),
+            },
+            body: JSON.stringify({ cause_count: selected.length }),
+          });
+          if (!quotaRes.ok) {
+            if (quotaRes.status === 401) this.clearAuth();
+            throw new Error(await this.migrationReadError(quotaRes, "额度不足，无法开始生成"));
+          }
         }
 
         this.retreatMascot();
@@ -3478,8 +3554,9 @@ function nbx() {
           signal: controller.signal,
         });
         if (!res.ok) {
-          if (res.status === 401) this.clearAuth();
-          throw new Error(await this.migrationReadError(res, `HTTP ${res.status}`));
+          const msg = await this.migrationReadError(res, `HTTP ${res.status}`);
+          if (res.status === 401 || res.status === 403) this.handleAuthFailure(msg);
+          throw new Error(msg);
         }
         card.status = "streaming";
         await this.consumeSSE(res, (event, data) => {
@@ -3802,7 +3879,7 @@ function nbx() {
     /* ============ 流式生成（SSE） ============ */
     /* 返回值：true = 已发起生成请求；false = 守卫阶段提前返回（未发起） */
     async run() {
-      if (!this.requireAuth("请先输入使用码")) return;
+      if (!this.ensureCanRun("当前模型需要输入使用码后才能使用")) return;
       if (this.isMigrationTool) {
         await this.analyzeMigration();
         return;
@@ -3879,6 +3956,7 @@ function nbx() {
           // 登录/额度类错误模型根本没执行，不标记；后端 error 事件回传的实际模型优先，快照兜底
           if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
+          this.errorLimited = !!(e && e.limited);
           this.finalize("error", (e && e.message) || "网络请求失败");
         }
       }
@@ -3903,19 +3981,27 @@ function nbx() {
       });
 
       if (!res.ok) {
-        if (res.status === 401) {
-          this.clearAuth();
-          throw Object.assign(new Error("登录已过期，请重新输入使用码"), { authIssue: true });
-        }
-        if (res.status === 403) {
-          throw Object.assign(new Error("额度已用尽或使用码已被禁用"), { authIssue: true });
-        }
-        let msg = "HTTP " + res.status;
+        // 后端 detail 优先（可能是「请先输入使用码」「额度已用尽」「免费模型限额已满」等）
+        let detailMsg = "";
         try {
           const j = await res.json();
-          if (j && j.detail != null) msg = formatApiDetail(j.detail) || JSON.stringify(j.detail);
+          if (j && j.detail != null) detailMsg = formatApiDetail(j.detail) || "";
         } catch {}
-        throw new Error(msg);
+        if (res.status === 401 || res.status === 403) {
+          // 已登录说明是本机凭证失效/额度耗尽，清掉本地登录态；未登录则引导输入使用码
+          this.handleAuthFailure(detailMsg);
+          throw Object.assign(
+            new Error(
+              detailMsg ||
+                (res.status === 401 ? "请先输入使用码" : "额度已用尽或使用码已被禁用")
+            ),
+            { authIssue: true }
+          );
+        }
+        // 429 = 免费模型限额或接口限速：单独标记，错误卡给出持久解释而不是一句「生成失败」
+        const err = new Error(detailMsg || "HTTP " + res.status);
+        if (res.status === 429) err.limited = true;
+        throw err;
       }
       if (!res.body) throw new Error("浏览器不支持流式读取");
 
@@ -4095,6 +4181,7 @@ function nbx() {
         this.toast("生成失败：" + this.errorMsg, "error");
       } else {
         this.failedModel = "";
+        this.errorLimited = false;
         this.status = state;
         if (this.output.trim()) {
           const item = this.pushHistory(state === "stopped");
@@ -4168,6 +4255,7 @@ function nbx() {
         } else {
           if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
+          this.errorLimited = !!(e && e.limited);
           this.finalizeVisualPaper("error", (e && e.message) || "网络请求失败");
         }
       }
@@ -4189,6 +4277,7 @@ function nbx() {
         this.toast("生成失败：" + this.errorMsg, "error");
       } else {
         this.failedModel = "";
+        this.errorLimited = false;
         this.status = state;
         if (this.output.trim()) {
           const updateId = opts.updateId || null;
@@ -4223,7 +4312,7 @@ function nbx() {
         this.toast("没有可续写的试卷", "warn");
         return;
       }
-      if (!this.requireAuth("请先输入使用码")) return;
+      if (!this.ensureCanRun("当前模型需要输入使用码后才能续写")) return;
       const keepId = this.visualPaper.historyId || null;
       // 连总数都没解析出来 → 整卷重跑，原记录上覆盖，不新增记录
       if ((this.visualPaper.total || 0) <= 0 && this.vpQuestionCount === 0) {
@@ -5082,14 +5171,17 @@ function nbx() {
       return "status-dot";
     },
 
-    toast(msg, type = "ok") {
+    /* 轻提示。警告/错误默认停留更久（额度、限速、失败原因这类信息一闪而过，
+       用户会完全不知道发生了什么），成功提示保持短促 */
+    toast(msg, type = "ok", duration = 0) {
       const id = Date.now() + Math.random();
+      const ms = duration || (type === "ok" ? 2400 : 6000);
       this.toasts.push({ id, msg, type });
       setTimeout(() => {
         const t = this.toasts.find((x) => x.id === id);
         if (t) t.out = true;
         setTimeout(() => { this.toasts = this.toasts.filter((x) => x.id !== id); }, 300);
-      }, 2400);
+      }, ms);
     },
 
     icon,

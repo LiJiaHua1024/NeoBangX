@@ -19,7 +19,7 @@ class FakeLLM:
 
 
 def _active_code():
-    # 瞬态码：仅供 get_current_code 覆盖使用，不落库。
+    # 瞬态码：仅供可选认证依赖覆盖使用，不落库。
     # id 必须取自增序列够不到的大数，避免与其它测试落库的真实行串扰
     #（曾用 id=11，新增测试文件后恰好撞上真实 code 行导致串库）。
     return UsageCode(
@@ -32,10 +32,15 @@ def _active_code():
     )
 
 
+def _code_context(code=None):
+    """可选认证依赖（get_code_context）的替代实现。"""
+    return deps.CodeContext(code=code if code is not None else _active_code(), reason="")
+
+
 def test_analyze_is_non_streaming_and_keeps_all_feedback(monkeypatch):
     fake = FakeLLM()
     monkeypatch.setattr(chat_router, "_build_llm", lambda *_args, **_kwargs: fake)
-    app.dependency_overrides[deps.get_current_code] = _active_code
+    app.dependency_overrides[deps.get_code_context] = _code_context
     try:
         client = TestClient(app)
         response = client.post(
@@ -66,7 +71,7 @@ def test_more_appends_user_message_to_analysis_history(monkeypatch):
         '{"causes":["没有核对指代关系"]}',
     ])
     monkeypatch.setattr(chat_router, "_build_llm", lambda *_args, **_kwargs: fake)
-    app.dependency_overrides[deps.get_current_code] = _active_code
+    app.dependency_overrides[deps.get_code_context] = _code_context
     try:
         client = TestClient(app)
         first = client.post(
@@ -96,7 +101,7 @@ def test_more_appends_user_message_to_analysis_history(monkeypatch):
 
 def test_quota_precheck_does_not_consume_code():
     code = _active_code()
-    app.dependency_overrides[deps.get_current_code] = lambda: code
+    app.dependency_overrides[deps.get_code_context] = lambda: _code_context(code)
     try:
         client = TestClient(app)
         response = client.post("/api/chat/migration/quota", json={"cause_count": 4})

@@ -26,7 +26,10 @@ def _active_code():
 
 
 def _client():
-    app.dependency_overrides[deps.get_current_code] = _active_code
+    # /api/parse/file 改走可选认证，这里模拟「持有效使用码」的常规调用
+    app.dependency_overrides[deps.get_code_context] = lambda: deps.CodeContext(
+        code=_active_code(), reason=""
+    )
     return TestClient(app)
 
 

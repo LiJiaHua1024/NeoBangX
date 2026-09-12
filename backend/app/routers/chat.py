@@ -1,10 +1,9 @@
 import asyncio
 import json
 import logging
-from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Callable, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, StringConstraints
@@ -12,9 +11,15 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
 from app.database import SessionLocal
-from app.deps import get_current_code
+from app.deps import CodeContext, get_code_context, get_current_code
 from app.models import UsageCode
 from app.routers.tools import _resolve_prompt_filename, get_prompt_loader
+from app.services.free_access import (
+    identity_key,
+    is_free_model,
+    is_free_open,
+    register_free_use,
+)
 from app.services.llm import LLMService, count_text_tokens
 from app.services.llm_router import LLMRouter
 from app.services.migration import (
@@ -28,6 +33,7 @@ from app.services.migration import (
 from app.services.model_capabilities import supports_reasoning
 from app.services.prompt_loader import PromptLoader
 from app.services.provider_config import get_model_provider_map, get_providers_for_model
+from app.services.rate_limit import enforce_rate_limit
 from app.services.request_log import (
     STATUS_CANCELLED,
     STATUS_ERROR,
@@ -41,31 +47,20 @@ from app.services.runtime_config import (
     find_tool_reasoning_rule,
     resolve_llm_settings,
 )
-from app.services.usage_code import assert_can_generate, consume_quota
+from app.services.usage_code import consume_quota
 from app.services.vocab_check import check_over_words
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 # 用于支持 SSE 请求中止的全局事件字典
-# key: request_id, value: (asyncio.Event, 发起该流的 code.id)
-# 停止请求必须校验属主，否则任何持码者都能掐断他人生成。
-_stop_events: dict[str, tuple[asyncio.Event, int]] = {}
+# key: request_id, value: (asyncio.Event, 发起该流的属主标识)
+# 属主标识形如 "code:12"（持码）或 "fp:xxx"/"ip:1.2.3.4"（匿名免费调用）；
+# 停止请求必须校验属主，否则任何人都能掐断他人的生成。
+_stop_events: dict[str, tuple[asyncio.Event, str]] = {}
 
-# 不扣额度端点的进程内滑动窗口限速：bucket -> (最大次数, 窗口秒)
-_RATE_LIMITS = {"analyze": (10, 60), "title": (30, 60), "vocab": (60, 60)}
-_rate_buckets: dict[tuple[int, str], deque] = defaultdict(deque)
-
-
-def _enforce_rate_limit(code_id: int, bucket: str) -> None:
-    limit, window = _RATE_LIMITS[bucket]
-    now = monotonic()
-    hits = _rate_buckets[(code_id, bucket)]
-    while hits and now - hits[0] > window:
-        hits.popleft()
-    if len(hits) >= limit:
-        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
-    hits.append(now)
+# 免码调用（免费模型无码可用）在使用日志里的占位使用码
+ANON_CODE_LABEL = "（免码）"
 
 
 def _load_cfg() -> dict:
@@ -93,9 +88,34 @@ def _validate_model(cfg: dict, model: Optional[str]) -> None:
     # 兜底：若没有 available 集合（旧逻辑），则按旧方式已通过 find_model_entry
 
 
+def _identity_for(request: Request, code: UsageCode | None) -> str:
+    """限流/限额主体：有码按码、无码按浏览器指纹、再退回 IP。"""
+    fp_hash, _ = get_fingerprint_info(request)
+    client_ip, _ = get_client_info(request)
+    return identity_key(code_id=code.id if code else None, fingerprint=fp_hash, ip=client_ip)
+
+
+def _owner_key(request: Request, code: UsageCode | None) -> str:
+    """SSE 流属主标识，用于 /stop 校验归属。"""
+    return f"code:{code.id}" if code else _identity_for(request, None)
+
+
+def _ensure_model_access(ctx: CodeContext, entry: dict | None) -> None:
+    """免费模型的无码放行判定。
+
+    有可用使用码一律放行（是否扣次数由调用方按模型是否免费决定）；
+    无码或码不可用时，仅「免费 + 无码可用」的模型放行，
+    其余按不可用原因返回 401/403（文案与严格依赖完全一致）。
+    """
+    if ctx.ok or is_free_open(entry):
+        return
+    raise ctx.error()
+
+
 @dataclass
 class _MigrationBatch:
-    code_id: int
+    # 属主：持码时为 code.id，免码调用统一为 0（batch_id 由客户端随机生成，不会互串）
+    owner_id: int
     expected: int
     charge_units: int
     created_at: float = field(default_factory=monotonic)
@@ -207,7 +227,7 @@ def _build_llm(cfg: dict, model: Optional[str] = None, chores: bool = False) -> 
 
 def _log_llm_call(
     *,
-    code: UsageCode,
+    code: UsageCode | None,
     tool_id: str,
     tool_name: str,
     model: str,
@@ -232,10 +252,12 @@ def _log_llm_call(
 
     元数据始终记录；原始输入 / 渲染 Prompt / 输出仅在 log_payload 开启时落库。
     指纹仅用于识别共享，不做拦截依据：缺失/非法时按无指纹记录，绝不影响主请求。
+    code 为 None 表示免码调用（免费模型无码可用），记 code_id=0 + `（免码）`
+    占位，便于管理后台把匿名用量与真实使用码区分开。
     """
     record_usage_log(
-        code_id=code.id,
-        code=code.code,
+        code_id=code.id if code else 0,
+        code=code.code if code else ANON_CODE_LABEL,
         tool_id=tool_id or "",
         tool_name=tool_name or "",
         model=model or "",
@@ -336,16 +358,23 @@ def _cleanup_migration_batches() -> None:
 
 
 def _release_migration_reservation(batch: _MigrationBatch) -> None:
-    reserved = _migration_reserved.get(batch.code_id, 0) - batch.charge_units
+    # 免费模型批次不占额度（charge_units=0），不能走减法：
+    # 否则会把同一属主其它批次的预留一起清掉
+    if batch.charge_units <= 0:
+        return
+    reserved = _migration_reserved.get(batch.owner_id, 0) - batch.charge_units
     if reserved > 0:
-        _migration_reserved[batch.code_id] = reserved
+        _migration_reserved[batch.owner_id] = reserved
     else:
-        _migration_reserved.pop(batch.code_id, None)
+        _migration_reserved.pop(batch.owner_id, None)
 
 
 def _register_migration_batch(
     req: ChatRequest,
-    code: UsageCode,
+    *,
+    owner_id: int,
+    remaining: int | None,
+    free: bool,
 ) -> _MigrationBatch | None:
     has_batch_fields = any(
         value is not None for value in (req.batch_id, req.batch_size, req.batch_index)
@@ -362,36 +391,38 @@ def _register_migration_batch(
         raise HTTPException(status_code=400, detail="智能错题迁移批次序号无效")
 
     _cleanup_migration_batches()
-    charge_units = migration_charge_units(req.batch_size)
+    # 免费模型不扣次数，整批也不占额度预留
+    charge_units = 0 if free else migration_charge_units(req.batch_size)
     batch = _migration_batches.get(req.batch_id)
     if batch:
         if (
-            batch.code_id != code.id
+            batch.owner_id != owner_id
             or batch.expected != req.batch_size
             or batch.charge_units != charge_units
         ):
             raise HTTPException(status_code=400, detail="智能错题迁移批次参数不一致")
         return batch
 
-    remaining = code.remaining
-    reserved = _migration_reserved.get(code.id, 0)
-    if remaining is not None and remaining - reserved < charge_units:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "message": "额度不足，无法生成本次智能错题迁移",
-                "required": charge_units,
-                "remaining": max(0, remaining - reserved),
-            },
-        )
+    if charge_units > 0:
+        reserved = _migration_reserved.get(owner_id, 0)
+        if remaining is not None and remaining - reserved < charge_units:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "额度不足，无法生成本次智能错题迁移",
+                    "required": charge_units,
+                    "remaining": max(0, remaining - reserved),
+                },
+            )
 
     batch = _MigrationBatch(
-        code_id=code.id,
+        owner_id=owner_id,
         expected=req.batch_size,
         charge_units=charge_units,
     )
     _migration_batches[req.batch_id] = batch
-    _migration_reserved[code.id] = reserved + charge_units
+    if charge_units > 0:
+        _migration_reserved[owner_id] = reserved + charge_units
     return batch
 
 
@@ -399,12 +430,12 @@ def _finish_migration_stream(
     *,
     batch_id: str,
     batch_index: int,
-    code_id: int,
+    owner_id: int,
     success: bool,
 ) -> bool:
     """标记一张卡片完成，返回是否应由当前请求完成整批扣费。"""
     batch = _migration_batches.get(batch_id)
-    if not batch or batch.code_id != code_id:
+    if not batch or batch.owner_id != owner_id:
         return False
 
     if not success:
@@ -462,10 +493,11 @@ class VocabCheckRequest(BaseModel):
 @router.post("/vocab/check")
 async def check_vocabulary(
     req: VocabCheckRequest,
-    code: Annotated[UsageCode, Depends(get_current_code)],
+    request: Request,
+    ctx: Annotated[CodeContext, Depends(get_code_context)],
 ):
-    """机械排查超标词:分词 + 课标词表集合匹配,毫秒级返回,不扣减额度。"""
-    _enforce_rate_limit(code.id, "vocab")
+    """机械排查超标词:分词 + 课标词表集合匹配,毫秒级返回,不扣减额度,无需使用码。"""
+    enforce_rate_limit(_identity_for(request, ctx.code), "vocab")
     try:
         # 正则分词是纯 CPU 计算，放线程池执行，避免大文本阻塞事件循环
         result = await asyncio.to_thread(check_over_words, req.text)
@@ -479,11 +511,14 @@ async def check_vocabulary(
 async def analyze_migration_causes(
     req: MigrationAnalyzeRequest,
     request: Request,
-    code: Annotated[UsageCode, Depends(get_current_code)],
+    ctx: Annotated[CodeContext, Depends(get_code_context)],
     loader: PromptLoader = Depends(get_prompt_loader),
 ):
-    """非流式分析智能错题迁移的错因，不扣减额度。"""
-    _enforce_rate_limit(code.id, "analyze")
+    """非流式分析智能错题迁移的错因，不扣减额度。
+
+    无码调用只在目标模型「免费 + 无码可用」时放行（前端会带上当前选中模型）。
+    """
+    enforce_rate_limit(_identity_for(request, ctx.code), "analyze")
     prompt = loader.render(
         MIGRATION_ANALYSIS_PROMPT_NAME,
         _migration_prompt_input(req),
@@ -494,8 +529,9 @@ async def analyze_migration_causes(
     messages = _migration_analysis_messages(req, prompt, loader)
     cfg = await asyncio.to_thread(_load_cfg)
     _validate_model(cfg, req.model)
-    llm = _build_llm(cfg, model=req.model, chores=False)
     model_used = req.model or cfg["llm_model"]
+    _ensure_model_access(ctx, find_model_entry(cfg["models"], model_used))
+    llm = _build_llm(cfg, model=req.model, chores=False)
     client_ip, user_agent = get_client_info(request)
     fp_hash, fp_summary = get_fingerprint_info(request)
     started = monotonic()
@@ -515,7 +551,7 @@ async def analyze_migration_causes(
             pass
         await asyncio.to_thread(
             _log_llm_call,
-            code=code,
+            code=ctx.code,
             tool_id="migration_analyze",
             tool_name="错因分析",
             model=model_used,
@@ -562,11 +598,11 @@ async def analyze_migration_causes(
 @router.post("/migration/quota")
 async def check_migration_quota(
     req: MigrationQuotaRequest,
-    code: Annotated[UsageCode, Depends(get_current_code)],
+    ctx: Annotated[CodeContext, Depends(get_code_context)],
 ):
-    """生成最终迁移结果前预检查本次所需额度，不扣费。"""
+    """生成最终迁移结果前预检查本次所需额度，不扣费；无码调用不校验额度。"""
     required = migration_charge_units(req.cause_count)
-    remaining = code.remaining
+    remaining = ctx.code.remaining if ctx.code else None
     if remaining is not None and remaining < required:
         raise HTTPException(
             status_code=403,
@@ -613,12 +649,15 @@ async def preview_prompt(
 async def chat_stream(
     req: ChatRequest,
     request: Request,
-    code: Annotated[UsageCode, Depends(get_current_code)],
+    ctx: Annotated[CodeContext, Depends(get_code_context)],
     loader: PromptLoader = Depends(get_prompt_loader),
 ):
-    """流式调用工具，返回 SSE 事件流。"""
-    assert_can_generate(code)
+    """流式调用工具，返回 SSE 事件流。
 
+    认证规则：使用码可用时一律放行（是否扣次数取决于模型是否免费）；
+    无码或码不可用时，仅「免费 + 无码可用」的模型放行，其余按原因返回 401/403。
+    免费模型不扣次数，但受模型级防滥用限额约束（0 = 不限制）。
+    """
     prompt_filename = _resolve_prompt_filename(req.tool_id)
     if not prompt_filename:
         raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")
@@ -630,30 +669,64 @@ async def chat_stream(
             detail=f"Prompt file {prompt_filename}.md not found",
         )
 
-    migration_batch = _register_migration_batch(req, code)
-
     # 配置读取走短会话 + 线程池：不随 SSE 流占住连接池会话，也不阻塞事件循环
     cfg = await asyncio.to_thread(_load_cfg)
     _validate_model(cfg, req.model)
+    model_used = req.model or cfg["llm_model"]
+    # 从模型列表中查找该模型的思考配置与免费标记；未配置则交由供应商默认
+    model_entry = find_model_entry(cfg["models"], model_used)
+    code = ctx.code
+    _ensure_model_access(ctx, model_entry)
+    free_model = is_free_model(model_entry)
+
+    # 日志元数据：客户端信息与原始数据开关（开关随请求读取，改配置即时生效）
+    client_ip, user_agent = get_client_info(request)
+    fp_hash, fp_summary = get_fingerprint_info(request)
+    log_payload_enabled = bool(cfg.get("log_payload"))
+    owner_id = code.id if code else 0
+    owner_key = f"code:{code.id}" if code else identity_key(fingerprint=fp_hash, ip=client_ip)
+
+    # 免费模型：不扣次数，但先过防滥用限额（超限在建立 SSE 之前 429）
+    release_free_slot: Callable[[], None] = lambda: None
+    if free_model:
+        release_free_slot = await asyncio.to_thread(
+            register_free_use,
+            entry=model_entry or {},
+            identity=identity_key(
+                code_id=code.id if code else None,
+                fingerprint=fp_hash,
+                ip=client_ip,
+            ),
+        )
+
+    try:
+        migration_batch = _register_migration_batch(
+            req,
+            owner_id=owner_id,
+            remaining=code.remaining if code else None,
+            free=free_model,
+        )
+    except BaseException:
+        release_free_slot()
+        raise
+
     llm = _build_llm(cfg, model=req.model, chores=False)
     tool_name = prompt_filename
     if req.tool_id == MIGRATION_TOOL_ID:
         # 日志展示用名称：迁移请求统一显示工具名而非底层 prompt 文件名
         tool_name = MIGRATION_TOOL_NAME
-    code_id = code.id
     base_request_id = req.request_id or f"{req.tool_id}_{id(request)}"
     request_id = base_request_id
     existing = _stop_events.get(base_request_id)
-    if existing is not None and existing[1] != code_id:
+    if existing is not None and existing[1] != owner_key:
         # 同毫秒撞名时不覆盖他人注册（属主校验收口在 /stop）
-        request_id = f"{base_request_id}_{code_id}"
+        request_id = f"{base_request_id}_{owner_id}"
     stop_event = asyncio.Event()
-    _stop_events[request_id] = (stop_event, code_id)
-    model_used = req.model or cfg["llm_model"]
-    # 从模型列表中查找该模型的 thinking 配置；未配置则交由供应商默认
-    model_entry = find_model_entry(cfg["models"], model_used)
+    _stop_events[request_id] = (stop_event, owner_key)
     reasoning_effort = model_entry.get("reasoning_effort") if model_entry else None
     thinking_budget = model_entry.get("thinking_budget") if model_entry else None
+    # 免费模型本次调用不扣次数（迁移批次在 units=0 时同样不扣）
+    quota_units = 0 if free_model else 1
     # 工具推理规则：按列表顺序取第一条命中该工具的规则，强制覆盖思考强度
     tool_rule = find_tool_reasoning_rule(cfg.get("tool_reasoning_rules") or [], req.tool_id)
     if tool_rule is not None:
@@ -663,6 +736,8 @@ async def chat_stream(
         supported = supports_reasoning(actual_model)
         if supported is False and tool_rule.get("on_unsupported") == "fail":
             # 在注册停止事件、建立 SSE 之前拦截，走 HTTP 错误路径（前端错误卡自带换模型重试）
+            _stop_events.pop(request_id, None)
+            release_free_slot()
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -677,10 +752,6 @@ async def chat_stream(
             thinking_budget = None
     # 试卷可视化全解使用自定义分隔格式，无需 JSON mode，兼容性更强（忠于原始模型配置，不强制覆盖 reasoning/max_tokens）
     visual_response_format = None
-    # 日志元数据：客户端信息与原始数据开关（开关随请求读取，改配置即时生效）
-    client_ip, user_agent = get_client_info(request)
-    fp_hash, fp_summary = get_fingerprint_info(request)
-    log_payload_enabled = bool(cfg.get("log_payload"))
 
     async def event_generator():
         charged = False
@@ -734,7 +805,7 @@ async def chat_stream(
                 should_charge = _finish_migration_stream(
                     batch_id=req.batch_id or "",
                     batch_index=req.batch_index or 0,
-                    code_id=code_id,
+                    owner_id=owner_id,
                     success=success,
                 )
                 migration_finished = True
@@ -742,7 +813,7 @@ async def chat_stream(
                 if should_charge and success:
                     units = await asyncio.to_thread(
                         _charge_usage,
-                        code_id=code_id,
+                        code_id=owner_id,
                         units=migration_batch.charge_units,
                         request_id=req.batch_id or request_id,
                     )
@@ -753,14 +824,15 @@ async def chat_stream(
                     "data": "[DONE]" if success else "[CANCELLED]",
                 }
             else:
-                # 保持现有工具的计费行为：流正常收尾（包括用户停止/断开）后扣 1 次。
+                # 保持现有工具的计费行为：流正常收尾（包括用户停止/断开）后扣 1 次；
+                # 免费模型 quota_units=0，不扣次数。
                 if client_disconnected or stop_event.is_set():
                     status = STATUS_CANCELLED
                 if not charged:
                     units = await asyncio.to_thread(
                         _charge_usage,
-                        code_id=code_id,
-                        units=1,
+                        code_id=owner_id,
+                        units=quota_units,
                         request_id=request_id,
                     )
                     charged = True
@@ -773,7 +845,7 @@ async def chat_stream(
                     _finish_migration_stream(
                         batch_id=req.batch_id or "",
                         batch_index=req.batch_index or 0,
-                        code_id=code_id,
+                        owner_id=owner_id,
                         success=False,
                     )
                     migration_finished = True
@@ -782,8 +854,8 @@ async def chat_stream(
                 if not charged:
                     units = await asyncio.to_thread(
                         _charge_usage,
-                        code_id=code_id,
-                        units=1,
+                        code_id=owner_id,
+                        units=quota_units,
                         request_id=request_id,
                     )
                     charged = True
@@ -806,10 +878,12 @@ async def chat_stream(
                 _finish_migration_stream(
                     batch_id=req.batch_id or "",
                     batch_index=req.batch_index or 0,
-                    code_id=code_id,
+                    owner_id=owner_id,
                     success=False,
                 )
             _stop_events.pop(request_id, None)
+            # 释放免费模型的在途占位（重复调用安全）
+            release_free_slot()
             # 成功、停止、异常统一留痕：元数据始终记录，原始数据受开关控制
             prov_id = ""
             prov_name = ""
@@ -857,9 +931,12 @@ def _charge_usage(*, code_id: int, units: int = 1, request_id: str = "") -> int:
     """在独立会话中扣减额度（日志由 _log_llm_call 统一记录）。
 
     同步函数，经 to_thread 调用。返回实际扣减的次数；
+    units <= 0（免费模型、免码调用、迁移单卡）直接返回 0，不碰数据库；
     并发超发被拒或写库失败时返回 0——内容已交付无法回收，
     但必须显式留痕而非静默吞掉。
     """
+    if units <= 0:
+        return 0
     db = SessionLocal()
     try:
         row = db.get(UsageCode, code_id)
@@ -883,11 +960,13 @@ def _charge_usage(*, code_id: int, units: int = 1, request_id: str = "") -> int:
 @router.post("/stop")
 async def stop_stream(
     req: StopRequest,
-    code: Annotated[UsageCode, Depends(get_current_code)],
+    request: Request,
+    ctx: Annotated[CodeContext, Depends(get_code_context)],
 ):
-    """中止当前使用码自己发起的 SSE 流。"""
+    """中止当前调用方自己发起的 SSE 流（含免码的免费模型调用）。"""
+    owner = _owner_key(request, ctx.code)
     entry = _stop_events.get(req.request_id)
-    if entry is not None and entry[1] == code.id:
+    if entry is not None and entry[1] == owner:
         entry[0].set()
         return {"status": "stopped", "request_id": req.request_id}
     # 不存在或不属于本人：统一返回 not_found，不泄露他人流的存在性
@@ -900,8 +979,8 @@ async def generate_title(
     request: Request,
     code: Annotated[UsageCode, Depends(get_current_code)],
 ):
-    """为一次生成结果生成简短标题。不扣减额度。"""
-    _enforce_rate_limit(code.id, "title")
+    """为一次生成结果生成简短标题。不扣减额度，仅登录用户可用。"""
+    enforce_rate_limit(f"code:{code.id}", "title")
     tool_name = _resolve_prompt_filename(req.tool_id)
     if not tool_name:
         raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")

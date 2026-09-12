@@ -86,6 +86,16 @@ class UpdateCodeRequest(BaseModel):
     quota: Optional[int] = Field(None, description="仅普通用户码可改额度")
 
 
+class FreeLimitsEntry(BaseModel):
+    """免费模型的防滥用限额（0 或 -1 = 不限制）。"""
+
+    minute: int = Field(0, ge=-1, description="每分钟最多调用次数，0/-1 为不限制")
+    hour: int = Field(0, ge=-1, description="每小时最多调用次数，0/-1 为不限制")
+    day: int = Field(0, ge=-1, description="每天最多调用次数，0/-1 为不限制")
+    week: int = Field(0, ge=-1, description="每周最多调用次数，0/-1 为不限制")
+    month: int = Field(0, ge=-1, description="每月最多调用次数，0/-1 为不限制")
+
+
 class ModelEntry(BaseModel):
     id: str = Field(..., min_length=1, description="LiteLLM 格式模型 ID")
     name: str = Field("", max_length=100, description="显示名称，留空回退模型 ID")
@@ -99,6 +109,13 @@ class ModelEntry(BaseModel):
     )
     chores_only: bool = Field(False, description="仅用于 Chores，不在 8000 用户端展示")
     enabled: bool = Field(True, description="是否启用，禁用后用户端与 Chores 均不可用")
+    is_free: bool = Field(False, description="免费模型：调用不消耗使用码次数，用户端显示「免费」标签")
+    free_no_code: bool = Field(
+        False, description="无码可用：没有使用码或次数已用尽时仍可调用（仅在免费模型下生效）"
+    )
+    free_limits: FreeLimitsEntry = Field(
+        default_factory=FreeLimitsEntry, description="免费模型的防滥用限额，0/-1 为不限制"
+    )
 
 
 class ToolReasoningRuleEntry(BaseModel):

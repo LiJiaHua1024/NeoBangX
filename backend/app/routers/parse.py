@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated, Optional
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_code, get_optional_code
-from app.models import UsageCode
+from app.deps import CodeContext, get_code_context
+from app.services.free_access import identity_key
+from app.services.rate_limit import enforce_rate_limit
+from app.services.request_log import get_client_info, get_fingerprint_info
 from app.services.mineru import (
     EMPTY_CHARS_THRESHOLD,
     MinerUError,
@@ -69,11 +71,21 @@ async def parse_config(db: Annotated[Session, Depends(get_db)]):
 
 @router.post("/file")
 async def parse_file(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
-    code: Annotated[UsageCode, Depends(get_current_code)],
+    ctx: Annotated[CodeContext, Depends(get_code_context)],
     file: UploadFile = File(...),
     confirm_scanned: bool = Form(False),
 ):
+    """PDF 云端解析：不消耗使用码次数，无码也可用。
+
+    匿名调用按指纹/IP 限流（MinerU 按次计费，防单机刷量）。
+    """
+    if ctx.code is None:
+        fp_hash, _ = get_fingerprint_info(request)
+        client_ip, _ = get_client_info(request)
+        enforce_rate_limit(identity_key(fingerprint=fp_hash, ip=client_ip), "parse")
+
     filename = (file.filename or "").strip() or "document.pdf"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext != "pdf":

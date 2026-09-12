@@ -149,11 +149,40 @@ def get_active_code_from_token(db: Session, token: str) -> UsageCode:
     return row
 
 
-def assert_can_generate(code: UsageCode) -> None:
-    if not code.is_enabled:
-        raise HTTPException(status_code=403, detail="使用码已被禁用")
-    if code.is_exhausted:
-        raise HTTPException(status_code=403, detail="额度已用尽")
+def resolve_code_lenient(db: Session, token: str | None) -> tuple[UsageCode | None, str]:
+    """宽松解析使用码：返回 (可用码, 不可用原因)，绝不抛异常。
+
+    供「免费模型允许无码调用」的接口使用：无码/凭证失效/已禁用/额度用尽
+    都只作为原因返回，由调用方决定是放行（免费模型）还是原样报错。
+    原因取值：missing / invalid / expired / unknown / disabled / exhausted，
+    通过时原因为空串。
+    """
+    if not token:
+        return None, "missing"
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        return None, "expired"
+    except jwt.InvalidTokenError:
+        return None, "invalid"
+
+    code_id = payload.get("sub")
+    code_value = payload.get("code")
+    row = None
+    if code_id:
+        try:
+            row = db.get(UsageCode, int(code_id))
+        except (TypeError, ValueError):
+            row = None
+    if row is None and code_value:
+        row = get_code_by_value(db, code_value)
+    if row is None:
+        return None, "unknown"
+    if not row.is_enabled:
+        return None, "disabled"
+    if row.is_exhausted:
+        return None, "exhausted"
+    return row, ""
 
 
 def consume_quota(

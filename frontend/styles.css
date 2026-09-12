@@ -870,6 +870,22 @@ html[data-theme="sora"] .mascot-peeking {
 .ms-item.on { background: color-mix(in srgb, var(--accent) 13%, transparent); }
 .ms-item .ms-item-name { font-size: 0.83rem; font-weight: 550; }
 .ms-item .ms-item-sub { font-size: 0.68rem; color: var(--text-faint); margin-top: 1px; }
+/* 免费模型：名称行 + 免费标签（标签不参与省略，避免长名称把它挤掉） */
+.ms-item-title { display: flex; align-items: center; gap: 0.3rem; min-width: 0; }
+.ms-item-title .truncate { font-size: 0.83rem; font-weight: 550; min-width: 0; }
+.ms-free {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.16rem 0.36rem;
+  border-radius: 999px;
+  color: #34d399;
+  background: color-mix(in srgb, #10b981 15%, transparent);
+  border: 1px solid color-mix(in srgb, #10b981 38%, transparent);
+}
 .ms-item .ms-ring {
   position: relative;
   width: 28px;
@@ -2011,6 +2027,18 @@ html[data-theme="sora"] .mascot-peeking {
   color: #f0958a;
   background: color-mix(in srgb, #c03e2a 10%, transparent);
   border: 1px solid color-mix(in srgb, #c03e2a 32%, transparent);
+}
+
+/* 使用码弹窗里的原因提示：说明本次为什么被要求输入使用码
+  （弹窗遮罩带模糊，toast 在这层之上看不见，因此提示写在弹窗内部） */
+.code-hint {
+  font-size: 0.78rem;
+  line-height: 1.55;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.6rem;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 /* 错误卡上的恢复操作：重试 / 换模型 / 编辑输入 */

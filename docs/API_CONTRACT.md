@@ -15,7 +15,8 @@
 - 请求体格式：`application/json`
 - 响应格式：JSON，除非特别说明为 SSE
 - 字符编码：UTF-8
-- **认证**：除 `/api/auth/activate`、`/api/health`、`/api/config`、`/api/tools/` 外，主站所有接口需在请求头携带 `Authorization: Bearer <token>`。token 通过 `POST /api/auth/activate` 获取。
+- **认证**：除 `/api/auth/activate`、`/api/health`、`/api/config`、`/api/tools/` 外，主站接口默认需在请求头携带 `Authorization: Bearer <token>`。token 通过 `POST /api/auth/activate` 获取。
+- **免费模型与无码调用**：模型可被标记为「免费」（调用不扣次数），并可额外开启「无码可用」。当所选模型同时满足两者时，`/api/chat/stream`、`/api/chat/stop`、`/api/chat/vocab/check`、`/api/chat/migration/analyze`、`/api/chat/migration/quota`、`/api/parse/file` 允许不带 token 调用（没有使用码或次数已用尽均可，等价于无码）；未满足条件时按原规则返回 401/403。免费模型的调用按使用码计数（无码时按浏览器指纹、再退回 IP），受模型级防滥用限额约束，超限返回 429；**生成失败（`status=error`）的调用不计入限额**，用户主动停止或中途断线（`cancelled`）照常计入。
 
 ---
 
@@ -32,11 +33,11 @@
 | POST | `/api/auth/activate` | 验证使用码，返回 JWT | 否 |
 | GET | `/api/auth/me` | 当前使用码状态 | 是 |
 | POST | `/api/chat/preview` | 预览最终 Prompt | 是 |
-| POST | `/api/chat/vocab/check` | 机械排查超标词：分词 + 课标词表匹配（不扣费） | 是 |
-| POST | `/api/chat/migration/analyze` | 非流式分析智能错题迁移错因（不扣费） | 是 |
-| POST | `/api/chat/migration/quota` | 预检查智能错题迁移额度（不扣费） | 是 |
-| POST | `/api/chat/stream` | 流式调用工具（SSE） | 是 |
-| POST | `/api/chat/stop` | 中止流式生成 | 是 |
+| POST | `/api/chat/vocab/check` | 机械排查超标词：分词 + 课标词表匹配（不扣费） | 可选 |
+| POST | `/api/chat/migration/analyze` | 非流式分析智能错题迁移错因（不扣费） | 可选（无码需免费+无码可用模型） |
+| POST | `/api/chat/migration/quota` | 预检查智能错题迁移额度（不扣费） | 可选 |
+| POST | `/api/chat/stream` | 流式调用工具（SSE） | 可选（无码需免费+无码可用模型） |
+| POST | `/api/chat/stop` | 中止流式生成（含免码的免费模型调用） | 可选 |
 | POST | `/api/chat/title` | 为生成结果生成标题 | 是 |
 
 ### 管理后台接口
@@ -150,14 +151,36 @@
 
 ```json
 {
-  "models": ["openrouter/google/gemini-2.0-flash"],
-  "default_model": "openrouter/google/gemini-2.0-flash",
+  "models": [
+    {
+      "id": "openrouter/google/gemini-2.5-flash",
+      "name": "Gemini 2.5 Flash",
+      "description": "速度快、性价比高，适合日常使用",
+      "score": 8.5,
+      "reasoning_effort": null,
+      "thinking_budget": null,
+      "chores_only": false,
+      "enabled": true,
+      "is_free": true,
+      "free_no_code": true,
+      "free_limits": { "minute": 3, "hour": 30, "day": 0, "week": 0, "month": 0 }
+    }
+  ],
+  "default_model": "openrouter/google/gemini-2.5-flash",
   "app_name": "NeoBangX",
   "version": "1.2.0",
   "slogan": "Bang助教学，大有可AI",
   "auth_required": true
 }
 ```
+
+模型字段说明：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `is_free` | bool | 免费模型：调用不消耗使用码次数，用户端模型列表显示「免费」标签 |
+| `free_no_code` | bool | 无码可用：没有使用码或次数已用尽时仍可调用（仅在 `is_free` 为真时生效） |
+| `free_limits` | object | 防滥用限额，键为 `minute` / `hour` / `day` / `week` / `month`，0 或 -1（含负数）= 不限制 |
 
 ---
 
@@ -188,10 +211,22 @@
       ]
     }
   ],
-  "models": ["openrouter/google/gemini-2.0-flash"],
-  "default_model": "openrouter/google/gemini-2.0-flash"
+  "models": [
+    {
+      "id": "openrouter/google/gemini-2.5-flash",
+      "name": "Gemini 2.5 Flash",
+      "description": "速度快、性价比高，适合日常使用",
+      "score": 8.5,
+      "is_free": true,
+      "free_no_code": true
+    }
+  ],
+  "default_model": "openrouter/google/gemini-2.5-flash"
 }
 ```
+
+`is_free` 表示免费模型（不扣次数），`free_no_code` 表示该模型无码可用；
+前端据此渲染「免费」标签，并在无使用码时默认选中可免码试用的模型。
 
 ### GET `/api/tools/models`
 
@@ -203,11 +238,15 @@
 {
   "models": [
     {
-      "id": "openrouter/google/gemini-2.0-flash",
-      "label": "openrouter/google/gemini-2.0-flash"
+      "id": "openrouter/google/gemini-2.5-flash",
+      "label": "Gemini 2.5 Flash",
+      "description": "速度快、性价比高，适合日常使用",
+      "score": 8.5,
+      "is_free": true,
+      "free_no_code": true
     }
   ],
-  "default_model": "openrouter/google/gemini-2.0-flash"
+  "default_model": "openrouter/google/gemini-2.5-flash"
 }
 ```
 
@@ -818,6 +857,20 @@ data: [DONE]
 `log_retention_days` 取值范围 `0 ~ 36500`，越界返回 422。
 两项日志配置**保存后即时生效**（主站在每次请求时读取），无需重启。
 
+`models` 为结构化数组（管理端提交 `ModelEntry` 列表），每项字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | string | 必填，LiteLLM 格式模型 ID |
+| `name` / `description` | string | 用户端展示名与描述 |
+| `score` | number\|null | 推荐评分 0-10 |
+| `reasoning_effort` / `thinking_budget` | string\|int\|null | 思考强度 / 思考 token 预算 |
+| `chores_only` | bool | 仅用于 Chores，不在用户端展示 |
+| `enabled` | bool | 禁用后用户端与 Chores 均不可用 |
+| `is_free` | bool | 免费模型：调用不消耗次数，用户端显示「免费」标签 |
+| `free_no_code` | bool | 无码可用：无使用码或次数用尽也能调用（仅免费模型生效） |
+| `free_limits` | object | `{minute, hour, day, week, month}` 防滥用限额，0/-1 为不限制 |
+
 ---
 
 ## 12. 工具 ID 与 Prompt 文件映射
@@ -875,6 +928,7 @@ openrouter/deepseek/deepseek-chat
 | 403 | 使用码被禁用或额度已用尽 |
 | 404 | 工具或 Prompt 文件不存在 |
 | 422 | 请求体验证失败 |
+| 429 | 免费模型超出防滥用限额，或辅助接口请求过于频繁 |
 | 500 | 后端内部错误或 LLM 调用失败 |
 
 ---
@@ -891,3 +945,4 @@ openrouter/deepseek/deepseek-chat
 | 1.4.0 | 2026-08-30 | 使用日志增强：新增状态 / 耗时 / token 用量 / IP / UA / 扣费次数字段，原始输入与输出按 `log_payload` 开关入库，新增 `/api/admin/logs/summary`、`/api/admin/logs/{id}`、`/api/admin/logs/purge` 与 `log_retention_days` 保留策略 |
 | 1.5.0 | 2026-09-04 | 设备指纹（仅用于识别共享，不做拦截依据）：前端经 ThumbmarkJS 上报 `X-Client-Fingerprint` / `X-Client-Fp-Summary`；日志新增 `device_id` / `fingerprint` 并挂载 `device`；日志筛选新增 `device` 参数、聚合新增 `distinct_devices`；新增 `/api/admin/devices` 列表与 `/api/admin/devices/{id}` 备注接口 |
 | 1.5.1 | 2026-09-04 | 设备画像详情：新增 `GET /api/admin/devices/{id}`（摘要翻译 profile + 风险 signals + 使用分布 codes/ips/user_agents/tools/models + 最近请求）；管理后台设备行可点开画像抽屉，日志详情可跳转画像 |
+| 1.6.0 | 2026-09-12 | 免费模型：模型新增 `is_free` / `free_no_code` / `free_limits` 字段；免费调用不扣次数并在用户端显示「免费」标签；`/api/chat/stream`、`/stop`、`/vocab/check`、`/migration/analyze`、`/migration/quota`、`/api/parse/file` 改为可选认证（免费+无码可用模型可无码调用）；免费模型按身份（使用码 > 指纹 > IP）套用分/时/天/周/月限额，超限返回 429，生成失败不计入限额；未登录用户可浏览全部工具界面，免码调用以 `（免码）` 记入使用日志 |
