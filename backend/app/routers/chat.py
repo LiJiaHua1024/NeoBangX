@@ -792,10 +792,14 @@ async def chat_stream(
             logger.error(f"Stream error for {request_id}: {e}")
             status = STATUS_ERROR
             error_message = str(e)
-            # 原始异常可能内嵌上游网关地址/供应商报错，不回传给终端用户
+            # 原始异常可能内嵌上游网关地址/供应商报错，不回传给终端用户；
+            # model 供前端失败归因：禁用真正执行失败的模型，而非其当前选中的模型
             yield {
                 "event": "error",
-                "data": json.dumps({"message": "生成失败，请稍后重试"}, ensure_ascii=False),
+                "data": json.dumps(
+                    {"message": "生成失败，请稍后重试", "model": model_used},
+                    ensure_ascii=False,
+                ),
             }
         finally:
             if migration_batch and not migration_finished:

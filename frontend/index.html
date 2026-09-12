@@ -1027,16 +1027,16 @@
                 <div class="error-card">
                   <div class="font-semibold mb-1">这次生成没有成功</div>
                   <div x-text="errorMsg"></div>
-                  <div class="mt-2 text-xs opacity-80" x-show="errorRetryable">试卷内容已保留：可以用当前模型重试，也可以换一个模型重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
+                  <div class="mt-2 text-xs opacity-80" x-show="errorRetryable">试卷内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
                   <div class="mt-2 text-xs opacity-80" x-show="!errorRetryable">请先解决账号或额度问题，再重新解析。</div>
                   <div class="error-actions mt-3" x-show="errorRetryable && submittedInput && !streaming">
                     <button class="btn-primary" @click="retryVisualPaper()"
                             :title="'用当前选中的模型（' + shortModel(selectedModel) + '）重新解析整份试卷，内容不变'">
-                      <span x-html="icon('refresh','w-4 h-4')"></span>使用当前模型重试
+                      <span x-html="icon('refresh','w-4 h-4')"></span>直接重试
                     </button>
                     <button class="btn-ghost" @click="retryModelOpen = true"
-                            title="当前模型一直失败？选一个其他模型，用同样的试卷内容重新生成">
-                      <span x-html="icon('replace','w-4 h-4')"></span>换个模型重试
+                            title="在弹窗中选择一个其他模型，会自动切换并用同样的试卷内容重新生成">
+                      <span x-html="icon('replace','w-4 h-4')"></span>换个模型重试…
                     </button>
                     <button class="btn-ghost" @click="editSubmittedInput()"
                             title="把试卷内容放回下方输入框，编辑后再解析">
@@ -1341,16 +1341,16 @@
                 <div class="error-card">
                   <div class="font-semibold mb-1">这次生成没有成功</div>
                   <div x-text="errorMsg"></div>
-                  <div class="mt-2 text-xs opacity-80" x-show="errorRetryable">输入内容已保留：可以用当前模型重试，也可以换一个模型重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
+                  <div class="mt-2 text-xs opacity-80" x-show="errorRetryable">输入内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
                   <div class="mt-2 text-xs opacity-80" x-show="!errorRetryable">请先解决账号或额度问题，再重新执行。</div>
                   <div class="error-actions mt-3" x-show="errorRetryable && submittedInput && !streaming">
                     <button class="btn-primary" @click="retryChat()"
                             :title="'用当前选中的模型（' + shortModel(selectedModel) + '）重新生成，输入内容不变'">
-                      <span x-html="icon('refresh','w-4 h-4')"></span>使用当前模型重试
+                      <span x-html="icon('refresh','w-4 h-4')"></span>直接重试
                     </button>
                     <button class="btn-ghost" @click="retryModelOpen = true"
-                            title="当前模型一直失败？选一个其他模型，用同样的输入内容重新生成">
-                      <span x-html="icon('replace','w-4 h-4')"></span>换个模型重试
+                            title="在弹窗中选择一个其他模型，会自动切换并用同样的输入内容重新生成">
+                      <span x-html="icon('replace','w-4 h-4')"></span>换个模型重试…
                     </button>
                     <button class="btn-ghost" @click="editSubmittedInput()"
                             title="把输入内容放回下方输入框，编辑后再执行">
@@ -1673,19 +1673,20 @@
         </div>
         <div class="p-5">
           <p class="text-xs text-dim leading-relaxed mb-3">
-            选择一个模型，会立即用<span class="font-semibold" style="color:var(--text)">刚才的输入内容</span>重新生成。
-            刚才失败的模型：<span class="font-semibold" style="color:var(--text)" x-text="shortModel(selectedModel)"></span>。
+            点选任意模型，会<span class="font-semibold" style="color:var(--text)">自动切换</span>到该模型，并立即用<span class="font-semibold" style="color:var(--text)">刚才的输入内容</span>重新生成。
+            <span x-show="failedModel">刚才失败的模型：<span class="font-semibold" style="color:var(--text)" x-text="shortModel(failedModel)"></span>。</span>
           </p>
           <div class="retry-model-list scroll-thin">
             <template x-for="m in allModels" :key="m.id">
               <button class="ms-item" :class="{ 'on': m.id === selectedModel }"
-                      :disabled="m.id === selectedModel"
-                      :title="m.id === selectedModel ? '刚才失败的就是它，选一个别的模型试试' : '用这个模型重新生成'"
+                      :disabled="m.id === failedModel"
+                      :title="m.id === failedModel ? '刚才失败的模型，请选择其他模型重试' : '切换到该模型并重新生成'"
                       @click="chooseModelAndRetry(m.id)">
                 <div class="min-w-0">
                   <div class="ms-item-name truncate" x-text="m.name || shortModel(m.id)"></div>
                   <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
-                  <div class="ms-item-sub ms-item-failed" x-show="m.id === selectedModel">当前模型 · 刚才失败</div>
+                  <div class="ms-item-sub ms-item-failed" x-show="m.id === failedModel">刚才失败</div>
+                  <div class="ms-item-sub" x-show="m.id === selectedModel && m.id !== failedModel">当前使用中</div>
                 </div>
                 <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
                   <svg viewBox="0 0 24 24">

@@ -1233,6 +1233,9 @@ function nbx() {
     errorMsg: "",
     // 登录过期/额度用尽类错误不可通过重试解决，错误卡上隐藏重试按钮
     errorRetryable: true,
+    // 刚才实际失败的模型，与 selectedModel 分离：失败后用户手动换模型时，
+    // 换模型弹窗仍应禁用真正失败的那个，而不是新的当前模型
+    failedModel: "",
     retryModelOpen: false,
     elapsed: "0.0",
     // 等待阶段计时：请求发出 → 首个事件到达（此期间还没在思考，只是等响应）
@@ -2715,6 +2718,7 @@ function nbx() {
       this.output = "";
       this.rendered = "";
       this.errorMsg = "";
+      this.failedModel = "";
       this.status = "idle";
       this.maskOn = false;
       this.resetReasoning();
@@ -3842,6 +3846,9 @@ function nbx() {
       this._abortCtrl = new AbortController();
       this.startTimer();
       this.startThinkTimer();
+      // 发起时快照模型：请求 body 用的是此刻的 selectedModel，失败归因以它为准，
+      // 避免流式期间用户切换右上角模型导致记录错位
+      const modelUsed = this.selectedModel;
 
       this.submittedInput = text;
       this.submittedFileName = this.attachedFile ? this.attachedFile.name : "";
@@ -3869,6 +3876,8 @@ function nbx() {
         if (e && e.name === "AbortError") {
           this.finalize("stopped");
         } else {
+          // 登录/额度类错误模型根本没执行，不标记；后端 error 事件回传的实际模型优先，快照兜底
+          if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
           this.finalize("error", (e && e.message) || "网络请求失败");
         }
@@ -3921,8 +3930,13 @@ function nbx() {
         if (ev === "done" || data === "[DONE]") return;
         if (ev === "error") {
           let m = data;
-          try { m = JSON.parse(data).message || data; } catch {}
-          throw new Error(m);
+          let model = "";
+          try {
+            const j = JSON.parse(data);
+            if (j) { m = j.message || data; model = typeof j.model === "string" ? j.model : ""; }
+          } catch {}
+          // model 供失败归因：禁用真正失败的模型，而非此刻的 selectedModel
+          throw Object.assign(new Error(m), { model });
         }
         if (data === "[CANCELLED]") { stopped = true; return; }
         if (ev === "reasoning") {
@@ -4052,6 +4066,7 @@ function nbx() {
       this.submittedFileName = "";
       this.submittedExpanded = false;
       this.errorMsg = "";
+      this.failedModel = "";
       this.status = "idle";
       this.inputCollapsed = false;
       this.$nextTick(() => {
@@ -4079,6 +4094,7 @@ function nbx() {
         this.errorMsg = errMsg || "生成失败";
         this.toast("生成失败：" + this.errorMsg, "error");
       } else {
+        this.failedModel = "";
         this.status = state;
         if (this.output.trim()) {
           const item = this.pushHistory(state === "stopped");
@@ -4128,6 +4144,8 @@ function nbx() {
       this._abortCtrl = new AbortController();
       this.startTimer();
       this.startThinkTimer();
+      // 与 run() 相同：发起时快照模型，失败归因以它为准
+      const modelUsed = this.selectedModel;
       try {
         const { state } = await this._streamChat({
           toolId: "13",
@@ -4148,6 +4166,7 @@ function nbx() {
         if (e && e.name === "AbortError") {
           this.finalizeVisualPaper("stopped", "", updateId ? { updateId } : {});
         } else {
+          if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
           this.finalizeVisualPaper("error", (e && e.message) || "网络请求失败");
         }
@@ -4169,6 +4188,7 @@ function nbx() {
         this.vpParseError = errMsg || "生成失败";
         this.toast("生成失败：" + this.errorMsg, "error");
       } else {
+        this.failedModel = "";
         this.status = state;
         if (this.output.trim()) {
           const updateId = opts.updateId || null;
