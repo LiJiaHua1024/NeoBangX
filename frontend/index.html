@@ -9,7 +9,7 @@
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=perf260913a">
+  <link rel="stylesheet" href="/static/styles.css?v=dlg260913a">
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -34,7 +34,7 @@
   <script defer src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.15.12/dist/cdn.min.js"></script>
   <script defer src="/static/vendor/thumbmark.umd.js"></script>
-  <script defer src="/static/script.js?v=perf260913a"></script>
+  <script defer src="/static/script.js?v=dlg260913a"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
 </head>
 
@@ -1730,7 +1730,7 @@
     <!-- ==================== 换个模型重试弹窗 ==================== -->
     <div x-show="retryModelOpen" class="modal-mask" x-transition.opacity x-cloak
          @click.self="retryModelOpen = false" @keydown.escape.window="retryModelOpen = false">
-      <div class="modal-card glass-deep pop-in" style="max-width:30rem" @click.stop>
+      <div class="modal-card modal-lg glass-deep pop-in" @click.stop>
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('replace','w-4 h-4')"></span>
           <h3 class="font-bold text-sm">换个模型重试</h3>
@@ -1775,7 +1775,7 @@
 
     <!-- ==================== 使用码输入弹窗 ==================== -->
     <div x-show="codeModal" class="modal-mask" x-transition.opacity @click.self="closeCodeModal()">
-      <div class="modal-card glass-deep pop-in" style="max-width:26rem" @click.stop>
+      <div class="modal-card modal-sm glass-deep pop-in" @click.stop>
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('key','w-4 h-4')"></span>
           <h3 class="font-bold text-sm">输入使用码</h3>
@@ -1822,7 +1822,7 @@
     <!-- ==================== 文件上传失败弹窗 ==================== -->
     <div x-show="uploadErrorOpen" class="modal-mask" x-transition.opacity
          @click.self="closeUploadError()" @keydown.escape.window="closeUploadError()">
-      <div class="modal-card glass-deep pop-in" style="max-width:26rem" @click.stop role="alertdialog" aria-modal="true">
+      <div class="modal-card modal-sm glass-deep pop-in" @click.stop role="alertdialog" aria-modal="true">
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('alert','w-4 h-4')"></span>
           <h3 class="font-bold text-sm" x-text="uploadErrorTitle || '文件上传失败'"></h3>
@@ -1843,7 +1843,7 @@
     <!-- ==================== 扫描版警告弹窗 ==================== -->
     <div x-show="scanWarnOpen" class="modal-mask" x-transition.opacity
          @click.self="scanWarnOpen = false" @keydown.escape.window="scanWarnOpen = false">
-      <div class="modal-card glass-deep pop-in" style="max-width:28rem" @click.stop role="alertdialog" aria-modal="true">
+      <div class="modal-card modal-md glass-deep pop-in" @click.stop role="alertdialog" aria-modal="true">
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('alert','w-4 h-4')"></span>
           <h3 class="font-bold text-sm">⚠️ 检测到图片/扫描版试卷</h3>
@@ -1870,7 +1870,7 @@
 
     <!-- ==================== PDF 云端解析中 ==================== -->
     <div x-show="parsingFile && !scanWarnOpen" class="modal-mask" x-transition.opacity>
-      <div class="modal-card glass-deep pop-in" style="max-width:24rem" @click.stop role="status" aria-live="polite">
+      <div class="modal-card modal-xs glass-deep pop-in" @click.stop role="status" aria-live="polite">
         <div class="p-6 flex flex-col items-center text-center gap-4">
           <div class="thinking-orb-wrap"><div class="thinking-orb"><div class="thinking-orb-inner"></div></div></div>
           <div>
@@ -1882,6 +1882,26 @@
             <p class="text-xs font-semibold mt-1" style="color:var(--accent)" x-text="'已用时 ' + parseElapsedSec + ' 秒'"></p>
           </div>
           <button class="btn-ghost w-full justify-center" @click="cancelPdfUpload()">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 通用确认弹窗（自研 UI，替代浏览器原生 confirm） ==================== -->
+    <div x-show="confirmOpen" class="modal-mask" x-transition.opacity x-cloak
+         @click.self="resolveConfirm(false)" @keydown.escape.window="confirmOpen && resolveConfirm(false)">
+      <div class="modal-card modal-sm glass-deep pop-in" @click.stop role="alertdialog" aria-modal="true">
+        <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
+          <span class="text-dim" x-html="icon('alert','w-4 h-4')"></span>
+          <h3 class="font-bold text-sm" x-text="confirmTitle"></h3>
+          <button class="icon-btn ml-auto" @click="resolveConfirm(false)" title="关闭" x-html="icon('x','w-4 h-4')"></button>
+        </div>
+        <div class="p-5">
+          <p class="confirm-msg text-sm leading-relaxed" x-text="confirmMessage"></p>
+        </div>
+        <div class="px-5 py-4 border-t flex justify-end gap-2 shrink-0" style="border-color:var(--border)">
+          <button class="btn-ghost" @click="resolveConfirm(false)" x-text="confirmCancelText"></button>
+          <button class="btn-primary" :class="{ 'btn-danger': confirmDanger }" @click="resolveConfirm(true)"
+                  x-text="confirmText"></button>
         </div>
       </div>
     </div>

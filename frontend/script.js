@@ -1458,6 +1458,14 @@ function nbx() {
     uploadErrorMsg: "",
     uploadErrorDetail: "",
     showUploadDetail: false,
+    /* --- 通用确认弹窗（替代浏览器原生 confirm） --- */
+    confirmOpen: false,
+    confirmTitle: "",
+    confirmMessage: "",
+    confirmText: "确定",
+    confirmCancelText: "取消",
+    confirmDanger: false,
+    _confirmResolve: null,
     _pdfAbort: null,
     get uploadHintText() {
       const base = "支持 .docx / .doc / .txt / .md / .pdf，自动跳过听力";
@@ -2907,13 +2915,17 @@ function nbx() {
       return null;
     },
 
-    selectTool(tool, ev) {
+    async selectTool(tool, ev) {
       // 工具列表与工具界面始终可预览；是否需要使用码在执行时按所选模型判定
-      if (this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing)) {
-        if (!confirm("正在生成中，切换工具将停止本次生成。确定切换吗？")) return;
-        if (this.streaming) this.abortActiveGeneration();
-        if (this.migration && this.migration.generating) this.stopMigration();
-        if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
+      if (this.isBusy) {
+        const ok = await this.askConfirm({
+          title: "停止本次生成？",
+          message: "正在生成中，切换工具将停止本次生成。",
+          confirmText: "停止并切换",
+          danger: true,
+        });
+        if (!ok) return;
+        this.stopBusyStreams();
       }
       this.currentTool = tool;
       this.output = "";
@@ -2942,12 +2954,16 @@ function nbx() {
       });
     },
 
-    goHome() {
-      if (this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing)) {
-        if (!confirm("正在生成中，返回首页将停止本次生成。确定吗？")) return;
-        if (this.streaming) this.abortActiveGeneration();
-        if (this.migration && this.migration.generating) this.stopMigration();
-        if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
+    async goHome() {
+      if (this.isBusy) {
+        const ok = await this.askConfirm({
+          title: "停止本次生成？",
+          message: "正在生成中，返回首页将停止本次生成。",
+          confirmText: "停止并回首页",
+          danger: true,
+        });
+        if (!ok) return;
+        this.stopBusyStreams();
       }
       this.currentTool = null;
       this.leftOpen = false;
@@ -4065,7 +4081,14 @@ function nbx() {
         return false;
       }
       if (!this.currentTool.prompt_loaded) {
-        if (!confirm(`「${this.currentTool.name}」的提示词文件尚未加载，生成效果可能不完整。仍要继续吗？`)) return false;
+        const ok = await this.askConfirm({
+          title: "提示词文件尚未加载",
+          message: `「${this.currentTool.name}」的提示词文件尚未加载，生成效果可能不完整。仍要继续吗？`,
+          confirmText: "仍要继续",
+        });
+        if (!ok) return false;
+        // 弹窗期间可能有第二次触发（Ctrl+Enter 等）已发起生成，await 之后必须复检
+        if (this.streaming) return false;
       }
 
       this.retreatMascot();
@@ -4405,7 +4428,14 @@ function nbx() {
         return;
       }
       if (this.currentTool && this.currentTool.prompt_loaded === false) {
-        if (!confirm(`「${this.currentTool.name}」的提示词文件尚未加载，生成效果可能不完整。仍要继续吗？`)) return;
+        const ok = await this.askConfirm({
+          title: "提示词文件尚未加载",
+          message: `「${this.currentTool.name}」的提示词文件尚未加载，生成效果可能不完整。仍要继续吗？`,
+          confirmText: "仍要继续",
+        });
+        if (!ok) return;
+        // 弹窗期间可能有第二次触发已发起生成，await 之后必须复检
+        if (this.streaming) return;
       }
       this.retreatMascot();
       this.resetVisualPaper();
@@ -5213,18 +5243,17 @@ function nbx() {
         // 标题生成失败静默处理
       }
     },
-    openHistory(item) {
-      // 忙碌守卫需与 selectTool/goHome 一致：超标词的 AI 替换流不置 streaming，
-      // 漏判会在 resetVocab 重建状态后让在途 token 继续写入新对象、污染历史数据
-      const busy =
-        this.streaming ||
-        (this.migration && this.migration.generating) ||
-        (this.vocab && this.vocab.replacing);
-      if (busy) {
-        if (!confirm("正在生成中，查看历史将停止本次生成。确定吗？")) return;
-        if (this.streaming) this.abortActiveGeneration();
-        if (this.migration && this.migration.generating) this.stopMigration();
-        if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
+    async openHistory(item) {
+      // 忙碌守卫由 isBusy 统一，需与 selectTool/goHome/startNewTopic 一致
+      if (this.isBusy) {
+        const ok = await this.askConfirm({
+          title: "停止本次生成？",
+          message: "正在生成中，查看历史将停止本次生成。",
+          confirmText: "停止并查看",
+          danger: true,
+        });
+        if (!ok) return;
+        this.stopBusyStreams();
       }
       if (item.migration) {
         this.openMigrationHistory(item);
@@ -5409,13 +5438,17 @@ function nbx() {
         this.scheduleMascotCheck(80);
       });
     },
-    startNewTopic() {
-      // 忙碌守卫与 selectTool/goHome 一致：生成中新建会清空已生成内容
-      if (this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing)) {
-        if (!confirm("正在生成中，开始新题目将停止本次生成。确定吗？")) return;
-        if (this.streaming) this.abortActiveGeneration();
-        if (this.migration && this.migration.generating) this.stopMigration();
-        if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
+    async startNewTopic() {
+      // 忙碌守卫由 isBusy 统一，需与 selectTool/goHome 一致：生成中新建会清空已生成内容
+      if (this.isBusy) {
+        const ok = await this.askConfirm({
+          title: "停止本次生成？",
+          message: "正在生成中，开始新题目将停止本次生成。",
+          confirmText: "停止并新建",
+          danger: true,
+        });
+        if (!ok) return;
+        this.stopBusyStreams();
       }
       if (this.isMigrationTool) {
         this.resetMigration();
@@ -5473,9 +5506,15 @@ function nbx() {
       lsSet(LS.history, this.history);
       this.toast("已删除该条记录");
     },
-    clearHistory() {
+    async clearHistory() {
       if (!this.history.length) return;
-      if (!confirm(`确定要清空全部 ${this.history.length} 条历史记录吗？此操作不可恢复。`)) return;
+      const ok = await this.askConfirm({
+        title: "清空全部历史？",
+        message: `将删除全部 ${this.history.length} 条历史记录，此操作不可恢复。`,
+        confirmText: "清空",
+        danger: true,
+      });
+      if (!ok) return;
       this.history = [];
       lsSet(LS.history, []);
       this.toast("历史记录已清空");
@@ -5626,6 +5665,42 @@ function nbx() {
       if (this.status === "done" || this.status === "history") return "status-dot ok";
       if (this.status === "error") return "status-dot err";
       return "status-dot";
+    },
+
+    /* ============ 通用确认弹窗（替代浏览器原生 confirm） ============ */
+    /* 返回 Promise<boolean>：确认 = true，取消 / Esc / 点遮罩 = false。
+       单槽位——已有确认弹窗开着时，新请求直接按取消返回：异步化后双击、
+       Ctrl+Enter 会重复进入守卫，原生 confirm 阻塞事件循环不存在这个问题 */
+    askConfirm({ title = "请确认", message = "", confirmText = "确定", cancelText = "取消", danger = false } = {}) {
+      return new Promise((resolve) => {
+        if (this.confirmOpen) { resolve(false); return; }
+        this.confirmTitle = title;
+        this.confirmMessage = message;
+        this.confirmText = confirmText;
+        this.confirmCancelText = cancelText;
+        this.confirmDanger = !!danger;
+        this._confirmResolve = resolve;
+        this.confirmOpen = true;
+      });
+    },
+    resolveConfirm(value) {
+      const resolve = this._confirmResolve;
+      this._confirmResolve = null;
+      this.confirmOpen = false;
+      if (resolve) resolve(!!value);
+    },
+
+    /* 在途生成判定：切工具 / 回首页 / 看历史 / 新建题目的守卫必须一致。
+       超标词的 AI 替换流不置 streaming，漏判会在 resetVocab 重建状态后
+       让在途 token 继续写入新对象、污染历史数据 */
+    get isBusy() {
+      return this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing);
+    },
+    /* 确认弹窗期间状态可能已自行结束（如刚好生成完），这里逐个复检 */
+    stopBusyStreams() {
+      if (this.streaming) this.abortActiveGeneration();
+      if (this.migration && this.migration.generating) this.stopMigration();
+      if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
     },
 
     /* 轻提示。警告/错误默认停留更久（额度、限速、失败原因这类信息一闪而过，

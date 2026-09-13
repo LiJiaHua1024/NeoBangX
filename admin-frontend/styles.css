@@ -832,6 +832,8 @@ select option { background: var(--bg); color: var(--text); }
 .modal-body { padding: 1.15rem; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .modal-narrow { width: min(360px, 100%); }
 .modal-wide { width: min(460px, 100%); }
+/* 确认弹窗正文：保留文案里的 \n 换行（沿用原生 confirm 的排版习惯） */
+.confirm-msg { white-space: pre-line; margin: 0; }
 
 /* 弹窗/抽屉打开时锁定背景滚动，弹窗内滚动到边界不再带动背后页面 */
 html.modal-open, body.modal-open {

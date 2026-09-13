@@ -727,6 +727,14 @@ function adminApp() {
     resetUsageModalOpen: false,
     resettingUsage: false,
     resetUsageForm: { id: null, code: "", used: 0, quota: 0 },
+    // 通用确认弹窗（替代浏览器原生 confirm）
+    confirmOpen: false,
+    confirmTitle: "",
+    confirmMessage: "",
+    confirmText: "确定",
+    confirmCancelText: "取消",
+    confirmDanger: false,
+    _confirmResolve: null,
     toasts: [],
 
     get pageTitle() {
@@ -843,13 +851,16 @@ function adminApp() {
     },
 
     async rotateJwtSecret() {
-      const confirmed = confirm(
-        "将生成新的随机 JWT 密钥并保存到数据卷：\n\n" +
-        "· 本管理后台立即生效\n" +
-        "· 主站(8000)需重启后生效（docker-compose restart）\n" +
-        "· 主站重启后所有老师需重新输入使用码\n\n确定继续吗？"
-      );
-      if (!confirmed) return;
+      const ok = await this.askConfirm({
+        title: "轮换 JWT 密钥？",
+        message: "将生成新的随机 JWT 密钥并保存到数据卷：\n\n" +
+          "· 本管理后台立即生效\n" +
+          "· 主站(8000)需重启后生效（docker-compose restart）\n" +
+          "· 主站重启后所有老师需重新输入使用码",
+        confirmText: "生成新密钥",
+        danger: true,
+      });
+      if (!ok) return;
       this.rotatingSecret = true;
       try {
         await this.api("/api/admin/jwt-secret/rotate", { method: "POST" });
@@ -972,6 +983,29 @@ function adminApp() {
         throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
       }
       return data;
+    },
+
+    /* 通用确认弹窗：替代浏览器原生 confirm()，返回 Promise<boolean>
+       （确认 = true，取消 / Esc / 点遮罩 = false）。单槽位——已有确认弹窗
+       开着时新请求直接按取消返回：异步化后双击会重复进入守卫，原生 confirm
+       阻塞事件循环不存在这个问题 */
+    askConfirm({ title = "请确认", message = "", confirmText = "确定", cancelText = "取消", danger = false } = {}) {
+      return new Promise((resolve) => {
+        if (this.confirmOpen) { resolve(false); return; }
+        this.confirmTitle = title;
+        this.confirmMessage = message;
+        this.confirmText = confirmText;
+        this.confirmCancelText = cancelText;
+        this.confirmDanger = !!danger;
+        this._confirmResolve = resolve;
+        this.confirmOpen = true;
+      });
+    },
+    resolveConfirm(value) {
+      const resolve = this._confirmResolve;
+      this._confirmResolve = null;
+      this.confirmOpen = false;
+      if (resolve) resolve(!!value);
     },
 
     toast(msg, type = "ok") {
@@ -1181,7 +1215,13 @@ function adminApp() {
     },
 
     async deleteCode(c) {
-      if (!confirm(`确定要删除使用码「${c.code}」吗？此操作不可恢复。`)) return;
+      const ok = await this.askConfirm({
+        title: "删除使用码？",
+        message: `确定要删除使用码「${c.code}」吗？此操作不可恢复。`,
+        confirmText: "删除",
+        danger: true,
+      });
+      if (!ok) return;
       try {
         await this.api(`/api/admin/codes/${c.id}`, { method: "DELETE" });
         this.toast("已删除");
@@ -2086,9 +2126,13 @@ function adminApp() {
         this.toast("保留天数为 0 表示永久保留，不会删除任何日志", "error");
         return;
       }
-      if (!confirm(`将永久删除 ${days} 天之前的全部使用日志（含原始输入/输出），此操作不可恢复。\n\n确定继续吗？`)) {
-        return;
-      }
+      const ok = await this.askConfirm({
+        title: "永久清理使用日志？",
+        message: `将永久删除 ${days} 天之前的全部使用日志（含原始输入/输出），此操作不可恢复。`,
+        confirmText: "立即清理",
+        danger: true,
+      });
+      if (!ok) return;
       this.purging = true;
       try {
         const data = await this.api("/api/admin/logs/purge", {
@@ -2343,10 +2387,16 @@ function adminApp() {
       }
     },
 
-    removeModel(i) {
+    async removeModel(i) {
       const m = this.configForm.models[i];
       if (!m) return;
-      if (!confirm(`确定从列表移除模型「${m.name || m.id}」？`)) return;
+      const ok = await this.askConfirm({
+        title: "移除模型？",
+        message: `确定从列表移除模型「${m.name || m.id}」？`,
+        confirmText: "移除",
+        danger: true,
+      });
+      if (!ok) return;
       this.configForm.models.splice(i, 1);
       if (this.configForm.default_model === m.id) {
         const next = this.configForm.models.find(x => !x.chores_only && x.enabled !== false) || this.configForm.models[0];
@@ -2432,11 +2482,17 @@ function adminApp() {
         // saveConfig 已 toast
       }
     },
-    removeRule(i) {
+    async removeRule(i) {
       const r = this.configForm.tool_reasoning_rules[i];
       if (!r) return;
       const names = r.tool_ids.map((t) => this.toolName(t)).join("、");
-      if (!confirm(`确定删除覆盖「${names}」的推理规则？删除后需点击“保存配置”生效。`)) return;
+      const ok = await this.askConfirm({
+        title: "删除推理规则？",
+        message: `确定删除覆盖「${names}」的推理规则？删除后需点击“保存配置”生效。`,
+        confirmText: "删除",
+        danger: true,
+      });
+      if (!ok) return;
       this.configForm.tool_reasoning_rules.splice(i, 1);
     },
     moveRule(i, dir) {
@@ -2714,7 +2770,13 @@ function adminApp() {
       finally { this.savingProvider = false; }
     },
     async removeProvider(p) {
-      if (!confirm(`确定删除 Provider「${p.name}」(${p.id})？该 Provider 在所有模型的绑定将被同步移除。`)) return;
+      const ok = await this.askConfirm({
+        title: "删除 Provider？",
+        message: `确定删除 Provider「${p.name}」(${p.id})？该 Provider 在所有模型的绑定将被同步移除。`,
+        confirmText: "删除",
+        danger: true,
+      });
+      if (!ok) return;
       try {
         await this.api(`/api/admin/providers/${p.id}`, { method: "DELETE" });
         this.toast("已删除");

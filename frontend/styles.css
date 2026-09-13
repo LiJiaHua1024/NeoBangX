@@ -628,6 +628,13 @@ html[data-theme="sora"] .mascot-peeking {
   animation: stop-breathe 1.6s ease-in-out infinite;
 }
 .btn-stop:hover:not(:disabled) { background: #c5442f; }
+/* 危险操作按钮：形状沿用 btn-primary，只换色（与后台的 .btn-danger 同义） */
+.btn-primary.btn-danger {
+  color: #fff;
+  background: #b03a28;
+  border-color: #b03a28;
+}
+.btn-primary.btn-danger:hover:not(:disabled) { background: #c5442f; }
 @keyframes stop-breathe {
   0%, 100% { box-shadow: 0 0 0 0 rgba(197, 68, 47, 0.45), 0 8px 24px -10px rgba(0, 0, 0, 0.35); }
   50% { box-shadow: 0 0 0 6px rgba(197, 68, 47, 0), 0 8px 24px -10px rgba(0, 0, 0, 0.35); }
@@ -2049,6 +2056,30 @@ html[data-theme="sora"] .mascot-peeking {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .modal-card textarea { resize: vertical; min-height: 10rem; line-height: 1.7; }
+
+/* 弹窗宽度档位：桌面按内容收窄，移动端统一满宽（见下方 ≤640px 段落） */
+.modal-xs { max-width: 24rem; }
+.modal-sm { max-width: 26rem; }
+.modal-md { max-width: 28rem; }
+.modal-lg { max-width: 30rem; }
+/* 确认弹窗正文：保留文案里的 \n 换行（沿用原生 confirm 的排版习惯） */
+.confirm-msg { white-space: pre-line; }
+
+/* 移动端：弹窗统一改为底部抽屉（与后台一致，拇指可达、不遮挡输入法） */
+@media (max-width: 640px) {
+  .modal-mask { padding: 0; align-items: flex-end; }
+  .modal-card {
+    max-width: none;
+    max-height: 92dvh;
+    border-radius: 1.3rem 1.3rem 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    overscroll-behavior: contain;
+  }
+  /* 触控目标 ≥44px */
+  .modal-card .btn-primary,
+  .modal-card .btn-ghost { min-height: 44px; }
+  .modal-card .icon-btn { width: 2.75rem; height: 2.75rem; }
+}
 
 .toast {
   display: flex;
