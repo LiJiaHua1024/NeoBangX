@@ -425,8 +425,11 @@ data: [DONE]
 |------|-----------|------|
 | `token` | 文本片段 | LLM 生成的内容片段 |
 | `reasoning` | 推理片段（与 token 同样 JSON 编码） | 模型的思考过程，仅用于展示，不计入正文、不写日志；不支持推理的模型不发送该事件，前端回退到原有等待动画 |
-| `done` | `[DONE]` | 生成正常结束 |
-| `error` | JSON 字符串 `{"message": "..."}` | 生成过程中发生错误 |
+| `fallback` | JSON 字符串 `{"failed_index": 1, "total": 3, "next_index": 2, "reason": "timeout"}` | 当前 Provider 失败、正在切换下一优先级（按优先级链顺序尝试）。`reason` 取值：`timeout`（首块等待超时）/ `empty`（上游未返回任何正文）/ `unavailable`（其余失败）。只用于向前端展示进度，不含 Provider 名称；单 Provider 或切换后无下一家时不发送 |
+| `done` | `[DONE]` / `[CANCELLED]` | 生成结束；`[CANCELLED]` 表示用户停止或客户端断开 |
+| `error` | JSON 字符串 `{"message": "...", "model": "..."}` | 生成过程中发生错误（含全部 Provider 均失败）；`model` 供前端失败归因 |
+
+**Provider 切换（fallback）：** 同一逻辑模型可绑定多个 Provider（管理后台按优先级排序）。默认切换策略是**除「上下文超限」「内容审核」这类换谁都一样的错误外，任何 Provider 失败都切下一家**——包含 401/403（key 失效、欠费）、404（该家没有这个模型）、400/422（该家不支持某个参数）等「某一家自己的问题」。流式生成中，单家 Provider 等待**第一个数据块**的上限由全局配置 `first_token_timeout`（默认 30 秒，管理后台「全局调用参数」可改）决定，超时即判该家失效并切下一家；首个数据块到达后改由 `timeout` 按块判定，不会掐断正在出字的流。已经吐出正文后再失败则不切换（避免两家内容拼接），直接以 `error` 事件结束。
 
 智能错题迁移的同一批请求共享 `batch_id`。后端只有在 `batch_size` 张卡片全部自然完成后，才按 `max(1, floor(batch_size / 2))` 扣减一次额度；任一卡片失败或被停止时不扣减。
 

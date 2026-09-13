@@ -21,7 +21,7 @@ from app.services.free_access import (
     register_free_use,
 )
 from app.services.llm import LLMService, count_text_tokens
-from app.services.llm_router import LLMRouter
+from app.services.llm_router import DEFAULT_FIRST_TOKEN_TIMEOUT, LLMRouter
 from app.services.migration import (
     MIGRATION_ANALYSIS_PROMPT_NAME,
     MIGRATION_MORE_ANALYSIS_PROMPT_NAME,
@@ -221,8 +221,71 @@ def _build_llm(cfg: dict, model: Optional[str] = None, chores: bool = False) -> 
         default_model=target_model,
         max_tokens=max_tokens,
         timeout=cfg["timeout"],
+        first_token_timeout=cfg.get("first_token_timeout") or DEFAULT_FIRST_TOKEN_TIMEOUT,
     )
     return router
+
+
+def _mark_usage_context(
+    request: Request,
+    *,
+    code: Optional[UsageCode],
+    tool_id: str,
+    tool_name: str,
+    model: str,
+    request_id: str = "",
+) -> None:
+    """把本次调用的业务上下文挂到请求上。
+
+    仅供 main.py 的全局未捕获异常处理器兜底留痕：异常在路由里被吞成 500 时，
+    使用日志仍能标出是哪个使用码、哪个工具、哪个模型出的问题。
+    """
+    request.state.usage_meta = {
+        "code": code,
+        "tool_id": tool_id,
+        "tool_name": tool_name,
+        "model": model,
+        "request_id": request_id,
+    }
+
+
+def _router_log_fields(llm) -> tuple[str, str, Optional[int]]:
+    """使用日志的 Provider 归属：成功记命中的那家，失败记最后尝试的那家。
+
+    多 Provider 全链失败时 provider_used 为空，必须回落到 last_provider，
+    否则日志里既看不到是哪家挂的，也看不到总共试了几家。
+    """
+    if not isinstance(llm, LLMRouter):
+        return "", "", None
+    provider = llm.reported_provider
+    if not provider:
+        return "", "", llm.attempts or None
+    return (
+        provider.get("id", "") or "",
+        provider.get("name", "") or "",
+        llm.attempts or None,
+    )
+
+
+def _final_error_message(llm, status: str, base: str) -> str:
+    """错误信息落库口径。
+
+    - 逐家失败摘要里已含最终抛出的异常，所以有摘要时以摘要为准，不再重复拼接；
+    - 但若调用方另有业务侧结论（如「模型未返回可确认的错因」），它比摘要更贴切，
+      拼在前面一起记，避免被逐家摘要盖掉；
+    - 成功但发生过备用切换的也留一条尾注，便于后台发现长期不健康的那家。
+    """
+    if not isinstance(llm, LLMRouter):
+        return base
+    summary = llm.failure_summary()
+    if not summary:
+        return base
+    if status == STATUS_SUCCESS:
+        return f"备用切换：{summary}"
+    last_error = llm.attempt_errors[-1][1] if llm.attempt_errors else ""
+    if base and last_error and base[:60] not in last_error:
+        return f"{base} ｜ {summary}"
+    return summary
 
 
 def _log_llm_call(
@@ -532,6 +595,13 @@ async def analyze_migration_causes(
     model_used = req.model or cfg["llm_model"]
     _ensure_model_access(ctx, find_model_entry(cfg["models"], model_used))
     llm = _build_llm(cfg, model=req.model, chores=False)
+    _mark_usage_context(
+        request,
+        code=ctx.code,
+        tool_id="migration_analyze",
+        tool_name="错因分析",
+        model=model_used,
+    )
     client_ip, user_agent = get_client_info(request)
     fp_hash, fp_summary = get_fingerprint_info(request)
     started = monotonic()
@@ -539,16 +609,7 @@ async def analyze_migration_causes(
     log_payload_enabled = bool(cfg.get("log_payload"))
 
     async def _record(status: str, output_text: str, error_message: str = "") -> None:
-        prov_id = ""
-        prov_name = ""
-        attempts = None
-        try:
-            if isinstance(llm, LLMRouter) and llm.provider_used:
-                prov_id = llm.provider_used.get("id", "")
-                prov_name = llm.provider_used.get("name", "")
-                attempts = llm.attempts
-        except Exception:
-            pass
+        prov_id, prov_name, attempts = _router_log_fields(llm)
         await asyncio.to_thread(
             _log_llm_call,
             code=ctx.code,
@@ -560,7 +621,7 @@ async def analyze_migration_causes(
             usage=usage,
             client=(client_ip, user_agent),
             log_payload=log_payload_enabled,
-            error_message=error_message,
+            error_message=_final_error_message(llm, status, error_message),
             input_text=_migration_prompt_input(req),
             rendered_prompt=prompt,
             output_text=output_text,
@@ -698,6 +759,17 @@ async def chat_stream(
                 ip=client_ip,
             ),
         )
+    # 日志展示用名称：迁移请求统一显示工具名而非底层 prompt 文件名
+    tool_name = MIGRATION_TOOL_NAME if req.tool_id == MIGRATION_TOOL_ID else prompt_filename
+    # 挂上业务上下文：路由内若有未捕获异常，全局处理器据此补一条使用日志
+    _mark_usage_context(
+        request,
+        code=code,
+        tool_id=req.tool_id,
+        tool_name=tool_name,
+        model=model_used,
+        request_id=req.request_id or "",
+    )
 
     try:
         migration_batch = _register_migration_batch(
@@ -711,10 +783,6 @@ async def chat_stream(
         raise
 
     llm = _build_llm(cfg, model=req.model, chores=False)
-    tool_name = prompt_filename
-    if req.tool_id == MIGRATION_TOOL_ID:
-        # 日志展示用名称：迁移请求统一显示工具名而非底层 prompt 文件名
-        tool_name = MIGRATION_TOOL_NAME
     base_request_id = req.request_id or f"{req.tool_id}_{id(request)}"
     request_id = base_request_id
     existing = _stop_events.get(base_request_id)
@@ -788,6 +856,11 @@ async def chat_stream(
                         {"t": reasoning_text, "n": count_text_tokens(reasoning_text, model_used)},
                         ensure_ascii=False,
                     )}
+                    continue
+                if isinstance(item, tuple) and item and item[0] == "fallback":
+                    # 切换备用 Provider：把进度透给前端（只有序号与总数，不含 Provider 名称），
+                    # 用户据此知道自己在等第几个通道，而不是对着空界面干等
+                    yield {"event": "fallback", "data": json.dumps(item[1], ensure_ascii=False)}
                     continue
                 token = item
                 output_parts.append(token)
@@ -885,16 +958,10 @@ async def chat_stream(
             # 释放免费模型的在途占位（重复调用安全）
             release_free_slot()
             # 成功、停止、异常统一留痕：元数据始终记录，原始数据受开关控制
-            prov_id = ""
-            prov_name = ""
-            attempts = None
-            try:
-                if isinstance(llm, LLMRouter) and llm.provider_used:
-                    prov_id = llm.provider_used.get("id", "")
-                    prov_name = llm.provider_used.get("name", "")
-                    attempts = llm.attempts
-            except Exception:
-                pass
+            prov_id, prov_name, attempts = _router_log_fields(llm)
+            # 先置位再落库：to_thread 会同步把写库任务提交进线程池，
+            # 全局异常处理器据此跳过，避免同一次请求被记两条
+            request.state.usage_logged = True
             await asyncio.to_thread(
                 _log_llm_call,
                 code=code,
@@ -907,7 +974,7 @@ async def chat_stream(
                 usage=usage,
                 client=(client_ip, user_agent),
                 log_payload=log_payload_enabled,
-                error_message=error_message,
+                error_message=_final_error_message(llm, status, error_message),
                 units=units,
                 input_text=req.input,
                 rendered_prompt=prompt,
@@ -996,6 +1063,13 @@ async def generate_title(
     _validate_model(cfg, req.model)
     llm = _build_llm(cfg, model=req.model, chores=True)
     model_used = req.model or cfg["chores_model"]
+    _mark_usage_context(
+        request,
+        code=code,
+        tool_id="title",
+        tool_name="标题生成",
+        model=model_used,
+    )
     client_ip, user_agent = get_client_info(request)
     fp_hash, fp_summary = get_fingerprint_info(request)
     started = monotonic()
@@ -1003,16 +1077,7 @@ async def generate_title(
     log_payload_enabled = bool(cfg.get("log_payload"))
 
     async def _record(status: str, output_text: str, error_message: str = "") -> None:
-        prov_id = ""
-        prov_name = ""
-        attempts = None
-        try:
-            if isinstance(llm, LLMRouter) and llm.provider_used:
-                prov_id = llm.provider_used.get("id", "")
-                prov_name = llm.provider_used.get("name", "")
-                attempts = llm.attempts
-        except Exception:
-            pass
+        prov_id, prov_name, attempts = _router_log_fields(llm)
         await asyncio.to_thread(
             _log_llm_call,
             code=code,
@@ -1024,7 +1089,7 @@ async def generate_title(
             usage=usage,
             client=(client_ip, user_agent),
             log_payload=log_payload_enabled,
-            error_message=error_message,
+            error_message=_final_error_message(llm, status, error_message),
             input_text=req.input,
             rendered_prompt=user_prompt,
             output_text=output_text,

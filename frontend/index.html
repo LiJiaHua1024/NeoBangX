@@ -859,6 +859,20 @@
                 </div>
               </div>
 
+              <!-- 备用通道切换进度：只在后端真的切过通道时出现（单 Provider 不会触发）。
+                   放在「加载态」容器之外，显隐只由 fallbackInfo 决定：
+                   续写时 vpHasData 已为 true，若跟着加载态一起显隐就看不到了 -->
+              <div class="max-w-3xl mx-auto px-6 pt-4" x-show="fallbackInfo" x-cloak>
+                <div class="fallback-panel">
+                  <div class="fallback-dots" aria-hidden="true">
+                    <template x-for="(dot, index) in fallbackDots" :key="index">
+                      <span class="fb-dot" :class="'fb-dot-' + dot"></span>
+                    </template>
+                  </div>
+                  <span class="fallback-text" x-text="fallbackText"></span>
+                </div>
+              </div>
+
               <!-- 加载态 -->
               <div x-show="streaming && !vpHasData" class="flex-1 min-h-0 flex flex-col items-center justify-center text-center px-6 py-10">
                 <div class="thinking-block" x-show="!reasoning">
@@ -1328,6 +1342,20 @@
                     <!-- 收起时的毛玻璃覆盖层 -->
                     <div class="submitted-frost" x-show="!submittedExpanded" x-transition.opacity.duration.300ms></div>
                   </div>
+                </div>
+              </div>
+
+              <!-- 备用通道切换进度：只在后端真的切过通道时出现（单 Provider 不会触发）。
+                   刻意放在「生成结果」容器之外：显隐只由 fallbackInfo 决定，
+                   不与 output/streaming 的显隐条件耦合，避免将来被容器条件连坐隐藏 -->
+              <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8" x-show="fallbackInfo" x-cloak>
+                <div class="fallback-panel">
+                  <div class="fallback-dots" aria-hidden="true">
+                    <template x-for="(dot, index) in fallbackDots" :key="index">
+                      <span class="fb-dot" :class="'fb-dot-' + dot"></span>
+                    </template>
+                  </div>
+                  <span class="fallback-text" x-text="fallbackText"></span>
                 </div>
               </div>
 

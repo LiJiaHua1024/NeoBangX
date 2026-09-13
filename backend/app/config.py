@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # LLM 调用参数
     max_tokens: int = 4096
     timeout: int = 120
+    # 单家 Provider 等待「第一个数据块」的秒数上限：超时即判该家失效并切下一家。
+    # 只约束流式生成的建连与首块，出字之后仍按 timeout 的按块读超时判定
+    first_token_timeout: int = 30
 
     # MinerU 文档解析（PDF）：模式 precision=精准解析API（推荐）/ agent=轻量解析API；
     # 模型仅精准模式有效 pipeline（推荐）/ vlm；token 仅精准模式必填；base_url 硬编码官方地址

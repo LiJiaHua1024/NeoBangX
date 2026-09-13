@@ -146,6 +146,9 @@ class ConfigUpdateRequest(BaseModel):
     chores_model: Optional[str] = None
     max_tokens: Optional[int] = None
     timeout: Optional[int] = None
+    first_token_timeout: Optional[int] = Field(
+        None, ge=5, le=600, description="单家 Provider 首块等待上限（秒），超时即切下一家"
+    )
     log_payload: Optional[bool] = Field(None, description="是否记录原始输入/输出数据")
     log_retention_days: Optional[int] = Field(None, ge=0, le=36500, description="日志保留天数，0=永久")
     tool_reasoning_rules: Optional[List[ToolReasoningRuleEntry]] = None
@@ -414,7 +417,8 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
                 func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
                 func.avg(UsageLog.duration_ms).label("avg_ms"),
                 func.avg(UsageLog.fallback_attempts).label("fallback_avg"),
-                func.coalesce(func.sum(case((UsageLog.fallback_attempts > 0, 1), else_=0)), 0).label("fallback_count"),
+                # fallback_attempts 记的是「尝试家数」，1 = 首选就成功、没有备用切换
+                func.coalesce(func.sum(case((UsageLog.fallback_attempts > 1, 1), else_=0)), 0).label("fallback_count"),
             )
             for c in cols:
                 q = q.group_by(c)
@@ -759,7 +763,8 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
     fallback = {"rate": 0.0, "count": 0, "avg_attempts": None, "max_attempts": None}
     try:
         q = _base(start if days != 0 else None, now)
-        fb_count = q.filter(UsageLog.fallback_attempts > 0).count()
+        # fallback_attempts 记的是「尝试家数」：> 1 才算真的发生过备用切换
+        fb_count = q.filter(UsageLog.fallback_attempts > 1).count()
         agg = q.with_entities(func.avg(UsageLog.fallback_attempts), func.max(UsageLog.fallback_attempts)).one()
         fallback = {
             "count": int(fb_count or 0),

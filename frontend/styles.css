@@ -1225,6 +1225,52 @@ html[data-theme="sora"] .mascot-peeking {
   40% { opacity: 1; transform: scale(1); }
 }
 
+/* 备用通道切换进度：文字 + 方格子示意。
+   已失败的格子标红、当前正在尝试的格子呼吸闪烁、还没轮到的留空，
+   让用户在长等待里看得出「在等第几个通道」，而不是以为卡死了。 */
+.fallback-panel {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.6rem;
+  background: var(--panel-soft, rgba(127, 127, 127, 0.06));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  animation: fade-in 0.4s ease both;
+}
+.fallback-dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  flex: none;
+}
+.fb-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--text-faint) 60%, transparent);
+  background: transparent;
+}
+.fb-dot-failed {
+  background: #e5604c;
+  border-color: #e5604c;
+}
+.fb-dot-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  animation: fallback-pulse 1.1s ease-in-out infinite;
+}
+.fb-dot-pending {
+  background: transparent;
+}
+@keyframes fallback-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.86); }
+  50% { opacity: 1; transform: scale(1.12); }
+}
+
 .stream-bar {
   position: absolute;
   top: 0; left: 0; right: 0;

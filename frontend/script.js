@@ -852,6 +852,28 @@ function formatApiDetail(detail) {
   return null;
 }
 
+/* 浏览器网络层错误的特征：fetch 被拒（Failed to fetch）与读流中断
+   （network error / NetworkError / Load failed）。这类文案是浏览器原生的英文
+   提示，直接甩给用户既看不懂、也分不清是服务端出错还是本地断网，
+   所以统一换成中文说明；原始报文只在控制台留档，便于排查。 */
+const NETWORK_ERROR_PATTERN = /failed to fetch|network ?error|load failed|networkerror|err_(connection|network|internet|empty_response)/i;
+
+function isNetworkError(e) {
+  if (!e) return false;
+  if (e.name === "TypeError" || e instanceof TypeError) return true;
+  return NETWORK_ERROR_PATTERN.test(String(e.message || ""));
+}
+
+/* 统一的错误文案：网络层错误给中文提示，其余沿用后端/业务文案 */
+function describeError(e, fallbackText = "操作失败，请稍后重试") {
+  const raw = (e && e.message) || "";
+  if (isNetworkError(e)) {
+    try { console.warn("网络层错误：", e); } catch { /* 忽略 */ }
+    return "网络连接中断，内容可能不完整。请检查网络后重试；若持续出现，请让管理员查看服务端日志。";
+  }
+  return raw || fallbackText;
+}
+
 /* ---------------- Markdown 渲染 ---------------- */
 function configureMarked() {
   if (window.marked) {
@@ -1335,6 +1357,12 @@ function nbx() {
     // 换模型弹窗仍应禁用真正失败的那个，而不是新的当前模型
     failedModel: "",
     retryModelOpen: false,
+    // 备用通道切换进度：后端发 fallback 事件时才有值（单 Provider 不会触发）。
+    // 只含「第几个 / 共几个 / 为什么切」，不含 Provider 名称，
+    // 让用户在长等待里知道自己在等第几个通道，而不是对着空界面干等。
+    fallbackInfo: null,
+    // 仅供 devPreview* 预览演练的取消令牌（见下方「仅供预览/联调」段）
+    _devPreviewSeq: 0,
     elapsed: "0.0",
     // 等待阶段计时：请求发出 → 首个事件到达（此期间还没在思考，只是等响应）
     thinkingSec: 0,
@@ -2398,7 +2426,7 @@ function nbx() {
         }
       } catch (e) {
         // 排查失败（含 429 限速）要留在面板上，不只飘一个 toast
-        this.vocab.checkError = (e && e.message) || "排查失败";
+        this.vocab.checkError = describeError(e, "排查失败");
         this.vocab.status = "error";
         this.toast("排查失败：" + this.vocab.checkError, "error");
       } finally {
@@ -2482,7 +2510,7 @@ function nbx() {
           this.vocab.status = "stopped";
         } else {
           this.vocab.status = "error";
-          this.vocab.checkError = (e && e.message) || "替换失败";
+          this.vocab.checkError = describeError(e, "替换失败");
           this.toast("替换失败：" + this.vocab.checkError, "error");
         }
       } finally {
@@ -2558,6 +2586,8 @@ function nbx() {
 
       await this.loadTools();
       this.loadParseConfig();
+      // 仅供预览/联调：?dev=fallback / ?dev=network 时自动播放一次（正式使用无副作用）
+      this.maybeRunDevPreview();
 
       const savedModel = localStorage.getItem(LS.model);
       if (savedModel && this.models.some((m) => m.id === savedModel)) this.selectedModel = savedModel;
@@ -3441,7 +3471,7 @@ function nbx() {
         state.causes = causes;
         state.selectedCauseIds = [];
       } catch (e) {
-        state.analysisError = e.message || "错因分析失败";
+        state.analysisError = describeError(e, "错因分析失败");
         this.toast(state.analysisError, "error");
       } finally {
         state.analyzing = false;
@@ -3497,7 +3527,7 @@ function nbx() {
         if (additions.length) this.toast(`已补充 ${additions.length} 个新错因`);
         else this.toast("AI 暂时没有发现新的独立错因", "warn");
       } catch (e) {
-        state.analysisError = e.message || "继续生成错因失败";
+        state.analysisError = describeError(e, "继续生成错因失败");
         this.toast(state.analysisError, "error");
       } finally {
         state.moreAnalyzing = false;
@@ -3590,7 +3620,7 @@ function nbx() {
         else this.toast(`已完成 ${state.results.length} 张迁移卡片`);
       } catch (e) {
         state.generating = false;
-        state.analysisError = e.message || "生成失败";
+        state.analysisError = describeError(e, "生成失败");
         this.toast(state.analysisError, "error");
       } finally {
         state.prechecking = false;
@@ -3603,8 +3633,15 @@ function nbx() {
       let buffer = "";
       let eventName = "message";
       let eventData = "";
+      // 是否收到过终止事件（done/[DONE]/[CANCELLED]）：没收到就断流 = 内容不完整
+      let sawTerminal = false;
       const dispatch = () => {
-        if (eventData !== "" || eventName !== "message") onEvent(eventName, eventData);
+        if (eventData !== "" || eventName !== "message") {
+          if (eventName === "done" || eventData === "[DONE]" || eventData === "[CANCELLED]") {
+            sawTerminal = true;
+          }
+          onEvent(eventName, eventData);
+        }
         eventName = "message";
         eventData = "";
       };
@@ -3635,6 +3672,11 @@ function nbx() {
         }
       }
       dispatch();
+      // 流干净结束但没给终止事件：多半是反代/网络把连接掐了，半截内容不能当成功
+      if (!sawTerminal) {
+        try { console.warn("SSE 流未收到终止事件即结束，按中断处理"); } catch { /* 忽略 */ }
+        throw Object.assign(new Error("生成中断，内容可能不完整，请重试"), { truncated: true });
+      }
     },
     async streamMigrationCard(card, index, batchId, batchSize) {
       const controller = new AbortController();
@@ -3711,7 +3753,7 @@ function nbx() {
         if (e && e.name === "AbortError") card.status = "stopped";
         else {
           card.status = "error";
-          card.error = e.message || "生成失败";
+          card.error = describeError(e, "生成失败");
         }
       } finally {
         card.streaming = false;
@@ -4016,6 +4058,7 @@ function nbx() {
       this.output = "";
       this.rendered = "";
       this.errorMsg = "";
+      this.fallbackInfo = null;
       this.streaming = true;
       this.thinking = true;
       this.thinkingSec = 0;
@@ -4045,6 +4088,7 @@ function nbx() {
           input: text,
           requestId: this.requestId,
           onReasoning: (text) => this.appendReasoning(text),
+          onFallback: (info) => this.updateFallback(info),
           onToken: (text) => {
             if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
             this.finishReasoningOnToken();
@@ -4063,14 +4107,14 @@ function nbx() {
           if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
           this.errorLimited = !!(e && e.limited);
-          this.finalize("error", (e && e.message) || "网络请求失败");
+          this.finalize("error", describeError(e, "生成失败，请稍后重试"));
         }
       }
       return true;
     },
 
     /* 通用 SSE 流式调用：返回 { state: "done" | "stopped" }，出错时抛出 Error */
-    async _streamChat({ toolId, input, requestId, onToken, onReasoning }) {
+    async _streamChat({ toolId, input, requestId, onToken, onReasoning, onFallback }) {
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: {
@@ -4117,9 +4161,11 @@ function nbx() {
       let evName = "message";
       let evData = "";
       let stopped = false;
+      // 是否收到过终止事件（done/[DONE]/[CANCELLED]）：没收到就断流 = 内容不完整
+      let sawTerminal = false;
 
       const dispatch = (ev, data) => {
-        if (ev === "done" || data === "[DONE]") return;
+        if (ev === "done" || data === "[DONE]") { sawTerminal = true; return; }
         if (ev === "error") {
           let m = data;
           let model = "";
@@ -4130,7 +4176,14 @@ function nbx() {
           // model 供失败归因：禁用真正失败的模型，而非此刻的 selectedModel
           throw Object.assign(new Error(m), { model });
         }
-        if (data === "[CANCELLED]") { stopped = true; return; }
+        if (data === "[CANCELLED]") { stopped = true; sawTerminal = true; return; }
+        if (ev === "fallback") {
+          // 备用通道切换：{failed_index, total, next_index, reason}，只用于展示进度
+          let info = null;
+          try { info = JSON.parse(data); } catch {}
+          if (info && onFallback) onFallback(info);
+          return;
+        }
         if (ev === "reasoning") {
           // 推理过程与正文分离：JSON 解码后交 onReasoning，不进 output。
           // 新后端事件为 {t, n}（n 为后端 tokenizer 计得的 token 数），旧后端仍为纯字符串；
@@ -4184,6 +4237,12 @@ function nbx() {
         }
       }
       if (evData !== "" || evName !== "message") dispatch(evName, evData);
+      // 流干净结束但没给终止事件：多半是反代/网络把连接掐了，
+      // 此时已收到的内容只是半截，绝不能当成功交付
+      if (!sawTerminal) {
+        try { console.warn("SSE 流未收到终止事件即结束，按中断处理"); } catch { /* 忽略 */ }
+        throw Object.assign(new Error("生成中断，内容可能不完整，请重试"), { truncated: true });
+      }
       return { state: stopped ? "stopped" : "done" };
     },
 
@@ -4273,6 +4332,7 @@ function nbx() {
     finalize(state, errMsg) {
       this.streaming = false;
       this.thinking = false;
+      this.fallbackInfo = null;
       this.stopTimer();
       this.stopThinkTimer();
       // 推理盒收起：答案已定稿，推理只留作可展开回看，不再占版面。
@@ -4333,6 +4393,7 @@ function nbx() {
       this.resetReasoning();
       this._stopRequested = false;
       this.status = "connecting";
+      this.fallbackInfo = null;
       this.requestId = `13_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this._abortCtrl = new AbortController();
       this.startTimer();
@@ -4345,6 +4406,7 @@ function nbx() {
           input: inputText,
           requestId: this.requestId,
           onReasoning: (text) => this.appendReasoning(text),
+          onFallback: (info) => this.updateFallback(info),
           onToken: (tok) => {
             if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
             this.finishReasoningOnToken();
@@ -4363,13 +4425,14 @@ function nbx() {
           if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
           this.errorLimited = !!(e && e.limited);
-          this.finalizeVisualPaper("error", (e && e.message) || "网络请求失败");
+          this.finalizeVisualPaper("error", describeError(e, "生成失败，请稍后重试"));
         }
       }
     },
     finalizeVisualPaper(state, errMsg, opts = {}) {
       this.streaming = false;
       this.thinking = false;
+      this.fallbackInfo = null;
       this.stopTimer();
       this.stopThinkTimer();
       if (this.reasoning) {
@@ -4560,6 +4623,107 @@ function nbx() {
     },
 
     /* --- 推理过程（有界展示：截头保尾 + 盒内滚动 + 首 token 自动收起） --- */
+    /* 记录后端发来的备用通道切换进度（fallback 事件）。
+       纯展示用，不参与任何判定；单 Provider 时后端不会发该事件。 */
+    updateFallback(raw) {
+      const total = Number(raw && raw.total) || 0;
+      const failed = Number(raw && raw.failed_index) || 0;
+      const next = Number(raw && raw.next_index) || failed + 1;
+      if (total < 2 || failed < 1 || next > total) return;
+      // 上一家的推理片段已作废：清掉，免得两家思考内容串在一起
+      if (this.reasoning) {
+        this.reasoning = "";
+        this.reasoningTokens = 0;
+        this.reasoningTruncated = false;
+      }
+      this.fallbackInfo = {
+        total,
+        failed,
+        current: next,
+        reason: (raw && raw.reason) || "unavailable",
+      };
+    },
+
+    /* ============ 仅供预览/联调：不发起任何请求，正式流程不会调用 ============
+       方式一（推荐）：地址栏加 ?dev=fallback 或 ?dev=network 刷新，自动播放一次；
+       方式二：控制台手动调用，一次只跑一条，跑完刷新页面即可复原：
+         Alpine.$data(document.querySelector('[x-data]')).devPreviewFallback()
+         Alpine.$data(document.querySelector('[x-data]')).devPreviewNetworkError()
+       确认观感后可整段删除（含上面的 _devPreviewSeq 字段）。 */
+    async maybeRunDevPreview() {
+      let mode = "";
+      try {
+        mode = new URLSearchParams(location.search).get("dev") || "";
+      } catch { return; }
+      if (mode !== "fallback" && mode !== "network") return;
+      // 等当前工具就位：面板与错误卡所在的容器由 currentTool 决定是否渲染
+      for (let i = 0; i < 60 && !this.currentTool; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (!this.currentTool) return;
+      // 面板挂在普通工具（非迁移 26 / 词汇 24 / 可视化 13）的结果区，
+      // 当前恰好在这些专用工具里时先切回第一个普通工具，免得预览时看不到面板
+      if (["26", "24", "13"].includes(this.currentTool.id)) {
+        const plain = (this.groups || [])
+          .flatMap((group) => group.tools || [])
+          .find((tool) => !["26", "24", "13"].includes(tool.id));
+        if (plain) this.selectTool(plain);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      try {
+        if (mode === "network") this.devPreviewNetworkError();
+        else await this.devPreviewFallback();
+      } catch (e) {
+        console.warn("dev 预览失败：", e);
+      }
+    },
+    async devPreviewFallback() {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      // 每次推进都重新接管界面：面板挂在「output || streaming」容器里，
+      // 若先跑过网络错误预览（它会把 streaming 置回 false），不重新置位就看不到方格
+      const step = (payload) => {
+        this.errorMsg = "";
+        this.output = "";
+        this.rendered = "";
+        this.streaming = true;
+        this.thinking = true;
+        this.status = "connecting";
+        this.updateFallback(payload);
+      };
+      const token = (this._devPreviewSeq += 1);
+      console.info(
+        "[dev] 开始预览备用切换：约 1 秒后应出现方格子面板（1/3 超时），" +
+        "约 4.5 秒后变成「红·红·闪」（2/3 不可用），约 8 秒后落到错误卡"
+      );
+      this.resetReasoning();
+      this.failedModel = "";
+      this.errorRetryable = true;
+      this.errorLimited = false;
+      this.thinkingSec = 0;
+      this.fallbackInfo = null;
+      step();
+      await sleep(700);
+      if (token !== this._devPreviewSeq) return;
+      step({ failed_index: 1, total: 3, next_index: 2, reason: "timeout" });   // 红·闪·空
+      await sleep(3500);
+      if (token !== this._devPreviewSeq) return;
+      step({ failed_index: 2, total: 3, next_index: 3, reason: "unavailable" }); // 红·红·闪
+      await sleep(3500);
+      if (token !== this._devPreviewSeq) return;
+      // 收尾：全链失败时的错误卡与 toast
+      this.finalize("error", "生成失败，请稍后重试");
+      this.errorRetryable = true;
+      this.failedModel = this.selectedModel || "演示模型";
+    },
+    devPreviewNetworkError() {
+      // 抢占令牌：让可能在跑的 fallback 预览立刻停下，避免两条预览互相覆盖
+      this._devPreviewSeq += 1;
+      console.info("[dev] 预览网络层错误的提示语言");
+      this.failedModel = this.selectedModel || "演示模型";
+      this.errorRetryable = true;
+      this.errorLimited = false;
+      this.finalize("error", describeError(new TypeError("Failed to fetch")));
+    },
     resetReasoning() {
       this.reasoning = "";
       this.reasoningOpen = true;
@@ -4572,6 +4736,8 @@ function nbx() {
     },
     appendReasoning(text, tok) {
       if (!text) return;
+      // 备用通道已经接上并开始出推理：等待面板功成身退
+      if (this.fallbackInfo) this.fallbackInfo = null;
       // token 数由后端 tokenizer 随事件下发；旧格式缺失时退回 1（chunk≈1 token）
       if (!this._reasoningStartTs) this._reasoningStartTs = performance.now();
       this.reasoningTokens += tok > 0 ? tok : 1;
@@ -4584,6 +4750,8 @@ function nbx() {
       this.scrollReasoning();
     },
     finishReasoningOnToken() {
+      // 正文开始即等待结束：备用通道面板收起
+      if (this.fallbackInfo) this.fallbackInfo = null;
       // 正文开始后推理即收起，避免把答案顶下去；用户可手动展开回看。
       if (this.reasoning) {
         this.reasoningDone = true;
@@ -5278,6 +5446,28 @@ function nbx() {
       const parts = [fmtTokens(this.reasoningTokens) + " tok", fmtDuration(this.reasoningSec)];
       if (this.reasoningSpeed > 0) parts.push(this.reasoningSpeed.toFixed(1) + " tok/s");
       return parts.join(" · ");
+    },
+    /* 备用通道切换：文字进度 + 方格子示意（已失败标红、当前尝试的呼吸动画、未尝试的留空） */
+    get fallbackText() {
+      const info = this.fallbackInfo;
+      if (!info) return "";
+      const reason = info.reason === "timeout"
+        ? "响应超时"
+        : info.reason === "empty"
+          ? "没有返回内容"
+          : "暂时不可用";
+      return `第 ${info.failed} 个通道${reason}，正在尝试第 ${info.current} 个（共 ${info.total} 个）`;
+    },
+    get fallbackDots() {
+      const info = this.fallbackInfo;
+      if (!info || !info.total) return [];
+      const dots = [];
+      for (let index = 1; index <= info.total; index += 1) {
+        if (index < info.current) dots.push("failed");
+        else if (index === info.current) dots.push("active");
+        else dots.push("pending");
+      }
+      return dots;
     },
     get statusText() {
       switch (this.status) {

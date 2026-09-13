@@ -1184,6 +1184,11 @@
               <span>Timeout（秒）</span>
               <input type="number" x-model.number="configForm.timeout" min="10" max="600">
             </label>
+            <label class="field">
+              <span>备用切换阈值（秒）</span>
+              <input type="number" x-model.number="configForm.first_token_timeout" min="5" max="600">
+              <span class="field-hint">单家 Provider 等待「第一个数据块」的上限，超时即判该家失效、切下一优先级；只作用于流式生成，出字之后的流不受影响</span>
+            </label>
             <label class="field field--full">
               <span>Chores 模型</span>
               <div class="custom-select" @click.outside="choresModelMenuOpen = false" style="max-width: 360px;">

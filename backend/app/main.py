@@ -1,18 +1,22 @@
 import asyncio
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import SessionLocal, bootstrap_lock, init_db
 from app.routers import auth, chat, parse, tools
 from app.services.request_log import (
+    STATUS_ERROR,
     current_retention_days,
+    get_client_info,
     purge_expired_logs_standalone,
+    record_usage_log,
 )
 from app.services.runtime_config import seed_config_from_env
 from app.services.usage_code import apply_jwt_secret_override, ensure_bootstrap_admin
@@ -116,6 +120,57 @@ app.include_router(tools.router)
 app.include_router(chat.router)
 app.include_router(auth.router)
 app.include_router(parse.router)
+
+
+def _unhandled_usage_log_kwargs(request: Request, exc: Exception) -> dict | None:
+    """把未捕获异常整理成一条使用日志的参数。
+
+    只有路由已挂上业务上下文（见 chat.py `_mark_usage_context`）才返回参数，
+    其余路径（健康检查、静态资源等）的崩溃不进使用日志，免得把日志灌脏。
+    """
+    meta = getattr(request.state, "usage_meta", None)
+    if not isinstance(meta, dict) or not meta:
+        return None
+    code = meta.get("code")
+    ip, user_agent = get_client_info(request)
+    frames = traceback.extract_tb(exc.__traceback__) if exc.__traceback__ else []
+    where = ""
+    if frames:
+        last = frames[-1]
+        # 完整 traceback 已在 stdout；日志行里只留最有用的落点，避免 500 字被栈帧吃满
+        where = f" @ {Path(last.filename).name}:{last.lineno} {last.name}"
+    return {
+        "code_id": code.id if code else 0,
+        "code": code.code if code else chat.ANON_CODE_LABEL,
+        "tool_id": str(meta.get("tool_id") or ""),
+        "tool_name": str(meta.get("tool_name") or ""),
+        "model": str(meta.get("model") or ""),
+        "request_id": str(meta.get("request_id") or ""),
+        "status": STATUS_ERROR,
+        "error_message": f"未捕获异常 {type(exc).__name__}: {exc}{where}",
+        "ip": ip,
+        "user_agent": user_agent,
+        "units": 0,
+    }
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """兜底留痕：未捕获异常不再只留在 stdout。
+
+    业务类 HTTPException（鉴权/额度/校验等预期内拒绝）有自己的处理器，不会走到这里；
+    这里只处理真正的 500，并在 SSE 生成器还没来得及落库时补一条 error 日志，
+    让「前端看到报错、后台一条记录都没有」不再发生。
+    """
+    logger.exception("Unhandled error: %s %s", request.method, request.url.path)
+    if not getattr(request.state, "usage_logged", False):
+        kwargs = _unhandled_usage_log_kwargs(request, exc)
+        if kwargs is not None:
+            try:
+                await asyncio.to_thread(record_usage_log, **kwargs)
+            except Exception:
+                logger.exception("记录未捕获异常的使用日志失败")
+    return JSONResponse({"detail": "服务器内部错误，请稍后重试"}, status_code=500)
 
 
 @app.get("/api/health")

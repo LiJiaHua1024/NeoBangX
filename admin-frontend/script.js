@@ -585,6 +585,7 @@ function adminApp() {
       chores_model: "",
       max_tokens: 4096,
       timeout: 120,
+      first_token_timeout: 30,
       log_payload: false,
       log_retention_days: 0,
       tool_reasoning_rules: [],
@@ -935,10 +936,17 @@ function adminApp() {
     },
 
     async api(path, options = {}) {
-      const res = await fetch(path, {
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-        ...options,
-      });
+      let res;
+      try {
+        res = await fetch(path, {
+          headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+          ...options,
+        });
+      } catch {
+        // 网络层失败：浏览器只给英文的 Failed to fetch / network error，
+        // 换成人话再抛，避免原始报文直接出现在 toast 里
+        throw new Error("无法连接后端服务，请确认服务已启动、网络正常后重试");
+      }
       let data = null;
       try {
         data = await res.json();
@@ -2113,6 +2121,7 @@ function adminApp() {
           chores_model: cfg.chores_model || "",
           max_tokens: Number(cfg.max_tokens) || 4096,
           timeout: Number(cfg.timeout) || 120,
+          first_token_timeout: Number(cfg.first_token_timeout) || 30,
           log_payload: /^(1|true|yes|on)$/i.test(String(cfg.log_payload ?? "")),
           log_retention_days: Number(cfg.log_retention_days) || 0,
           tool_reasoning_rules: Array.isArray(cfg.tool_reasoning_rules)
@@ -2546,6 +2555,7 @@ function adminApp() {
           chores_model: this.configForm.chores_model || "",
           max_tokens: this.configForm.max_tokens,
           timeout: this.configForm.timeout,
+          first_token_timeout: this.configForm.first_token_timeout,
           log_payload: !!this.configForm.log_payload,
           log_retention_days: Math.max(0, Math.floor(Number(this.configForm.log_retention_days) || 0)),
           tool_reasoning_rules: this.configForm.tool_reasoning_rules.map((r) => ({

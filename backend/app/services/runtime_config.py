@@ -18,6 +18,7 @@ CONFIG_KEYS = [
     "chores_model",
     "max_tokens",
     "timeout",
+    "first_token_timeout",
     "log_payload",
     "log_retention_days",
     "mineru_mode",
@@ -440,6 +441,14 @@ def resolve_llm_settings(db: Session) -> dict:
         timeout = int(cfg.get("timeout") or settings.timeout)
     except ValueError:
         timeout = settings.timeout
+    # 单家 Provider 的首块等待上限：越界值一律夹回合法区间，避免误填导致整条链瞬间全灭
+    try:
+        first_token_timeout = int(
+            cfg.get("first_token_timeout") or settings.first_token_timeout
+        )
+    except ValueError:
+        first_token_timeout = settings.first_token_timeout
+    first_token_timeout = max(5, min(600, first_token_timeout))
 
     if not model_list:
         model_list = [{
@@ -567,6 +576,7 @@ def resolve_llm_settings(db: Session) -> dict:
         "chores_api_key": "",
         "max_tokens": max_tokens,
         "timeout": timeout,
+        "first_token_timeout": first_token_timeout,
         "log_payload": log_payload,
         "log_retention_days": log_retention_days,
         "providers": providers,
