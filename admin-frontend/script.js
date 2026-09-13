@@ -643,6 +643,10 @@ function adminApp() {
     editingQuotaCode: "",
     editingQuotaUsed: 0,
     editingQuotaValue: 10,
+    // 重置用量确认弹窗
+    resetUsageModalOpen: false,
+    resettingUsage: false,
+    resetUsageForm: { id: null, code: "", used: 0, quota: 0 },
     toasts: [],
 
     get pageTitle() {
@@ -1051,6 +1055,36 @@ function adminApp() {
         this.toast(e.message || "更新失败", "error");
       } finally {
         this.savingQuota = false;
+      }
+    },
+
+    openResetUsage(c) {
+      if (!c) return;
+      this.resetUsageForm = {
+        id: c.id,
+        code: c.code || "",
+        used: c.used_count || 0,
+        quota: c.quota,
+      };
+      this.resettingUsage = false;
+      this.resetUsageModalOpen = true;
+    },
+
+    async confirmResetUsage() {
+      const f = this.resetUsageForm;
+      if (!f.id) return;
+      this.resettingUsage = true;
+      try {
+        await this.api(`/api/admin/codes/${f.id}/reset-usage`, { method: "POST" });
+        this.resetUsageModalOpen = false;
+        this.toast("已重置用量");
+        await this.loadCodes();
+        // 概览的「已用次数」是 sum(used_count)，重置后要一起刷新
+        await this.loadStats();
+      } catch (e) {
+        this.toast(e.message || "重置失败", "error");
+      } finally {
+        this.resettingUsage = false;
       }
     },
 

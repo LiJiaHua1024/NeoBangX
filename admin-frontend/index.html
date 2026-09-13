@@ -31,7 +31,7 @@
   <!-- init() 由 Alpine 3 自动调用（组件含 init 方法时）；不要再写 x-init="init()"，
        否则 init 双跑：背景 canvas 会出现两条动画链轮流重绘同一画布（高频闪烁），
        还会泄漏定时器与监听器、双倍发起初始请求 -->
-  <div x-data="adminApp()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen || ruleModalOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen || ruleModalOpen)">
+  <div x-data="adminApp()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || resetUsageModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen || ruleModalOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || resetUsageModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen || ruleModalOpen)">
     <!-- 侧栏 -->
     <aside class="sidebar glass">
       <div class="brand">
@@ -631,6 +631,8 @@
                     <button class="link-btn" @click="toggleCode(c)" x-text="c.is_enabled ? '禁用' : '启用'"></button>
                     <button class="link-btn" @click="openCodeNoteEditor(c)">备注</button>
                     <button class="link-btn" x-show="c.code_type === 'user'" @click="openEditQuota(c)">改额度</button>
+                    <button class="link-btn" x-show="c.code_type === 'user' && c.used_count > 0"
+                            @click="openResetUsage(c)">重置用量</button>
                     <button class="link-btn danger" @click="deleteCode(c)">删除</button>
                   </td>
                 </tr>
@@ -1407,6 +1409,26 @@
         <div class="modal-foot">
           <button class="btn-ghost" @click="quotaModalOpen = false">取消</button>
           <button class="btn-primary" @click="saveEditQuota()" :disabled="savingQuota">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 重置用量确认弹窗（自研 UI，不调用浏览器原生弹窗） -->
+    <div class="modal-mask" x-show="resetUsageModalOpen" x-transition.opacity @click.self="resetUsageModalOpen = false">
+      <div class="modal glass modal-narrow" @click.stop>
+        <div class="modal-head">
+          <h3>重置用量</h3>
+          <button class="icon-x" @click="resetUsageModalOpen = false">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="muted mb-3 mono" x-text="resetUsageForm.code"></p>
+          <p class="muted"
+             x-text="`已用 ${resetUsageForm.used} 次，重置后归零；剩余次数恢复为 ${resetUsageForm.quota} 次。`"></p>
+          <p class="field-hint mt-2">使用日志不会被删除，只清零计数；此操作不可撤销。</p>
+        </div>
+        <div class="modal-foot">
+          <button class="btn-ghost" @click="resetUsageModalOpen = false">取消</button>
+          <button class="btn-danger" @click="confirmResetUsage()" :disabled="resettingUsage">重置</button>
         </div>
       </div>
     </div>

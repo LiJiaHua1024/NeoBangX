@@ -907,6 +907,21 @@ async def update_code(
     return row.to_admin_dict()
 
 
+@router.post("/codes/{code_id}/reset-usage")
+async def reset_code_usage(
+    code_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """把已用次数清零（剩余额度随之恢复）。使用日志保留，不动。"""
+    row = db.get(UsageCode, code_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="使用码不存在")
+    row.used_count = 0
+    db.commit()
+    db.refresh(row)
+    return row.to_admin_dict()
+
+
 @router.delete("/codes/{code_id}")
 async def delete_code(
     code_id: int,

@@ -49,6 +49,7 @@
 | GET | `/api/admin/codes` | 使用码列表 |
 | POST | `/api/admin/codes` | 生成使用码 |
 | PATCH | `/api/admin/codes/{id}` | 更新使用码（启用/禁用/备注/额度） |
+| POST | `/api/admin/codes/{id}/reset-usage` | 重置使用码已用次数（日志保留） |
 | GET | `/api/admin/logs` | 使用日志列表（可按状态 / 模型 / 时间筛选） |
 | GET | `/api/admin/logs/summary` | 使用日志聚合统计（随筛选联动） |
 | GET | `/api/admin/logs/{id}` | 单条日志详情（含原始输入 / Prompt / 输出） |
@@ -429,7 +430,7 @@ data: [DONE]
 
 智能错题迁移的同一批请求共享 `batch_id`。后端只有在 `batch_size` 张卡片全部自然完成后，才按 `max(1, floor(batch_size / 2))` 扣减一次额度；任一卡片失败或被停止时不扣减。
 
-**日志留痕：** 无论成功、用户停止还是异常，每次 `/api/chat/stream` 调用都会在服务端留下**一条**使用日志（见 11.5）。智能错题迁移的每张卡片各记一条日志，其 `units` 为 0；整批的扣费次数记在最后一卡的日志上。
+**日志留痕：** 无论成功、用户停止还是异常，每次 `/api/chat/stream` 调用都会在服务端留下**一条**使用日志（见 11.6）。智能错题迁移的每张卡片各记一条日志，其 `units` 为 0；整批的扣费次数记在最后一卡的日志上。
 
 ---
 
@@ -582,7 +583,31 @@ data: [DONE]
 }
 ```
 
-### 11.5 使用日志
+### 11.5 重置使用码用量
+
+#### POST `/api/admin/codes/{id}/reset-usage`
+
+把使用码的已用次数清零，剩余次数随之恢复为额度值。**使用日志不受影响**（只清零计数，不删除日志）。幂等操作，无请求体。
+
+**响应：** 更新后的使用码对象（同 11.2 的 item 结构）。
+
+```json
+{
+  "id": 1,
+  "code": "NBXU-XXXX-XXXX-XXXX",
+  "code_type": "user",
+  "quota": 10,
+  "used_count": 0,
+  "remaining": 10,
+  "is_enabled": true,
+  "is_exhausted": false,
+  "is_unlimited": false,
+  "note": "",
+  "created_at": "2026-07-28T12:00:00+00:00"
+}
+```
+
+### 11.6 使用日志
 
 每次 LLM 调用（主聊天流、标题生成、错因分析）都会留下**一条**日志。元数据
 （状态、耗时、token 用量、客户端 IP / UA、实际扣费次数）**始终记录**；原始内容
@@ -805,7 +830,7 @@ data: [DONE]
 }
 ```
 
-### 11.6 查看配置
+### 11.7 查看配置
 
 #### GET `/api/admin/config`
 
@@ -836,7 +861,7 @@ data: [DONE]
 `log_payload` 以字符串 `"true"` / `"false"` 存储；`log_retention_days` 为
 天数字符串，`"0"` 表示永久保留。
 
-### 11.7 更新配置
+### 11.8 更新配置
 
 #### PUT `/api/admin/config`
 
@@ -946,3 +971,4 @@ openrouter/deepseek/deepseek-chat
 | 1.5.0 | 2026-09-04 | 设备指纹（仅用于识别共享，不做拦截依据）：前端经 ThumbmarkJS 上报 `X-Client-Fingerprint` / `X-Client-Fp-Summary`；日志新增 `device_id` / `fingerprint` 并挂载 `device`；日志筛选新增 `device` 参数、聚合新增 `distinct_devices`；新增 `/api/admin/devices` 列表与 `/api/admin/devices/{id}` 备注接口 |
 | 1.5.1 | 2026-09-04 | 设备画像详情：新增 `GET /api/admin/devices/{id}`（摘要翻译 profile + 风险 signals + 使用分布 codes/ips/user_agents/tools/models + 最近请求）；管理后台设备行可点开画像抽屉，日志详情可跳转画像 |
 | 1.6.0 | 2026-09-12 | 免费模型：模型新增 `is_free` / `free_no_code` / `free_limits` 字段；免费调用不扣次数并在用户端显示「免费」标签；`/api/chat/stream`、`/stop`、`/vocab/check`、`/migration/analyze`、`/migration/quota`、`/api/parse/file` 改为可选认证（免费+无码可用模型可无码调用）；免费模型按身份（使用码 > 指纹 > IP）套用分/时/天/周/月限额，超限返回 429，生成失败不计入限额；未登录用户可浏览全部工具界面，免码调用以 `（免码）` 记入使用日志 |
+| 1.7.0 | 2026-09-13 | 使用码重置用量：新增 `POST /api/admin/codes/{id}/reset-usage` 把已用次数清零（剩余次数恢复，使用日志保留）；管理后台使用码操作列新增「重置用量」+ 自研确认弹窗 |

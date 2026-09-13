@@ -222,6 +222,7 @@ NBXU-3XXX-XXXX-XXXX
 - 每次工具生成扣减 1 次额度。
 - 管理员码不计额度，但仍记录使用日志。
 - 额度用完后直接锁定，无法继续使用。
+- 管理后台可把某个使用码的已用次数重置为 0（剩余额度随之恢复，使用日志保留）。
 
 ### 7.4 使用流程
 
@@ -250,6 +251,7 @@ NBXU-3XXX-XXXX-XXXX
 - `GET /api/admin/codes` — 使用码列表
 - `POST /api/admin/codes` — 生成使用码
 - `PATCH /api/admin/codes/{id}` — 启用/禁用/修改额度
+- `POST /api/admin/codes/{id}/reset-usage` — 重置已用次数
 - `GET /api/admin/logs` — 使用日志列表（支持使用码 / 工具 / 模型 / 状态 / 时间范围筛选）
 - `GET /api/admin/logs/summary` — 日志聚合统计（请求数、成功/停止/异常、总 Tokens、平均耗时）
 - `GET /api/admin/logs/{id}` — 单条日志详情（含原始输入 / 渲染 Prompt / 输出，受记录开关控制）
