@@ -704,6 +704,17 @@ mark, .vp-hl {
 .vp-writing { border-radius: 0.9rem; padding: 1rem; margin-top: 0.75rem; }
 .vp-card { padding: 1rem; border-radius: 0.9rem; }
 .vp-transfer-foot { margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+/* 每题多道迁移时的块内小标题（单道时不显示） */
+.vp-transfer-cap {
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.5rem;
+  padding-right: 1.6rem;
+  border-bottom: 1px dashed var(--border);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
 .vp-sample {
   font-size: 1.05rem;
   line-height: 1.85;

@@ -102,6 +102,23 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
     current_field: str | None = None
     field_buf: list[str] = []
 
+    def begin_transfer_field(key: str) -> dict:
+        """迁移块可整块重复（每题 N 道），块以 TRANSFER_PASSAGE 开头。
+
+        本块已有内容且该字段写过（或这正是开头标签）→ 上一块结束，先收进
+        列表再开新草稿；模型省略 passage 直接开下一块时也能正确切分。
+        """
+        if current_q is None:
+            return {}
+        draft = current_q.get("_transfer_draft")
+        if draft and any(draft.values()) and (key in draft or key == "passage"):
+            current_q.setdefault("_transfers_raw", []).append(draft)
+            draft = None
+        if draft is None:
+            draft = {}
+            current_q["_transfer_draft"] = draft
+        return draft
+
     def flush_field():
         nonlocal current_field, field_buf, current_q
         if current_field is None or current_q is None:
@@ -190,9 +207,9 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     cleaned.append(s)
             current_q["_pattern_steps_raw"] = cleaned
         elif cf == "TRANSFER_PASSAGE":
-            current_q["_transfer_passage_raw"] = content
+            begin_transfer_field("passage")["passage"] = content
         elif cf == "TRANSFER_STEM":
-            current_q["_transfer_stem_raw"] = content.strip()
+            begin_transfer_field("stem")["stem"] = content.strip()
         elif cf == "TRANSFER_OPTIONS":
             opts = []
             for line in content.splitlines():
@@ -206,11 +223,11 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     opts.append({"label": label, "text": text})
                 else:
                     opts.append({"label": "", "text": line})
-            current_q["_transfer_options_raw"] = opts
+            begin_transfer_field("options")["options"] = opts
         elif cf == "TRANSFER_ANSWER":
-            current_q["_transfer_answer_raw"] = content.strip()
+            begin_transfer_field("answer")["answer"] = content.strip()
         elif cf == "TRANSFER_EXPL":
-            current_q["_transfer_expl_raw"] = content.strip()
+            begin_transfer_field("explanation")["explanation"] = content.strip()
         elif cf == "WRITING_POINTS":
             points = [l.strip() for l in content.splitlines() if l.strip()]
             # 去除序号
@@ -260,7 +277,7 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
         is_writing = qtype == "writing" or current_group.get("id") in ("writing_app", "writing_cont")
         if is_writing:
             qtype = "writing"
-        transfer = None
+        transfers: list[dict] = []
         writingGuide = None
         if is_writing:
             writingGuide = {
@@ -272,23 +289,21 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
             if not writingGuide["points"] and not writingGuide["outline"] and not writingGuide["sample"]:
                 writingGuide = {"points": [], "outline": "", "sample": ""}
         else:
-            # 非写作：构建 transfer
-            t_pass = current_q.get("_transfer_passage_raw", "")
-            t_stem = current_q.get("_transfer_stem_raw", "")
-            t_opts = current_q.get("_transfer_options_raw", [])
-            t_ans = current_q.get("_transfer_answer_raw", "")
-            t_expl = current_q.get("_transfer_expl_raw", "")
-            # 仅当至少有 passage 或 stem 时才视为有效 transfer，否则为 None（允许部分题无迁移？但 spec 要求必有，容错）
-            if t_pass or t_stem or t_opts or t_ans:
-                transfer = {
-                    "passage": t_pass or "",
-                    "stem": t_stem or "",
-                    "options": t_opts or [],
-                    "answer": t_ans or "",
-                    "explanation": t_expl or "",
-                }
-            else:
-                transfer = None
+            # 非写作：把已收下的迁移块与最后一块草稿合并成数组
+            drafts = list(current_q.get("_transfers_raw", []))
+            draft = current_q.get("_transfer_draft")
+            if draft:
+                drafts.append(draft)
+            for d in drafts:
+                # 仅当至少有 passage 或 stem 等内容时才视为有效迁移（spec 要求必有，容错）
+                if d.get("passage") or d.get("stem") or d.get("options") or d.get("answer"):
+                    transfers.append({
+                        "passage": d.get("passage") or "",
+                        "stem": d.get("stem") or "",
+                        "options": d.get("options") or [],
+                        "answer": d.get("answer") or "",
+                        "explanation": d.get("explanation") or "",
+                    })
         # 构建最终 question
         q_obj = {
             "no": str(no).strip(),
@@ -300,7 +315,7 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
             "reference": reference,
             "pitfalls": pitfalls,
             "pattern": pattern,
-            "transfer": transfer,
+            "transfers": transfers,
             "writingGuide": writingGuide,
         }
         # 写作题 answer 为 null，已在上面处理
@@ -545,21 +560,28 @@ def validate_visual_paper(data: Any) -> tuple[bool, list[str]]:
                 steps = pat.get("steps")
                 if not isinstance(steps, list) or not all(isinstance(s, str) and s.strip() for s in steps):
                     errors.append(f"{prefix}.pattern.steps must be string array")
-            tr = q.get("transfer")
+            trs = q.get("transfers")
+            legacy = q.get("transfer")
             is_writing = g.get("id") in ("writing_app", "writing_cont")
             if is_writing:
-                if tr is not None:
-                    errors.append(f"{prefix}.transfer must be null for writing")
+                if (trs is not None and trs != []) or legacy is not None:
+                    errors.append(f"{prefix}.transfers must be empty for writing")
             else:
-                if tr is not None and not isinstance(tr, dict):
-                    errors.append(f"{prefix}.transfer must be object or null")
-                elif isinstance(tr, dict):
-                    for k in ("passage", "stem", "answer", "explanation"):
-                        if not isinstance(tr.get(k), str):
-                            errors.append(f"{prefix}.transfer.{k} must be string")
-                    topts = tr.get("options")
-                    if not isinstance(topts, list):
-                        errors.append(f"{prefix}.transfer.options must be array")
+                # 兼容旧结构：单数 transfer 对象（normalize 会升级成数组）
+                if trs is None and isinstance(legacy, dict):
+                    trs = [legacy]
+                if trs is not None and not isinstance(trs, list):
+                    errors.append(f"{prefix}.transfers must be array")
+                elif isinstance(trs, list):
+                    for ti, tr in enumerate(trs):
+                        if not isinstance(tr, dict):
+                            errors.append(f"{prefix}.transfers[{ti}] must be object")
+                            continue
+                        for k in ("passage", "stem", "answer", "explanation"):
+                            if not isinstance(tr.get(k), str):
+                                errors.append(f"{prefix}.transfers[{ti}].{k} must be string")
+                        if not isinstance(tr.get("options"), list):
+                            errors.append(f"{prefix}.transfers[{ti}].options must be array")
             wg = q.get("writingGuide")
             if is_writing:
                 if wg is not None and not isinstance(wg, dict):
@@ -567,7 +589,7 @@ def validate_visual_paper(data: Any) -> tuple[bool, list[str]]:
     return (len(errors) == 0), errors
 
 def normalize_visual_paper(data: dict) -> dict:
-    """归一化：补齐缺失字段、截断超长、确保写作题 transfer 为 null。"""
+    """归一化：补齐缺失字段、截断超长、确保写作题不含迁移、旧单数 transfer 升级为 transfers 数组。"""
     out = json.loads(json.dumps(data, ensure_ascii=False))
     if "paper" not in out or not isinstance(out["paper"], dict):
         out["paper"] = {"title": "", "subject": "英语", "year": ""}
@@ -595,13 +617,19 @@ def normalize_visual_paper(data: dict) -> dict:
                     q["qtype"] = "blank"
             gid = g.get("id")
             if gid in ("writing_app", "writing_cont"):
-                q["transfer"] = None
+                q["transfers"] = []
                 if q.get("writingGuide") is None:
                     q["writingGuide"] = {"points": [], "outline": "", "sample": ""}
             else:
-                q.setdefault("transfer", None)
+                transfers = q.get("transfers")
+                if not isinstance(transfers, list):
+                    # 旧结构（单数 transfer 对象）就地升级为数组，避免两套字段并存
+                    legacy = q.get("transfer")
+                    transfers = [legacy] if isinstance(legacy, dict) else []
+                q["transfers"] = [t for t in transfers if isinstance(t, dict)]
                 if q.get("writingGuide") is None:
                     q["writingGuide"] = None
+            q.pop("transfer", None)
             if isinstance(q.get("passage"), str):
                 q["passage"] = trunc(q["passage"], 4000)
             if isinstance(q.get("stem"), str):
@@ -617,9 +645,9 @@ def normalize_visual_paper(data: dict) -> dict:
             pat = q.get("pattern")
             if isinstance(pat, dict) and isinstance(pat.get("steps"), list):
                 pat["steps"] = [trunc(str(s), 300) for s in pat["steps"][:5]]
-            tr = q.get("transfer")
-            if isinstance(tr, dict) and isinstance(tr.get("passage"), str):
-                tr["passage"] = trunc(tr["passage"], 800)
+            for t in (q.get("transfers") or []):
+                if isinstance(t, dict) and isinstance(t.get("passage"), str):
+                    t["passage"] = trunc(t["passage"], 800)
     # 若 total 未声明，推算
     if out.get("total") is None:
         cnt = sum(len(g.get("questions", [])) for g in out["groups"])

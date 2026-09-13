@@ -1099,7 +1099,7 @@
                         <button :class="{ 'on': vpActiveTab === 'reference' }" @click="vpSetTab('reference')">参考答案</button>
                         <button :class="{ 'on': vpActiveTab === 'pitfalls' }" @click="vpSetTab('pitfalls')">易错点</button>
                         <button :class="{ 'on': vpActiveTab === 'pattern' }" @click="vpSetTab('pattern')">考点范式</button>
-                        <button :class="{ 'on': vpActiveTab === 'transfer' }" @click="vpSetTab('transfer')" :disabled="!vpCurrentQuestion.transfer" :title="vpCurrentQuestion.transfer ? '' : '写作题不设迁移训练'">迁移训练</button>
+                        <button :class="{ 'on': vpActiveTab === 'transfer' }" @click="vpSetTab('transfer')" :disabled="!(vpCurrentQuestion.transfers || []).length" :title="(vpCurrentQuestion.transfers || []).length ? '' : '写作题不设迁移训练'">迁移训练</button>
                       </div>
 
                       <!-- 参考答案 -->
@@ -1204,65 +1204,82 @@
                         </template>
                       </div>
 
-                      <!-- 迁移训练 -->
+                      <!-- 迁移训练（每题可多道：文本里是整块重复的 TRANSFER 标签，这里按块堆叠） -->
                       <div x-show="vpActiveTab === 'transfer'" class="vp-tab-panel" :class="{ 'mask-answers': maskOn && !vpEditing }">
-                        <template x-if="vpCurrentQuestion.transfer && !vpEditing">
+                        <template x-if="(vpCurrentQuestion.transfers || []).length && !vpEditing">
                           <div>
                             <div class="vp-tab-title">迁移训练 <span class="text-xs text-dim font-normal">（同构新题，话题不同·范式相同）</span></div>
-                            <div class="glass-soft rounded-xl p-4 mb-3">
-                              <div class="text-sm leading-relaxed whitespace-pre-wrap mb-3" x-html="vpFmt(vpCurrentQuestion.transfer.passage)"></div>
-                              <div class="font-medium text-sm mb-2 whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.transfer.stem)"></div>
-                              <div class="vp-options-grid">
-                                <template x-for="opt in (vpCurrentQuestion.transfer.options || [])" :key="opt.label">
-                                  <div class="vp-option-card" :class="{ 'correct': opt.label === vpCurrentQuestion.transfer.answer, 'masked': maskOn && opt.label === vpCurrentQuestion.transfer.answer }">
-                                    <span class="vp-option-label" x-text="opt.label"></span>
-                                    <span class="vp-option-text whitespace-pre-wrap" x-html="vpFmt(opt.text)"></span>
-                                  </div>
-                                </template>
+                            <template x-for="(tr, tIdx) in (vpCurrentQuestion.transfers || [])" :key="tIdx">
+                              <div class="glass-soft rounded-xl p-4 mb-3">
+                                <div class="vp-transfer-cap" x-show="vpCurrentQuestion.transfers.length > 1"
+                                     x-text="'迁移训练 ' + (tIdx + 1) + ' / ' + vpCurrentQuestion.transfers.length"></div>
+                                <div class="text-sm leading-relaxed whitespace-pre-wrap mb-3" x-html="vpFmt(tr.passage)"></div>
+                                <div class="font-medium text-sm mb-2 whitespace-pre-wrap" x-html="vpFmt(tr.stem)"></div>
+                                <div class="vp-options-grid">
+                                  <template x-for="opt in (tr.options || [])" :key="opt.label">
+                                    <div class="vp-option-card" :class="{ 'correct': opt.label === tr.answer, 'masked': maskOn && opt.label === tr.answer }">
+                                      <span class="vp-option-label" x-text="opt.label"></span>
+                                      <span class="vp-option-text whitespace-pre-wrap" x-html="vpFmt(opt.text)"></span>
+                                    </div>
+                                  </template>
+                                </div>
+                                <div class="mt-3 pt-3 border-t text-sm" style="border-color:var(--border)">
+                                  <div><span class="font-semibold ans" x-text="'答案：' + vpDetag(tr.answer)"></span></div>
+                                  <div class="text-dim mt-1 whitespace-pre-wrap" x-html="vpFmt(tr.explanation)"></div>
+                                </div>
                               </div>
-                              <div class="mt-3 pt-3 border-t text-sm" style="border-color:var(--border)">
-                                <div><span class="font-semibold ans" x-text="'答案：' + vpDetag(vpCurrentQuestion.transfer.answer)"></span></div>
-                                <div class="text-dim mt-1 whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.transfer.explanation)"></div>
-                              </div>
-                            </div>
+                            </template>
                           </div>
                         </template>
-                        <template x-if="vpCurrentQuestion.transfer && vpEditing">
+                        <template x-if="(vpCurrentQuestion.transfers || []).length && vpEditing">
                           <div class="space-y-2">
-                            <div class="vp-edit-cell">
-                              <div class="vp-edit-label">迁移语篇</div>
-                              <div class="vp-editable" data-vp-path="q.transfer.passage" data-vp-multi="1" data-vp-max="800" x-init="vpEditMount($el)"></div>
-                              <div class="vp-edit-count" hidden></div>
-                            </div>
-                            <div class="vp-edit-cell">
-                              <div class="vp-edit-label">迁移题干</div>
-                              <div class="vp-editable" data-vp-path="q.transfer.stem" data-vp-multi="1" x-init="vpEditMount($el)"></div>
-                            </div>
-                            <div x-show="(vpCurrentQuestion.transfer.options || []).length" class="space-y-1.5">
-                              <div class="vp-edit-label">迁移选项（增删时编号自动重排）</div>
-                              <div class="space-y-1.5" data-vp-list="q.transfer.options">
-                                <template x-for="(opt, oIdx) in (vpCurrentQuestion.transfer.options || [])" :key="oIdx">
-                                  <div class="vp-edit-row">
-                                    <span class="vp-option-label" x-text="opt.label"></span>
-                                    <div class="vp-editable" :data-vp-path="'q.transfer.options.' + oIdx + '.text'" x-init="vpEditMount($el)"></div>
-                                    <button class="vp-edit-del" @click="vpRemoveItem('q.transfer.options', oIdx)" title="删除这个选项">×</button>
+                            <div class="space-y-2" data-vp-list="q.transfers">
+                              <template x-for="(tr, tIdx) in (vpCurrentQuestion.transfers || [])" :key="tIdx">
+                                <div class="glass-soft rounded-xl p-3 vp-edit-item">
+                                  <div class="vp-edit-label vp-transfer-cap" x-text="'迁移训练 ' + (tIdx + 1) + ' / ' + vpCurrentQuestion.transfers.length"></div>
+                                  <div class="vp-edit-cell">
+                                    <div class="vp-edit-label">迁移语篇</div>
+                                    <div class="vp-editable" :data-vp-path="'q.transfers.' + tIdx + '.passage'" data-vp-multi="1" data-vp-max="800" x-init="vpEditMount($el)"></div>
+                                    <div class="vp-edit-count" hidden></div>
                                   </div>
-                                </template>
-                              </div>
-                              <button class="vp-edit-add" @click="vpAddItem('q.transfer.options')">+ 加一个选项</button>
+                                  <div class="vp-edit-cell">
+                                    <div class="vp-edit-label">迁移题干</div>
+                                    <div class="vp-editable" :data-vp-path="'q.transfers.' + tIdx + '.stem'" data-vp-multi="1" x-init="vpEditMount($el)"></div>
+                                  </div>
+                                  <div x-show="(tr.options || []).length" class="space-y-1.5">
+                                    <div class="vp-edit-label">迁移选项（增删时编号自动重排）</div>
+                                    <div class="space-y-1.5" :data-vp-list="'q.transfers.' + tIdx + '.options'">
+                                      <template x-for="(opt, oIdx) in (tr.options || [])" :key="oIdx">
+                                        <div class="vp-edit-row">
+                                          <span class="vp-option-label" x-text="opt.label"></span>
+                                          <div class="vp-editable" :data-vp-path="'q.transfers.' + tIdx + '.options.' + oIdx + '.text'" x-init="vpEditMount($el)"></div>
+                                          <button class="vp-edit-del" @click="vpRemoveItem('q.transfers.' + tIdx + '.options', oIdx)" title="删除这个选项">×</button>
+                                        </div>
+                                      </template>
+                                    </div>
+                                    <button class="vp-edit-add" @click="vpAddItem('q.transfers.' + tIdx + '.options')">+ 加一个选项</button>
+                                  </div>
+                                  <div class="vp-edit-cell">
+                                    <div class="vp-edit-label">迁移答案</div>
+                                    <div class="vp-editable" :data-vp-path="'q.transfers.' + tIdx + '.answer'" x-init="vpEditMount($el)"></div>
+                                  </div>
+                                  <div class="vp-edit-cell">
+                                    <div class="vp-edit-label">迁移解析</div>
+                                    <div class="vp-editable" :data-vp-path="'q.transfers.' + tIdx + '.explanation'" data-vp-multi="1" x-init="vpEditMount($el)"></div>
+                                  </div>
+                                  <button class="vp-edit-del vp-transfer-del" @click="vpRemoveItem('q.transfers', tIdx)" title="删除这道迁移题">×</button>
+                                </div>
+                              </template>
                             </div>
-                            <div class="vp-edit-cell">
-                              <div class="vp-edit-label">迁移答案</div>
-                              <div class="vp-editable" data-vp-path="q.transfer.answer" x-init="vpEditMount($el)"></div>
-                            </div>
-                            <div class="vp-edit-cell">
-                              <div class="vp-edit-label">迁移解析</div>
-                              <div class="vp-editable" data-vp-path="q.transfer.explanation" data-vp-multi="1" x-init="vpEditMount($el)"></div>
-                            </div>
+                            <button class="vp-edit-add" @click="vpAddItem('q.transfers')">+ 加一道迁移题</button>
+                            <div class="text-xs text-faint">空白的迁移题在保存时会被丢弃（与「无内容即不生成迁移」一致）。</div>
                           </div>
                         </template>
-                        <template x-if="!vpCurrentQuestion.transfer">
-                          <div class="text-sm text-dim" x-html="vpCurrentQuestion.qtype === 'writing' ? '该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。' : '该题暂无迁移训练内容（填写后会自动出现在这里）。'"></div>
+                        <template x-if="!(vpCurrentQuestion.transfers || []).length">
+                          <div>
+                            <div class="text-sm text-dim" x-html="vpCurrentQuestion.qtype === 'writing' ? '该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。' : '该题暂无迁移训练内容（填写后会自动出现在这里）。'"></div>
+                            <button x-show="vpEditing && vpCurrentQuestion.qtype !== 'writing'" class="vp-edit-add mt-2" @click="vpAddItem('q.transfers')">+ 加一道迁移题</button>
+                          </div>
                         </template>
                       </div>
                     </div>
@@ -1404,6 +1421,31 @@
               <span class="text-faint hidden sm:inline" x-show="vpHasData" x-text="'· ' + vpQuestionCount + ' 题'"></span>
               <span class="text-faint hidden md:inline" x-text="'· ' + shortModel(selectedModel)"></span>
               <span class="ml-auto flex items-center gap-1">
+                <!-- 解析设置（目前只有每题迁移题量）：弹层向上展开，交互与视觉对齐右上角模型菜单 -->
+                <span class="ms-wrap mr-1" @click.outside="closeVpSettings()">
+                  <button type="button" class="ms-trigger vp-cfg-trigger" :class="{ 'open': vpSettingsOpen }"
+                          @click="toggleVpSettings()" aria-label="解析设置" :aria-expanded="vpSettingsOpen">
+                    <span class="ms-spark" x-html="icon('sliders','w-3.5 h-3.5')"></span>
+                    <span>设置</span>
+                    <span class="vp-cfg-badge" x-text="'迁移 ' + vpTransferCount + ' 题'"></span>
+                    <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                  </button>
+                  <div class="ms-menu vp-cfg-menu glass-deep" x-show="vpSettingsOpen" x-cloak
+                       x-transition:enter="vp-cfg-anim" x-transition:enter-start="vp-cfg-anim-from" x-transition:enter-end="vp-cfg-anim-to"
+                       x-transition:leave="vp-cfg-anim-leave" x-transition:leave-start="vp-cfg-anim-to" x-transition:leave-end="vp-cfg-anim-from">
+                    <div class="vp-cfg-head">解析设置</div>
+                    <label class="vp-cfg-row">
+                      <span class="vp-cfg-label">每题迁移题量 <b x-text="vpTransferCount + ' 题'"></b></span>
+                      <input type="range" :min="VP_TRANSFER_MIN" :max="VP_TRANSFER_MAX" step="1"
+                             x-model.number="vpSettings.transferCount"
+                             :aria-label="'每题迁移题量 ' + vpTransferCount + ' 题'">
+                      <span class="vp-cfg-scale"><span x-text="VP_TRANSFER_MIN"></span><span x-text="VP_TRANSFER_MAX"></span></span>
+                    </label>
+                    <p class="vp-cfg-tip">每道笔试题生成几道同构迁移题（写作题不生成），对之后开始的解析与续写生效。题量越大单次输出越长，中断后可点「继续生成剩余 N 题」续上。</p>
+                    <button type="button" class="vp-cfg-reset" @click="vpResetSettings()"
+                            :disabled="vpTransferCount === VP_TRANSFER_MIN">恢复默认（1 题）</button>
+                  </div>
+                </span>
                 <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData" :class="{ 'on': maskOn }" @click="toggleMask()" :title="maskOn ? '显示答案' : '隐藏答案'" x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
                 <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData || output" @click="copyResult()" :title="copied ? '已复制' : '复制'" x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
                 <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData" @click="openVpExport()" title="下载讲解文件（单文件 HTML，双击即可讲题）" x-html="icon('insert','w-4 h-4')"></button>

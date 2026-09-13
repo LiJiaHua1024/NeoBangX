@@ -1,9 +1,18 @@
 import os
+import re
 from pathlib import Path
 from typing import Dict, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+# 模板占位符：{{user_input}}、{{transfer_count}} 等
+_PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
+# 未显式传值的占位符回落值：Prompt 里写了 {{x}} 但调用方没给时也不会把占位符漏给模型
+DEFAULT_VARIABLES = {
+    "user_input": "",
+    "transfer_count": "1",
+}
 
 
 class PromptLoader:
@@ -46,12 +55,28 @@ class PromptLoader:
         self._cache.clear()
         self._load_all()
 
-    def render(self, tool_name: str, user_input: str) -> Optional[str]:
-        """将用户输入注入到 Prompt 模板中
+    def render(
+        self,
+        tool_name: str,
+        user_input: str,
+        variables: Optional[Dict[str, object]] = None,
+    ) -> Optional[str]:
+        """将用户输入与工具参数注入到 Prompt 模板中
 
-        使用 {{user_input}} 作为变量占位符。
+        模板变量写作 {{name}}：{{user_input}} 为材料正文，其余为工具参数
+        （如 {{transfer_count}}）。整份模板只做一遍替换，用户输入里若含
+        {{...}} 字面量不会被二次扫描。未传值的占位符按 DEFAULT_VARIABLES
+        回落，避免把裸占位符送给模型。
         """
         template = self.get(tool_name)
         if template is None:
             return None
-        return template.replace("{{user_input}}", user_input)
+        values: Dict[str, str] = dict(DEFAULT_VARIABLES)
+        values["user_input"] = user_input
+        for key, value in (variables or {}).items():
+            if value is None:
+                continue
+            values[str(key)] = str(value)
+        return _PLACEHOLDER_RE.sub(
+            lambda m: values.get(m.group(1), m.group(0)), template
+        )

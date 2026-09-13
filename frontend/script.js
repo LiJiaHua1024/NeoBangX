@@ -66,6 +66,7 @@ const ICON_PATHS = {
   "insert": '<path d="M12 4v9.5M7.5 10 12 14.5 16.5 10"/><path d="M4 16.5V18a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1.5"/>',
   "refresh": '<path d="M20 12a8 8 0 1 1-2.34-5.66M20 3.5v4h-4"/>',
   "wand": '<path d="m6 21 15-15-3-3L3 18l3 3Z"/><path d="m14 7 3 3"/>',
+  "sliders": '<path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h9M17 17h3"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="15" cy="17" r="2"/>',
   "home": '<path d="m3.5 10.5 8.5-7 8.5 7"/><path d="M5.5 9v11h13V9"/><path d="M10 20v-6h4v6"/>',
   "eraser": '<path d="m7 21-4.3-4.3a2 2 0 0 1 0-2.8l9.6-9.6a2 2 0 0 1 2.8 0l5.6 5.6a2 2 0 0 1 0 2.8L13 20.5"/><path d="M21 21H9.5"/><path d="m8.5 8 7.5 7.5"/>',
   "paperclip": '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
@@ -1655,6 +1656,11 @@ function nbx() {
     _vpEditListenersBound: false,
     _vpDragging: false,
     vpSelActive: false,
+    // 生成前的工具配置：每题迁移训练题量（1–5，默认 1）；面板仿右上角模型菜单向上弹出
+    vpSettings: { transferCount: 1 },
+    vpSettingsOpen: false,
+    VP_TRANSFER_MIN: 1,
+    VP_TRANSFER_MAX: 5,
 
     /* --- 智能错题迁移 --- */
     migration: null,
@@ -1877,6 +1883,8 @@ function nbx() {
         answerMap: {},
         notice: "",
         total: null,
+        // 这份卷子生成时用的每题迁移题量（随历史记录一起存，续写时沿用）
+        transferCount: 1,
         historyId: null,
         rawJson: "",
         parseError: "",
@@ -1922,6 +1930,18 @@ function nbx() {
       let currentQ = null;
       let currentField = null;
       let fieldBuf = [];
+      // 迁移块可整块重复（每题 N 道），块以 TRANSFER_PASSAGE 开头：
+      // 本块已有内容且该字段写过（或这正是开头标签）→ 上一块结束，先收进列表再开新草稿；
+      // 这样模型省略 passage 直接开下一块时也能正确切分
+      const beginTransferField = (key) => {
+        let d = currentQ._transfer_draft;
+        if (d && Object.values(d).some(Boolean) && (d[key] !== undefined || key === "passage")) {
+          (currentQ._transfers_raw = currentQ._transfers_raw || []).push(d);
+          d = null;
+        }
+        if (!d) { d = {}; currentQ._transfer_draft = d; }
+        return d;
+      };
       const flushField = () => {
         if (currentField === null || currentQ === null) { fieldBuf = []; currentField = null; return; }
         const content = fieldBuf.join("\n").trim();
@@ -1976,8 +1996,8 @@ function nbx() {
         else if (cf === "PATTERN_STEPS") {
           const steps = content.split("\n").map(s=>s.trim()).filter(Boolean).map(s=>s.replace(/^[\d\.\、\)\）\s]+/, ""));
           currentQ._pattern_steps_raw = steps;
-        } else if (cf === "TRANSFER_PASSAGE") currentQ._transfer_passage_raw = content;
-        else if (cf === "TRANSFER_STEM") currentQ._transfer_stem_raw = content.trim();
+        } else if (cf === "TRANSFER_PASSAGE") beginTransferField("passage").passage = content;
+        else if (cf === "TRANSFER_STEM") beginTransferField("stem").stem = content.trim();
         else if (cf === "TRANSFER_OPTIONS") {
           const opts = [];
           for (const l of content.split("\n")) {
@@ -1987,9 +2007,9 @@ function nbx() {
             if (m) opts.push({label: m[1].toUpperCase(), text: m[2].trim()});
             else opts.push({label: "", text: line});
           }
-          currentQ._transfer_options_raw = opts;
-        } else if (cf === "TRANSFER_ANSWER") currentQ._transfer_answer_raw = content.trim();
-        else if (cf === "TRANSFER_EXPL") currentQ._transfer_expl_raw = content.trim();
+          beginTransferField("options").options = opts;
+        } else if (cf === "TRANSFER_ANSWER") beginTransferField("answer").answer = content.trim();
+        else if (cf === "TRANSFER_EXPL") beginTransferField("explanation").explanation = content.trim();
         else if (cf === "WRITING_POINTS") {
           let points = content.split("\n").map(s=>s.trim()).filter(Boolean).map(s=>s.replace(/^[\d\.\、\)\）\s]+/, ""));
           currentQ._writing_points_raw = points;
@@ -2014,20 +2034,24 @@ function nbx() {
         }
         const isWriting = qtype === "writing" || currentGroup.id === "writing_app" || currentGroup.id === "writing_cont";
         if (isWriting) qtype = "writing";
-        let transfer = null;
+        let transfers = [];
         let writingGuide = null;
         if (isWriting) {
           writingGuide = {points: currentQ._writing_points_raw || [], outline: currentQ._writing_outline_raw || "", sample: currentQ._writing_sample_raw || ""};
           if (!writingGuide.points.length && !writingGuide.outline && !writingGuide.sample) writingGuide = {points:[], outline:"", sample:""};
         } else {
-          const tPass = currentQ._transfer_passage_raw || "";
-          const tStem = currentQ._transfer_stem_raw || "";
-          const tOpts = currentQ._transfer_options_raw || [];
-          const tAns = currentQ._transfer_answer_raw || "";
-          const tExpl = currentQ._transfer_expl_raw || "";
-          if (tPass || tStem || tOpts.length || tAns) {
-            transfer = {passage: tPass, stem: tStem, options: tOpts, answer: tAns, explanation: tExpl};
-          }
+          // 已收下的迁移块 + 最后一块草稿：有 passage/stem/选项/答案才算有效迁移
+          const drafts = (currentQ._transfers_raw || []).slice();
+          if (currentQ._transfer_draft) drafts.push(currentQ._transfer_draft);
+          transfers = drafts
+            .filter((d) => d && (d.passage || d.stem || (d.options && d.options.length) || d.answer))
+            .map((d) => ({
+              passage: d.passage || "",
+              stem: d.stem || "",
+              options: d.options || [],
+              answer: d.answer || "",
+              explanation: d.explanation || "",
+            }));
         }
         const qObj = {
           no: String(no).trim(),
@@ -2039,7 +2063,7 @@ function nbx() {
           reference: reference,
           pitfalls: pitfalls,
           pattern: pattern.name || pattern.steps.length ? pattern : {name:"", steps:[]},
-          transfer: transfer,
+          transfers: transfers,
           writingGuide: writingGuide,
         };
         if (isWriting && !qObj.answer) qObj.answer = null;
@@ -2205,12 +2229,15 @@ function nbx() {
           }
           const gid = g.id;
           if (gid === "writing_app" || gid === "writing_cont") {
-            q.transfer = null;
+            q.transfers = [];
             if (!q.writingGuide) q.writingGuide = {points:[], outline:"", sample:""};
           } else {
-            if (q.transfer === undefined) q.transfer = null;
+            // 旧结构（单数 transfer 对象）就地升级为数组，避免两套字段并存
+            if (!Array.isArray(q.transfers)) q.transfers = q.transfer ? [q.transfer] : [];
+            q.transfers = q.transfers.filter((t) => t && typeof t === "object");
             if (q.writingGuide === undefined) q.writingGuide = null;
           }
+          delete q.transfer;
           if (typeof q.passage === "string") q.passage = trunc(q.passage, 4000);
           if (typeof q.stem === "string") q.stem = trunc(q.stem, 1000);
           if (q.reference) {
@@ -2218,7 +2245,15 @@ function nbx() {
           }
           for (const p of (q.pitfalls||[])) if (typeof p.desc==="string") p.desc=trunc(p.desc,500);
           if (q.pattern && Array.isArray(q.pattern.steps)) q.pattern.steps = q.pattern.steps.slice(0,5).map(s=>trunc(String(s),300));
-          if (q.transfer && typeof q.transfer.passage==="string") q.transfer.passage=trunc(q.transfer.passage,800);
+          for (const tr of (q.transfers || [])) {
+            // 每道迁移题各自补全字段 + 语篇截断（沿用原来的 800 字上限）
+            tr.passage = typeof tr.passage === "string" ? tr.passage : "";
+            tr.stem = typeof tr.stem === "string" ? tr.stem : "";
+            tr.answer = typeof tr.answer === "string" ? tr.answer : "";
+            tr.explanation = typeof tr.explanation === "string" ? tr.explanation : "";
+            if (!Array.isArray(tr.options)) tr.options = [];
+            tr.passage = trunc(tr.passage, 800);
+          }
         }
       }
       return out;
@@ -2333,6 +2368,24 @@ function nbx() {
       this.vpEditBeforeLeave();
       this.vpActiveTab = tab;
       this.$nextTick(() => this.vpMountAll());
+    },
+    /* --- 生成前配置（每题迁移题量）：面板开关与取值，仿右上角模型菜单 --- */
+    _vpClampTransferCount(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return this.VP_TRANSFER_MIN;
+      return Math.min(this.VP_TRANSFER_MAX, Math.max(this.VP_TRANSFER_MIN, Math.round(n)));
+    },
+    get vpTransferCount() {
+      return this._vpClampTransferCount(this.vpSettings && this.vpSettings.transferCount);
+    },
+    toggleVpSettings() {
+      this.vpSettingsOpen = !this.vpSettingsOpen;
+    },
+    closeVpSettings() {
+      this.vpSettingsOpen = false;
+    },
+    vpResetSettings() {
+      this.vpSettings.transferCount = this.VP_TRANSFER_MIN;
     },
     vpIsCurrent(gIdx, qIdx) {
       return this.visualPaper && this.visualPaper.currentGroupIdx === gIdx && this.visualPaper.currentQIdx === qIdx;
@@ -4487,7 +4540,7 @@ function nbx() {
     },
 
     /* 通用 SSE 流式调用：返回 { state: "done" | "stopped" }，出错时抛出 Error */
-    async _streamChat({ toolId, input, requestId, onToken, onReasoning, onFallback }) {
+    async _streamChat({ toolId, input, requestId, transferCount, onToken, onReasoning, onFallback }) {
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: {
@@ -4499,6 +4552,7 @@ function nbx() {
           input,
           model: this.selectedModel || undefined,
           request_id: requestId,
+          transfer_count: transferCount || undefined,
         }),
         signal: this._abortCtrl.signal,
       });
@@ -4803,11 +4857,16 @@ function nbx() {
       this.startThinkTimer();
       // 与 run() 相同：发起时快照模型，失败归因以它为准
       const modelUsed = this.selectedModel;
+      // 迁移题量随记录一起存：关掉页面再从历史续写时题量不会掉回默认值
+      if (!this.visualPaper) this.visualPaper = this.newVisualPaperState();
+      const transferCount = this.vpTransferCount;
+      this.visualPaper.transferCount = transferCount;
       try {
         const { state } = await this._streamChat({
           toolId: "13",
           input: inputText,
           requestId: this.requestId,
+          transferCount: transferCount,
           onReasoning: (text) => { if (seq === this._runSeq) this.appendReasoning(text); },
           onFallback: (info) => { if (seq === this._runSeq) this.updateFallback(info); },
           onToken: (tok) => {
@@ -4940,7 +4999,7 @@ function nbx() {
       const lastNo = alreadyNos.length ? Math.max(...alreadyNos.map(n=>parseInt(n)||0)) : 0;
       const nextNo = lastNo + 1;
       const remaining = this.vpRemaining;
-      const contInput = this.submittedInput + `\n\n【续写指令】已生成 ${this.vpQuestionCount}/${this.vpTotal} 题，题号 ${alreadyNos.join(",")} 已完成，请继续生成剩余 ${remaining} 题，从 @@Q@@ ${nextNo} 开始，按相同 @@TAG@@ 格式输出，每题以 @@END_Q@@ 结束，不要重复已生成题，也不要重新输出 @@TOTAL@@/@@PAPER@@/@@NOTICE@@。`;
+      const contInput = this.submittedInput + `\n\n【续写指令】已生成 ${this.vpQuestionCount}/${this.vpTotal} 题，题号 ${alreadyNos.join(",")} 已完成，请继续生成剩余 ${remaining} 题，从 @@Q@@ ${nextNo} 开始，按相同 @@TAG@@ 格式输出，每题以 @@END_Q@@ 结束，不要重复已生成题，也不要重新输出 @@TOTAL@@/@@PAPER@@/@@NOTICE@@。续写的每道笔试题同样要输出 ${this.vpTransferCount} 块迁移（写作题除外）。`;
       if (this.output && !this.output.endsWith("\n")) this.output += "\n";
       const baseLen = this.output.length;
       await this._runVisualStream(contInput, keepId);
@@ -5040,11 +5099,14 @@ function nbx() {
             for (let i = 0; i < (q.pattern.steps || []).length; i++) md += `${i + 1}. ${q.pattern.steps[i]}\n`;
             md += `\n`;
           }
-          if (q.transfer) {
-            const tr = q.transfer;
-            md += `**迁移训练**\n\n${tr.passage}\n\n**${tr.stem}**\n\n`;
-            for (const o of (tr.options || [])) md += `- ${o.label}. ${o.text}\n`;
-            md += `\n答案：${tr.answer}\n\n解析：${tr.explanation}\n\n`;
+          if (q.transfers && q.transfers.length) {
+            const total = q.transfers.length;
+            q.transfers.forEach((tr, ti) => {
+              if (!tr) return;
+              md += `**迁移训练${total > 1 ? ` ${ti + 1}/${total}` : ""}**\n\n${tr.passage}\n\n**${tr.stem}**\n\n`;
+              for (const o of (tr.options || [])) md += `- ${o.label}. ${o.text}\n`;
+              md += `\n答案：${tr.answer}\n\n解析：${tr.explanation}\n\n`;
+            });
           } else if (q.writingGuide) {
             md += `**写作指导**\n\n- 要点：${(q.writingGuide.points || []).join("；")}\n- 框架：${q.writingGuide.outline}\n- 范文：${q.writingGuide.sample}\n\n`;
           }
@@ -5307,6 +5369,7 @@ function nbx() {
     vpNewItem(path) {
       if (path.endsWith("options")) return { label: "", text: "" };
       if (path.endsWith("pitfalls")) return { title: "", desc: "" };
+      if (path === "q.transfers") return { passage: "", stem: "", options: [], answer: "", explanation: "" };
       return "";
     },
     vpAddItem(path) {
@@ -5337,7 +5400,8 @@ function nbx() {
       if (!Array.isArray(arr) || idx < 0 || idx >= arr.length) return;
       this.vpEditBeforeLeave();          // 先把在改的内容写回，再动数组
       if (path.endsWith("options")) {
-        const ansPath = path.startsWith("q.transfer") ? "q.transfer.answer" : "q.answer";
+        // 选项所属的答案字段：q.options → q.answer，q.transfers.2.options → q.transfers.2.answer
+        const ansPath = path.replace(/\.options$/, ".answer");
         const ans = String(this.vpFieldGet(ansPath) || "").trim().toUpperCase();
         const removed = String((arr[idx] && arr[idx].label) || "").trim().toUpperCase();
         // 删掉的正是正确项时先拦一下：否则答案会变成一个不存在的字母
@@ -5400,7 +5464,9 @@ function nbx() {
           }
           for (const p of (q.pitfalls || [])) check("易错点描述", p.desc, 500);
           for (const s of ((q.pattern && q.pattern.steps) || [])) check("考点范式步骤", s, 300);
-          if (q.transfer) check("迁移训练语篇", q.transfer.passage, 800);
+          (q.transfers || []).forEach((tr, ti) => {
+            if (tr) check(`第 ${q.no} 题·迁移${ti + 1} 语篇`, tr.passage, 800);
+          });
         }
       }
       return [...new Set(out)];
@@ -5462,20 +5528,24 @@ function nbx() {
             out.push(flat(wg.outline));
             out.push("@@WRITING_SAMPLE@@");
             out.push(block(wg.sample));
-          } else if (q.transfer) {
-            out.push("@@TRANSFER_PASSAGE@@");
-            out.push(block(q.transfer.passage));
-            out.push("@@TRANSFER_STEM@@");
-            out.push(block(q.transfer.stem));
-            out.push("@@TRANSFER_OPTIONS@@");
-            (q.transfer.options || []).forEach((o, i) => {
-              if (!o) return;
-              out.push(`${flat(o.label) || String.fromCharCode(65 + i)}. ${flat(o.text)}`);
-            });
-            out.push("@@TRANSFER_ANSWER@@");
-            out.push(flat(q.transfer.answer));
-            out.push("@@TRANSFER_EXPL@@");
-            out.push(block(q.transfer.explanation));
+          } else if (q.transfers && q.transfers.length) {
+            // 每题 N 道迁移：整块重复输出，块与块之间不插其他标签
+            for (const tr of q.transfers) {
+              if (!tr) continue;
+              out.push("@@TRANSFER_PASSAGE@@");
+              out.push(block(tr.passage));
+              out.push("@@TRANSFER_STEM@@");
+              out.push(block(tr.stem));
+              out.push("@@TRANSFER_OPTIONS@@");
+              (tr.options || []).forEach((o, i) => {
+                if (!o) return;
+                out.push(`${flat(o.label) || String.fromCharCode(65 + i)}. ${flat(o.text)}`);
+              });
+              out.push("@@TRANSFER_ANSWER@@");
+              out.push(flat(tr.answer));
+              out.push("@@TRANSFER_EXPL@@");
+              out.push(block(tr.explanation));
+            }
           }
           out.push("@@END_Q@@");
         }
@@ -6039,13 +6109,13 @@ function nbx() {
           } : null,
           pitfalls: (q.pitfalls || []).map((p) => ({ title: p.title || "", desc: p.desc || "" })),
           pattern: q.pattern ? { name: q.pattern.name || "", steps: (q.pattern.steps || []).slice() } : null,
-          transfer: q.transfer ? {
-            passage: q.transfer.passage || "",
-            stem: q.transfer.stem || "",
-            options: options(q.transfer.options),
-            answer: q.transfer.answer || "",
-            explanation: q.transfer.explanation || "",
-          } : null,
+          transfers: (q.transfers || []).map((tr) => ({
+            passage: tr.passage || "",
+            stem: tr.stem || "",
+            options: options(tr.options),
+            answer: tr.answer || "",
+            explanation: tr.explanation || "",
+          })),
           writingGuide: q.writingGuide ? {
             points: (q.writingGuide.points || []).slice(),
             outline: q.writingGuide.outline || "",
@@ -6457,6 +6527,8 @@ function nbx() {
       this.vpActiveTab = "reference";
       if (item.visualPaper && item.visualPaper.groups) {
         this.visualPaper = JSON.parse(JSON.stringify(item.visualPaper));
+        // 恢复这份卷子生成时的迁移题量（旧记录没有该字段 → 当时硬编码为 1 道）
+        this.vpSettings.transferCount = this._vpClampTransferCount(item.visualPaper.transferCount);
         // 旧记录可能存的是解析器修复前的坏快照（标签漂移导致易错点丢失等）：
         // 原文 output 完好，优先用当前解析器重解析，重解析不出题目再回退快照
         const re = this.tryParseVisualPaper(item.output || "");

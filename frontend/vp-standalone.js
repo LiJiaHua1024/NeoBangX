@@ -450,32 +450,42 @@
       return;
     }
 
-    /* transfer */
-    var tr = q.transfer;
-    if (!tr) {
+    /* transfer（每题可多道：块内小标题 + 块级删除 + 底部「加一道」） */
+    var transfers = q.transfers || (q.transfers = []);
+    if (!transfers.length) {
       tabPanel.appendChild(el("div", "vp-line dim", q.qtype === "writing"
         ? "该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。"
         : "该题暂无迁移训练内容。"));
-      return;
+    } else {
+      var tlist = el("div", "vp-edit-list");
+      tlist.dataset.vpList = "q.transfers";
+      transfers.forEach(function (tr, ti) {
+        if (!tr) return;
+        var card = el("div", "glass-soft vp-card vp-edit-item");
+        card.appendChild(el("div", "vp-transfer-cap", "迁移训练 " + (ti + 1) + " / " + transfers.length));
+        card.appendChild(cell("迁移语篇", "q.transfers." + ti + ".passage", { multi: true, max: 800 }));
+        card.appendChild(cell("迁移题干", "q.transfers." + ti + ".stem", { multi: true }));
+        var tcell = el("div", "vp-edit-cell");
+        tcell.appendChild(el("div", "vp-edit-label", "迁移选项（只改文字；增删时编号自动重排）"));
+        var olist = listBox("q.transfers." + ti + ".options");
+        (tr.options || []).forEach(function (o, oi) {
+          var row = el("div", "vp-edit-row");
+          row.appendChild(el("span", "vp-option-label", str(o && o.label) || String.fromCharCode(65 + oi)));
+          row.appendChild(editableNode("q.transfers." + ti + ".options." + oi + ".text"));
+          row.appendChild(delBtn("q.transfers." + ti + ".options", oi, "删除这个选项"));
+          olist.appendChild(row);
+        });
+        tcell.appendChild(olist);
+        tcell.appendChild(addBtn("q.transfers." + ti + ".options", "+ 加一个选项"));
+        card.appendChild(tcell);
+        card.appendChild(cell("迁移答案", "q.transfers." + ti + ".answer"));
+        card.appendChild(cell("迁移解析", "q.transfers." + ti + ".explanation", { multi: true }));
+        card.appendChild(delBtn("q.transfers", ti, "删除这道迁移题"));
+        tlist.appendChild(card);
+      });
+      tabPanel.appendChild(tlist);
     }
-    tabPanel.appendChild(el("div", "vp-tab-title", "迁移训练"));
-    tabPanel.appendChild(cell("迁移语篇", "q.transfer.passage", { multi: true, max: 800 }));
-    tabPanel.appendChild(cell("迁移题干", "q.transfer.stem", { multi: true }));
-    var tcell = el("div", "vp-edit-cell");
-    tcell.appendChild(el("div", "vp-edit-label", "迁移选项（只改文字；增删时编号自动重排）"));
-    var tlist = listBox("q.transfer.options");
-    (tr.options || []).forEach(function (o, i) {
-      var row = el("div", "vp-edit-row");
-      row.appendChild(el("span", "vp-option-label", str(o && o.label) || String.fromCharCode(65 + i)));
-      row.appendChild(editableNode("q.transfer.options." + i + ".text"));
-      row.appendChild(delBtn("q.transfer.options", i, "删除这个选项"));
-      tlist.appendChild(row);
-    });
-    tcell.appendChild(tlist);
-    tcell.appendChild(addBtn("q.transfer.options", "+ 加一个选项"));
-    tabPanel.appendChild(tcell);
-    tabPanel.appendChild(cell("迁移答案", "q.transfer.answer"));
-    tabPanel.appendChild(cell("迁移解析", "q.transfer.explanation", { multi: true }));
+    if (q.qtype !== "writing") tabPanel.appendChild(addBtn("q.transfers", "+ 加一道迁移题"));
   }
 
   /* ---------------- 挂载编辑区：只在目标变化时灌内容，避免打字时被自己覆盖 ---------------- */
@@ -643,6 +653,7 @@
   function newItem(path) {
     if (path.slice(-7) === "options") return { label: "", text: "" };
     if (path.slice(-8) === "pitfalls") return { title: "", desc: "" };
+    if (path === "q.transfers") return { passage: "", stem: "", options: [], answer: "", explanation: "" };
     return "";
   }
   function relabelOptions(arr) {
@@ -677,7 +688,8 @@
     if (!Array.isArray(arr) || idx < 0 || idx >= arr.length) return;
     writeBackEdited();                 // 先把在改的内容写回，再动数组
     if (path.slice(-7) === "options") {
-      var ansPath = path.indexOf("q.transfer") === 0 ? "q.transfer.answer" : "q.answer";
+      // 选项所属的答案字段：q.options → q.answer，q.transfers.2.options → q.transfers.2.answer
+      var ansPath = path.replace(/\.options$/, ".answer");
       var ans = str(fieldGet(ansPath)).trim().toUpperCase();
       var removed = str(arr[idx] && arr[idx].label).trim().toUpperCase();
       // 删掉的正是正确项时先拦一下：否则答案会变成一个不存在的字母
@@ -1106,7 +1118,7 @@
     tabsWrap.querySelectorAll("button").forEach(function (b) {
       b.classList.toggle("on", b.dataset.tab === state.tab);
       if (b.dataset.tab === "transfer") {
-        var off = !q.transfer;
+        var off = !(q.transfers || []).length;
         b.disabled = off;
         b.title = off ? "写作题不设迁移训练" : "";
       }
@@ -1171,9 +1183,9 @@
       return;
     }
 
-    /* transfer */
-    var tr = q.transfer;
-    if (!tr) {
+    /* transfer（每题可多道：逐块渲染成卡） */
+    var transfers = q.transfers || [];
+    if (!transfers.length) {
       tabPanel.appendChild(el("div", "vp-line dim", q.qtype === "writing"
         ? "该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。"
         : "该题暂无迁移训练内容。"));
@@ -1183,21 +1195,27 @@
     thead.appendChild(document.createTextNode("迁移训练 "));
     thead.appendChild(el("span", "vp-tab-sub", "（同构新题，话题不同 · 范式相同）"));
     tabPanel.appendChild(thead);
-    var card = el("div", "glass-soft vp-card");
-    if (has(tr.passage)) card.appendChild(setRich(el("div", "vp-pre vp-line mb2"), tr.passage));
-    if (has(tr.stem)) card.appendChild(setRich(el("div", "semibold vp-line mb2"), tr.stem));
-    var grid = el("div", "vp-options-grid");
-    (tr.options || []).filter(Boolean).forEach(function (opt) {
-      grid.appendChild(optionCard(opt, tr.answer, state.mask));
+    var tblist = el("div", "vp-edit-list");
+    transfers.forEach(function (tr, ti) {
+      if (!tr) return;
+      var card = el("div", "glass-soft vp-card");
+      if (transfers.length > 1) card.appendChild(el("div", "vp-transfer-cap", "迁移训练 " + (ti + 1) + " / " + transfers.length));
+      if (has(tr.passage)) card.appendChild(setRich(el("div", "vp-pre vp-line mb2"), tr.passage));
+      if (has(tr.stem)) card.appendChild(setRich(el("div", "semibold vp-line mb2"), tr.stem));
+      var grid = el("div", "vp-options-grid");
+      (tr.options || []).filter(Boolean).forEach(function (opt) {
+        grid.appendChild(optionCard(opt, tr.answer, state.mask));
+      });
+      if (grid.childNodes.length) card.appendChild(grid);
+      var foot = el("div", "vp-transfer-foot");
+      var ansline = el("div", "vp-line");
+      ansline.appendChild(setRich(el("span", "semibold ans"), "答案：" + str(tr.answer)));
+      foot.appendChild(ansline);
+      if (has(tr.explanation)) foot.appendChild(setRich(el("div", "vp-line dim"), tr.explanation));
+      card.appendChild(foot);
+      tblist.appendChild(card);
     });
-    if (grid.childNodes.length) card.appendChild(grid);
-    var foot = el("div", "vp-transfer-foot");
-    var ansline = el("div", "vp-line");
-    ansline.appendChild(setRich(el("span", "semibold ans"), "答案：" + str(tr.answer)));
-    foot.appendChild(ansline);
-    if (has(tr.explanation)) foot.appendChild(setRich(el("div", "vp-line dim"), tr.explanation));
-    card.appendChild(foot);
-    tabPanel.appendChild(card);
+    tabPanel.appendChild(tblist);
   }
   function renderQuestion() {
     var cur = FLAT[state.cur];

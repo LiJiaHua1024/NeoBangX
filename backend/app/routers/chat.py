@@ -352,6 +352,9 @@ class ChatRequest(BaseModel):
     batch_id: Optional[str] = Field(None, max_length=128, description="智能错题迁移批次 ID")
     batch_size: Optional[int] = Field(None, ge=1, description="批次内错因卡片总数")
     batch_index: Optional[int] = Field(None, ge=0, description="当前错因在批次中的序号")
+    transfer_count: Optional[int] = Field(
+        None, ge=1, le=5, description="试卷可视化全解：每道笔试题的迁移训练题量（默认 1）"
+    )
 
 
 class MigrationAnalyzeRequest(BaseModel):
@@ -388,6 +391,9 @@ class MigrationQuotaRequest(BaseModel):
 class ChatPreviewRequest(BaseModel):
     tool_id: str = Field(..., max_length=64)
     input: str = Field(..., min_length=1, max_length=50000)
+    transfer_count: Optional[int] = Field(
+        None, ge=1, le=5, description="试卷可视化全解：每道笔试题的迁移训练题量（默认 1）"
+    )
 
 
 class StopRequest(BaseModel):
@@ -704,7 +710,9 @@ async def preview_prompt(
     if not prompt_filename:
         raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")
 
-    prompt = loader.render(prompt_filename, req.input)
+    prompt = loader.render(
+        prompt_filename, req.input, {"transfer_count": req.transfer_count}
+    )
     if prompt is None:
         raise HTTPException(
             status_code=404,
@@ -736,7 +744,9 @@ async def chat_stream(
     if not prompt_filename:
         raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")
 
-    prompt = loader.render(prompt_filename, req.input)
+    prompt = loader.render(
+        prompt_filename, req.input, {"transfer_count": req.transfer_count}
+    )
     if prompt is None:
         raise HTTPException(
             status_code=404,
