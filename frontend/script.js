@@ -2500,9 +2500,7 @@ function nbx() {
             partial: false,
             createdAt: Date.now(),
           };
-          this.history.unshift(item);
-          if (this.history.length > HISTORY_LIMIT) this.history.length = HISTORY_LIMIT;
-          lsSet(LS.history, this.history);
+          this._unshiftHistory(item);
           this.generateTitle(item);
         }
       } catch (e) {
@@ -2512,6 +2510,13 @@ function nbx() {
           this.vocab.status = "error";
           this.vocab.checkError = describeError(e, "替换失败");
           this.toast("替换失败：" + this.vocab.checkError, "error");
+          // 原文是用户辛苦录入的，替换失败也要留一条（输入不在输入框里，显式传入）
+          this.pushFailedHistory(this.vocab.checkError, {
+            input: this.vocab.text.trim(),
+            output: this.vocab.output,
+            fileName: "",
+            model: this.selectedModel,
+          });
         }
       } finally {
         clearInterval(this._timer);
@@ -3611,10 +3616,16 @@ function nbx() {
         state.generating = false;
         state.generated = true;
         const partial = state.results.some((card) => card.status !== "done");
-        if (this.migrationHasOutput) {
-          const item = this.pushMigrationHistory(partial);
-          this.generateTitle(item);
-        }
+        // 出错也要留历史（用户表单里的题目/答案是真材实料）：汇总失败卡片的原因，
+        // 整批失败就是那句原始错误，部分失败则标注比例
+        const failed = state.results.filter((card) => card.status === "error");
+        const errText = failed.length
+          ? (failed.length === state.results.length
+            ? (failed[0].error || "生成失败")
+            : `${failed.length}/${state.results.length} 张卡片生成失败`)
+          : "";
+        const item = this.pushMigrationHistory(partial, errText);
+        if (item && this.migrationHasOutput) this.generateTitle(item);
         if (!partial) this.verifyAuth();
         if (partial) this.toast("部分迁移卡片未完成，请检查后重试", "warn");
         else this.toast(`已完成 ${state.results.length} 张迁移卡片`);
@@ -4003,34 +4014,41 @@ function nbx() {
       lsSet(LS.favorites, this.favorites);
       this.toast("已收藏整条迁移记录");
     },
-    pushMigrationHistory(partial = false) {
+    pushMigrationHistory(partial = false, error = "") {
       const form = this.migration.form;
-      const output = this.migrationAllText(true);
-      const item = {
-        id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
-        toolId: this.currentTool.id,
-        toolName: this.currentTool.name,
-        icon: this.currentTool.icon,
-        title: "",
+      // 卡片状态与失败原因一并存：重开历史时部分失败的卡片不能被显示成「已完成」
+      const fields = {
         input: form.question.trim(),
+        output: this.migrationAllText(true),
         fileName: "",
-        output,
         model: this.selectedModel,
         partial: !!partial,
-        createdAt: Date.now(),
         migration: {
           form: { ...form },
           causes: this.migrationSelectedCauses.map((cause) => ({ ...cause })),
           questionCount: this.migration.questionCount,
           results: this.migration.results
             .filter((card) => card.output && card.output.trim())
-            .map((card) => ({ causeId: card.causeId, cause: card.cause, output: card.output })),
+            .map((card) => ({
+              causeId: card.causeId,
+              cause: card.cause,
+              output: card.output,
+              status: card.status,
+              error: card.error || "",
+            })),
         },
       };
-      this.history.unshift(item);
-      if (this.history.length > HISTORY_LIMIT) this.history.length = HISTORY_LIMIT;
-      lsSet(LS.history, this.history);
-      return item;
+      // 失败走统一入口：同样是「同输入连续失败合并一条」，整批失败时输入也不会丢
+      if (error) return this.pushFailedHistory(error, fields);
+      return this._unshiftHistory({
+        id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+        toolId: this.currentTool.id,
+        toolName: this.currentTool.name,
+        icon: this.currentTool.icon,
+        title: "",
+        createdAt: Date.now(),
+        ...fields,
+      });
     },
 
     /* ============ 流式生成（SSE） ============ */
@@ -4355,6 +4373,8 @@ function nbx() {
         this.status = "error";
         this.errorMsg = errMsg || "生成失败";
         this.toast("生成失败：" + this.errorMsg, "error");
+        // 出错同样入历史：已生成的部分内容与用户输入都要留得住
+        this.pushFailedHistory(this.errorMsg);
       } else {
         this.failedModel = "";
         this.errorLimited = false;
@@ -4455,6 +4475,25 @@ function nbx() {
         this.errorMsg = errMsg || "生成失败";
         this.vpParseError = errMsg || "生成失败";
         this.toast("生成失败：" + this.errorMsg, "error");
+        // 失败也入历史：整卷/续写中途报错时，已解析出的题目快照一并存下，之后还能续写
+        const updId = opts.updateId || null;
+        const origin = updId ? this.history.find(h => h.id === updId) : null;
+        const hasPaper = !!(this.visualPaper && (this.visualPaper.groups?.length || this.visualPaper.total || (this.visualPaper.paper && this.visualPaper.paper.title)));
+        if (origin) {
+          // 重试/续写一个字都没产出时保留原内容与快照，别把已生成的记录清空
+          if (this.output.trim()) {
+            origin.output = this.output;
+            if (hasPaper) origin.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
+          }
+          origin.error = String(this.errorMsg).slice(0, 300);
+          origin.partial = false;
+          origin.model = this.failedModel || this.selectedModel;
+          origin.createdAt = Date.now();
+          lsSet(LS.history, this.history);
+        } else {
+          const created = this.pushFailedHistory(this.errorMsg, hasPaper ? { visualPaper: JSON.parse(JSON.stringify(this.visualPaper)) } : {});
+          if (created && this.visualPaper) this.visualPaper.historyId = created.id;
+        }
       } else {
         this.failedModel = "";
         this.errorLimited = false;
@@ -4463,9 +4502,10 @@ function nbx() {
           const updateId = opts.updateId || null;
           let item = updateId ? this.history.find(h => h.id === updateId) : null;
           if (item) {
-            // 续写/重跑：在原记录上追加更新，不新增记录
+            // 续写/重跑：在原记录上追加更新，不新增记录；这次成功了就不再是失败记录
             item.output = this.output;
             item.partial = (state === "stopped");
+            item.error = "";
             item.model = this.selectedModel;
             if (this.visualPaper && (this.visualPaper.groups?.length || this.visualPaper.total)) {
               item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
@@ -5076,8 +5116,14 @@ function nbx() {
     },
 
     /* ============ 历史记录 ============ */
+    _unshiftHistory(item) {
+      this.history.unshift(item);
+      if (this.history.length > HISTORY_LIMIT) this.history.length = HISTORY_LIMIT;
+      lsSet(LS.history, this.history);
+      return item;
+    },
     pushHistory(partial) {
-      const item = {
+      return this._unshiftHistory({
         id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
         toolId: this.currentTool.id,
         toolName: this.currentTool.name,
@@ -5089,11 +5135,43 @@ function nbx() {
         model: this.selectedModel,
         partial: !!partial,
         createdAt: Date.now(),
+      });
+    },
+    /* 生成失败也留一条历史：用户敲进去的输入是真实付出，不该因为一次报错就消失。
+       无输入（开发预览等）不落盘；同一工具 + 同一输入连续失败时合并上一条，
+       避免反复点「重试」把列表刷屏。
+       extra 里 input / output / fileName / model 会覆盖取值来源（超标词等输入不在输入框里的工具用），
+       其余字段原样写进记录（如可视化试卷的 visualPaper 快照）。 */
+    pushFailedHistory(errorMsg, extra = {}) {
+      const { input: inputOverride, output: outputOverride, fileName: fileNameOverride, ...fields } = extra;
+      const input = (inputOverride != null ? String(inputOverride) : (this.submittedInput || this.input || "")).trim();
+      if (!input || !this.currentTool) return null;
+      const args = {
+        toolId: this.currentTool.id,
+        input,
+        fileName: fileNameOverride != null ? String(fileNameOverride) : (this.submittedFileName || ""),
+        output: outputOverride != null ? outputOverride : this.output,
+        model: this.failedModel || this.selectedModel,
+        error: String(errorMsg || "生成失败").slice(0, 300),
+        createdAt: Date.now(),
+        ...fields,
       };
-      this.history.unshift(item);
-      if (this.history.length > HISTORY_LIMIT) this.history.length = HISTORY_LIMIT;
-      lsSet(LS.history, this.history);
-      return item;
+      const prev = this.history[0];
+      if (prev && prev.error && prev.toolId === args.toolId && prev.input === args.input) {
+        // 这次重试一个字都没产出时保留上一条已生成的内容，别把内容越重试越少
+        if (!String(args.output || "").trim() && prev.output) args.output = prev.output;
+        Object.assign(prev, args);
+        lsSet(LS.history, this.history);
+        return prev;
+      }
+      return this._unshiftHistory({
+        id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+        toolName: this.currentTool.name,
+        icon: this.currentTool.icon,
+        title: "",
+        partial: false,
+        ...args,
+      });
     },
 
     async generateTitle(item) {
@@ -5153,7 +5231,12 @@ function nbx() {
         this.vocab.text = item.input || "";
         this.vocab.output = item.output || "";
         this.vocab.rendered = renderMd(item.output || "");
-        this.vocab.status = item.output ? "done" : "idle";
+        if (item.error) {
+          this.vocab.status = "error";
+          this.vocab.checkError = item.error;
+        } else {
+          this.vocab.status = item.output ? "done" : "idle";
+        }
         this.rightMobileOpen = false;
         return;
       }
@@ -5165,8 +5248,17 @@ function nbx() {
       this.attachedFile = null;
       this.inputMode = "text";
       this.output = item.output;
-      this.errorMsg = "";
-      this.status = "history";
+      // 失败记录：把错误原因一并还原，错误卡与「直接重试 / 换个模型重试 / 编辑输入」照常可用
+      if (item.error) {
+        this.errorMsg = item.error;
+        this.status = "error";
+        this.failedModel = item.model || "";
+        this.errorRetryable = true;
+        this.errorLimited = false;
+      } else {
+        this.errorMsg = "";
+        this.status = "history";
+      }
       this.resetReasoning();
       this._outputDirty = true; // 载入历史同样属于输出变化，须走完整渲染
       this.doRender();
@@ -5203,8 +5295,8 @@ function nbx() {
         cause: card.cause || "未命名错因",
         output: card.output || "",
         rendered: renderMd(card.output || ""),
-        status: "done",
-        error: "",
+        status: card.status === "error" ? "error" : (card.status === "stopped" ? "stopped" : "done"),
+        error: card.error || "",
         streaming: false,
         collapsed: false,
         requestId: "",
@@ -5213,9 +5305,18 @@ function nbx() {
         reasoningTruncated: false,
         reasoningTokens: 0,
       }));
-      this.migration.step = 4;
-      this.migration.generated = true;
       this.migration.generating = false;
+      if (this.migration.results.length) {
+        this.migration.step = 4;
+        this.migration.generated = true;
+        this.migration.analysisError = item.error || "";
+      } else {
+        // 整批失败、一张卡片都没留下：回到参数步骤，表单与已选错因都还原，
+        // 失败原因显示在那一步的错误卡上，用户可以直接再点「开始生成」
+        this.migration.step = 3;
+        this.migration.generated = false;
+        this.migration.analysisError = item.error || "生成失败";
+      }
       this.rightMobileOpen = false;
     },
     openVisualPaperHistory(item) {
@@ -5229,8 +5330,17 @@ function nbx() {
       this.submittedFileName = item.fileName || "";
       this.inputCollapsed = true;
       this.output = item.output || "";
-      this.errorMsg = "";
-      this.status = "history";
+      // 失败记录：还原错误提示，错误卡上的「重试 / 换个模型 / 续写」照常可用
+      if (item.error) {
+        this.errorMsg = item.error;
+        this.status = "error";
+        this.failedModel = item.model || "";
+        this.errorRetryable = true;
+        this.errorLimited = false;
+      } else {
+        this.errorMsg = "";
+        this.status = "history";
+      }
       this.vpCloseFullscreen();
       this.vpActiveTab = "reference";
       if (item.visualPaper && item.visualPaper.groups) {

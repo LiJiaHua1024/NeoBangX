@@ -1931,6 +1931,11 @@ html[data-theme="sora"] .mascot-peeking {
   border-color: var(--border);
   color: var(--text-dim);
 }
+.chip.danger {
+  background: color-mix(in srgb, #c03e2a 10%, transparent);
+  border-color: color-mix(in srgb, #c03e2a 26%, transparent);
+  color: #f0958a;
+}
 
 .seg {
   display: flex;
