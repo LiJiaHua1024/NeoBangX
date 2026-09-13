@@ -769,6 +769,12 @@ mark, .vp-hl {
   transition: background 0.18s ease, color 0.18s ease;
 }
 .vp-stage-exit:hover { background: var(--hover-bg); color: var(--text); }
+/* 修改模式打开时按钮亮起（与 App 内的修改开关一致） */
+.vp-stage-exit.on {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
 
 .vp-stage-nav {
   position: absolute;
@@ -970,9 +976,122 @@ mark, .vp-hl {
   .cover-themes .theme-dot, .vp-stage-themes .theme-dot { width: 1.25rem; height: 1.25rem; }
   .vp-stage-exit span { display: none; }
   .vp-stage-exit { padding: 0 0.7rem; }
+  /* 小屏顶栏挤不下：格式按钮只留选中文字后浮出的那一组（触屏更好按） */
+  .vp-fmt-group { display: none; }
   .vp-stage-nav { min-width: 0; padding: 0 1rem; font-size: 0.95rem; height: 3rem; }
   .vp-stage-dock { height: 2.9rem; }
   .vp-dock-pos { min-width: 3.6rem; font-size: 0.92rem; }
   .vp-dock-btn { font-size: 0.82rem; padding: 0 0.7rem; }
   .vp-overview { width: 94vw; }
 }
+
+/* ============================================================
+   修改模式（与 App 内一致：编辑区与正文同字号，聚焦才有边框）
+   独立文件里改了就地存在浏览器；「保存文件」导出更新后的 HTML。
+   ============================================================ */
+.vp-edit-head { flex: none; max-height: 62%; overflow-y: auto; }
+.vp-edit-cell { display: flex; flex-direction: column; gap: 0.2rem; margin-top: 0.55rem; }
+.vp-edit-cell:first-child { margin-top: 0; }
+.vp-edit-label { font-size: 0.72rem; font-weight: 650; letter-spacing: 0.02em; color: var(--text-faint); }
+.vp-edit-key { flex: none; min-width: 1.1rem; font-size: 0.78rem; color: var(--text-faint); line-height: 2.1; }
+.vp-editable {
+  min-height: 1.9rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.55rem;
+  border: 1px dashed color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--panel-soft) 60%, transparent);
+  color: var(--text);
+  font-size: 0.94rem;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.vp-editable:hover { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.vp-editable:focus {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: var(--panel-soft);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.vp-editable-passage { min-height: 8rem; }
+.vp-edit-count { font-size: 0.65rem; color: var(--text-faint); text-align: right; }
+.vp-edit-count.over { color: #e5604c; font-weight: 600; }
+.vp-edit-row { display: flex; align-items: flex-start; gap: 0.45rem; }
+.vp-edit-row .vp-editable { flex: 1; min-width: 0; }
+.vp-edit-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.vp-edit-item { position: relative; padding-right: 2rem; }
+.vp-edit-del {
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 0.5rem;
+  color: var(--text-faint);
+  font-size: 1.05rem;
+  line-height: 1;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.vp-edit-del:hover { background: color-mix(in srgb, #c03e2a 14%, transparent); color: #e5604c; }
+.vp-edit-item > .vp-edit-del { position: absolute; top: 0.45rem; right: 0.1rem; }
+.vp-edit-add {
+  align-self: flex-start;
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--accent);
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+.vp-edit-add:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.vp-edit-add:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 顶栏格式组（仅修改模式显示）：选中文字后按钮亮起，与浮出的小按钮等效 */
+.vp-fmt-group { display: inline-flex; align-items: center; gap: 0.15rem; padding-left: 0.35rem; border-left: 1px solid var(--border); }
+.vp-fmt-btn {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  transition: background 0.15s ease, color 0.15s ease, transform 0.08s ease;
+}
+.vp-fmt-btn:hover:not(:disabled) { background: var(--hover-bg); color: var(--text); }
+.vp-fmt-btn:active:not(:disabled) { transform: scale(0.92); }
+.vp-fmt-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* 浮动格式按钮：选中文字时才出现（fixed 定位，贴着选区） */
+.vp-edit-tools {
+  position: fixed;
+  z-index: 78;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+}
+.vp-edit-tools .vp-fmt-btn { width: 2.1rem; height: 2rem; }
+
+/* 轻提示（保存、导出结果等）：停在控制台上方，别盖住底部的按钮 */
+.vp-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 5.6rem;
+  transform: translateX(-50%);
+  z-index: 90;
+  padding: 0.6rem 1.1rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text);
+  max-width: min(88vw, 34rem);
+  text-align: center;
+}
+.vp-toast.ok { color: var(--accent); }
+.vp-toast.warn { color: #e0a24c; }
+.vp-toast.error { color: #e5604c; }
+

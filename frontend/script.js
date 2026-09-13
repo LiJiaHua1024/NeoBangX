@@ -5102,20 +5102,22 @@ function nbx() {
       // 拖到窗口外松手等情况下清掉拖拽标记，避免之后选字不浮出
       document.addEventListener("pointercancel", () => { this._vpDragging = false; }, { passive: true, capture: true });
       window.addEventListener("blur", () => { this._vpDragging = false; });
+      // 关页面前把防抖中的改动落盘：免得老师在最后一次停顿（约 1 秒）之内就关了窗口
+      window.addEventListener("beforeunload", () => this.vpFlushEdits());
     },
     _vpStopEditTimer() { clearTimeout(this._vpEditTimer); this._vpEditTimer = null; },
 
-    /* --- 字段路径读写：paper.* / g<序号>.* / q.*（q 指当前题） --- */
+    /* --- 字段路径读写：paper.* / notice / g<序号>.* / q.*（q 指当前题） --- */
     vpResolvePath(path) {
       const segs = String(path || "").split(".");
       if (!segs.length || !this.visualPaper) return null;
       let host = null;
-      if (segs[0] === "paper") host = this.visualPaper.paper;
-      else if (/^g\d+$/.test(segs[0])) host = this.vpGroups[Number(segs[0].slice(1))];
-      else if (segs[0] === "q") host = this.vpCurrentQuestion;
-      if (!host) return null;
-      const rest = segs.slice(1);
-      if (!rest.length) return null;
+      let rest = segs;
+      if (segs[0] === "paper") { host = this.visualPaper.paper; rest = segs.slice(1); }
+      else if (segs[0] === "notice") host = this.visualPaper;   // 试卷说明是顶层字段，路径就是 notice 本身
+      else if (/^g\d+$/.test(segs[0])) { host = this.vpGroups[Number(segs[0].slice(1))]; rest = segs.slice(1); }
+      else if (segs[0] === "q") { host = this.vpCurrentQuestion; rest = segs.slice(1); }
+      if (!host || !rest.length) return null;
       for (let i = 0; i < rest.length - 1; i++) {
         const k = rest[i];
         host = host[/^\d+$/.test(k) ? Number(k) : k];
@@ -5277,9 +5279,9 @@ function nbx() {
       tools.style.top = `${Math.round(top)}px`;
     },
     vpHideTools() {
+      // 只藏浮层，不清 _vpEditEl：用键盘（Shift+方向键）选字时也要能点亮加粗/高亮
       const tools = this.$refs.vpEditTools;
       if (tools) tools.hidden = true;
-      this._vpEditEl = null;
     },
     vpHideToolsSoon() {
       clearTimeout(this._vpToolTimer);
@@ -6053,6 +6055,9 @@ function nbx() {
       }));
       return {
         version: 1,
+        // 独立文件没有后端：文件自带一个 id，浏览器里按它记住本机修改（localStorage）
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        rev: 1,
         title,
         notice: vp.notice || "",
         paper: { title: paper.title || "", subject: paper.subject || "", year: paper.year || "" },
@@ -6066,7 +6071,7 @@ function nbx() {
     vpExportIconSprite() {
       const names = ["x", "check", "chevron-left", "chevron-right", "chevron-down", "chevron-up",
         "eye", "eye-off", "grid", "pin", "projector", "target", "lightbulb", "route", "puzzle",
-        "expand", "compress"];
+        "expand", "compress", "pen", "insert", "bold", "highlight"];
       const symbols = names
         .map((n) => `<symbol id="i-${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[n] || ""}</symbol>`)
         .join("");

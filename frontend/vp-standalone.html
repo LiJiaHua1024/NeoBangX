@@ -2,7 +2,8 @@
 <!--
   NeoBangX · 可视化讲解单文件模板
   由 frontend/script.js 的 vpBuildStandaloneHtml() 组装：模板里的双花括号占位符会被
-  主题、标题、图标精灵、样式、数据与脚本替换；产物不依赖网络，双击即可讲解。
+  主题、标题、图标精灵、样式、数据与脚本替换；产物不依赖网络，双击即可讲解，
+  并且可以直接在文件里改字（改动存在浏览器，「保存文件」写回 HTML；未保存就关闭会先提示）。
 -->
 <html lang="zh-CN" data-theme="{{VP_THEME}}"{{VP_SKY}}>
 <head>
@@ -40,6 +41,7 @@
     <div class="vp-split">
       <div class="vp-col vp-col-left">
         <div class="vp-pane scroll-thin" id="vp-left">
+          <div id="q-edit-meta" hidden></div>
           <div class="vp-passage" id="q-passage"></div>
           <div class="vp-nopassage t-sm dim" id="q-nopassage">该题无独立语篇（写作题或语法填空）</div>
           <div class="vp-ansmap" id="ans-map">
@@ -51,6 +53,7 @@
       <div class="vp-col vp-col-right">
         <div class="vp-pane vp-pane-right scroll-thin" id="vp-right">
           <div class="vp-qwrap">
+            <div class="vp-edit-head" id="q-edit-head" hidden></div>
             <div class="vp-question-head" id="q-head">
               <div class="vp-qhead-top">
                 <span class="chip" id="q-no"></span>
@@ -91,6 +94,16 @@
           </div>
         </div>
         <div class="vp-stage-right">
+          <button class="vp-stage-exit" id="st-edit" title="修改模式：点开后所有文字都能改">
+            <svg class="vp-ic" aria-hidden="true"><use href="#i-pen"></use></svg><span>修改</span>
+          </button>
+          <button class="vp-stage-exit" id="st-save" title="保存到文件（首次会让你确认一次，之后直接覆盖）" hidden>
+            <svg class="vp-ic" aria-hidden="true"><use href="#i-insert"></use></svg><span>保存文件</span>
+          </button>
+          <span class="vp-fmt-group" id="st-fmt" hidden>
+            <button type="button" class="vp-fmt-btn" id="st-bold" title="加粗选中的文字（也可按 Ctrl+B）" aria-label="加粗"></button>
+            <button type="button" class="vp-fmt-btn" id="st-hl" title="高亮选中的文字" aria-label="高亮"></button>
+          </span>
           <div class="vp-stage-themes" id="st-themes" role="group" aria-label="主题"></div>
           <button class="vp-stage-exit" id="st-fs" title="切换全屏" aria-label="切换全屏"></button>
           <button class="vp-stage-exit" id="st-cover" title="返回封面（Esc）">
@@ -135,6 +148,14 @@
       </button>
     </div>
   </div>
+
+  <!-- ==================== 修改模式：选中文字时浮出的格式按钮 ==================== -->
+  <div class="vp-edit-tools glass-deep" id="vp-edit-tools" hidden>
+    <button type="button" class="vp-fmt-btn" id="vp-tool-bold" title="加粗（也可按 Ctrl+B）" aria-label="加粗"></button>
+    <button type="button" class="vp-fmt-btn" id="vp-tool-hl" title="高亮" aria-label="高亮"></button>
+  </div>
+
+  <div class="vp-toast glass-deep" id="vp-toast" hidden></div>
 
   <script id="vp-data" type="application/json">{{VP_DATA}}</script>
   <script>{{VP_JS}}</script>

@@ -1,9 +1,11 @@
 /* ============================================================
    NeoBangX · 可视化讲解单文件运行时（导出产物专用）
    无依赖、无网络：读取 #vp-data 的 JSON，在 #vp-cover / #vp-present 里
-   渲染封面与全屏讲台。所有文本一律用 textContent 写入，不拼 HTML。
+   渲染封面与全屏讲台。文本一律先转义再写入（vpFmt），无注入面。
    交互与 App 内「全屏讲题」对齐：左右键/空格翻题、遮答案、题目总览、
    控制台自动隐藏与唤出、5 套主题实时切换、触屏左右滑动、浏览器全屏。
+   另外带修改模式：顶栏「修改」进去，点文字就能改，选中文字可加粗/高亮，
+   列表可增删；改动自动存在本浏览器，「保存文件」导出更新后的单文件 HTML。
    ============================================================ */
 (function () {
   "use strict";
@@ -16,23 +18,40 @@
   var DATA = {};
   try { DATA = JSON.parse(($("vp-data") && $("vp-data").textContent) || "{}") || {}; } catch (e) { DATA = {}; }
 
-  var TITLE = str(DATA.title) || "可视化试卷讲解";
-  var PAPER = DATA.paper || {};
-  var NOTICE = str(DATA.notice);
-  var ANSWER_MAP = DATA.answerMap || {};
-  var TOTAL = Number(DATA.total) > 0 ? Number(DATA.total) : 0;
+  /* 独立文件没有后端：正式改动存在浏览器里（键按文件自带的 id 区分），
+     下次打开同一个文件自动恢复；rev 保证「文件本体」比本机记录新时以文件为准。 */
+  var DOC_KEY = "nbx_vp_doc_" + (str(DATA.id) || "local");
+  var DOC_REV = Number(DATA.rev) || 0;
+  (function loadLocal() {
+    try {
+      var raw = localStorage.getItem(DOC_KEY);
+      if (!raw) return;
+      var saved = JSON.parse(raw);
+      if (!saved || !saved.data) return;
+      if ((Number(saved.rev) || 0) < DOC_REV) return;
+      DATA = saved.data;
+      DOC_REV = Number(saved.rev) || 0;
+    } catch (e) {}
+  })();
+
+  var PAPER = DATA.paper || (DATA.paper = {});
+  function titleText() { return str(DATA.title).trim() || "可视化试卷讲解"; }
+  function noticeText() { return str(DATA.notice); }
 
   var GROUPS = [];
   var FLAT = [];
-  (DATA.groups || []).forEach(function (g) {
+  (DATA.groups = DATA.groups || []).forEach(function (g) {
     if (!g) return;
     var qs = (g.questions || []).filter(Boolean);
     if (!qs.length) return;
+    g.questions = qs;                 /* 就地规范化：修改模式写回的就是这些对象 */
+    g.title = str(g.title);
+    g.intro = str(g.intro);
     var gi = GROUPS.length;
-    GROUPS.push({ title: str(g.title), intro: str(g.intro), questions: qs });
+    GROUPS.push(g);
     qs.forEach(function (q, qi) { FLAT.push({ gi: gi, qi: qi, group: g, q: q }); });
   });
-  if (!TOTAL) TOTAL = FLAT.length;
+  var TOTAL = Number(DATA.total) > 0 ? Number(DATA.total) : FLAT.length;
 
   /* 分组内坐标 → 扁平题号（与 FLAT 的构建顺序一致） */
   function flatIndexOf(gi, qi) {
@@ -150,6 +169,803 @@
       ovCount = $("ov-count"), ovClose = $("ov-close");
   var wakeTopBtn = $("wake-top"), wakeBottomBtn = $("wake-bottom");
   var tabsWrap = $("q-tabs");
+  /* 修改模式相关节点 */
+  var qHead = $("q-head"), qPassage = $("q-passage"), qNoPassage = $("q-nopassage");
+  var qEditMeta = $("q-edit-meta"), qEditHead = $("q-edit-head");
+  var stEdit = $("st-edit"), stSave = $("st-save"), stFmt = $("st-fmt"),
+      stBold = $("st-bold"), stHl = $("st-hl");
+  var toolBar = $("vp-edit-tools"), toolBold = $("vp-tool-bold"), toolHl = $("vp-tool-hl");
+  var toastBox = $("vp-toast");
+  var dataScript = $("vp-data");
+
+  /* ============================================================
+     修改模式（与 App 内一致：完全所见即所得，永远看不到 ** 与 == 标记）
+     改动写进 localStorage（按文件 id 区分），点「保存文件」把当前数据
+     写进一份新的单文件 HTML，可以拷给别人；两条路都不需要老师碰源码。
+     ============================================================ */
+  var edit = { on: false, dirty: false, sel: false, el: null, saveTimer: null, toolTimer: null, drag: false, bound: false };
+  var fileDirty = false;        /* 本次打开后有改动、还没写进 HTML 文件 */
+  var saveHandle = null;        /* 拿到过的文件句柄：再次保存可无对话框直接覆盖 */
+  var saving = false;
+
+  var toastTimer = null;
+  function toast(msg, kind) {
+    if (!toastBox) return;
+    toastBox.textContent = str(msg);
+    toastBox.className = "vp-toast glass-deep" + (kind ? " " + kind : "");
+    toastBox.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastBox.hidden = true; }, kind === "error" ? 5200 : 3400);
+  }
+
+  /* ---------------- 行内标记：DOM ⇄ 文本（与 App 内同名函数保持一致） ---------------- */
+  function vpNormalizeInline(text) {
+    var s = String(text == null ? "" : text).replace(/\*{3,}/g, "**").replace(/={3,}/g, "==");
+    return vpInlineParts(s).map(function (p) {
+      if (p.k === "b") return "**" + vpNormalizeInline(p.v) + "**";
+      if (p.k === "m") return "==" + vpNormalizeInline(p.v) + "==";
+      return p.v;
+    }).join("");
+  }
+  /* 编辑区 DOM → 标记文本：b/strong/mark 转标记，br/div/p 转换行，其余元素透明穿透 */
+  function vpDomToMd(root) {
+    var walk = function (node) {
+      var out = "";
+      var kids = node.childNodes || [];
+      for (var i = 0; i < kids.length; i++) {
+        var n = kids[i];
+        if (n.nodeType === 3) { out += n.nodeValue.replace(/\u00a0/g, " "); continue; }
+        if (n.nodeType !== 1) continue;
+        var tag = n.tagName;
+        if (tag === "BR") { out += "\n"; continue; }
+        var inner = walk(n);
+        if (tag === "B" || tag === "STRONG") out += "**" + inner + "**";
+        else if (tag === "MARK") out += "==" + inner + "==";
+        else if (tag === "DIV" || tag === "P") out += (out && out.slice(-1) !== "\n" ? "\n" : "") + inner + "\n";
+        else out += inner;
+      }
+      return out;
+    };
+    /* 浏览器把每行包成 <div>，末尾会多出一个换行，去掉它避免反复编辑攒空行 */
+    return vpNormalizeInline(walk(root)).replace(/\n+$/, "");
+  }
+  function vpClosestInline(node, root, tag) {
+    var want = tag.toUpperCase();
+    for (var n = node && node.nodeType === 1 ? node : (node ? node.parentNode : null); n && n !== root; n = n.parentNode) {
+      if (n.tagName === want) return n;
+    }
+    return null;
+  }
+  /* 给选区加/去格式：已整体处于该标签内则解包，否则包裹 */
+  function vpToggleTag(root, tag) {
+    var sel = document.getSelection ? document.getSelection() : window.getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    var range = sel.getRangeAt(0);
+    if (range.collapsed) return false;
+    if (!root.contains(range.commonAncestorContainer)) return false;
+    var host = vpClosestInline(range.commonAncestorContainer, root, tag);
+    if (host) {
+      var parent = host.parentNode;
+      var moved = [];
+      while (host.firstChild) moved.push(parent.insertBefore(host.firstChild, host));
+      parent.removeChild(host);
+      if (moved.length) {
+        var after = document.createRange();
+        after.setStartBefore(moved[0]);
+        after.setEndAfter(moved[moved.length - 1]);
+        sel.removeAllRanges();
+        sel.addRange(after);
+      }
+      return true;
+    }
+    var wrap = document.createElement(tag);
+    try {
+      range.surroundContents(wrap);
+    } catch (err) {
+      wrap.appendChild(range.extractContents());
+      range.insertNode(wrap);
+    }
+    return true;
+  }
+
+  /* ---------------- 字段路径读写：doc.* / paper.* / g<序号>.* / q.*（q 指当前题） ---------------- */
+  function resolvePath(path) {
+    var segs = String(path || "").split(".");
+    if (!segs.length || !segs[0]) return null;
+    var head = segs[0];
+    var host = null;
+    if (head === "doc") host = DATA;
+    else if (head === "paper") host = PAPER;
+    else if (/^g\d+$/.test(head)) host = GROUPS[Number(head.slice(1))];
+    else if (head === "q") host = FLAT[state.cur] ? FLAT[state.cur].q : null;
+    if (!host) return null;
+    var rest = segs.slice(1);
+    if (!rest.length) return null;
+    for (var i = 0; i < rest.length - 1; i++) {
+      var k = rest[i];
+      host = host[/^\d+$/.test(k) ? Number(k) : k];
+      if (host == null) return null;
+    }
+    var key = rest[rest.length - 1];
+    return { host: host, key: Array.isArray(host) && /^\d+$/.test(key) ? Number(key) : key };
+  }
+  function fieldGet(path) {
+    var t = resolvePath(path);
+    if (!t) return "";
+    var v = t.host[t.key];
+    return v == null ? "" : v;
+  }
+  function fieldSet(path, value) {
+    var t = resolvePath(path);
+    if (!t) return;
+    t.host[t.key] = value;
+  }
+  function deriveAnswerMap() {
+    var m = {};
+    FLAT.forEach(function (it) { if (has(it.q.answer)) m[str(it.q.no)] = it.q.answer; });
+    return m;
+  }
+
+  /* ---------------- 编辑区节点构造 ---------------- */
+  function editableNode(path, o) {
+    o = o || {};
+    var ed = el("div", "vp-editable" + (o.passage ? " vp-editable-passage" : ""));
+    ed.dataset.vpPath = path;
+    if (o.multi) ed.dataset.vpMulti = "1";
+    if (o.max) ed.dataset.vpMax = String(o.max);
+    return ed;
+  }
+  function cell(label, path, o) {
+    o = o || {};
+    var box = el("div", "vp-edit-cell");
+    if (label) box.appendChild(el("div", "vp-edit-label", label));
+    box.appendChild(editableNode(path, o));
+    if (o.max) { var c = el("div", "vp-edit-count"); c.hidden = true; box.appendChild(c); }
+    return box;
+  }
+  function listBox(path) {
+    var box = el("div", "vp-edit-list");
+    box.dataset.vpList = path;
+    return box;
+  }
+  function addBtn(path, text, disabled, title) {
+    var b = el("button", "vp-edit-add", text);
+    b.type = "button";
+    b.dataset.vpAdd = path;
+    if (disabled) { b.disabled = true; if (title) b.title = title; }
+    return b;
+  }
+  function delBtn(path, idx, title) {
+    var b = el("button", "vp-edit-del", "×");
+    b.type = "button";
+    b.dataset.vpDel = path;
+    b.dataset.vpIdx = String(idx);
+    b.title = title || "删除这一条";
+    return b;
+  }
+  function numberedRow(key, path, idx, delPath, delTitle) {
+    var row = el("div", "vp-edit-row");
+    row.appendChild(el("span", "vp-edit-key", key));
+    row.appendChild(editableNode(path));
+    row.appendChild(delBtn(delPath, idx, delTitle));
+    return row;
+  }
+
+  /* ---------------- 编辑视图：左栏（标题/说明/大题/语篇）与右栏（题干/选项/答案/写作指导） ---------------- */
+  function renderEditMeta() {
+    var cur = FLAT[state.cur];
+    clear(qEditMeta);
+    qEditMeta.appendChild(cell("讲解标题（封面大字）", "doc.title"));
+    qEditMeta.appendChild(cell("试卷标题（封面小字，可留空）", "paper.title"));
+    qEditMeta.appendChild(cell("试卷说明（封面底部，可留空）", "doc.notice", { max: 200 }));
+    if (cur) {
+      qEditMeta.appendChild(cell("大题标题", "g" + cur.gi + ".title"));
+      qEditMeta.appendChild(cell("大题导语（可留空）", "g" + cur.gi + ".intro", { max: 200 }));
+    }
+    qEditMeta.appendChild(cell("语篇（写作题或语法填空可留空）", "q.passage", { multi: true, max: 4000, passage: true }));
+  }
+  function renderEditHead(q) {
+    clear(qEditHead);
+    qEditHead.appendChild(cell("题干", "q.stem", { multi: true, max: 1000 }));
+    var opts = q.options || [];
+    if (opts.length || q.qtype === "choice") {
+      var obox = el("div", "vp-edit-cell");
+      obox.appendChild(el("div", "vp-edit-label", "选项（只改文字；增删时编号自动重排）"));
+      var olist = listBox("q.options");
+      opts.forEach(function (o, i) {
+        var row = el("div", "vp-edit-row");
+        row.appendChild(el("span", "vp-option-label", str(o && o.label) || String.fromCharCode(65 + i)));
+        row.appendChild(editableNode("q.options." + i + ".text"));
+        row.appendChild(delBtn("q.options", i, "删除这个选项"));
+        olist.appendChild(row);
+      });
+      obox.appendChild(olist);
+      obox.appendChild(addBtn("q.options", "+ 加一个选项"));
+      qEditHead.appendChild(obox);
+    }
+    if (q.qtype !== "writing") qEditHead.appendChild(cell("答案（选项字母，或填空文本）", "q.answer"));
+    if (q.qtype === "writing") {
+      var wg = q.writingGuide || (q.writingGuide = { points: [], outline: "", sample: "" });
+      wg.points = wg.points || [];
+      var wbox = el("div", "vp-edit-cell");
+      wbox.appendChild(el("div", "vp-edit-label", "写作指导 · 审题要点"));
+      var plist = listBox("q.writingGuide.points");
+      wg.points.forEach(function (p, i) {
+        plist.appendChild(numberedRow((i + 1) + ".", "q.writingGuide.points." + i, i, "q.writingGuide.points", "删除这条要点"));
+      });
+      wbox.appendChild(plist);
+      wbox.appendChild(addBtn("q.writingGuide.points", "+ 加一条要点"));
+      qEditHead.appendChild(wbox);
+      qEditHead.appendChild(cell("写作指导 · 结构框架", "q.writingGuide.outline"));
+      qEditHead.appendChild(cell("写作指导 · 范文", "q.writingGuide.sample", { multi: true }));
+    }
+  }
+  function renderEditTab(q) {
+    clear(tabPanel);
+    tabPanel.hidden = false;
+
+    if (state.tab === "reference") {
+      tabPanel.appendChild(el("div", "vp-tab-title", "参考答案"));
+      if (!q.reference) q.reference = { evidence: "", reason: "", distractor: "" };
+      tabPanel.appendChild(cell("证据（照录原文出处）", "q.reference.evidence", { multi: true, max: 800 }));
+      tabPanel.appendChild(cell("推理", "q.reference.reason", { multi: true, max: 800 }));
+      tabPanel.appendChild(cell("干扰项", "q.reference.distractor", { multi: true, max: 800 }));
+      return;
+    }
+
+    if (state.tab === "pitfalls") {
+      tabPanel.appendChild(el("div", "vp-tab-title", "易错点分析"));
+      var list = q.pitfalls || (q.pitfalls = []);
+      var box = listBox("q.pitfalls");
+      list.forEach(function (p, i) {
+        var item = el("div", "vp-pitfall-item vp-edit-item");
+        item.appendChild(cell("易错点 " + (i + 1) + " · 标题", "q.pitfalls." + i + ".title"));
+        item.appendChild(cell("描述", "q.pitfalls." + i + ".desc", { multi: true, max: 500 }));
+        item.appendChild(delBtn("q.pitfalls", i, "删除这条易错点"));
+        box.appendChild(item);
+      });
+      tabPanel.appendChild(box);
+      tabPanel.appendChild(addBtn("q.pitfalls", "+ 加一条易错点"));
+      return;
+    }
+
+    if (state.tab === "pattern") {
+      tabPanel.appendChild(el("div", "vp-tab-title", "考点范式归纳"));
+      var ptn = q.pattern || (q.pattern = { name: "", steps: [] });
+      var steps = ptn.steps || (ptn.steps = []);
+      tabPanel.appendChild(cell("范式名称", "q.pattern.name"));
+      var pcell = el("div", "vp-edit-cell");
+      pcell.appendChild(el("div", "vp-edit-label", "解题步骤（最多 5 步）"));
+      var slist = listBox("q.pattern.steps");
+      steps.forEach(function (s, i) {
+        var row = el("div", "vp-edit-row");
+        row.appendChild(el("span", "vp-edit-key", (i + 1) + "."));
+        row.appendChild(editableNode("q.pattern.steps." + i, { max: 300 }));
+        row.appendChild(delBtn("q.pattern.steps", i, "删除这一步"));
+        slist.appendChild(row);
+      });
+      pcell.appendChild(slist);
+      pcell.appendChild(addBtn("q.pattern.steps", "+ 加一步", steps.length >= 5, steps.length >= 5 ? "最多 5 步，先删再补" : ""));
+      tabPanel.appendChild(pcell);
+      return;
+    }
+
+    /* transfer */
+    var tr = q.transfer;
+    if (!tr) {
+      tabPanel.appendChild(el("div", "vp-line dim", q.qtype === "writing"
+        ? "该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。"
+        : "该题暂无迁移训练内容。"));
+      return;
+    }
+    tabPanel.appendChild(el("div", "vp-tab-title", "迁移训练"));
+    tabPanel.appendChild(cell("迁移语篇", "q.transfer.passage", { multi: true, max: 800 }));
+    tabPanel.appendChild(cell("迁移题干", "q.transfer.stem", { multi: true }));
+    var tcell = el("div", "vp-edit-cell");
+    tcell.appendChild(el("div", "vp-edit-label", "迁移选项（只改文字；增删时编号自动重排）"));
+    var tlist = listBox("q.transfer.options");
+    (tr.options || []).forEach(function (o, i) {
+      var row = el("div", "vp-edit-row");
+      row.appendChild(el("span", "vp-option-label", str(o && o.label) || String.fromCharCode(65 + i)));
+      row.appendChild(editableNode("q.transfer.options." + i + ".text"));
+      row.appendChild(delBtn("q.transfer.options", i, "删除这个选项"));
+      tlist.appendChild(row);
+    });
+    tcell.appendChild(tlist);
+    tcell.appendChild(addBtn("q.transfer.options", "+ 加一个选项"));
+    tabPanel.appendChild(tcell);
+    tabPanel.appendChild(cell("迁移答案", "q.transfer.answer"));
+    tabPanel.appendChild(cell("迁移解析", "q.transfer.explanation", { multi: true }));
+  }
+
+  /* ---------------- 挂载编辑区：只在目标变化时灌内容，避免打字时被自己覆盖 ---------------- */
+  function mountCell(node) {
+    if (!node || !node.dataset) return;
+    var path = node.dataset.vpPath;
+    if (!path) return;
+    var key = path + "#" + state.cur;
+    if (node.dataset.vpKey === key) return;
+    node.dataset.vpKey = key;
+    node.dataset.vpEdited = "";
+    node.setAttribute("contenteditable", "true");
+    node.setAttribute("spellcheck", "false");
+    node.setAttribute("role", "textbox");
+    node.setAttribute("aria-multiline", node.dataset.vpMulti === "1" ? "true" : "false");
+    var lab = node.parentElement ? node.parentElement.querySelector(".vp-edit-label") : null;
+    if (lab && lab.textContent.trim()) node.setAttribute("aria-label", lab.textContent.trim());
+    node.innerHTML = vpFmt(fieldGet(path));
+    if (!node.dataset.vpBound) {
+      node.dataset.vpBound = "1";
+      node.addEventListener("input", function () { onCellInput(node); });
+      node.addEventListener("paste", onCellPaste);
+      node.addEventListener("keydown", function (e) { onCellKeydown(e, node); });
+      node.addEventListener("focus", function () { showTools(node); });
+      node.addEventListener("mouseup", function () { showTools(node); });
+      node.addEventListener("blur", function () { edit.sel = false; syncFmtButtons(); hideToolsSoon(); });
+    }
+    syncCount(node);
+  }
+  function mountEditables(root) {
+    if (!edit.on) return;
+    var nodes = (root || present).querySelectorAll("[data-vp-path]");
+    for (var i = 0; i < nodes.length; i++) mountCell(nodes[i]);
+  }
+  /* 输入时把 DOM 还原成标记文本写回数据（只在真的改过时才写，避免误伤） */
+  function onCellInput(node) {
+    var path = node.dataset.vpPath;
+    if (!path) return;
+    node.dataset.vpEdited = "1";
+    fieldSet(path, vpDomToMd(node));
+    markDirty();
+    syncCount(node);
+  }
+  function syncCount(node) {
+    var max = Number(node.dataset.vpMax || 0);
+    var box = node.parentElement ? node.parentElement.querySelector(".vp-edit-count") : null;
+    if (!box) return;
+    if (!max) { box.hidden = true; return; }
+    var len = str(fieldGet(node.dataset.vpPath)).length;
+    box.hidden = len < max * 0.9;
+    box.textContent = len + " / " + max;
+    box.classList.toggle("over", len > max);
+  }
+  /* 把改过的编辑区内容写回数据（防抖还没到点、或浏览器吞了 input 事件时兜底） */
+  function writeBackEdited(root) {
+    var nodes = (root || present).querySelectorAll("[data-vp-path][data-vp-edited='1']");
+    var changed = false;
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (!node.dataset.vpPath) continue;
+      var next = vpDomToMd(node);
+      if (str(fieldGet(node.dataset.vpPath)) === next) continue;
+      fieldSet(node.dataset.vpPath, next);
+      changed = true;
+    }
+    if (changed) markDirty();
+  }
+
+  /* ---------------- 输入行为：粘贴纯文本、回车、快捷键 ---------------- */
+  function onCellPaste(e) {
+    var text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
+    e.preventDefault();
+    // 插纯文本，杜绝从 Word/网页粘来的样式洪水；insertText 保留撤销栈
+    if (!text) return;
+    try { document.execCommand("insertText", false, text); } catch (err) {}
+    onCellInput(e.currentTarget || e.target);
+  }
+  function onCellKeydown(e, node) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && String(e.key).toLowerCase() === "b") {
+      e.preventDefault();
+      formatSelection(node, "b");
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (node.dataset.vpMulti === "1") {
+        var before = vpDomToMd(node);
+        try { document.execCommand("insertLineBreak"); } catch (err) {}
+        // 少数浏览器不支持 insertLineBreak：退化成插入换行文本（pre-wrap 下同样换行）
+        if (vpDomToMd(node) === before) { try { document.execCommand("insertText", false, "\n"); } catch (err2) {} }
+        onCellInput(node);
+      } else {
+        node.blur();
+      }
+      return;
+    }
+    if (e.key === "Escape") { e.stopPropagation(); node.blur(); }
+  }
+  function formatSelection(node, tag) {
+    if (!node) { toast("先点一下要修改的文字，再选中它", "warn"); return; }
+    if (!vpToggleTag(node, tag)) { toast("先选中要加格式的文字", "warn"); return; }
+    node.dataset.vpEdited = "1";
+    fieldSet(node.dataset.vpPath, vpDomToMd(node));
+    markDirty();
+    node.focus();
+    repositionTools();
+  }
+  function formatFocused(tag) { formatSelection(edit.el, tag); }
+
+  /* ---------------- 浮动格式按钮：只在真的选中了文字时才出现 ---------------- */
+  function showTools(node) {
+    edit.el = node;
+    syncToolsFromSelection();
+  }
+  function syncFmtButtons() {
+    if (stBold) stBold.disabled = !edit.sel;
+    if (stHl) stHl.disabled = !edit.sel;
+  }
+  function syncToolsFromSelection() {
+    if (!edit.on) { edit.sel = false; syncFmtButtons(); hideTools(); return; }
+    var node = edit.el;
+    var sel = document.getSelection ? document.getSelection() : null;
+    var range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+    var ok = !!(node && node.isConnected && range && !range.collapsed && node.contains(range.commonAncestorContainer));
+    edit.sel = ok;
+    syncFmtButtons();
+    if (!ok || edit.drag) { hideTools(); return; }
+    if (!toolBar) return;
+    toolBar.hidden = false;
+    repositionTools();
+  }
+  function repositionTools() {
+    var node = edit.el;
+    if (!toolBar || toolBar.hidden || !node || !node.isConnected) return;
+    /* 贴着选区浮出（选区矩形拿不到时退回整格的位置） */
+    var rect = null;
+    var sel = document.getSelection ? document.getSelection() : null;
+    if (sel && sel.rangeCount && !sel.isCollapsed && node.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+      var rr = sel.getRangeAt(0).getBoundingClientRect();
+      if (rr && (rr.width || rr.height)) rect = rr;
+    }
+    if (!rect) rect = node.getBoundingClientRect();
+    var w = toolBar.offsetWidth || 92;
+    var h = toolBar.offsetHeight || 34;
+    var left = Math.max(8, Math.min(rect.left + Math.min(rect.width / 2, 60), window.innerWidth - w - 8));
+    var top = rect.top - h - 8;
+    if (top < 8) top = Math.min(window.innerHeight - h - 8, rect.bottom + 8);
+    toolBar.style.left = Math.round(left) + "px";
+    toolBar.style.top = Math.round(top) + "px";
+  }
+  function hideTools() {
+    /* 只藏浮层，不清 edit.el：用键盘（Shift+方向键）选字时也要能点亮加粗/高亮 */
+    if (toolBar) toolBar.hidden = true;
+  }
+  function hideToolsSoon() {
+    clearTimeout(edit.toolTimer);
+    edit.toolTimer = setTimeout(function () {
+      if (edit.el && edit.el === document.activeElement) return;
+      hideTools();
+    }, 140);
+  }
+
+  /* ---------------- 列表增删：易错点 / 范式步骤 / 选项 / 写作要点 ---------------- */
+  /* 重渲染会整块重建编辑区，所以增删后直接按当前数据重画，不存在「旧格子串内容」的问题 */
+  function newItem(path) {
+    if (path.slice(-7) === "options") return { label: "", text: "" };
+    if (path.slice(-8) === "pitfalls") return { title: "", desc: "" };
+    return "";
+  }
+  function relabelOptions(arr) {
+    arr.forEach(function (o, i) { if (o && typeof o === "object") o.label = String.fromCharCode(65 + i); });
+  }
+  function focusLastIn(path) {
+    var box = document.querySelector('[data-vp-list="' + path + '"]');
+    if (!box) return;
+    var eds = box.querySelectorAll(".vp-editable");
+    if (eds.length) eds[eds.length - 1].focus();
+  }
+  function addItem(path) {
+    var t = resolvePath(path);
+    if (!t) return;
+    var arr = t.host[t.key];
+    if (!Array.isArray(arr)) return;
+    if (path.indexOf("pattern.steps") >= 0 && arr.length >= 5) {
+      toast("考点范式最多 5 步，先删再补", "warn");
+      return;
+    }
+    writeBackEdited();                 // 先把在改的内容写回，再动数组
+    arr.push(newItem(path));
+    if (path.slice(-7) === "options") relabelOptions(arr);
+    markDirty();
+    renderQuestion();
+    focusLastIn(path);
+  }
+  function removeItem(path, idx) {
+    var t = resolvePath(path);
+    if (!t) return;
+    var arr = t.host[t.key];
+    if (!Array.isArray(arr) || idx < 0 || idx >= arr.length) return;
+    writeBackEdited();                 // 先把在改的内容写回，再动数组
+    if (path.slice(-7) === "options") {
+      var ansPath = path.indexOf("q.transfer") === 0 ? "q.transfer.answer" : "q.answer";
+      var ans = str(fieldGet(ansPath)).trim().toUpperCase();
+      var removed = str(arr[idx] && arr[idx].label).trim().toUpperCase();
+      // 删掉的正是正确项时先拦一下：否则答案会变成一个不存在的字母
+      if (ans && removed && ans === removed) {
+        toast("第 " + removed + " 项是当前答案，先改答案再删它", "warn");
+        return;
+      }
+      arr.splice(idx, 1);
+      relabelOptions(arr);
+      var oldIdx = ans ? ans.charCodeAt(0) - 65 : -1;
+      if (oldIdx > idx && oldIdx <= arr.length) fieldSet(ansPath, String.fromCharCode(64 + oldIdx));
+    } else {
+      arr.splice(idx, 1);
+    }
+    markDirty();
+    renderQuestion();
+  }
+
+  /* ---------------- 保存：本机自动记 + 导出更新后的 HTML ---------------- */
+  function markDirty() {
+    edit.dirty = true;
+    /* 有改动没写进文件：让「保存文件」按钮一直亮着，关窗口时也会拦一下 */
+    if (!fileDirty) { fileDirty = true; syncEditChrome(); }
+    clearTimeout(edit.saveTimer);
+    edit.saveTimer = setTimeout(flushEdits, 1200);
+  }
+  function flushEdits() {
+    clearTimeout(edit.saveTimer);
+    edit.saveTimer = null;
+    if (!edit.dirty) return;
+    edit.dirty = false;
+    persistLocal();
+  }
+  /* 把当前数据写进浏览器（答案速查表等派生数据一并刷新） */
+  var localWarned = false;
+  function persistLocal() {
+    DATA.answerMap = deriveAnswerMap();
+    DATA.total = TOTAL;
+    DOC_REV += 1;
+    DATA.rev = DOC_REV;
+    try {
+      localStorage.setItem(DOC_KEY, JSON.stringify({ rev: DOC_REV, data: DATA }));
+    } catch (e) {
+      // 存不下就说清楚：不然老师下次打开发现改动没了，却不知道为什么
+      if (!localWarned) {
+        localWarned = true;
+        toast("本机存不下这次修改（浏览器存储已满）；点「保存文件」导出更新后的 HTML", "warn");
+      }
+    }
+  }
+
+  /* 启动时抓一份原始文档文本（在任何渲染之前）：保存文件时只替换数据块、
+     页签标题与主题属性，得到的永远是干净、双击即开封面的单文件。 */
+  var PRISTINE_HTML = "", PRISTINE_HTML_TAG = "", PRISTINE_TITLE_TAG = "", PRISTINE_DATA_TAG = "";
+  function capturePristine() {
+    var root = document.documentElement;
+    var text = root.outerHTML;
+    PRISTINE_HTML = "<!DOCTYPE html>\n" + text;
+    var head = text.indexOf(">");
+    PRISTINE_HTML_TAG = head > 0 ? text.slice(0, head + 1) : "";
+    var t = document.querySelector("title");
+    PRISTINE_TITLE_TAG = t ? t.outerHTML : "";
+    PRISTINE_DATA_TAG = dataScript ? dataScript.outerHTML : "";
+  }
+  function attrSet(tag, name, value) {
+    var out = tag.replace(new RegExp(" " + name + '="[^"]*"'), "");
+    if (!value) return out;
+    return out.replace(/>$/, " " + name + '="' + String(value).replace(/"/g, "&quot;") + '">');
+  }
+  function safeFilename(name) {
+    var cleaned = str(name)
+      .replace(/[\\/:*?"<>|]/g, " ")
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80)
+      .replace(/[. ]+$/, "")
+      .trim();
+    if (cleaned) return cleaned;
+    var d = new Date();
+    return "可视化试卷讲解_" + d.getFullYear() + String(d.getMonth() + 1) + String(d.getDate());
+  }
+  function buildSnapshotHtml() {
+    if (!PRISTINE_HTML) return "";
+    var json = JSON.stringify(DATA).replace(/</g, "\\u003c");
+    var dataTag = '<script id="vp-data" type="application/json">' + json + "<" + "/script>";
+    var titleTag = "<title>" + esc(vpDetag(titleText())) + "</title>";
+    var htmlTag = attrSet(attrSet(PRISTINE_HTML_TAG, "data-theme", state.theme), "data-sky", skyOf(state.theme));
+    var put = function (s, find, repl) { return find ? s.replace(find, function () { return repl; }) : s; };
+    return put(put(put(PRISTINE_HTML, PRISTINE_HTML_TAG, htmlTag), PRISTINE_TITLE_TAG, titleTag), PRISTINE_DATA_TAG, dataTag);
+  }
+  /* ---------------- 保存：本机自动记 + 写回 HTML 文件 ----------------
+     页面不能无声写自己的文件（浏览器安全限制）：Chrome / Edge 上用文件系统访问接口，
+     第一次保存会弹一次系统保存框（默认文件名就是当前文件名，选同一目录确认替换即可原地覆盖，
+     不会多出"(1)"），同一个页面里之后再点保存就直接覆盖、不再弹框；
+     不支持该接口的浏览器退回「另存为下载」，提示老师替换原文件。 */
+  /* 当前文件名（file:// 打开时就是它本身）：用作保存对话框的默认名，方便原地替换 */
+  function currentFileName() {
+    try {
+      if (location.protocol !== "file:") return "";
+      var name = decodeURIComponent(String(location.pathname || "").split("/").pop() || "");
+      return /\.html?$/i.test(name) ? name : "";
+    } catch (e) { return ""; }
+  }
+  function fileNameFor(title) { return currentFileName() || (safeFilename(vpDetag(title)) + ".html"); }
+  function canWriteInPlace() { return typeof window.showSaveFilePicker === "function"; }
+
+  function downloadBlob(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+  /* 写回文件：优先用已授权的句柄（无对话框），否则弹一次保存框 */
+  function writeInPlace(blob) {
+    var handle = saveHandle;
+    var askPerm = function (h, mode) {
+      if (!h.queryPermission) return Promise.resolve("granted");
+      return h.queryPermission({ mode: mode }).then(function (p) {
+        if (p === "granted" || !h.requestPermission) return p;
+        return h.requestPermission({ mode: mode });
+      });
+    };
+    var ready = handle
+      ? askPerm(handle, "readwrite").catch(function () { return "denied"; })
+      : Promise.resolve("none");
+    return ready.then(function (perm) {
+      if (perm === "granted") return handle;
+      if (!canWriteInPlace()) throw new Error("no-fs-api");
+      return window.showSaveFilePicker({
+        id: "nbx-vp-doc",                         /* 让浏览器记住上次的目录，第二次默认就在原处 */
+        suggestedName: fileNameFor(titleText()),
+        types: [{ description: "网页文件（单文件讲解）", accept: { "text/html": [".html"] } }],
+      });
+    }).then(function (h) {
+      if (!h || !h.createWritable) throw new Error("no-writable");
+      return h.createWritable().then(function (w) {
+        return Promise.resolve(w.write(blob)).then(function () { return w.close(); }).then(function () {
+          saveHandle = h;
+          return h.name || "";
+        });
+      });
+    });
+  }
+  function markSaved() {
+    fileDirty = false;
+    syncEditChrome();
+  }
+  function saveFile() {
+    if (saving) return Promise.resolve();
+    writeBackEdited();
+    flushEdits();
+    persistLocal();
+    var html = buildSnapshotHtml();
+    if (!html) { toast("保存失败：读不到当前文档内容", "error"); return Promise.resolve(); }
+    var blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    return saveAs(blob);
+  }
+  function saveAs(blob) {
+    var fallbackName = fileNameFor(titleText());
+    if (!canWriteInPlace()) {
+      downloadBlob(blob, fallbackName);
+      markSaved();
+      toast("已导出文件：" + fallbackName + "（这个浏览器不支持原地覆盖，请用它替换原文件）", "ok");
+      return Promise.resolve();
+    }
+    saving = true;
+    var inPlace = currentFileName() !== "";
+    return writeInPlace(blob).then(function (name) {
+      markSaved();
+      toast(inPlace ? "已保存并覆盖文件：" + (name || fallbackName) : "已保存文件：" + (name || fallbackName), "ok");
+    }).catch(function (err) {
+      if (err && err.name === "AbortError") { toast("已取消保存", "warn"); return; }
+      /* 其它失败（老浏览器 / 权限策略）：退回下载，至少别让老师的改动没了 */
+      try {
+        downloadBlob(blob, fallbackName);
+        markSaved();
+        toast("已导出文件：" + fallbackName + "（请用它替换原文件）", "ok");
+      } catch (e2) {
+        toast("保存失败，请换用 Chrome / Edge 打开", "error");
+      }
+    }).then(function () { saving = false; });
+  }
+
+  /* ---------------- 进出修改模式 ---------------- */
+  function syncEditChrome() {
+    if (stEdit) {
+      clear(stEdit);
+      stEdit.appendChild(svgUse(edit.on ? "check" : "pen"));
+      stEdit.appendChild(el("span", null, edit.on ? "完成修改" : "修改"));
+      stEdit.title = edit.on ? "完成修改并保存" : "修改模式：点开后所有文字都能改";
+      stEdit.classList.toggle("on", edit.on);
+    }
+    if (stSave) {
+      /* 只要「有改动没写进文件」就留着这个按钮，退出修改模式也能一键保存 */
+      stSave.hidden = !(edit.on || fileDirty);
+      stSave.classList.toggle("on", fileDirty);
+      var fname = currentFileName();
+      stSave.title = fname
+        ? "保存到文件（首次会让你确认一次，之后直接覆盖 " + fname + "）"
+        : "保存到文件（未保存就关闭窗口会先提示）";
+    }
+    if (stFmt) stFmt.hidden = !edit.on;
+    syncFmtButtons();
+  }
+  function enterEdit() {
+    if (!FLAT.length) { toast("没有可修改的内容", "error"); return; }
+    edit.on = true;
+    edit.dirty = false;
+    edit.sel = false;
+    state.mask = false;                 // 边改边看得到答案
+    if (state.overview) toggleOverview(false);
+    state.topHidden = false;            // 编辑时顶栏不能自动隐藏（上面有「完成修改 / 保存文件」）
+    state.bottomHidden = false;
+    stopHide();
+    syncEditChrome();
+    applyChrome();
+    syncMask();
+    renderQuestion();
+    toast("修改模式：点文字即可改；「完成修改」存本机，「保存文件」写进 HTML");
+  }
+  function exitEdit() {
+    if (!edit.on) return;
+    writeBackEdited();
+    edit.on = false;
+    edit.sel = false;
+    flushEdits();
+    hideTools();
+    syncEditChrome();
+    buildCover();
+    renderQuestion();
+    buildAnswerMap();
+    applyChrome();
+    scheduleHide();
+    toast(fileDirty ? "修改已保存在本机；还没写进 HTML 文件，可点「保存文件」" : "修改已保存在本机浏览器", fileDirty ? "warn" : "ok");
+  }
+  function toggleEdit() { if (!edit.on) enterEdit(); else exitEdit(); }
+
+  function bindEditEvents() {
+    if (edit.bound) return;
+    edit.bound = true;
+    if (stEdit) stEdit.addEventListener("click", toggleEdit);
+    if (stSave) stSave.addEventListener("click", saveFile);
+    /* 格式按钮：mousedown 阻止默认，保住编辑区里的选区 */
+    var fmt = [[stBold, "b"], [stHl, "mark"], [toolBold, "b"], [toolHl, "mark"]];
+    fmt.forEach(function (pair) {
+      var b = pair[0];
+      if (!b) return;
+      b.addEventListener("mousedown", function (e) { e.preventDefault(); });
+      b.addEventListener("click", function () { formatFocused(pair[1]); });
+    });
+    /* 列表增删：在容器上做事件委托，重画后依然有效 */
+    present.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var add = t.closest("[data-vp-add]");
+      if (add) { if (!add.disabled) addItem(add.dataset.vpAdd); return; }
+      var del = t.closest("[data-vp-del]");
+      if (del) removeItem(del.dataset.vpDel, Number(del.dataset.vpIdx));
+    });
+    /* 选中文字 → 浮出格式按钮；拖选过程中先不浮出 */
+    document.addEventListener("selectionchange", function () { if (edit.on) syncToolsFromSelection(); });
+    document.addEventListener("scroll", function () { if (edit.el) repositionTools(); }, { passive: true, capture: true });
+    window.addEventListener("resize", function () { if (edit.el) repositionTools(); });
+    document.addEventListener("pointerdown", function () { edit.drag = true; }, { passive: true, capture: true });
+    document.addEventListener("pointerup", function () {
+      edit.drag = false;
+      if (edit.on) syncToolsFromSelection();
+    }, { passive: true, capture: true });
+    document.addEventListener("pointercancel", function () { edit.drag = false; }, { passive: true, capture: true });
+    window.addEventListener("blur", function () { edit.drag = false; });
+    /* 关页面前：先把防抖中的改动落本机（localStorage 是同步的，来得及）；
+       还有没写进文件的改动时拦住关闭，让浏览器弹出它自带的确认框
+       （浏览器不允许自定义这句提示，也没有「保存」按钮，只能这样拦一下）。 */
+    window.addEventListener("beforeunload", function (e) {
+      flushEdits();
+      if (!fileDirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    });
+    document.addEventListener("visibilitychange", function () { if (document.hidden) flushEdits(); });
+  }
+
 
   /* ---------------- 主题 ---------------- */
   var dotNodes = [];
@@ -225,8 +1041,8 @@
   function buildCover() {
     cvPaper.textContent = has(PAPER.title) ? vpDetag(PAPER.title) : "";
     cvPaper.hidden = !has(PAPER.title);
-    setRich(cvTitle, TITLE);
-    setRich(stTitle, TITLE);
+    setRich(cvTitle, titleText());
+    setRich(stTitle, titleText());
 
     clear(cvFeatures);
     FEATURES.forEach(function (f) {
@@ -247,10 +1063,10 @@
     if (has(PAPER.subject)) bits.push(PAPER.subject);
     if (has(PAPER.year)) bits.push(PAPER.year);
     cvMeta.textContent = bits.join(" · ");
-    setRich(cvNotice, NOTICE);
-    cvNotice.hidden = !NOTICE;
+    setRich(cvNotice, noticeText());
+    cvNotice.hidden = !noticeText();
     cvStart.disabled = !FLAT.length;
-    document.title = vpDetag(TITLE);
+    document.title = vpDetag(titleText());
   }
 
   /* ---------------- 讲台 ---------------- */
@@ -262,10 +1078,12 @@
   }
   function buildAnswerMap() {
     clear(ansList);
-    var keys = Object.keys(ANSWER_MAP);
+    /* 答案速查表跟着题目数据走：修改模式里改了答案，退出后这里就是新的 */
+    var map = deriveAnswerMap();
+    var keys = Object.keys(map);
     ansMap.hidden = !keys.length;
     keys.forEach(function (no) {
-      var label = no + ": " + vpDetag(ANSWER_MAP[no]);
+      var label = no + ": " + vpDetag(map[no]);
       var chip = el("span", "chip neutral vp-ans-chip ans", label);
       chip.title = label;
       ansList.appendChild(chip);
@@ -293,6 +1111,8 @@
         b.title = off ? "写作题不设迁移训练" : "";
       }
     });
+
+    if (edit.on) { renderEditTab(q); mountEditables(present); return; }
 
     if (state.tab === "reference") {
       var head = el("div", "vp-tab-title");
@@ -424,12 +1244,31 @@
     }
 
     renderTab();
+    /* 修改模式：右栏换成编辑版（题干/选项/答案/写作指导），左栏换成标题与语篇编辑区 */
+    if (edit.on) {
+      qHead.hidden = true;
+      qEditHead.hidden = false;
+      qPassage.hidden = true;
+      qNoPassage.hidden = true;
+      qEditMeta.hidden = false;
+      renderEditMeta();
+      renderEditHead(q);
+      buildAnswerMap();
+      mountEditables(present);
+    } else {
+      qHead.hidden = false;
+      qEditHead.hidden = true;
+      qEditMeta.hidden = true;
+      clear(qEditHead);
+      clear(qEditMeta);
+    }
     syncMask();
     syncOverviewActive();
   }
 
   function setIndex(i, keepTab) {
     if (!FLAT.length) return;
+    if (edit.on) writeBackEdited();          // 换题前先把在改的内容写回
     var n = Math.max(0, Math.min(i, FLAT.length - 1));
     state.cur = n;
     if (!keepTab) state.tab = "reference";
@@ -462,7 +1301,7 @@
   /* ---------------- 控制台自动隐藏 ---------------- */
   var hideTimer = null;
   function scheduleHide() {
-    if (state.view !== "present" || state.pinned) return;
+    if (state.view !== "present" || state.pinned || edit.on) return;   // 修改模式：控制台一直留着
     clearTimeout(hideTimer);
     hideTimer = setTimeout(function () {
       if (state.view !== "present" || state.pinned || state.overview) return;
@@ -566,6 +1405,7 @@
     requestFs();
   }
   function backToCover() {
+    if (edit.on) exitEdit();                 // 回封面先收工：把在改的内容存好
     state.view = "cover";
     present.hidden = true;
     cover.hidden = false;
@@ -592,6 +1432,7 @@
     tabsWrap.addEventListener("click", function (e) {
       var b = e.target.closest("button[data-tab]");
       if (!b || b.disabled) return;
+      if (edit.on) writeBackEdited();
       state.tab = b.dataset.tab;
       renderTab();
       syncMask();
@@ -601,6 +1442,8 @@
 
     document.addEventListener("keydown", function (e) {
       var tag = e.target && e.target.tagName;
+      /* 修改模式：编辑区里的按键（方向键、Esc、Ctrl+B）归编辑区自己管，不翻题也不回封面 */
+      if (edit.on && e.target && (e.target.isContentEditable || (e.target.closest && e.target.closest(".vp-editable")))) return;
       if (state.view === "cover") {
         if ((e.key === "Enter" || e.key === " ") && tag !== "BUTTON") {
           e.preventDefault();
@@ -637,13 +1480,15 @@
       if (state.topHidden) wakeTop();
     }, { passive: true });
 
-    /* 触屏：左右滑动翻题，轻点唤出控制台 */
+    /* 触屏：左右滑动翻题，轻点唤出控制台（修改模式下要选字，不参与手势） */
     var touch = null;
     present.addEventListener("touchstart", function (e) {
+      if (edit.on) return;
       var t = e.changedTouches && e.changedTouches[0];
       if (t) touch = { x: t.clientX, y: t.clientY };
     }, { passive: true });
     present.addEventListener("touchend", function (e) {
+      if (edit.on) { touch = null; return; }
       var t = e.changedTouches && e.changedTouches[0];
       var start = touch;
       touch = null;
@@ -662,6 +1507,7 @@
 
   /* ---------------- 启动 ---------------- */
   function boot() {
+    capturePristine();                 /* 必须在任何渲染改动之前抓（保存文件时要用） */
     applyTheme(savedTheme() || document.documentElement.dataset.theme || "paper", false);
     buildThemeDots(cvThemes);
     buildThemeDots(stThemes);
@@ -669,6 +1515,13 @@
     buildCover();
     buildAnswerMap();
     bindEvents();
+    bindEditEvents();
+    /* 修改模式按钮固定用代码画图标：顶栏的「修改」要按状态换图标 */
+    setIcon(toolBold, "bold");
+    setIcon(toolHl, "highlight");
+    setIcon(stBold, "bold");
+    setIcon(stHl, "highlight");
+    syncEditChrome();
     if (!fsAvailable()) { cvFs.hidden = true; stFs.hidden = true; }
     syncFsButtons();
     applyChrome();
