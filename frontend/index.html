@@ -802,31 +802,7 @@
                 <button class="icon-btn" style="width:2rem;height:2rem" :class="{ 'on': maskOn }" @click="toggleMask()" :title="maskOn ? '显示答案' : '隐藏答案'" x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
                 <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpPrevQuestion()" :disabled="vpQuestionCount===0">上一题</button>
                 <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpNextQuestion()" :disabled="vpQuestionCount===0">下一题</button>
-                <div class="relative" @click.outside="closeExportMenu()">
-                  <button class="icon-btn" style="width:2rem;height:2rem" :class="{ 'on': exportMenuOpen }" @click="toggleExportMenu($event.currentTarget)" title="导出" x-html="icon('insert','w-4 h-4')"></button>
-                  <div x-show="exportMenuOpen" x-transition:enter="export-menu-anim" x-transition:enter-start="export-menu-anim-from" x-transition:enter-end="export-menu-anim-to" x-transition:leave="export-menu-anim-leave" x-transition:leave-start="export-menu-anim-to" x-transition:leave-end="export-menu-anim-from" class="export-menu glass-deep rounded-xl" data-export-menu :style="exportMenuStyle">
-                    <div class="export-size-row">
-                      <span class="export-size-label" :class="{ 'disabled': !exportSizeEnabled }">文字大小</span>
-                      <input type="range" class="export-slider" min="10" max="24" step="1" x-model.number="exportFontSize" :disabled="!exportSizeEnabled">
-                      <span class="export-size-num" :class="{ 'disabled': !exportSizeEnabled }" x-text="exportFontSize"></span>
-                    </div>
-                    <div class="export-list">
-                      <template x-for="f in exportFormats" :key="f.id">
-                        <div class="export-item" :class="{ 'active': exportFormat === f.id }" @click="exportFormat = f.id">
-                          <span class="export-item-icon" x-html="icon(f.icon, 'w-4 h-4')"></span>
-                          <div class="export-item-text">
-                            <span class="export-item-name" x-text="f.name"></span>
-                            <span class="export-item-desc" x-text="f.desc"></span>
-                          </div>
-                          <span class="export-check" x-show="exportFormat === f.id" x-html="icon('check','w-3.5 h-3.5')"></span>
-                        </div>
-                      </template>
-                    </div>
-                    <div class="export-action">
-                      <button class="btn-primary w-full justify-center" @click="doExport()" x-text="exportIsCopy ? '复制' : '下载'"></button>
-                    </div>
-                  </div>
-                </div>
+                <button class="icon-btn" style="width:2rem;height:2rem" @click="openVpExport()" title="下载讲解文件（单文件 HTML，双击即可讲题）" x-html="icon('insert','w-4 h-4')"></button>
                 <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="toggleVpFullscreen()" x-html="vpFullscreen ? icon('x','w-4 h-4') : icon('panel-right','w-4 h-4')"></button>
                 <span x-text="vpFullscreen ? '退出全屏' : '全屏讲题'" class="text-xs hidden sm:inline" style="margin-left:-4px"></span>
               </div>
@@ -1134,6 +1110,12 @@
                       <span class="whitespace-nowrap" x-text="'生成中 ' + vpQuestionCount + ' / ' + (vpTotal || '…')"></span>
                       <button class="vp-stage-live-stop" @click="stop()" title="停止生成，已生成题目会保留">停止</button>
                     </span>
+                    <div class="vp-stage-themes" role="group" aria-label="主题">
+                      <template x-for="th in themes" :key="th.id">
+                        <button class="theme-dot" :class="{ 'on': theme === th.id, 'theme-dot-sora': th.id === 'sora' }" :style="'background:' + th.dot"
+                                @click="setTheme(th.id)" :title="th.name" :aria-label="'切换到' + th.name + '主题'"></button>
+                      </template>
+                    </div>
                     <button class="vp-stage-exit" @click="vpCloseFullscreen()" title="退出全屏（Esc）">
                       <span x-html="icon('x','w-4 h-4')"></span><span>退出全屏</span>
                     </button>
@@ -1220,31 +1202,7 @@
               <span class="ml-auto flex items-center gap-1">
                 <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData" :class="{ 'on': maskOn }" @click="toggleMask()" :title="maskOn ? '显示答案' : '隐藏答案'" x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
                 <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData || output" @click="copyResult()" :title="copied ? '已复制' : '复制'" x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
-                <div class="relative" x-show="vpHasData || output" @click.outside="closeExportMenu()">
-                  <button class="icon-btn" style="width:2rem;height:2rem" :class="{ 'on': exportMenuOpen }" @click="toggleExportMenu($event.currentTarget)" title="导出" x-html="icon('insert','w-4 h-4')"></button>
-                  <div x-show="exportMenuOpen" x-transition:enter="export-menu-anim" x-transition:enter-start="export-menu-anim-from" x-transition:enter-end="export-menu-anim-to" x-transition:leave="export-menu-anim-leave" x-transition:leave-start="export-menu-anim-to" x-transition:leave-end="export-menu-anim-from" class="export-menu glass-deep rounded-xl" data-export-menu :style="exportMenuStyle">
-                    <div class="export-size-row">
-                      <span class="export-size-label" :class="{ 'disabled': !exportSizeEnabled }">文字大小</span>
-                      <input type="range" class="export-slider" min="10" max="24" step="1" x-model.number="exportFontSize" :disabled="!exportSizeEnabled">
-                      <span class="export-size-num" :class="{ 'disabled': !exportSizeEnabled }" x-text="exportFontSize"></span>
-                    </div>
-                    <div class="export-list">
-                      <template x-for="f in exportFormats" :key="f.id">
-                        <div class="export-item" :class="{ 'active': exportFormat === f.id }" @click="exportFormat = f.id">
-                          <span class="export-item-icon" x-html="icon(f.icon, 'w-4 h-4')"></span>
-                          <div class="export-item-text">
-                            <span class="export-item-name" x-text="f.name"></span>
-                            <span class="export-item-desc" x-text="f.desc"></span>
-                          </div>
-                          <span class="export-check" x-show="exportFormat === f.id" x-html="icon('check','w-3.5 h-3.5')"></span>
-                        </div>
-                      </template>
-                    </div>
-                    <div class="export-action">
-                      <button class="btn-primary w-full justify-center" @click="doExport()" x-text="exportIsCopy ? '复制' : '下载'"></button>
-                    </div>
-                  </div>
-                </div>
+                <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData" @click="openVpExport()" title="下载讲解文件（单文件 HTML，双击即可讲题）" x-html="icon('insert','w-4 h-4')"></button>
               </span>
             </div>
 
@@ -1766,6 +1724,38 @@
           <button class="btn-ghost" @click="favModal = false">取消</button>
           <button class="btn-primary" @click="saveFavEdit()">
             <span x-html="icon('check','w-4 h-4')"></span>保存
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 导出可视化讲解（单文件 HTML） ==================== -->
+    <div x-show="vpExportOpen" class="modal-mask" x-transition.opacity x-cloak
+         @click.self="closeVpExport()" @keydown.escape.window="vpExportOpen && closeVpExport()">
+      <div class="modal-card modal-md glass-deep pop-in" @click.stop>
+        <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
+          <span class="text-dim" x-html="icon('projector','w-4 h-4')"></span>
+          <h3 class="font-bold text-sm">导出可视化讲解</h3>
+          <button class="icon-btn ml-auto" @click="closeVpExport()" title="关闭" x-html="icon('x','w-4 h-4')"></button>
+        </div>
+        <div class="p-5 space-y-4 overflow-y-auto scroll-thin">
+          <div>
+            <label class="text-xs text-dim block mb-1.5">讲解标题</label>
+            <input type="text" x-ref="vpExportTitleEl" x-model="vpExportTitle"
+                   placeholder="例如：2022 全国甲卷 阅读理解讲解" @keydown.enter="doVpExport()">
+          </div>
+          <p class="text-xs text-dim leading-relaxed">
+            下载得到一个单文件 HTML，全部题目与解析都在里面，无需联网、可直接分发给学生。
+            双击用浏览器打开即进入全屏讲解：先看到封面，点「开始讲解」逐题讲下去；
+            封面与讲台都能实时切换 5 套主题，讲题时支持方向键翻题、遮答案、题目总览。
+          </p>
+          <p class="text-[11px] text-faint">文件名：<span x-text="vpExportFilenamePreview"></span></p>
+        </div>
+        <div class="px-5 py-4 border-t flex justify-end gap-2 shrink-0" style="border-color:var(--border)">
+          <button class="btn-ghost" @click="closeVpExport()" :disabled="vpExportBusy">取消</button>
+          <button class="btn-primary" @click="doVpExport()" :disabled="vpExportBusy">
+            <span x-html="icon('insert','w-4 h-4')"></span>
+            <span x-text="vpExportBusy ? '正在生成…' : '下载'"></span>
           </button>
         </div>
       </div>

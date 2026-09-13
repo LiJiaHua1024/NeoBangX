@@ -47,6 +47,8 @@ const ICON_PATHS = {
   "chevron-right": '<path d="m9 6 6 6-6 6"/>',
   "chevrons-right": '<path d="m6 7 5 5-5 5M13 7l5 5-5 5"/>',
   "panel-right": '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M15 4.5v15"/>',
+  "expand": '<path d="M9 3.5H5.5a2 2 0 0 0-2 2V9M15 3.5h3.5a2 2 0 0 1 2 2V9M15 20.5h3.5a2 2 0 0 0 2-2V15M9 20.5H5.5a2 2 0 0 1-2-2V15"/>',
+  "compress": '<path d="M9.5 3.5v4a2 2 0 0 1-2 2h-4M14.5 3.5v4a2 2 0 0 0 2 2h4M14.5 20.5v-4a2 2 0 0 1 2-2h4M9.5 20.5v-4a2 2 0 0 0-2-2h-4"/>',
   "clock": '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.2 1.8"/>',
   "bookmark": '<path d="M6.5 3.5h11V21L12 16.8 6.5 21V3.5Z"/>',
   "bookmark-plus": '<path d="M6.5 3.5h11V21L12 16.8 6.5 21V3.5Z"/><path d="M12 8v5M9.5 10.5h5"/>',
@@ -1513,6 +1515,11 @@ function nbx() {
     vpTopHidden: false,
     vpBottomHidden: false,
     vpChromePinned: false,
+    // 导出单文件讲解 HTML：标题弹窗 / 打包状态 / 静态资源缓存
+    vpExportOpen: false,
+    vpExportTitle: "",
+    vpExportBusy: false,
+    _vpAssets: null,
 
     /* --- 智能错题迁移 --- */
     migration: null,
@@ -5339,6 +5346,161 @@ function nbx() {
       const blob = new Blob([this.getExportPlain()], { type: "text/plain;charset=utf-8" });
       this.downloadBlob(blob, this.exportFilename("txt"));
       this.toast("纯文本文件已开始下载");
+    },
+
+    /* ============ 可视化讲解：导出单文件 HTML ============ */
+    /* 该工具只有一种导出格式（单文件交互式 HTML），所以不走格式菜单：
+       点下载 → 标题弹窗 → 直接产出可双击讲解的离线文件。 */
+    get vpExportFilenamePreview() {
+      return this.vpSafeFilename(this.vpExportTitle) + ".html";
+    },
+    openVpExport() {
+      if (!this.vpHasData) {
+        this.toast("暂无可导出的讲解内容", "error");
+        return;
+      }
+      this.closeExportMenu();
+      const paper = this.visualPaper && this.visualPaper.paper ? this.visualPaper.paper : {};
+      this.vpExportTitle = (paper.title || "").trim() || "试卷讲解";
+      this.vpExportOpen = true;
+      this.$nextTick(() => {
+        const el = this.$refs.vpExportTitleEl;
+        if (el) { el.focus(); el.select(); }
+      });
+    },
+    closeVpExport() {
+      if (this.vpExportBusy) return;
+      this.vpExportOpen = false;
+    },
+    /* 文件名清洗：去掉 Windows 非法字符与结尾的点/空格，过长截断 */
+    vpSafeFilename(name) {
+      const cleaned = String(name || "")
+        .replace(/[\\/:*?"<>|]/g, " ")
+        .replace(/[\u0000-\u001f\u007f]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 80)
+        .replace(/[. ]+$/, "")
+        .trim();
+      if (cleaned) return cleaned;
+      const d = new Date();
+      const ts = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}_${String(d.getHours()).padStart(2, "0")}${String(d.getMinutes()).padStart(2, "0")}`;
+      return `可视化试卷全解_${ts}`;
+    },
+    /* 只取讲解需要的字段，且全部是纯文本（提示词契约禁止 Markdown/HTML） */
+    vpExportPayload(title) {
+      const vp = this.visualPaper || {};
+      const paper = vp.paper || {};
+      const options = (list) => (list || []).map((o) => ({ label: o.label, text: o.text }));
+      const groups = (vp.groups || []).map((g) => ({
+        id: g.id || "",
+        title: g.title || "",
+        intro: g.intro || "",
+        questions: (g.questions || []).map((q) => ({
+          no: q.no,
+          qtype: q.qtype || "",
+          passage: q.passage || "",
+          stem: q.stem || "",
+          options: options(q.options),
+          answer: q.answer || "",
+          reference: q.reference ? {
+            evidence: q.reference.evidence || "",
+            reason: q.reference.reason || "",
+            distractor: q.reference.distractor || "",
+          } : null,
+          pitfalls: (q.pitfalls || []).map((p) => ({ title: p.title || "", desc: p.desc || "" })),
+          pattern: q.pattern ? { name: q.pattern.name || "", steps: (q.pattern.steps || []).slice() } : null,
+          transfer: q.transfer ? {
+            passage: q.transfer.passage || "",
+            stem: q.transfer.stem || "",
+            options: options(q.transfer.options),
+            answer: q.transfer.answer || "",
+            explanation: q.transfer.explanation || "",
+          } : null,
+          writingGuide: q.writingGuide ? {
+            points: (q.writingGuide.points || []).slice(),
+            outline: q.writingGuide.outline || "",
+            sample: q.writingGuide.sample || "",
+          } : null,
+        })),
+      }));
+      return {
+        version: 1,
+        title,
+        notice: vp.notice || "",
+        paper: { title: paper.title || "", subject: paper.subject || "", year: paper.year || "" },
+        total: this.vpTotal,
+        questionCount: this.vpQuestionCount,
+        answerMap: vp.answerMap || {},
+        groups,
+      };
+    },
+    /* 图标精灵复用页面的 ICON_PATHS，避免导出文件里再维护一套图标 */
+    vpExportIconSprite() {
+      const names = ["x", "check", "chevron-left", "chevron-right", "chevron-down", "chevron-up",
+        "eye", "eye-off", "grid", "pin", "projector", "target", "lightbulb", "route", "puzzle",
+        "expand", "compress"];
+      const symbols = names
+        .map((n) => `<symbol id="i-${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[n] || ""}</symbol>`)
+        .join("");
+      return `<svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">${symbols}</svg>`;
+    },
+    async vpLoadStandaloneAssets() {
+      if (this._vpAssets) return this._vpAssets;
+      const load = (url) => fetch(url, { cache: "no-cache" }).then((r) => {
+        if (!r.ok) throw new Error(`${url} → ${r.status}`);
+        return r.text();
+      });
+      const [html, css, js] = await Promise.all([
+        load("/static/vp-standalone.html"),
+        load("/static/vp-standalone.css"),
+        load("/static/vp-standalone.js"),
+      ]);
+      this._vpAssets = { html, css, js };
+      return this._vpAssets;
+    },
+    vpBuildStandaloneHtml(assets, title, payload) {
+      const theme = THEMES.some((t) => t.id === this.theme) ? this.theme : "paper";
+      const hour = new Date().getHours();
+      const sky = theme === "sora" ? (hour >= 6 && hour < 22 ? "day" : "night") : "";
+      // JSON 里的 < 全部转义：内容中若出现 </script> 会提前闭合数据块
+      const data = JSON.stringify(payload).replace(/</g, "\\u003c");
+      // 用函数式替换：CSS/JS 里的 $& $' 等序列不会被当成替换模式
+      const put = (tpl, token, value) => tpl.replace(token, () => value);
+      let out = assets.html;
+      out = put(out, "{{VP_THEME}}", theme);
+      out = put(out, "{{VP_SKY}}", sky ? ` data-sky="${sky}"` : "");
+      out = put(out, "{{VP_TITLE}}", escapeHtml(title));
+      out = put(out, "{{VP_ICONS}}", this.vpExportIconSprite());
+      out = put(out, "{{VP_CSS}}", assets.css);
+      out = put(out, "{{VP_DATA}}", data);
+      out = put(out, "{{VP_JS}}", assets.js);
+      const leftover = out.match(/\{\{VP_(THEME|SKY|TITLE|ICONS|CSS|DATA|JS)\}\}/);
+      if (leftover) throw new Error(`模板占位符未替换：${leftover[0]}`);
+      return out;
+    },
+    async doVpExport() {
+      if (this.vpExportBusy) return;
+      if (!this.vpHasData) {
+        this.toast("暂无可导出的讲解内容", "error");
+        this.vpExportOpen = false;
+        return;
+      }
+      this.vpExportBusy = true;
+      try {
+        const title = (this.vpExportTitle || "").trim() || "试卷讲解";
+        const payload = this.vpExportPayload(title);
+        const assets = await this.vpLoadStandaloneAssets();
+        const html = this.vpBuildStandaloneHtml(assets, title, payload);
+        const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+        this.downloadBlob(blob, this.vpSafeFilename(title) + ".html");
+        this.toast("讲解文件已开始下载：双击打开即可讲题");
+        this.vpExportOpen = false;
+      } catch (e) {
+        this.toast("导出组件未加载，请检查网络或刷新后重试", "error");
+      } finally {
+        this.vpExportBusy = false;
+      }
     },
 
     /* ============ 历史记录 ============ */

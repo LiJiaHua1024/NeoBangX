@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<!--
+  NeoBangX · 可视化讲解单文件模板
+  由 frontend/script.js 的 vpBuildStandaloneHtml() 组装：模板里的双花括号占位符会被
+  主题、标题、图标精灵、样式、数据与脚本替换；产物不依赖网络，双击即可讲解。
+-->
+<html lang="zh-CN" data-theme="{{VP_THEME}}"{{VP_SKY}}>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>{{VP_TITLE}}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23b4502a'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
+  <style>{{VP_CSS}}</style>
+</head>
+<body>
+  {{VP_ICONS}}
+
+  <!-- ==================== 封面 ==================== -->
+  <div id="vp-cover" class="cover">
+    <div class="cover-glow" aria-hidden="true"></div>
+    <div class="cover-inner">
+      <div class="cover-paper t-xs" id="cv-paper"></div>
+      <div class="cover-rule" aria-hidden="true"></div>
+      <h1 class="cover-title" id="cv-title"></h1>
+      <div class="cover-features" id="cv-features"></div>
+      <div class="cover-meta t-xs" id="cv-meta"></div>
+      <button class="btn-primary cover-start" id="cv-start">
+        <svg class="vp-ic" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+        <span>开始讲解</span>
+      </button>
+      <div class="cover-hint t-xs" id="cv-notice"></div>
+    </div>
+    <button class="icon-btn cover-fs" id="cv-fs" title="进入全屏（F11 亦可）" aria-label="切换全屏"></button>
+    <div class="cover-themes" id="cv-themes" role="group" aria-label="主题"></div>
+  </div>
+
+  <!-- ==================== 讲解舞台 ==================== -->
+  <div id="vp-present" class="vp-present" hidden>
+    <!-- 左：语篇 + 答案速查；右：题目 + 四维解析 -->
+    <div class="vp-split">
+      <div class="vp-col vp-col-left">
+        <div class="vp-pane scroll-thin" id="vp-left">
+          <div class="vp-passage" id="q-passage"></div>
+          <div class="vp-nopassage t-sm dim" id="q-nopassage">该题无独立语篇（写作题或语法填空）</div>
+          <div class="vp-ansmap" id="ans-map">
+            <div class="vp-ansmap-title t-xs semibold">答案速查表</div>
+            <div class="vp-ansmap-list" id="ans-list"></div>
+          </div>
+        </div>
+      </div>
+      <div class="vp-col vp-col-right">
+        <div class="vp-pane vp-pane-right scroll-thin" id="vp-right">
+          <div class="vp-qwrap">
+            <div class="vp-question-head" id="q-head">
+              <div class="vp-qhead-top">
+                <span class="chip" id="q-no"></span>
+                <span class="chip neutral" id="q-type-blank" hidden>填空</span>
+                <span class="chip neutral" id="q-type-writing" hidden>写作</span>
+                <span class="t-xs dim ellipsis" id="q-group"></span>
+                <span class="mlauto t-xs faint nowrap" id="q-pos"></span>
+              </div>
+              <div class="vp-stem" id="q-stem"></div>
+              <div class="vp-options-grid" id="q-options"></div>
+              <div class="glass-soft vp-writing" id="q-writing" hidden>
+                <div class="t-xs semibold mb2">写作指导</div>
+                <div class="t-xs dim mb2" id="q-writing-points"></div>
+                <div class="t-xs dim mb2" id="q-writing-outline"></div>
+                <div class="vp-sample" id="q-writing-sample"></div>
+              </div>
+            </div>
+            <div class="seg vp-tabs" id="q-tabs">
+              <button type="button" data-tab="reference" class="on">参考答案</button>
+              <button type="button" data-tab="pitfalls">易错点</button>
+              <button type="button" data-tab="pattern">考点范式</button>
+              <button type="button" data-tab="transfer">迁移训练</button>
+            </div>
+            <div class="vp-tab-panel" id="q-tab"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 舞台 chrome：顶栏 / 翻题钮 / 中央坞 / 总览 / 唤出把手 -->
+    <div class="vp-stage" id="st-stage">
+      <header class="vp-stage-top glass-deep">
+        <div class="vp-stage-title">
+          <div class="vp-stage-name ellipsis" id="st-title"></div>
+          <div class="vp-stage-pos">
+            <span class="vp-stage-no" id="st-pos"></span>
+            <span class="ellipsis" id="st-group"></span>
+          </div>
+        </div>
+        <div class="vp-stage-right">
+          <div class="vp-stage-themes" id="st-themes" role="group" aria-label="主题"></div>
+          <button class="vp-stage-exit" id="st-fs" title="切换全屏" aria-label="切换全屏"></button>
+          <button class="vp-stage-exit" id="st-cover" title="返回封面（Esc）">
+            <svg class="vp-ic" aria-hidden="true"><use href="#i-projector"></use></svg><span>返回封面</span>
+          </button>
+        </div>
+      </header>
+
+      <button class="vp-stage-nav prev" id="nav-prev" title="上一题（←）">
+        <svg class="vp-ic" aria-hidden="true"><use href="#i-chevron-left"></use></svg><span>上一题</span>
+      </button>
+      <button class="vp-stage-nav next" id="nav-next" title="下一题（→）">
+        <span>下一题</span><svg class="vp-ic" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+      </button>
+
+      <div class="vp-stage-dock glass-deep">
+        <span class="vp-dock-pos" id="dock-pos"></span>
+        <span class="vp-dock-sep"></span>
+        <button class="vp-dock-btn vp-dock-icon" id="dock-mask" title="隐藏答案" aria-label="隐藏答案"></button>
+        <button class="vp-dock-btn" id="dock-overview">
+          <svg class="vp-ic" aria-hidden="true"><use href="#i-grid"></use></svg><span>题目总览</span>
+        </button>
+        <span class="vp-dock-sep"></span>
+        <button class="vp-dock-btn vp-dock-icon" id="dock-pin" title="固定控制台（不再自动隐藏）" aria-label="固定控制台"></button>
+      </div>
+
+      <div class="vp-overview-mask" id="ov-mask" hidden></div>
+      <div class="vp-overview glass-deep" id="ov-panel" hidden>
+        <div class="vp-overview-head">
+          <span class="semibold">题目总览</span>
+          <span class="t-xs faint" id="ov-count"></span>
+          <button class="icon-btn mlauto" id="ov-close" title="收起" aria-label="收起"></button>
+        </div>
+        <div class="vp-overview-body scroll-thin" id="ov-body"></div>
+      </div>
+
+      <button class="vp-stage-handle top glass-deep" id="wake-top" title="显示顶栏" aria-label="显示顶栏">
+        <svg class="vp-ic" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+      </button>
+      <button class="vp-stage-handle glass-deep" id="wake-bottom" title="显示讲解控制台" aria-label="显示讲解控制台">
+        <svg class="vp-ic" aria-hidden="true"><use href="#i-chevron-up"></use></svg>
+      </button>
+    </div>
+  </div>
+
+  <script id="vp-data" type="application/json">{{VP_DATA}}</script>
+  <script>{{VP_JS}}</script>
+</body>
+</html>

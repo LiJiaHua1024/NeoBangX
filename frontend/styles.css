@@ -1651,6 +1651,13 @@ html[data-theme="sora"] .mascot-peeking {
 }
 .vp-stage-exit:hover { background: var(--hover-bg); color: var(--text); }
 
+/* —— 顶栏主题点：全屏讲解时左侧栏被盖住，这里提供实时换主题入口 —— */
+.vp-stage-themes { display: flex; align-items: center; gap: 0.5rem; margin-right: 0.35rem; }
+@media (max-width: 640px) {
+  .vp-stage-themes { gap: 0.35rem; margin-right: 0.15rem; }
+  .vp-stage-themes .theme-dot { width: 1.15rem; height: 1.15rem; }
+}
+
 /* —— 左下 上一题 / 右下 下一题 —— */
 .vp-stage-nav {
   position: absolute;
