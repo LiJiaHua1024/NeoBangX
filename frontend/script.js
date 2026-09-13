@@ -2834,7 +2834,7 @@ function nbx() {
       if (this.willConsumeQuota) return "";
       if (this.isFreeModel()) {
         return this.isAuthenticated
-          ? "免费模型，本次生成不消耗额度"
+          ? "免费模型，限额内不消耗次数；超出后按次消耗次数"
           : "免费模型，无需使用码，本次生成不消耗额度";
       }
       if (!this.isAuthenticated) return "当前模型需要输入使用码，或改选带「免费」标签的模型";
@@ -3701,8 +3701,18 @@ function nbx() {
           signal: controller.signal,
         });
         if (!res.ok) {
+          // 结构化 403（如额度不足无法支付整批迁移）不是登录态问题，不能清掉本地凭证
+          let quotaShortfall = false;
+          if (res.status === 403) {
+            try {
+              const detail = (await res.clone().json()).detail;
+              quotaShortfall = !!(detail && typeof detail === "object" && "required" in detail);
+            } catch { /* 非 JSON 响应按普通 403 处理 */ }
+          }
           const msg = await this.migrationReadError(res, `HTTP ${res.status}`);
-          if (res.status === 401 || res.status === 403) this.handleAuthFailure(msg);
+          if ((res.status === 401 || res.status === 403) && !quotaShortfall) {
+            this.handleAuthFailure(msg);
+          }
           throw new Error(msg);
         }
         card.status = "streaming";

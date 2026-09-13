@@ -438,7 +438,6 @@ def _active_code():
     return UsageCode(
         id=999_222,
         code="NBXU-FALLBACK-TEST",
-        code_type="user",
         quota=3,
         used_count=0,
         is_enabled=True,

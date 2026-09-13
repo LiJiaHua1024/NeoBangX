@@ -13,7 +13,6 @@ def _code(quota=10):
     return UsageCode(
         id=7,
         code="NBXU-TEST-TEST-TEST",
-        code_type="user",
         quota=quota,
         used_count=0,
         is_enabled=True,

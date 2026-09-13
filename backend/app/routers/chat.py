@@ -458,12 +458,24 @@ def _register_migration_batch(
     charge_units = 0 if free else migration_charge_units(req.batch_size)
     batch = _migration_batches.get(req.batch_id)
     if batch:
-        if (
-            batch.owner_id != owner_id
-            or batch.expected != req.batch_size
-            or batch.charge_units != charge_units
-        ):
+        if batch.owner_id != owner_id or batch.expected != req.batch_size:
             raise HTTPException(status_code=400, detail="智能错题迁移批次参数不一致")
+        if charge_units > batch.charge_units:
+            # 免费批生成途中命中免费限额：整批升级为付费批（同批计费口径必须一致）
+            delta = charge_units - batch.charge_units
+            reserved = _migration_reserved.get(owner_id, 0)
+            if remaining is not None and remaining - reserved < delta:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "message": "额度不足，无法生成本次智能错题迁移",
+                        "required": charge_units,
+                        "remaining": max(0, remaining - reserved),
+                    },
+                )
+            batch.charge_units = charge_units
+            _migration_reserved[owner_id] = reserved + delta
+        # charge_units 更小（窗口滚动后又有免费卡）不回退，整批仍按付费结算
         return batch
 
     if charge_units > 0:
@@ -717,7 +729,8 @@ async def chat_stream(
 
     认证规则：使用码可用时一律放行（是否扣次数取决于模型是否免费）；
     无码或码不可用时，仅「免费 + 无码可用」的模型放行，其余按原因返回 401/403。
-    免费模型不扣次数，但受模型级防滥用限额约束（0 = 不限制）。
+    免费模型在限额内不扣次数；限额命中后若使用码仍可用则转为按次扣减，
+    无码或码不可用才返回 429。
     """
     prompt_filename = _resolve_prompt_filename(req.tool_id)
     if not prompt_filename:
@@ -747,18 +760,28 @@ async def chat_stream(
     owner_id = code.id if code else 0
     owner_key = f"code:{code.id}" if code else identity_key(fingerprint=fp_hash, ip=client_ip)
 
-    # 免费模型：不扣次数，但先过防滥用限额（超限在建立 SSE 之前 429）
+    # 免费模型：优先走免费额度（不扣次数）并在建立 SSE 之前过防滥用限额；
+    # 限额命中时若使用码仍可用（含无限码）则转为按次计费，无码/码不可用才 429
+    charged_free = free_model
     release_free_slot: Callable[[], None] = lambda: None
     if free_model:
-        release_free_slot = await asyncio.to_thread(
-            register_free_use,
-            entry=model_entry or {},
-            identity=identity_key(
-                code_id=code.id if code else None,
-                fingerprint=fp_hash,
-                ip=client_ip,
-            ),
-        )
+        try:
+            release_free_slot = await asyncio.to_thread(
+                register_free_use,
+                entry=model_entry or {},
+                identity=identity_key(
+                    code_id=code.id if code else None,
+                    fingerprint=fp_hash,
+                    ip=client_ip,
+                ),
+            )
+        except HTTPException as exc:
+            if exc.status_code != 429 or code is None or code.is_exhausted:
+                raise
+            charged_free = False
+            logger.info(
+                "免费模型限额命中，转为按次计费：model=%s code_id=%s", model_used, code.id
+            )
     # 日志展示用名称：迁移请求统一显示工具名而非底层 prompt 文件名
     tool_name = MIGRATION_TOOL_NAME if req.tool_id == MIGRATION_TOOL_ID else prompt_filename
     # 挂上业务上下文：路由内若有未捕获异常，全局处理器据此补一条使用日志
@@ -776,7 +799,7 @@ async def chat_stream(
             req,
             owner_id=owner_id,
             remaining=code.remaining if code else None,
-            free=free_model,
+            free=charged_free,
         )
     except BaseException:
         release_free_slot()
@@ -793,8 +816,8 @@ async def chat_stream(
     _stop_events[request_id] = (stop_event, owner_key)
     reasoning_effort = model_entry.get("reasoning_effort") if model_entry else None
     thinking_budget = model_entry.get("thinking_budget") if model_entry else None
-    # 免费模型本次调用不扣次数（迁移批次在 units=0 时同样不扣）
-    quota_units = 0 if free_model else 1
+    # 免费额度命中的调用不扣次数；转为按次计费时扣 1 次（迁移批次按 charge_units 结算）
+    quota_units = 0 if charged_free else 1
     # 工具推理规则：按列表顺序取第一条命中该工具的规则，强制覆盖思考强度
     tool_rule = find_tool_reasoning_rule(cfg.get("tool_reasoning_rules") or [], req.tool_id)
     if tool_rule is not None:
@@ -898,7 +921,7 @@ async def chat_stream(
                 }
             else:
                 # 保持现有工具的计费行为：流正常收尾（包括用户停止/断开）后扣 1 次；
-                # 免费模型 quota_units=0，不扣次数。
+                # 免费额度内 quota_units=0 不扣，命中限额转按次计费时扣 1 次。
                 if client_disconnected or stop_event.is_set():
                     status = STATUS_CANCELLED
                 if not charged:

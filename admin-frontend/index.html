@@ -109,7 +109,7 @@
       <div class="security-banner" x-show="securityWarning && !securityBannerDismissed" x-cloak>
         <div class="security-banner-text">
           <strong>⚠️ 安全警告：JWT 密钥仍为默认值。</strong>
-          任何拿到源码的人都可以离线伪造登录票据，冒充任意使用码（含无限额管理员码）。
+          任何拿到源码的人都可以离线伪造登录票据，冒充任意使用码（含无限额度使用码）。
           点击右侧按钮即可生成随机密钥并保存到数据卷；也可在
           <code>backend/.env</code> 中手动设置 <code>JWT_SECRET</code>。
         </div>
@@ -550,23 +550,6 @@
           <div class="filters">
             <input type="search" x-model="codeQuery" @keydown.enter="codesPage = 1; loadCodes()" placeholder="搜索码 / 备注">
 
-            <!-- 类型筛选 -->
-            <div class="custom-select" @click.outside="codeTypeMenuOpen = false">
-              <button class="custom-select-trigger" :class="{ open: codeTypeMenuOpen }"
-                      @click="codeTypeMenuOpen = !codeTypeMenuOpen">
-                <span x-text="codeTypeFilterLabel"></span>
-                <span class="chev">▼</span>
-              </button>
-              <div class="custom-select-menu" x-show="codeTypeMenuOpen" x-cloak>
-                <button class="custom-select-item" :class="{ on: codeTypeFilter === '' }"
-                        @click="codeTypeFilter = ''; codeTypeMenuOpen = false; codesPage = 1; loadCodes()">全部类型</button>
-                <button class="custom-select-item" :class="{ on: codeTypeFilter === 'user' }"
-                        @click="codeTypeFilter = 'user'; codeTypeMenuOpen = false; codesPage = 1; loadCodes()">普通用户</button>
-                <button class="custom-select-item" :class="{ on: codeTypeFilter === 'admin' }"
-                        @click="codeTypeFilter = 'admin'; codeTypeMenuOpen = false; codesPage = 1; loadCodes()">管理员</button>
-              </div>
-            </div>
-
             <!-- 状态筛选 -->
             <div class="custom-select" @click.outside="codeEnabledMenuOpen = false">
               <button class="custom-select-trigger" :class="{ open: codeEnabledMenuOpen }"
@@ -594,7 +577,6 @@
             <thead>
               <tr>
                 <th>使用码</th>
-                <th>类型</th>
                 <th>额度</th>
                 <th>已用</th>
                 <th>剩余</th>
@@ -606,17 +588,13 @@
             </thead>
             <tbody>
               <tr x-show="!codes.length">
-                <td colspan="9" class="empty">暂无使用码</td>
+                <td colspan="8" class="empty">暂无使用码</td>
               </tr>
               <template x-for="c in codes" :key="c.id">
                 <tr>
                   <td class="mono code-cell" data-label="使用码" data-span="full">
                     <span x-text="c.code"></span>
                     <button class="link-btn" @click="copyText(c.code)" title="复制">复制</button>
-                  </td>
-                  <td data-label="类型">
-                    <span class="badge" :class="c.code_type === 'admin' ? 'badge-admin' : 'badge-user'"
-                          x-text="c.code_type === 'admin' ? '管理员' : '用户'"></span>
                   </td>
                   <td data-label="额度" x-text="c.is_unlimited ? '∞' : c.quota"></td>
                   <td data-label="已用" x-text="c.used_count"></td>
@@ -630,8 +608,8 @@
                   <td class="actions" data-label="操作" data-span="full">
                     <button class="link-btn" @click="toggleCode(c)" x-text="c.is_enabled ? '禁用' : '启用'"></button>
                     <button class="link-btn" @click="openCodeNoteEditor(c)">备注</button>
-                    <button class="link-btn" x-show="c.code_type === 'user'" @click="openEditQuota(c)">改额度</button>
-                    <button class="link-btn" x-show="c.code_type === 'user' && c.used_count > 0"
+                    <button class="link-btn" @click="openEditQuota(c)">改额度</button>
+                    <button class="link-btn" x-show="c.used_count > 0"
                             @click="openResetUsage(c)">重置用量</button>
                     <button class="link-btn danger" @click="deleteCode(c)">删除</button>
                   </td>
@@ -1338,27 +1316,11 @@
         </div>
         <div class="modal-body form-grid">
           <label class="field">
-            <span>类型</span>
-            <div class="custom-select" @click.outside="createTypeMenuOpen = false">
-              <button class="custom-select-trigger" :class="{ open: createTypeMenuOpen }"
-                      @click="createTypeMenuOpen = !createTypeMenuOpen">
-                <span x-text="createForm.code_type === 'admin' ? '管理员（NBXA · 无限额度）' : '普通用户（NBXU）'"></span>
-                <span class="chev">▼</span>
-              </button>
-              <div class="custom-select-menu" x-show="createTypeMenuOpen" x-cloak>
-                <button class="custom-select-item" :class="{ on: createForm.code_type === 'user' }"
-                        @click="createForm.code_type = 'user'; createTypeMenuOpen = false">普通用户（NBXU）</button>
-                <button class="custom-select-item" :class="{ on: createForm.code_type === 'admin' }"
-                        @click="createForm.code_type = 'admin'; createTypeMenuOpen = false">管理员（NBXA · 无限额度）</button>
-              </div>
-            </div>
-          </label>
-          <label class="field" x-show="createForm.code_type === 'user'">
             <span>额度（次）</span>
             <div class="preset-chips">
-              <template x-for="q in quotaPresets" :key="q">
-                <button class="preset-chip" :class="{ on: createForm.quota === q }"
-                        @click="createForm.quota = q" x-text="q"></button>
+              <template x-for="q in quotaPresets" :key="q.value">
+                <button class="preset-chip" :class="{ on: createForm.quota === q.value }"
+                        @click="createForm.quota = q.value" x-text="q.label"></button>
               </template>
             </div>
           </label>
@@ -1402,14 +1364,14 @@
           <label class="field">
             <span>新额度</span>
             <div class="preset-chips">
-              <template x-for="q in quotaPresets" :key="q">
-                <button class="preset-chip" :class="{ on: editingQuotaValue === q }"
-                        @click="editingQuotaValue = q" x-text="q"></button>
+              <template x-for="q in quotaPresets" :key="q.value">
+                <button class="preset-chip" :class="{ on: editingQuotaValue === q.value }"
+                        @click="editingQuotaValue = q.value" x-text="q.label"></button>
               </template>
             </div>
           </label>
-          <p class="field-hint">也可直接输入自定义数字；新额度不能小于已用次数。</p>
-          <input type="number" x-model.number="editingQuotaValue" min="1" class="mt-2">
+          <p class="field-hint">也可直接输入自定义数字（-1 即 ∞ 无限）。改为无限会清空已用次数；从无限改回有限将从 0 次重新计数；新额度不能小于已用次数。</p>
+          <input type="number" x-model.number="editingQuotaValue" min="-1" class="mt-2">
         </div>
         <div class="modal-foot">
           <button class="btn-ghost" @click="quotaModalOpen = false">取消</button>

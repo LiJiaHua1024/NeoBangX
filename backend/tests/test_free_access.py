@@ -4,7 +4,8 @@
 1. 配置解析：is_free / free_no_code / free_limits 的规范化与序列化往返；
 2. 限额服务：identity 归属、窗口计数、在途占位与释放；
 3. 端点行为：匿名只能调用「免费 + 无码可用」模型、免费调用不扣次数、
-   次数耗尽的码仍可调用免费模型、超限返回 429。
+   次数耗尽的码仍可调用免费模型、超限返回 429；限额命中且持可用码时
+   转为按次计费（迁移批次同步升级为付费批）。
 """
 import json
 from uuid import uuid4
@@ -80,7 +81,6 @@ def _make_code(*, quota=5, used=0, enabled=True):
         # 码值唯一：会话级数据库在多个测试间共享
         row = UsageCode(
             code=f"NBXU-FREE-{uuid4().hex[:12].upper()}",
-            code_type="user",
             quota=quota,
             used_count=used,
             is_enabled=enabled,
@@ -448,3 +448,174 @@ def test_admin_config_roundtrip_keeps_free_fields(models_config):
     # 未标记免费时无码开关强制归零
     assert returned[PAID_MODEL_ID]["is_free"] is False
     assert returned[PAID_MODEL_ID]["free_no_code"] is False
+
+
+# ---------------- 免费限额命中转按次计费 ----------------
+
+def _latest_log(db, code_id):
+    return (
+        db.query(UsageLog)
+        .filter(UsageLog.code_id == code_id)
+        .order_by(UsageLog.id.desc())
+        .first()
+    )
+
+
+def test_free_limit_hit_falls_back_to_code_quota(stream, models_config):
+    """免费限额命中后，持可用使用码的调用转为按次扣减，而不是 429。"""
+    models_config(
+        [_model_entry(FREE_MODEL_ID, is_free=True, free_no_code=True, free_limits={"minute": 1})],
+        FREE_MODEL_ID,
+    )
+    client = stream
+    code = _make_code(quota=3, used=0)
+    _as_code(code)
+
+    first = _post_stream(client, model=FREE_MODEL_ID)
+    assert first.status_code == 200
+
+    db = SessionLocal()
+    try:
+        assert db.get(UsageCode, code.id).used_count == 0  # 限额内免费
+        assert _latest_log(db, code.id).units == 0
+    finally:
+        db.close()
+
+    second = _post_stream(client, model=FREE_MODEL_ID)
+    assert second.status_code == 200
+
+    db = SessionLocal()
+    try:
+        assert db.get(UsageCode, code.id).used_count == 1  # 达限转按次扣 1 次
+        row = _latest_log(db, code.id)
+        assert row.units == 1 and row.model == FREE_MODEL_ID
+    finally:
+        db.close()
+
+    # 窗口内后续调用持续按次计费（付费日志同样计入免费窗口计数）
+    third = _post_stream(client, model=FREE_MODEL_ID)
+    assert third.status_code == 200
+
+    db = SessionLocal()
+    try:
+        assert db.get(UsageCode, code.id).used_count == 2
+    finally:
+        db.close()
+
+
+def test_free_limit_hit_unlimited_code_keeps_logging_one_unit(stream, models_config):
+    """无限码命中免费限额后照常放行：不实扣次数，但按次计费口径记 units=1。"""
+    models_config(
+        [_model_entry(FREE_MODEL_ID, is_free=True, free_no_code=True, free_limits={"minute": 1})],
+        FREE_MODEL_ID,
+    )
+    client = stream
+    code = _make_code(quota=-1, used=0)
+    _as_code(code)
+
+    assert _post_stream(client, model=FREE_MODEL_ID).status_code == 200
+    assert _post_stream(client, model=FREE_MODEL_ID).status_code == 200
+
+    db = SessionLocal()
+    try:
+        assert db.get(UsageCode, code.id).used_count == 0
+        assert _latest_log(db, code.id).units == 1
+    finally:
+        db.close()
+
+
+def test_free_limit_hit_exhausted_code_still_429(stream, models_config):
+    """次数耗尽的码等同无码：免费限额命中后没有付费途径，仍 429。"""
+    models_config(
+        [_model_entry(FREE_MODEL_ID, is_free=True, free_no_code=True, free_limits={"minute": 1})],
+        FREE_MODEL_ID,
+    )
+    client = stream
+    _as_anonymous(reason="exhausted")
+    headers = {"X-Client-Fingerprint": "fp-limit-exhausted"}
+
+    assert _post_stream(client, model=FREE_MODEL_ID, **headers).status_code == 200
+    second = _post_stream(client, model=FREE_MODEL_ID, **headers)
+    assert second.status_code == 429
+    assert "每分钟" in second.text
+
+
+def test_free_model_without_limits_never_charges(stream, models_config):
+    """免费模型未配置限额时不会转按次计费（回归）。"""
+    models_config(
+        [_model_entry(FREE_MODEL_ID, is_free=True, free_no_code=True)],
+        FREE_MODEL_ID,
+    )
+    client = stream
+    code = _make_code(quota=3, used=0)
+    _as_code(code)
+
+    for _ in range(3):
+        assert _post_stream(client, model=FREE_MODEL_ID).status_code == 200
+
+    db = SessionLocal()
+    try:
+        assert db.get(UsageCode, code.id).used_count == 0
+    finally:
+        db.close()
+
+
+# ---------------- 迁移批次：免费批升级付费批 ----------------
+
+def _migration_req(batch_id, batch_size):
+    return chat_router.ChatRequest(
+        tool_id=chat_router.MIGRATION_TOOL_ID,
+        input="迁移测试",
+        batch_id=batch_id,
+        batch_size=batch_size,
+        batch_index=0,
+    )
+
+
+def test_migration_batch_upgrades_free_to_paid():
+    """同批卡片先按免费登记、后因限额命中需付费：批次升级而不是 400。"""
+    batch_id = f"mig_upgrade_{uuid4().hex}"
+    req = _migration_req(batch_id, batch_size=4)  # charge_units = max(1, 4 // 2) = 2
+    owner_id = 987_654
+    try:
+        free_batch = chat_router._register_migration_batch(
+            req, owner_id=owner_id, remaining=10, free=True
+        )
+        assert free_batch.charge_units == 0
+
+        paid_batch = chat_router._register_migration_batch(
+            req, owner_id=owner_id, remaining=10, free=False
+        )
+        assert paid_batch is free_batch
+        assert paid_batch.charge_units == 2
+        assert chat_router._migration_reserved.get(owner_id) == 2
+
+        # 付费批中夹入免费卡（窗口滚动）：不回退、不报错，整批仍按付费结算
+        again = chat_router._register_migration_batch(
+            req, owner_id=owner_id, remaining=10, free=True
+        )
+        assert again.charge_units == 2
+    finally:
+        batch = chat_router._migration_batches.pop(batch_id, None)
+        if batch:
+            chat_router._release_migration_reservation(batch)
+
+
+def test_migration_batch_upgrade_rejected_when_quota_short():
+    """免费批升级付费批时整批额度不足：403 结构化 detail，不误报 400。"""
+    batch_id = f"mig_short_{uuid4().hex}"
+    req = _migration_req(batch_id, batch_size=4)
+    owner_id = 987_655
+    try:
+        chat_router._register_migration_batch(req, owner_id=owner_id, remaining=1, free=True)
+        with pytest.raises(HTTPException) as exc:
+            chat_router._register_migration_batch(
+                req, owner_id=owner_id, remaining=1, free=False
+            )
+        assert exc.value.status_code == 403
+        assert exc.value.detail["required"] == 2
+        assert exc.value.detail["remaining"] == 1
+    finally:
+        batch = chat_router._migration_batches.pop(batch_id, None)
+        if batch:
+            chat_router._release_migration_reservation(batch)

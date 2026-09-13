@@ -521,9 +521,7 @@ function adminApp() {
     codesPage: 1,
     codesPageSize: 20,
     codeQuery: "",
-    codeTypeFilter: "",
     codeEnabledFilter: "",
-    codeTypeMenuOpen: false,
     codeEnabledMenuOpen: false,
     logs: [],
     logsTotal: 0,
@@ -701,9 +699,19 @@ function adminApp() {
     ],
     createOpen: false,
     creating: false,
-    createForm: { code_type: "user", quota: 10, count: 1, note: "" },
-    createTypeMenuOpen: false,
-    quotaPresets: [1, 3, 5, 10, 50, 100, 200, 500, 1000],
+    createForm: { quota: 10, count: 1, note: "" },
+    quotaPresets: [
+      { value: 1, label: "1" },
+      { value: 3, label: "3" },
+      { value: 5, label: "5" },
+      { value: 10, label: "10" },
+      { value: 50, label: "50" },
+      { value: 100, label: "100" },
+      { value: 200, label: "200" },
+      { value: 500, label: "500" },
+      { value: 1000, label: "1000" },
+      { value: -1, label: "∞ 无限" },
+    ],
     createdItems: [],
     quotaModalOpen: false,
     savingQuota: false,
@@ -748,10 +756,6 @@ function adminApp() {
           parse: "配置 PDF 云端解析：精准/轻量模式、模型与 Token",
         }[this.tab] || ""
       );
-    },
-    get codeTypeFilterLabel() {
-      const map = { "": "全部类型", user: "普通用户", admin: "管理员" };
-      return map[this.codeTypeFilter] || "全部类型";
     },
     get codeEnabledFilterLabel() {
       const map = { "": "全部状态", true: "已启用", false: "已禁用" };
@@ -1014,7 +1018,6 @@ function adminApp() {
           page_size: String(this.codesPageSize),
         });
         if (this.codeQuery.trim()) params.set("q", this.codeQuery.trim());
-        if (this.codeTypeFilter) params.set("code_type", this.codeTypeFilter);
         if (this.codeEnabledFilter !== "") params.set("enabled", this.codeEnabledFilter);
 
         const data = await this.api(`/api/admin/codes?${params}`);
@@ -1032,18 +1035,19 @@ function adminApp() {
     },
 
     openCreate() {
-      this.createForm = { code_type: "user", quota: 10, count: 1, note: "" };
+      this.createForm = { quota: 10, count: 1, note: "" };
       this.createdItems = [];
       this.createOpen = true;
-      this.createTypeMenuOpen = false;
     },
 
     async createCodes() {
       this.creating = true;
       try {
+        // 负数（∞ 无限）归一为 -1，其余缺失/非法值回退 1
+        const rawQuota = Number(this.createForm.quota);
+        const quota = rawQuota < 0 ? -1 : rawQuota >= 1 ? rawQuota : 1;
         const body = {
-          code_type: this.createForm.code_type,
-          quota: this.createForm.code_type === "admin" ? -1 : Number(this.createForm.quota) || 1,
+          quota,
           count: Number(this.createForm.count) || 1,
           note: this.createForm.note || "",
         };
@@ -1111,16 +1115,22 @@ function adminApp() {
       this.editingQuotaId = c.id;
       this.editingQuotaCode = c.code;
       this.editingQuotaUsed = c.used_count;
-      this.editingQuotaValue = c.quota;
+      this.editingQuotaValue = c.is_unlimited ? -1 : c.quota;
       this.quotaModalOpen = true;
     },
 
     async saveEditQuota() {
-      const quota = parseInt(this.editingQuotaValue, 10);
-      if (!Number.isFinite(quota) || quota < 1) {
-        this.toast("额度需为正整数", "error");
+      const raw = parseInt(this.editingQuotaValue, 10);
+      if (!Number.isFinite(raw) || raw === 0) {
+        this.toast("额度至少为 1，或选择 ∞ 无限", "error");
         return;
       }
+      if (raw > 0 && raw < this.editingQuotaUsed) {
+        this.toast(`额度不能小于已用次数（${this.editingQuotaUsed}）`, "error");
+        return;
+      }
+      // 负数（∞ 无限）统一提交 -1
+      const quota = raw < 0 ? -1 : raw;
       this.savingQuota = true;
       try {
         await this.api(`/api/admin/codes/${this.editingQuotaId}`, {
@@ -1130,6 +1140,8 @@ function adminApp() {
         this.toast("额度已更新");
         this.quotaModalOpen = false;
         await this.loadCodes();
+        // 互转会清零已用次数，概览的「已用次数」需一并刷新
+        await this.loadStats();
       } catch (e) {
         this.toast(e.message || "更新失败", "error");
       } finally {
@@ -1143,7 +1155,8 @@ function adminApp() {
         id: c.id,
         code: c.code || "",
         used: c.used_count || 0,
-        quota: c.quota,
+        // 无限码正常不出现重置按钮，防御性显示 ∞
+        quota: c.is_unlimited ? "∞" : c.quota,
       };
       this.resettingUsage = false;
       this.resetUsageModalOpen = true;

@@ -22,22 +22,16 @@ ALPHABET = string.ascii_uppercase + string.digits
 # 去掉易混淆字符
 ALPHABET = ALPHABET.replace("0", "").replace("O", "").replace("1", "").replace("I", "")
 
-CODE_PREFIX = {
-    "admin": "NBXA",
-    "user": "NBXU",
-}
+CODE_PREFIX = "NBXU"
 
 
 def _segment(n: int = 4) -> str:
     return "".join(secrets.choice(ALPHABET) for _ in range(n))
 
 
-def generate_code(code_type: str) -> str:
+def generate_code() -> str:
     """生成形如 NBXU-XXXX-XXXX-XXXX 的使用码。"""
-    prefix = CODE_PREFIX.get(code_type)
-    if not prefix:
-        raise ValueError(f"未知使用码类型: {code_type}")
-    return f"{prefix}-{_segment()}-{_segment()}-{_segment()}"
+    return f"{CODE_PREFIX}-{_segment()}-{_segment()}-{_segment()}"
 
 
 def normalize_code(raw: str) -> str:
@@ -47,25 +41,22 @@ def normalize_code(raw: str) -> str:
 def create_codes(
     db: Session,
     *,
-    code_type: str = "user",
     quota: int = 10,
     count: int = 1,
     note: str = "",
 ) -> list[UsageCode]:
-    if code_type not in CODE_PREFIX:
-        raise HTTPException(status_code=400, detail="code_type 必须是 admin 或 user")
     if count < 1 or count > 200:
         raise HTTPException(status_code=400, detail="批量数量需在 1–200 之间")
-    if code_type == "admin":
-        quota = -1
+    if quota < 0:
+        quota = -1  # 任意负值归一为无限
     elif quota < 1:
-        raise HTTPException(status_code=400, detail="普通用户码额度至少为 1")
+        raise HTTPException(status_code=400, detail="额度至少为 1，或设为 -1 表示无限")
 
     created: list[UsageCode] = []
     for _ in range(count):
         # 极低碰撞概率，仍做唯一性保护
         for _attempt in range(20):
-            code = generate_code(code_type)
+            code = generate_code()
             exists = db.query(UsageCode).filter(UsageCode.code == code).first()
             if not exists:
                 break
@@ -74,7 +65,6 @@ def create_codes(
 
         row = UsageCode(
             code=code,
-            code_type=code_type,
             quota=quota,
             used_count=0,
             is_enabled=True,
@@ -112,7 +102,6 @@ def issue_token(code: UsageCode) -> str:
     payload = {
         "sub": str(code.id),
         "code": code.code,
-        "code_type": code.code_type,
         "iat": now,
         "exp": now + timedelta(days=settings.jwt_expire_days),
     }
@@ -195,7 +184,7 @@ def consume_quota(
 
     扣减使用单条条件 UPDATE（used_count + units <= quota 才生效），
     并发提交下也不会把 used_count 写超 quota；额度不足时抛 403。
-    管理员码与无限额度码不扣减。
+    无限额度码（quota < 0）不扣减。
     """
     if units < 1:
         raise ValueError("扣减次数必须至少为 1")
@@ -204,7 +193,7 @@ def consume_quota(
     if row is None:
         raise HTTPException(status_code=401, detail="使用码不存在")
 
-    if row.code_type != "admin" and row.quota >= 0:
+    if row.quota >= 0:
         result = db.execute(
             update(UsageCode)
             .where(
@@ -222,28 +211,31 @@ def consume_quota(
     return row
 
 
-def ensure_bootstrap_admin(db: Session) -> UsageCode | None:
-    """若库中没有任何使用码，自动创建一把管理员码。
+def ensure_bootstrap_code(db: Session) -> UsageCode | None:
+    """若库中没有任何使用码，自动创建一把无限额度的初始使用码。
 
-    管理员码不写入日志（容器日志可能被集中采集），改为落到数据目录下的
-    bootstrap_admin.txt，由运维查看后妥善保存。
+    初始使用码不写入日志（容器日志可能被集中采集），改为落到数据目录下的
+    bootstrap_code.txt，由运维查看后妥善保存。
     """
     count = db.query(UsageCode).count()
     if count > 0:
         return None
-    codes = create_codes(db, code_type="admin", quota=-1, count=1, note="系统初始化管理员码")
-    admin = codes[0]
-    _write_bootstrap_secret(admin.code)
-    return admin
+    codes = create_codes(db, quota=-1, count=1, note="系统初始化使用码")
+    row = codes[0]
+    _write_bootstrap_secret(row.code)
+    return row
 
 
 def _write_bootstrap_secret(code_value: str) -> None:
-    path = Path(settings.data_dir) / "bootstrap_admin.txt"
+    path = Path(settings.data_dir) / "bootstrap_code.txt"
     try:
-        path.write_text(f"{code_value}\n（初始管理员使用码，请妥善保存；此文件可手动删除。）\n", encoding="utf-8")
-        logger.info("初始管理员使用码已写入 %s（请查看后妥善保存）", path.resolve())
+        path.write_text(
+            f"{code_value}\n（初始使用码，无限额度，请妥善保存；此文件可手动删除。）\n",
+            encoding="utf-8",
+        )
+        logger.info("初始使用码已写入 %s（请查看后妥善保存）", path.resolve())
     except OSError as exc:
-        logger.error("初始管理员使用码写入文件失败（%s），请直接查询 usage_codes 表获取", exc)
+        logger.error("初始使用码写入文件失败（%s），请直接查询 usage_codes 表获取", exc)
 
 
 # ---------------- JWT 密钥一键轮换 ----------------

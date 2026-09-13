@@ -12,7 +12,7 @@ from app.config import settings
 from app.database import SessionLocal, bootstrap_lock, init_db
 from app.routers import admin
 from app.services.runtime_config import seed_config_from_env
-from app.services.usage_code import apply_jwt_secret_override, ensure_bootstrap_admin
+from app.services.usage_code import apply_jwt_secret_override, ensure_bootstrap_code
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,15 +31,15 @@ async def lifespan(app: FastAPI):
             "JWT 密钥仍为源码默认值，任何知道源码的人都能伪造登录票据！"
             "请在 backend/.env 设置 JWT_SECRET 并重启服务。"
         )
-    # 双进程可能同时首启：用文件锁串行化引导，避免 seed 冲突 / 重复管理员码
+    # 双进程可能同时首启：用文件锁串行化引导，避免 seed 冲突 / 重复初始使用码
     with bootstrap_lock():
         db = SessionLocal()
         try:
             seed_config_from_env(db)
-            admin_code = ensure_bootstrap_admin(db)
-            if admin_code:
+            bootstrap_code = ensure_bootstrap_code(db)
+            if bootstrap_code:
                 logger.info(
-                    "已自动创建初始管理员使用码，内容见数据目录下 bootstrap_admin.txt"
+                    "已自动创建初始使用码（无限额度），内容见数据目录下 bootstrap_code.txt"
                 )
         finally:
             db.close()

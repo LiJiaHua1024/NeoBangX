@@ -16,7 +16,7 @@
 - 响应格式：JSON，除非特别说明为 SSE
 - 字符编码：UTF-8
 - **认证**：除 `/api/auth/activate`、`/api/health`、`/api/config`、`/api/tools/` 外，主站接口默认需在请求头携带 `Authorization: Bearer <token>`。token 通过 `POST /api/auth/activate` 获取。
-- **免费模型与无码调用**：模型可被标记为「免费」（调用不扣次数），并可额外开启「无码可用」。当所选模型同时满足两者时，`/api/chat/stream`、`/api/chat/stop`、`/api/chat/vocab/check`、`/api/chat/migration/analyze`、`/api/chat/migration/quota`、`/api/parse/file` 允许不带 token 调用（没有使用码或次数已用尽均可，等价于无码）；未满足条件时按原规则返回 401/403。免费模型的调用按使用码计数（无码时按浏览器指纹、再退回 IP），受模型级防滥用限额约束，超限返回 429；**生成失败（`status=error`）的调用不计入限额**，用户主动停止或中途断线（`cancelled`）照常计入。
+- **免费模型与无码调用**：模型可被标记为「免费」（限额内调用不扣次数），并可额外开启「无码可用」。当所选模型同时满足两者时，`/api/chat/stream`、`/api/chat/stop`、`/api/chat/vocab/check`、`/api/chat/migration/analyze`、`/api/chat/migration/quota`、`/api/parse/file` 允许不带 token 调用（没有使用码或次数已用尽均可，等价于无码）；未满足条件时按原规则返回 401/403。免费模型的调用按使用码计数（无码时按浏览器指纹、再退回 IP），受模型级防滥用限额约束；**限额命中时若请求携带的使用码仍可用（未耗尽或无限额度），本次调用自动转为按次扣减（不返回 429）**，无码或码不可用时才 429；**生成失败（`status=error`）的调用不计入限额**，用户主动停止或中途断线（`cancelled`）照常计入。转按次计费后的调用仍计入免费限额窗口计数，因此窗口滚动前会持续按次扣减。
 
 ---
 
@@ -83,7 +83,6 @@
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "user": {
     "code": "NBXU-XXXX-XXXX-XXXX",
-    "code_type": "user",
     "quota": 10,
     "used_count": 0,
     "remaining": 10,
@@ -114,7 +113,6 @@
 {
   "user": {
     "code": "NBXU-XXXX-XXXX-XXXX",
-    "code_type": "user",
     "quota": 10,
     "used_count": 3,
     "remaining": 7,
@@ -179,7 +177,7 @@
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `is_free` | bool | 免费模型：调用不消耗使用码次数，用户端模型列表显示「免费」标签 |
+| `is_free` | bool | 免费模型：限额内调用不消耗使用码次数，用户端模型列表显示「免费」标签；限额命中后持可用使用码时转按次扣减 |
 | `free_no_code` | bool | 无码可用：没有使用码或次数已用尽时仍可调用（仅在 `is_free` 为真时生效） |
 | `free_limits` | object | 防滥用限额，键为 `minute` / `hour` / `day` / `week` / `month`，0 或 -1（含负数）= 不限制 |
 
@@ -226,8 +224,9 @@
 }
 ```
 
-`is_free` 表示免费模型（不扣次数），`free_no_code` 表示该模型无码可用；
-前端据此渲染「免费」标签，并在无使用码时默认选中可免码试用的模型。
+`is_free` 表示免费模型（限额内不扣次数，限额命中后持可用使用码时转按次扣减），
+`free_no_code` 表示该模型无码可用；前端据此渲染「免费」标签，
+并在无使用码时默认选中可免码试用的模型。
 
 ### GET `/api/tools/models`
 
@@ -355,7 +354,7 @@
 
 #### POST `/api/chat/migration/quota`
 
-请求体只需提供选中的错因数量 `cause_count`。扣费次数为 `max(1, floor(cause_count / 2))`，预检查不扣费；最终卡片全部成功后由批次流式请求统一扣减。
+请求体只需提供选中的错因数量 `cause_count`。扣费次数为 `max(1, floor(cause_count / 2))`，预检查不扣费；最终卡片全部成功后由批次流式请求统一扣减。预检查不感知免费模型限额（限额在流内逐卡判定、命中后转按次计费），免费模型的最终额度校验以流内批次注册为准。
 
 ```json
 { "cause_count": 3 }
@@ -431,7 +430,7 @@ data: [DONE]
 
 **Provider 切换（fallback）：** 同一逻辑模型可绑定多个 Provider（管理后台按优先级排序）。默认切换策略是**除「上下文超限」「内容审核」这类换谁都一样的错误外，任何 Provider 失败都切下一家**——包含 401/403（key 失效、欠费）、404（该家没有这个模型）、400/422（该家不支持某个参数）等「某一家自己的问题」。流式生成中，单家 Provider 等待**第一个数据块**的上限由全局配置 `first_token_timeout`（默认 30 秒，管理后台「全局调用参数」可改）决定，超时即判该家失效并切下一家；首个数据块到达后改由 `timeout` 按块判定，不会掐断正在出字的流。已经吐出正文后再失败则不切换（避免两家内容拼接），直接以 `error` 事件结束。
 
-智能错题迁移的同一批请求共享 `batch_id`。后端只有在 `batch_size` 张卡片全部自然完成后，才按 `max(1, floor(batch_size / 2))` 扣减一次额度；任一卡片失败或被停止时不扣减。
+智能错题迁移的同一批请求共享 `batch_id`。后端只有在 `batch_size` 张卡片全部自然完成后，才按 `max(1, floor(batch_size / 2))` 扣减一次额度；任一卡片失败或被停止时不扣减。免费模型的批次整批按 0 次结算；若生成途中部分卡片命中免费限额转为按次计费，**整批升级为付费批**并按上式扣减（额度不足支付整批时该卡返回 403 结构化 detail `{message, required, remaining}`，批次不扣费）；已升级的批次不会因限额窗口滚动再降回免费。
 
 **日志留痕：** 无论成功、用户停止还是异常，每次 `/api/chat/stream` 调用都会在服务端留下**一条**使用日志（见 11.6）。智能错题迁移的每张卡片各记一条日志，其 `units` 为 0；整批的扣费次数记在最后一卡的日志上。
 
@@ -516,7 +515,6 @@ data: [DONE]
 | 参数 | 说明 |
 |------|------|
 | `q` | 按使用码或备注搜索 |
-| `code_type` | `admin` 或 `user` |
 | `enabled` | `true` 或 `false` |
 | `page` | 页码，从 1 开始 |
 | `page_size` | 每页数量 |
@@ -532,7 +530,6 @@ data: [DONE]
     {
       "id": 1,
       "code": "NBXU-XXXX-XXXX-XXXX",
-      "code_type": "user",
       "quota": 10,
       "used_count": 0,
       "remaining": 10,
@@ -554,14 +551,13 @@ data: [DONE]
 
 ```json
 {
-  "code_type": "user",
   "quota": 10,
   "count": 5,
   "note": "某校教研组"
 }
 ```
 
-说明：`code_type` 为 `admin` 时 `quota` 自动为无限。
+说明：`quota` 传 `-1`（任意负值均归一为 -1）表示无限额度，`0` 返回 400；新码统一 `NBXU-` 前缀。
 
 **响应：**
 
@@ -586,6 +582,13 @@ data: [DONE]
 }
 ```
 
+额度互转说明（响应为更新后的使用码对象）：
+
+- **有限 → 无限**：传负数（归一为 `-1`），已用次数**自动清零**；
+- **无限 → 有限**：传正整数，已用次数从 **0** 开始重新计数；
+- 有限 → 有限：新额度不能小于已用次数（否则 400）；
+- `0` 返回 400。
+
 ### 11.5 重置使用码用量
 
 #### POST `/api/admin/codes/{id}/reset-usage`
@@ -598,7 +601,6 @@ data: [DONE]
 {
   "id": 1,
   "code": "NBXU-XXXX-XXXX-XXXX",
-  "code_type": "user",
   "quota": 10,
   "used_count": 0,
   "remaining": 10,
@@ -673,7 +675,7 @@ data: [DONE]
 | `duration_ms` | 从发起到流结束的墙钟耗时；旧数据为 `null` |
 | `prompt_tokens` 等 | 供应商回传的 token 用量；未开启流式 usage 或供应商不支持时为 `null` |
 | `ip` | 客户端 IP，反代后按 `X-Real-IP` > `X-Forwarded-For` 首跳 > 直连地址取值 |
-| `units` | 本次请求**实际扣减**的额度次数。普通工具成功/停止 = 1；标题生成、错因分析、迁移单卡 = 0；迁移整批的最后一卡 = 整批次数 |
+| `units` | 本次请求**实际扣减**的额度次数。普通工具成功/停止 = 1（免费模型限额内为 0，限额命中转按次计费为 1）；标题生成、错因分析、迁移单卡 = 0；迁移整批的最后一卡 = 整批次数（免费批升级付费批后为整批付费次数） |
 | `device_id` / `fingerprint` | 浏览器设备指纹（仅用于识别共享，不做拦截依据）。`device_id` 为 `null` 表示当时无指纹（旧数据/上报失败）；`fingerprint` 为 ThumbmarkJS 全哈希冗余。列表与详情额外挂载 `device` 对象（含短码/昵称/备注/颜色/摘要），缺失时为 `null` |
 | `device` | 挂载的设备摘要：`{ id, fingerprint, short_code(FP-XXXX-XXXX), auto_name, display_name(备注优先), note, color, device_summary, first_seen_at, last_seen_at, seen_count }` |
 
@@ -956,7 +958,7 @@ openrouter/deepseek/deepseek-chat
 | 403 | 使用码被禁用或额度已用尽 |
 | 404 | 工具或 Prompt 文件不存在 |
 | 422 | 请求体验证失败 |
-| 429 | 免费模型超出防滥用限额，或辅助接口请求过于频繁 |
+| 429 | 免费模型超出防滥用限额且无可用使用码（持可用码时自动转为扣次数），或辅助接口请求过于频繁 |
 | 500 | 后端内部错误或 LLM 调用失败 |
 
 ---
@@ -975,3 +977,5 @@ openrouter/deepseek/deepseek-chat
 | 1.5.1 | 2026-09-04 | 设备画像详情：新增 `GET /api/admin/devices/{id}`（摘要翻译 profile + 风险 signals + 使用分布 codes/ips/user_agents/tools/models + 最近请求）；管理后台设备行可点开画像抽屉，日志详情可跳转画像 |
 | 1.6.0 | 2026-09-12 | 免费模型：模型新增 `is_free` / `free_no_code` / `free_limits` 字段；免费调用不扣次数并在用户端显示「免费」标签；`/api/chat/stream`、`/stop`、`/vocab/check`、`/migration/analyze`、`/migration/quota`、`/api/parse/file` 改为可选认证（免费+无码可用模型可无码调用）；免费模型按身份（使用码 > 指纹 > IP）套用分/时/天/周/月限额，超限返回 429，生成失败不计入限额；未登录用户可浏览全部工具界面，免码调用以 `（免码）` 记入使用日志 |
 | 1.7.0 | 2026-09-13 | 使用码重置用量：新增 `POST /api/admin/codes/{id}/reset-usage` 把已用次数清零（剩余次数恢复，使用日志保留）；管理后台使用码操作列新增「重置用量」+ 自研确认弹窗 |
+| 1.8.0 | 2026-09-13 | 使用码额度支持有限 ↔ 无限互转（改为无限清零已用；改回有限从 0 起算），生成使用码也可直接指定无限（-1）；免费模型限额命中后，持可用使用码的调用自动转为按次扣减（不再 429），迁移批次同步升级为付费批 |
+| 1.9.0 | 2026-09-13 | 使用码不再区分类型：移除 code_type（数据库列在启动时自动迁移删除，历史管理员码保留无限额度，旧 NBXA 码继续有效），管理后台移除类型筛选/展示与创建类型选择；初始使用码改为无限额度普通码并写入 bootstrap_code.txt |

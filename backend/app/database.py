@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
@@ -52,12 +53,61 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
 def init_db() -> None:
-    """创建表结构，并为已有表补齐新增列（轻量 schema 演进）。"""
+    """创建表结构、补齐新增列并迁移历史数据（轻量 schema 演进）。"""
     # 延迟导入，避免循环导入
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _add_missing_columns()
+    _drop_legacy_usage_code_type()
+
+
+def _drop_legacy_usage_code_type() -> None:
+    """数据迁移：删除旧版 usage_codes.code_type 列（管理员码与普通码已合并）。
+
+    旧版使用码区分 admin / user 两类；管理后台本身零登录、管理员不需要码，
+    普通码也已支持无限额度，类型区分不再有意义。历史管理员码的无限额度保存
+    在 quota 上（异常数据先归一为 -1），删除列后即成为普通无限额度码。
+    以「列存在」为条件，幂等；新库无此列时零操作。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("usage_codes"):
+        return
+    if "code_type" not in {column["name"] for column in inspector.get_columns("usage_codes")}:
+        return
+
+    try:
+        with engine.begin() as conn:
+            total, admin_count = conn.execute(
+                text(
+                    "SELECT COUNT(*),"
+                    " COALESCE(SUM(CASE WHEN code_type = 'admin' THEN 1 ELSE 0 END), 0)"
+                    " FROM usage_codes"
+                )
+            ).one()
+            # 防御性归一：历史异常数据若存在 admin 且 quota>=0，先恢复「管理员码=无限」语义
+            conn.execute(
+                text("UPDATE usage_codes SET quota = -1 WHERE code_type = 'admin' AND quota >= 0")
+            )
+            conn.execute(text("ALTER TABLE usage_codes DROP COLUMN code_type"))
+    except OperationalError:
+        # 双进程同时首启：另一进程可能刚完成迁移
+        if "code_type" not in {
+            column["name"] for column in inspect(engine).get_columns("usage_codes")
+        }:
+            logger.info("数据迁移：usage_codes.code_type 已由另一进程删除")
+            return
+        logger.exception(
+            "数据迁移失败：删除 usage_codes.code_type 未成功（可能数据库被占用或 SQLite 版本过旧），"
+            "请重试启动；仍失败时手工执行 ALTER TABLE usage_codes DROP COLUMN code_type"
+        )
+        return
+
+    logger.warning(
+        "数据迁移：已删除 usage_codes.code_type 列（共 %s 行，其中历史管理员码 %s 行，无限额度保留）",
+        total,
+        admin_count,
+    )
 
 
 def _add_missing_columns() -> None:

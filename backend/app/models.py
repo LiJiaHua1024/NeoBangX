@@ -43,7 +43,6 @@ class UsageCode(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
-    code_type: Mapped[str] = mapped_column(String(16), nullable=False)  # admin | user
     quota: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # -1 = 无限
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -66,7 +65,6 @@ class UsageCode(Base):
     def to_public_dict(self) -> dict:
         return {
             "code": self.code,
-            "code_type": self.code_type,
             "quota": self.quota,
             "used_count": self.used_count,
             "remaining": self.remaining,

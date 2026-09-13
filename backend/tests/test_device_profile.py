@@ -22,7 +22,7 @@ from app.services.request_log import record_usage_log
 
 def _make_code(db, code):
     row = UsageCode(
-        code=code, code_type="user", quota=100, used_count=0, is_enabled=True, note="画像"
+        code=code, quota=100, used_count=0, is_enabled=True, note="画像"
     )
     db.add(row)
     db.commit()

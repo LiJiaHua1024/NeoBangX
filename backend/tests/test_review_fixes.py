@@ -61,7 +61,7 @@ def test_parse_error_causes_plain_text_fallback_kept():
 # ---------------- 原子额度扣减 ----------------
 
 def _fresh_code(db, *, code="NBXU-TEST-QUOTA-ATOMIC", quota=3):
-    row = UsageCode(code=code, code_type="user", quota=quota, used_count=0, is_enabled=True)
+    row = UsageCode(code=code, quota=quota, used_count=0, is_enabled=True)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -93,12 +93,11 @@ def test_consume_quota_conditional_update_rejects_overdraft():
         db.close()
 
 
-def test_consume_quota_admin_code_never_deducted():
+def test_consume_quota_unlimited_code_never_deducted():
     db = SessionLocal()
     try:
         row = UsageCode(
-            code="NBXA-TEST-QUOTA-ADMIN",
-            code_type="admin",
+            code="NBXU-TEST-QUOTA-UNLIMITED",
             quota=-1,
             used_count=0,
             is_enabled=True,
@@ -108,9 +107,9 @@ def test_consume_quota_admin_code_never_deducted():
         db.refresh(row)
         consume_quota(db, row, units=5)
         db.refresh(row)
-        assert row.used_count == 0  # 管理员码只记日志不扣减
+        assert row.used_count == 0  # 无限额度码只记日志不扣减
     finally:
-        db.query(UsageCode).filter(UsageCode.code == "NBXA-TEST-QUOTA-ADMIN").delete()
+        db.query(UsageCode).filter(UsageCode.code == "NBXU-TEST-QUOTA-UNLIMITED").delete()
         db.commit()
         db.close()
 

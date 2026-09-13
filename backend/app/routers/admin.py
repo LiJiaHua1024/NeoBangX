@@ -74,8 +74,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 class CreateCodeRequest(BaseModel):
-    code_type: str = Field("user", description="admin | user")
-    quota: int = Field(10, description="额度；admin 自动为无限")
+    quota: int = Field(10, description="额度；-1（可为任意负值，归一为 -1）表示无限")
     count: int = Field(1, ge=1, le=200, description="生成数量")
     note: str = Field("", max_length=255)
 
@@ -83,7 +82,10 @@ class CreateCodeRequest(BaseModel):
 class UpdateCodeRequest(BaseModel):
     is_enabled: Optional[bool] = None
     note: Optional[str] = Field(None, max_length=255)
-    quota: Optional[int] = Field(None, description="仅普通用户码可改额度")
+    quota: Optional[int] = Field(
+        None,
+        description="负数（归一为 -1）表示无限，改无限会清零已用；从无限改回有限从 0 开始计数",
+    )
 
 
 class FreeLimitsEntry(BaseModel):
@@ -540,11 +542,9 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
             .all()
         )
         code_notes: dict[str, str] = {}
-        code_types: dict[str, str] = {}
         try:
             for c in db.query(UsageCode).filter(UsageCode.code.in_([r.code for r in rows])).all():
                 code_notes[c.code] = c.note or ""
-                code_types[c.code] = c.code_type or ""
         except Exception:
             pass
         for r in rows:
@@ -552,7 +552,6 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
             top_codes.append({
                 "code": r.code or "（未记录）",
                 "note": code_notes.get(r.code or "", ""),
-                "code_type": code_types.get(r.code or "", ""),
                 "requests": req,
                 "share": round(req / total_req, 4) if total_req else 0.0,
                 "total_tokens": int(r.tokens or 0),
@@ -831,7 +830,6 @@ async def rotate_jwt_secret():
 async def list_codes(
     db: Annotated[Session, Depends(get_db)],
     q: str = Query("", description="按使用码或备注搜索"),
-    code_type: str = Query("", description="admin | user，空为全部"),
     enabled: Optional[bool] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -842,8 +840,6 @@ async def list_codes(
         query = query.filter(
             (UsageCode.code.ilike(like)) | (UsageCode.note.ilike(like))
         )
-    if code_type in ("admin", "user"):
-        query = query.filter(UsageCode.code_type == code_type)
     if enabled is not None:
         query = query.filter(UsageCode.is_enabled.is_(enabled))
 
@@ -869,7 +865,6 @@ async def create_code_api(
 ):
     codes = create_codes(
         db,
-        code_type=req.code_type,
         quota=req.quota,
         count=req.count,
         note=req.note,
@@ -895,12 +890,17 @@ async def update_code(
     if req.note is not None:
         row.note = req.note
     if req.quota is not None:
-        if row.code_type == "admin":
+        if req.quota == 0:
+            raise HTTPException(status_code=400, detail="额度至少为 1，或设为 -1 表示无限")
+        elif req.quota < 0:
+            # 有限/无限 → 无限：已用清零（改回有限时从 0 开始计数）
             row.quota = -1
+            row.used_count = 0
         else:
-            if req.quota < 1:
-                raise HTTPException(status_code=400, detail="额度至少为 1")
-            if req.quota < row.used_count:
+            if row.quota < 0:
+                # 无限 → 有限：已用从 0 开始计数
+                row.used_count = 0
+            elif req.quota < row.used_count:
                 raise HTTPException(
                     status_code=400,
                     detail=f"额度不能小于已用次数（{row.used_count}）",

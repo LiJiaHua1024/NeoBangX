@@ -50,7 +50,7 @@ def _request_stub(headers=None, host="10.1.2.3"):
 
 def _make_code(db, code, *, quota=100):
     row = UsageCode(
-        code=code, code_type="user", quota=quota, used_count=0, is_enabled=True, note="测试"
+        code=code, quota=quota, used_count=0, is_enabled=True, note="测试"
     )
     db.add(row)
     db.commit()

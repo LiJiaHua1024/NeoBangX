@@ -18,7 +18,6 @@ def _active_code():
     return UsageCode(
         id=999_222,
         code="NBXU-TEST-PARSE-01",
-        code_type="user",
         quota=3,
         used_count=0,
         is_enabled=True,
