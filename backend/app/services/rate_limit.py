@@ -25,6 +25,21 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
 
 _buckets: dict[tuple[str, str], deque] = defaultdict(deque)
 
+# 键数量上限：键含客户端可控的指纹/IP，正常请求只访问自己的键，过期键不会被动清理，
+# 长期运行（或被伪造指纹刷）会让字典单调增长。超过阈值时扫一遍，丢掉已空的键。
+_MAX_KEYS = 4096
+
+
+def _sweep(now: float) -> None:
+    """丢掉所有窗口都已过期的键（只删空 deque，不影响任何仍在窗口内的计数）。"""
+    for key in list(_buckets):
+        hits = _buckets[key]
+        window = RATE_LIMITS.get(key[1], (0, 0))[1]
+        while hits and now - hits[0] > window:
+            hits.popleft()
+        if not hits:
+            _buckets.pop(key, None)
+
 
 def enforce_rate_limit(identity: str, bucket: str) -> None:
     """在窗口内累计一次命中，超限抛 429。"""
@@ -37,3 +52,5 @@ def enforce_rate_limit(identity: str, bucket: str) -> None:
     if len(hits) >= limit:
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
     hits.append(now)
+    if len(_buckets) > _MAX_KEYS:
+        _sweep(now)

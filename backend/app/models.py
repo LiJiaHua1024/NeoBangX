@@ -93,6 +93,10 @@ class Device(Base):
     """
 
     __tablename__ = "devices"
+    __table_args__ = (
+        # 设备列表按最近活跃倒序分页，设备数增长后避免每次全表排序
+        Index("ix_devices_last_seen_at", "last_seen_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     fingerprint: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
@@ -141,6 +145,16 @@ class UsageLog(Base):
     """
 
     __tablename__ = "usage_logs"
+    __table_args__ = (
+        # 免费模型防滥用限额按「身份 + 模型 + 窗口」计数（free_access.register_free_use），
+        # 身份可以是使用码 / 指纹 / IP。索引列顺序与查询条件一致：身份定位 + 时间范围，
+        # 避免只按 created_at 扫窗口内全部行再逐行过滤（日志永久保留时这就是主要增长点）。
+        # 注意：已存在的库由 database._ensure_indexes() 用 CREATE INDEX IF NOT EXISTS 补建，
+        # 仅靠这里的声明只对新库生效。
+        Index("ix_usage_logs_code_model_created", "code_id", "model", "created_at"),
+        Index("ix_usage_logs_fp_model_created", "fingerprint", "model", "created_at"),
+        Index("ix_usage_logs_ip_model_created", "ip", "model", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)

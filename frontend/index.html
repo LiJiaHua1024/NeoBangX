@@ -698,6 +698,13 @@
                     </span>
                   </div>
                   <div class="md" x-show="vocab.output" x-html="vocab.rendered"></div>
+                  <div class="text-center mt-4" x-show="vocab.folded && !vocab.replacing">
+                    <button class="btn-ghost" @click="unfoldHistoryOutput()"
+                            :title="'内容较长，当前已折叠显示；展开后渲染全文（共 ' + vocab.foldTotal + ' 字）'">
+                      <span x-html="icon('chevron-down','w-4 h-4')"></span>
+                      <span x-text="'查看更多（共 ' + vocab.foldTotal + ' 字）'"></span>
+                    </button>
+                  </div>
                   <div class="vocab-loading" x-show="vocab.replacing && !vocab.output && !vocab.reasoning">
                     <span>AI 正在替换超标词…</span>
                   </div>
@@ -1420,6 +1427,14 @@
                 <div class="md" x-ref="mdRoot"
                      :class="{ 'mask-answers': maskOn && currentTool && currentTool.id === '13' }"
                      x-html="rendered"></div>
+                <!-- 超长历史先折叠渲染，展开时再渲染全文（实时生成不折叠） -->
+                <div class="text-center mt-4" x-show="outputFolded && !streaming">
+                  <button class="btn-ghost" @click="unfoldHistoryOutput()"
+                          :title="'内容较长，当前已折叠显示；展开后渲染全文（共 ' + outputFoldTotal + ' 字）'">
+                    <span x-html="icon('chevron-down','w-4 h-4')"></span>
+                    <span x-text="'查看更多（共 ' + outputFoldTotal + ' 字）'"></span>
+                  </button>
+                </div>
                 <span class="tw-cursor" x-show="streaming"></span>
               </div>
 
@@ -1673,7 +1688,8 @@
                   </div>
                   <p class="mt-1.5 leading-snug" style="font-size:.82rem">
                     <span x-show="item.title" class="font-medium" x-text="item.title"></span>
-                    <span x-show="!item.title" x-text="excerpt(item.input)"></span>
+                    <!-- 索引项只带 inputHead（正文摘要），列表不读正文 -->
+                    <span x-show="!item.title" x-text="item.inputHead || excerpt(item.input)"></span>
                   </p>
                   <div class="flex items-center gap-1.5 mt-1.5 text-[11px] text-faint">
                     <span x-text="fmtTime(item.createdAt)"></span>

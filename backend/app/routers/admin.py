@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import json
 import logging
 import re
@@ -38,7 +39,6 @@ from app.services.provider_config import (
     update_provider,
 )
 from app.services.device_profile import (
-    beijing_hour,
     build_profile,
     build_signals,
     identify_device,
@@ -669,30 +669,45 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
     bucket_defs = [(1000, "<1s"), (3000, "1–3s"), (5000, "3–5s"), (10000, "5–10s"), (30000, "10–30s"), (None, "30s+")]
     bucket_counts = [0] * len(bucket_defs)
     try:
-        durations = [
-            r[0] for r in _base(start if days != 0 else None, now)
-            .with_entities(UsageLog.duration_ms)
+        # 先按耗时取值分组计数再拿回 Python：原来把窗口内每一行 duration_ms 都拉回来排序，
+        # 内存与排序开销随日志行数线性增长（days=0 时等于整表）。这里只传回「不同取值 + 计数」，
+        # 分位数按累积计数定位，取的仍是原值，结果与全量排序完全一致。
+        rows = (
+            _base(start if days != 0 else None, now)
+            .with_entities(UsageLog.duration_ms, func.count(UsageLog.id))
             .filter(UsageLog.duration_ms.is_not(None))
+            .group_by(UsageLog.duration_ms)
+            .order_by(UsageLog.duration_ms)
             .all()
-        ]
-        durations = sorted(int(d) for d in durations if d is not None)
-        n = len(durations)
-        latency["count"] = n
-        if n:
+        )
+        values: list[int] = []
+        cumulative: list[int] = []
+        counts: list[int] = []
+        total = 0
+        for value, count in rows:
+            if value is None:
+                continue
+            total += int(count or 0)
+            values.append(int(value))
+            counts.append(int(count or 0))
+            cumulative.append(total)
+        latency["count"] = total
+        if total:
             def _q(p):
-                idx = min(n - 1, max(0, int(p * n)))
-                return int(durations[idx])
+                # 名次索引与原实现一致（对全量排序后的列表取同一个下标）
+                idx = min(total - 1, max(0, int(p * total)))
+                return values[min(bisect.bisect_right(cumulative, idx), len(values) - 1)]
             latency.update({
                 "p50": _q(0.50), "p90": _q(0.90), "p95": _q(0.95), "p99": _q(0.99),
-                "max": int(durations[-1]),
+                "max": values[-1],
             })
-            for d in durations:
+            for value, count in zip(values, counts):
                 for i, (le, _label) in enumerate(bucket_defs):
-                    if le is None or d < le:
-                        bucket_counts[i] += 1
+                    if le is None or value < le:
+                        bucket_counts[i] += count
                         break
         latency["buckets"] = [
-            {"label": label, "count": bucket_counts[i], "share": round(bucket_counts[i] / n, 4) if n else 0.0}
+            {"label": label, "count": bucket_counts[i], "share": round(bucket_counts[i] / total, 4) if total else 0.0}
             for i, (_le, label) in enumerate(bucket_defs)
         ]
     except Exception:
@@ -1002,14 +1017,18 @@ def _apply_log_filters(
 def _filter_by_device(query, device: str, db: Optional[Session]):
     """按设备筛选日志：短码 / 备注 / 自动昵称 / 全哈希模糊匹配。
 
-    纯数字视为 device_id 精确匹配；否则先在 devices 表中找候选 id，
-    再与 usage_logs.fingerprint 模糊匹配取并集。db 为空时退化为仅指纹匹配。
+    纯数字视为 device_id 精确匹配；否则用子查询把 devices 的候选并进条件
+    （子查询而不是把 id 列表取回 Python 再拼 IN：设备数增长后 IN 列表会撞上
+    SQLite 的变量数上限直接报错，结果集与逐条取回完全一致）。
+    db 为空时退化为仅指纹匹配。
     """
     like = f"%{device}%"
-    device_ids: list[int] = []
+    conditions = [UsageLog.fingerprint.ilike(like)]
+    if device.strip().isdigit():
+        conditions.append(UsageLog.device_id == int(device.strip()))
     if db is not None:
         try:
-            q = db.query(Device.id).filter(
+            device_ids = db.query(Device.id).filter(
                 or_(
                     Device.short_code.ilike(like),
                     Device.note.ilike(like),
@@ -1017,14 +1036,9 @@ def _filter_by_device(query, device: str, db: Optional[Session]):
                     Device.fingerprint.ilike(like),
                 )
             )
-            device_ids = [row[0] for row in q.all()]
+            conditions.append(UsageLog.device_id.in_(device_ids.scalar_subquery()))
         except Exception:
-            device_ids = []
-    conditions = [UsageLog.fingerprint.ilike(like)]
-    if device.strip().isdigit():
-        conditions.append(UsageLog.device_id == int(device.strip()))
-    if device_ids:
-        conditions.append(UsageLog.device_id.in_(device_ids))
+            logger.exception("设备筛选子查询构造失败，退化为仅按指纹匹配")
     return query.filter(or_(*conditions))
 
 
@@ -1253,17 +1267,25 @@ async def list_devices(
 
 
 def _device_hour_histogram(base) -> list[int]:
-    """设备请求的活跃时段直方图（按北京时间 0-23 小时分桶）。"""
+    """设备请求的活跃时段直方图（按北京时间 0-23 小时分桶）。
+
+    分桶交给 SQLite 的 strftime（+8 小时即北京时间），与 device_profile.beijing_hour
+    逐行等价；原来把该设备全部 created_at 拉回 Python 逐行取小时，高频设备打开详情页
+    时要构造几万个 datetime 对象，日志越多越慢。
+    """
     hours = [0] * 24
     try:
-        rows = base.with_entities(UsageLog.created_at).all()
-        for (created,) in rows:
-            if created is None:
+        hour_col = func.strftime("%H", UsageLog.created_at, "+8 hours")
+        rows = base.with_entities(hour_col, func.count(UsageLog.id)).group_by(hour_col).all()
+        for value, count in rows:
+            try:
+                h = int(str(value))
+            except (TypeError, ValueError):
                 continue
-            h = beijing_hour(created)
-            if h is not None:
-                hours[h] += 1
+            if 0 <= h <= 23:
+                hours[h] += int(count or 0)
     except Exception:
+        logger.exception("device hour histogram failed")
         return [0] * 24
     return hours
 

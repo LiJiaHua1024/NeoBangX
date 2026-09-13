@@ -218,6 +218,27 @@ def test_limit_blocks_then_release_restores_slot():
     register_free_use(entry=entry, identity=identity)()
 
 
+def test_inflight_sweep_drops_expired_keys_and_keeps_live():
+    """在途计数的键清理只删已过期的键：删掉活跃键会直接放穿限额。"""
+    from app.services import free_access
+
+    free_access._inflight.clear()
+    now = free_access.monotonic()
+    free_access._inflight[("fp:live", "m")].append(now)
+    for index in range(20):
+        free_access._inflight[(f"fp:stale-{index}", "m")].append(
+            now - free_access._INFLIGHT_TTL - 1
+        )
+    assert len(free_access._inflight) == 21
+
+    free_access._sweep_inflight(now)
+
+    assert ("fp:live", "m") in free_access._inflight
+    assert len(free_access._inflight[("fp:live", "m")]) == 1
+    assert [key for key in free_access._inflight if key[0].startswith("fp:stale-")] == []
+    free_access._inflight.clear()
+
+
 def test_limit_counts_persisted_logs():
     """已落库的历史调用计入窗口（跨重启仍然有效）。"""
     entry = {"id": "limit/persisted", "name": "限额模型", "is_free": True,

@@ -53,13 +53,45 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
 def init_db() -> None:
-    """创建表结构、补齐新增列并迁移历史数据（轻量 schema 演进）。"""
+    """创建表结构、补齐新增列、补建索引并迁移历史数据（轻量 schema 演进）。"""
     # 延迟导入，避免循环导入
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _add_missing_columns()
+    _ensure_indexes()
     _drop_legacy_usage_code_type()
+
+
+def _ensure_indexes() -> None:
+    """为旧库补建模型里声明但库里缺失的索引。
+
+    `create_all` 只建缺失的表，不会给已存在的表加索引：新声明的索引若不显式补建，
+    持久卷上的老库永远用不上（历史越大越吃亏的是按身份计数的限额查询与设备排序）。
+    DDL 直接由模型元数据派生，避免与 models.py 里的声明两处维护而漂移；
+    `IF NOT EXISTS` 保证幂等，双进程同时首启也不会互相冲突。
+    """
+    inspector = inspect(engine)
+    preparer = engine.dialect.identifier_preparer
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        existing = {ix["name"] for ix in inspector.get_indexes(table.name)}
+        for index in sorted(table.indexes, key=lambda ix: ix.name or ""):
+            if not index.name or index.name in existing:
+                continue
+            columns = ", ".join(preparer.quote(column.name) for column in index.columns)
+            unique = "UNIQUE " if index.unique else ""
+            ddl = (
+                f"CREATE {unique}INDEX IF NOT EXISTS {preparer.quote(index.name)}"
+                f" ON {preparer.quote(table.name)} ({columns})"
+            )
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(ddl))
+                logger.warning("Schema 演进：已为表 %s 补建索引 %s", table.name, index.name)
+            except Exception:
+                logger.exception("索引补建失败：%s", ddl)
 
 
 def _drop_legacy_usage_code_type() -> None:

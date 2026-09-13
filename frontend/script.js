@@ -836,6 +836,120 @@ function lsSet(key, value) {
     }
   }
 }
+/* 严格写入：返回是否成功，且不弹全局提示，供「失败后自行淘汰重试」的调用方判断 */
+function lsWrite(key, value) {
+  try { localStorage.setItem(key, value); return true; } catch { return false; }
+}
+function lsRemove(key) {
+  try { localStorage.removeItem(key); } catch { /* 忽略：清理失败不影响主流程 */ }
+}
+function storageFullWarn(evicted) {
+  if (_storageWarnShown) return;
+  _storageWarnShown = true;
+  window.dispatchEvent(new CustomEvent("nbx:storage-full", { detail: { evicted: !!evicted } }));
+}
+
+/* ---------------- 历史记录分键存储 ----------------
+   索引键（LS.history）只存列表渲染与路由需要的轻量元数据，正文按条存 nbx_h:<id>。
+   目的：新增/修改一条只序列化一条，不再整份历史重写（历史累积时每次保存的主线程
+   停顿随之消失），配额不足时也只牵连单条。旧格式（整个数组含正文）在启动时一次性
+   拆分，拆分失败则本次会话退回整份写入，旧数据原样保留。 */
+const HISTORY_BODY_PREFIX = "nbx_h:";
+const HISTORY_INDEX_VERSION = 2;
+// 索引里保留的输入摘要长度：够卡片在无标题时展示（模板用 excerpt 的默认 46 字）
+const HISTORY_HEAD_CHARS = 60;
+
+function historyHead(input) {
+  return String(input || "").replace(/\s+/g, " ").trim().slice(0, HISTORY_HEAD_CHARS);
+}
+/* 索引项：不含 input/output/migration/visualPaper 这些大字段。
+   hasMigration / hasPaper 只用于打开时路由，避免把正文读回来才能判断类型。
+   本函数对「索引项」与「已水合的完整记录」都要给出相同结果：写回索引时列表里
+   大部分条目只有索引项，若直接读 item.input / item.migration 会把摘要与类型标记清空。 */
+function historyIndexOf(item) {
+  return {
+    v: HISTORY_INDEX_VERSION,
+    id: item.id,
+    toolId: item.toolId,
+    toolName: item.toolName,
+    icon: item.icon,
+    title: item.title || "",
+    error: item.error || "",
+    partial: !!item.partial,
+    createdAt: item.createdAt,
+    model: item.model || "",
+    inputHead: item.input !== undefined ? historyHead(item.input) : (item.inputHead || ""),
+    hasMigration: !!item.migration || !!item.hasMigration,
+    hasPaper: !!item.visualPaper || !!item.hasPaper,
+  };
+}
+function historyBodyOf(item) {
+  const body = {
+    input: item.input || "",
+    output: item.output || "",
+    fileName: item.fileName || "",
+  };
+  if (item.migration) body.migration = item.migration;
+  if (item.visualPaper) body.visualPaper = item.visualPaper;
+  return body;
+}
+/* 旧格式判定：整份数组里的条目带正文（input/output）而非索引摘要 */
+function isLegacyHistoryArray(raw) {
+  return (
+    Array.isArray(raw) &&
+    raw.some((it) => it && typeof it === "object" && (it.output !== undefined || it.input !== undefined))
+  );
+}
+
+/* ---------------- 流式渲染节流 ----------------
+   每个节流 tick 都要把「整份累计输出」重新过一遍 Markdown 解析 + 消毒 + 整块替换，
+   单次开销随长度线性增长，固定间隔会让整轮生成的总开销按长度二次增长 ——
+   解卷整卷、迁移多卡这类长输出到后段会明显掉帧。
+   这里让间隔随输出长度递增（上限 280ms）：渲染结果本身不变，只是超长输出时
+   刷新频率降下来，把总开销摊平；定稿那一次仍走完整渲染。 */
+function streamRenderDelay(len, base = 60) {
+  const n = Number(len) || 0;
+  if (n <= 4000) return base;
+  return Math.min(280, base + Math.round(n / 4000) * 40);
+}
+
+/* ---------------- 超长历史折叠 ----------------
+   打开一条很长的历史记录时，一次性渲染全文会让首屏明显变慢（解析 + 消毒 + DOM 重建
+   都按全文长度算）。超过阈值只渲染前一段，底部给「查看更多」按钮展开全文。
+   截断点取段落边界，并校正未闭合的 ``` 代码围栏与 $$ 行间公式 —— 半截的围栏会
+   把后面的内容全部吞进代码块，展开前后的观感必须一致。 */
+const OUTPUT_FOLD_CHARS = 12000;
+
+function foldMarkdown(raw, limit = OUTPUT_FOLD_CHARS) {
+  const text = String(raw || "");
+  if (text.length <= limit) return { text, folded: false, total: text.length };
+  // 优先切在空行处，保住段落与列表的完整性；找不到就按长度硬切
+  let cut = text.lastIndexOf("\n\n", limit);
+  if (cut < limit / 2) cut = limit;
+  return { text: balanceTruncatedMarkdown(text.slice(0, cut), text, cut), folded: true, total: text.length };
+}
+
+/* 截断点校验：未闭合的围栏/公式要么向后补到闭合处，要么就地补上闭合标记。
+   向后补的上限（4000 字）是防止模型把整个后文都包在一个代码块里导致「查看更多」
+   一展开就跳很远。 */
+function balanceTruncatedMarkdown(head, full, cut) {
+  const nextFence = () => {
+    const at = full.indexOf("\n```", cut);
+    if (at === -1 || at - cut > 4000) return "";
+    const end = full.indexOf("\n", at + 1);
+    return full.slice(0, end === -1 ? full.length : end);
+  };
+  if ((head.match(/^ {0,3}```/gm) || []).length % 2 === 1) {
+    return nextFence() || head + "\n```";
+  }
+  const dollars = (head.match(/\$\$/g) || []).length;
+  if (dollars % 2 === 1) {
+    const at = full.indexOf("$$", cut);
+    if (at !== -1 && at - cut <= 4000) return full.slice(0, at + 2);
+    return head + "\n$$";
+  }
+  return head;
+}
 
 /* 把后端错误 detail 转成可读文案；无法识别时返回 null，由调用方回退默认提示 */
 function formatApiDetail(detail) {
@@ -1347,6 +1461,10 @@ function nbx() {
     input: "",
     output: "",
     rendered: "",
+    // 从历史打开的超长内容：只渲染前一段，「查看更多」展开全文（实时生成不折叠）
+    outputFoldEligible: false,
+    outputFolded: false,
+    outputFoldTotal: 0,
     streaming: false,
     thinking: false,
     status: "idle",
@@ -1489,6 +1607,8 @@ function nbx() {
 
     /* --- 本地数据 --- */
     history: [],
+    // 旧格式迁移失败时置真：本次会话退回整份历史写入，不破坏尚未拆分的旧数据
+    _historyLegacy: false,
     favorites: [],
     favModal: false,
     editingFav: { id: null, title: "", content: "" },
@@ -1591,6 +1711,10 @@ function nbx() {
         elapsed: "0.0",
         output: "",
         rendered: "",
+        // 从历史打开的超长结果先折叠渲染，展开后才渲染全文
+        foldEligible: false,
+        folded: false,
+        foldTotal: 0,
         requestId: null,
         reasoning: "",
         reasoningOpen: true,
@@ -2469,6 +2593,8 @@ function nbx() {
       this.vocab.elapsed = "0.0";
       this.vocab.output = "";
       this.vocab.rendered = "";
+      // 新一次替换的内容还在增长，不套用「从历史打开」的折叠
+      this.vocab.foldEligible = false;
       this.resetVocabReasoning();
       this.vocab.requestId = "24_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
       this._abortCtrl = new AbortController();
@@ -2561,8 +2687,13 @@ function nbx() {
       this.applyTheme();
 
       // localStorage 写入失败（配额满）时提示，避免用户误以为内容已保存
-      window.addEventListener("nbx:storage-full", () => {
-        this.toast("本机存储空间不足，新内容可能未被保存", "warn");
+      window.addEventListener("nbx:storage-full", (e) => {
+        this.toast(
+          e && e.detail && e.detail.evicted
+            ? "本机存储空间不足，已自动清理最旧的历史记录"
+            : "本机存储空间不足，新内容可能未被保存",
+          "warn"
+        );
       });
 
       // 悠空 · 两时段天空：每分钟校准一次，回到前台时立即校准
@@ -2574,8 +2705,8 @@ function nbx() {
       // 动态光影背景
       this._bg = createBackground(document.getElementById("bgfx"));
 
-      // 本地数据
-      this.history = lsGet(LS.history, []);
+      // 本地数据（历史为索引 + 分条正文，旧格式在此一次性拆分）
+      this.history = this._loadHistory();
       this.favorites = lsGet(LS.favorites, []);
       this.input = localStorage.getItem(LS.draft) || "";
 
@@ -2945,6 +3076,7 @@ function nbx() {
       this.currentTool = tool;
       this.output = "";
       this.rendered = "";
+      this.outputFoldEligible = false;  // 切工具后展示的是新内容，清掉历史折叠态
       this.errorMsg = "";
       this.failedModel = "";
       this.status = "idle";
@@ -4119,6 +4251,7 @@ function nbx() {
       this.retreatMascot();
       this.output = "";
       this.rendered = "";
+      this.outputFoldEligible = false;  // 新生成的内容不做折叠
       this.errorMsg = "";
       this.fallbackInfo = null;
       this.streaming = true;
@@ -4466,6 +4599,7 @@ function nbx() {
       this.resetVisualPaper();
       this.visualPaper = this.newVisualPaperState();
       this.output = "";
+      this.outputFoldEligible = false;  // 新生成的内容不做折叠
       this.rendered = "";
       this.errorMsg = "";
       this._nearBottom = true;
@@ -4484,6 +4618,8 @@ function nbx() {
       this.thinking = true;
       this.thinkingSec = 0;
       this.resetReasoning();
+      // 解卷的正文一律走结构化视图，不套用「从历史打开」的长文折叠
+      this.outputFoldEligible = false;
       const seq = ++this._runSeq;
       this.status = "connecting";
       this.fallbackInfo = null;
@@ -4558,7 +4694,7 @@ function nbx() {
           origin.partial = false;
           origin.model = this.failedModel || this.selectedModel;
           origin.createdAt = Date.now();
-          lsSet(LS.history, this.history);
+          this._persistHistoryItem(origin);
         } else {
           const created = this.pushFailedHistory(this.errorMsg, hasPaper ? { visualPaper: JSON.parse(JSON.stringify(this.visualPaper)) } : {});
           if (created && this.visualPaper) this.visualPaper.historyId = created.id;
@@ -4579,14 +4715,14 @@ function nbx() {
             if (this.visualPaper && (this.visualPaper.groups?.length || this.visualPaper.total)) {
               item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
             }
-            lsSet(LS.history, this.history);
+            this._persistHistoryItem(item);
           } else {
             item = this.pushHistory(state === "stopped");
             // 为可视化历史附加结构化数据，便于回放（0 完整题也保存 total/paper，中断可续）
             if (this.visualPaper && (this.visualPaper.groups?.length || this.visualPaper.total || (this.visualPaper.paper && this.visualPaper.paper.title))) {
               item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
               // 同步到 history 存储
-              lsSet(LS.history, this.history);
+              this._persistHistoryItem(item);
             }
             if (this.visualPaper) this.visualPaper.historyId = item.id;
             this.generateTitle(item);
@@ -4637,7 +4773,7 @@ function nbx() {
       setTimeout(() => {
         this._vpRenderPending = false;
         this.vpDoRender();
-      }, 80);
+      }, streamRenderDelay((this.output || "").length, 80));
     },
     vpDoRender() {
       // 输出未变化时跳过整份重解析（定稿与在途节流 tick 重叠时不再重复解析全文）
@@ -4804,6 +4940,7 @@ function nbx() {
         this.errorMsg = "";
         this.output = "";
         this.rendered = "";
+        this.outputFoldEligible = false;
         this.streaming = true;
         this.thinking = true;
         this.status = "connecting";
@@ -4939,7 +5076,7 @@ function nbx() {
       setTimeout(() => {
         this._renderPending = false;
         this.doRender();
-      }, 60);
+      }, streamRenderDelay(this.output.length));
     },
     /* 迁移卡片的按卡片节流渲染（多卡并行时开销随累计长度二次增长，必须合并） */
     scheduleCardRender(card) {
@@ -4949,20 +5086,40 @@ function nbx() {
         card._renderTimer = null;
         if (card._renderPending) card.rendered = renderMd(card.output);
         card._renderPending = false;
-      }, 60);
+      }, streamRenderDelay((card.output || "").length));
     },
     doRender() {
       // 输出未变化（如定稿与在途节流 tick 重叠）时跳过整份重渲染
       if (!this._outputDirty) return;
       this._outputDirty = false;
-      this.rendered = renderMd(this.output);
-      if (this.vocab) this.vocab.rendered = renderMd(this.vocab.output || "");
+      const main = this._foldedForRender(this.output, this.outputFoldEligible);
+      this.outputFolded = main.folded;
+      this.outputFoldTotal = main.total;
+      this.rendered = renderMd(main.text);
+      if (this.vocab) {
+        const v = this._foldedForRender(this.vocab.output || "", this.vocab.foldEligible);
+        this.vocab.folded = v.folded;
+        this.vocab.foldTotal = v.total;
+        this.vocab.rendered = renderMd(v.text);
+      }
       this.$nextTick(() => {
         if (this.maskOn && this.currentTool && this.currentTool.id === "13") {
           tagAnswerElements(this.$refs.mdRoot);
         }
         this.maybeScroll();
       });
+    },
+    /* 只有「从历史打开」的超长内容才折叠：实时生成的内容还在增长，折叠会打断阅读 */
+    _foldedForRender(text, eligible) {
+      const raw = text || "";
+      return eligible ? foldMarkdown(raw) : { text: raw, folded: false, total: raw.length };
+    },
+    /* 「查看更多」：关掉折叠标记后按完整内容重渲染一次 */
+    unfoldHistoryOutput() {
+      this.outputFoldEligible = false;
+      if (this.vocab) this.vocab.foldEligible = false;
+      this._outputDirty = true;
+      this.doRender();
     },
     toggleMask() {
       this.maskOn = !this.maskOn;
@@ -5185,10 +5342,87 @@ function nbx() {
     },
 
     /* ============ 历史记录 ============ */
+    /* --- 分键存储：索引 + 单条正文 --- */
+    /* 淘汰最旧记录直到写入成功：write 用当前 history 生成 payload 并落盘，返回是否成功。
+       keepId 是本次正在写的记录，永不淘汰它；配额满时从最旧开始删（正文键一并清理），
+       让新内容优先落盘，而不是新内容静默丢失。 */
+    _evictOldestUntil(write, keepId) {
+      if (write()) return true;
+      for (let i = this.history.length - 1; i >= 0; i -= 1) {
+        const victim = this.history[i];
+        if (!victim || victim.id === keepId) continue;
+        this.history.splice(i, 1);
+        lsRemove(HISTORY_BODY_PREFIX + victim.id);
+        if (write()) return true;
+      }
+      return write();
+    },
+    _historyIndexPayload() {
+      // 迁移失败的会话退回整份数组（含正文），与拆分前的行为一致
+      return JSON.stringify(this._historyLegacy ? this.history : this.history.map(historyIndexOf));
+    },
+    _persistHistoryIndex(keepId = "") {
+      return this._evictOldestUntil(() => lsWrite(LS.history, this._historyIndexPayload()), keepId);
+    },
+    /* 落盘一条记录：正文单独写、索引单独写。返回是否成功。 */
+    _persistHistoryItem(item) {
+      // 防御：索引项没有 input 字段，若调用方在未水合的条目上改过别的字段就落盘，
+      // 这里先读回正文，避免用空 input/output 覆盖已存内容（正文一定含 input 键）
+      if (!this._historyLegacy && !item._bodyLoaded && item.input === undefined) this._hydrateHistory(item);
+      let ok = true;
+      if (!this._historyLegacy) {
+        const key = HISTORY_BODY_PREFIX + item.id;
+        const payload = JSON.stringify(historyBodyOf(item));
+        ok = this._evictOldestUntil(() => lsWrite(key, payload), item.id);
+      }
+      ok = this._persistHistoryIndex(item.id) && ok;
+      if (!ok) storageFullWarn(true);
+      return ok;
+    },
+    /* 惰性读回正文：列表只持有索引，打开某条时才把大字段合并进来（本地同步读）。
+       正文键缺失（旧记录 / 已被淘汰）时保留索引里的元数据，正文按空处理。 */
+    _hydrateHistory(item) {
+      if (!item || item._bodyLoaded || this._historyLegacy) return item;
+      item._bodyLoaded = true;
+      try {
+        const raw = localStorage.getItem(HISTORY_BODY_PREFIX + item.id);
+        if (raw) Object.assign(item, JSON.parse(raw));
+      } catch { /* 正文损坏：保留索引元数据，正文留空 */ }
+      return item;
+    },
+    /* 启动加载：旧格式就地拆分。正文全部写成功后才覆盖索引键，
+       中途失败或崩溃时旧键完好、下次启动重放，不会丢数据。 */
+    _loadHistory() {
+      const raw = lsGet(LS.history, []);
+      if (!isLegacyHistoryArray(raw)) return Array.isArray(raw) ? raw : [];
+      const index = [];
+      const written = [];
+      for (const item of raw) {
+        if (!item || typeof item !== "object" || !item.id) continue;
+        if (!lsWrite(HISTORY_BODY_PREFIX + item.id, JSON.stringify(historyBodyOf(item)))) {
+          for (const it of written) lsRemove(HISTORY_BODY_PREFIX + it.id);
+          this._historyLegacy = true;
+          return raw;
+        }
+        written.push(item);
+        index.push(historyIndexOf(item));
+      }
+      if (!lsWrite(LS.history, JSON.stringify(index))) {
+        for (const it of written) lsRemove(HISTORY_BODY_PREFIX + it.id);
+        this._historyLegacy = true;
+        return raw;
+      }
+      return index;
+    },
     _unshiftHistory(item) {
+      // 正文就在内存里：标记已水合，任何路径都不必（也不该）再从存储读回来覆盖它
+      item._bodyLoaded = true;
       this.history.unshift(item);
-      if (this.history.length > HISTORY_LIMIT) this.history.length = HISTORY_LIMIT;
-      lsSet(LS.history, this.history);
+      while (this.history.length > HISTORY_LIMIT) {
+        const dropped = this.history.pop();
+        if (dropped) lsRemove(HISTORY_BODY_PREFIX + dropped.id);
+      }
+      this._persistHistoryItem(item);
       return item;
     },
     pushHistory(partial) {
@@ -5226,11 +5460,13 @@ function nbx() {
         ...fields,
       };
       const prev = this.history[0];
+      // 索引项不含 input，合并判定前先把上一条正文读回来，保持「同输入连续失败合并」的旧行为
+      if (prev) this._hydrateHistory(prev);
       if (prev && prev.error && prev.toolId === args.toolId && prev.input === args.input) {
         // 这次重试一个字都没产出时保留上一条已生成的内容，别把内容越重试越少
         if (!String(args.output || "").trim() && prev.output) args.output = prev.output;
         Object.assign(prev, args);
-        lsSet(LS.history, this.history);
+        this._persistHistoryItem(prev);
         return prev;
       }
       return this._unshiftHistory({
@@ -5262,7 +5498,8 @@ function nbx() {
         const data = await res.json();
         if (data.title) {
           item.title = data.title;
-          lsSet(LS.history, this.history);
+          // 标题只存在索引里，写索引即可（迁移失败的会话内部仍写整份数组）
+          this._persistHistoryIndex(item.id);
         }
       } catch {
         // 标题生成失败静默处理
@@ -5280,11 +5517,13 @@ function nbx() {
         if (!ok) return;
         this.stopBusyStreams();
       }
-      if (item.migration) {
+      // 列表里持有的是索引项，正文在打开时才读回来（本地同步读，开销可忽略）
+      this._hydrateHistory(item);
+      if (item.migration || item.hasMigration) {
         this.openMigrationHistory(item);
         return;
       }
-      if (item.visualPaper || item.toolId === "13") {
+      if (item.visualPaper || item.hasPaper || item.toolId === "13") {
         this.openVisualPaperHistory(item);
         return;
       }
@@ -5298,7 +5537,12 @@ function nbx() {
         this.resetVocab();
         this.vocab.text = item.input || "";
         this.vocab.output = item.output || "";
-        this.vocab.rendered = renderMd(item.output || "");
+        // 超长结果先折叠渲染（与主输出区同一套「查看更多」）
+        this.vocab.foldEligible = true;
+        const folded = this._foldedForRender(this.vocab.output, true);
+        this.vocab.folded = folded.folded;
+        this.vocab.foldTotal = folded.total;
+        this.vocab.rendered = renderMd(folded.text);
         if (item.error) {
           this.vocab.status = "error";
           this.vocab.checkError = item.error;
@@ -5328,6 +5572,8 @@ function nbx() {
         this.status = "history";
       }
       this.resetReasoning();
+      // 从历史打开的长文先折叠渲染，首屏不必等全文解析
+      this.outputFoldEligible = true;
       this._outputDirty = true; // 载入历史同样属于输出变化，须走完整渲染
       this.doRender();
       this.rightMobileOpen = false;
@@ -5337,6 +5583,7 @@ function nbx() {
       });
     },
     openMigrationHistory(item) {
+      this._hydrateHistory(item);
       const tool = this.findTool(item.toolId) || {
         id: "26", name: "智能错题迁移", icon: "migration", description: "", prompt_loaded: true,
       };
@@ -5388,6 +5635,7 @@ function nbx() {
       this.rightMobileOpen = false;
     },
     openVisualPaperHistory(item) {
+      this._hydrateHistory(item);
       const tool = this.findTool("13") || {
         id: "13", name: "试卷可视化全解", icon: "projector", description: "整卷题目与解析的课堂投影版", prompt_loaded: true,
       };
@@ -5398,6 +5646,8 @@ function nbx() {
       this.submittedFileName = item.fileName || "";
       this.inputCollapsed = true;
       this.output = item.output || "";
+      // 解卷走结构化分页视图，不套用长文折叠
+      this.outputFoldEligible = false;
       // 失败记录：还原错误提示，错误卡上的「重试 / 换个模型 / 续写」照常可用
       if (item.error) {
         this.errorMsg = item.error;
@@ -5514,6 +5764,7 @@ function nbx() {
       this.submittedExpanded = false;
       this.output = "";
       this.rendered = "";
+      this.outputFoldEligible = false;
       this.errorMsg = "";
       this.status = "idle";
       this.resetReasoning();
@@ -5528,7 +5779,8 @@ function nbx() {
     },
     removeHistory(id) {
       this.history = this.history.filter((h) => h.id !== id);
-      lsSet(LS.history, this.history);
+      lsRemove(HISTORY_BODY_PREFIX + id);
+      this._persistHistoryIndex();
       this.toast("已删除该条记录");
     },
     async clearHistory() {
@@ -5540,8 +5792,9 @@ function nbx() {
         danger: true,
       });
       if (!ok) return;
+      for (const item of this.history) lsRemove(HISTORY_BODY_PREFIX + item.id);
       this.history = [];
-      lsSet(LS.history, []);
+      lsWrite(LS.history, "[]");
       this.toast("历史记录已清空");
     },
 

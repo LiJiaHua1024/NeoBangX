@@ -1008,6 +1008,9 @@ async def chat_stream(
                 fingerprint=fp_hash,
                 device_summary=fp_summary,
             )
+            # 批次缓存只在注册新批次时被动清理，若此后再无迁移请求，过期批次与
+            # 额度预留会一直留在内存里；每次生成收尾顺手扫一遍，代价可忽略
+            _cleanup_migration_batches()
 
     return EventSourceResponse(
         event_generator(),

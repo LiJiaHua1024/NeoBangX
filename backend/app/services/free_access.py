@@ -46,6 +46,10 @@ ANON_IDENTITY = "anon"
 _INFLIGHT_TTL = 3600.0
 _inflight: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
+# 键数量上限：键含客户端可控的指纹/IP，键只在被再次访问时修剪，否则空 deque 会常驻。
+# 超过阈值时扫一遍把全部过期的键删掉（不影响任何仍在 TTL 内的在途计数）。
+_MAX_INFLIGHT_KEYS = 4096
+
 
 def is_free_model(entry: dict | None) -> bool:
     """该模型是否被标记为免费（调用不扣次数）。"""
@@ -110,6 +114,15 @@ def _prune(entries: deque[float], now_mono: float) -> None:
         entries.popleft()
 
 
+def _sweep_inflight(now_mono: float) -> None:
+    """丢掉所有记录都已过期的键，避免空 deque 常驻（身份键可被伪造）。"""
+    for key in list(_inflight):
+        entries = _inflight[key]
+        _prune(entries, now_mono)
+        if not entries:
+            _inflight.pop(key, None)
+
+
 def _inflight_count(entries: deque[float], now_mono: float, seconds: int) -> int:
     return sum(1 for stamp in entries if now_mono - stamp <= seconds)
 
@@ -126,6 +139,8 @@ def register_free_use(*, entry: dict, identity: str) -> Callable[[], None]:
 
     model_id = str(entry.get("id") or "")
     now_mono = monotonic()
+    if len(_inflight) > _MAX_INFLIGHT_KEYS:
+        _sweep_inflight(now_mono)
     entries = _inflight[(identity, model_id)]
     _prune(entries, now_mono)
 
