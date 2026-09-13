@@ -418,6 +418,56 @@ def test_tools_projection_exposes_free_flags(models_config):
     assert by_id[PAID_MODEL_ID]["free_no_code"] is False
 
 
+def test_tools_hides_disabled_and_chores_models(models_config):
+    """用户端模型列表只含可见模型：已禁用与仅 Chores 既不展示、也不计入折叠数量。"""
+    models_config(
+        [
+            _model_entry("test/visible-a"),
+            _model_entry("test/disabled-b", enabled=False),
+            _model_entry("test/chores-c", chores_only=True),
+            _model_entry("test/visible-d"),
+        ],
+        "test/visible-a",
+    )
+    data = TestClient(app).get("/api/tools/").json()
+    assert [m["id"] for m in data["models"]] == ["test/visible-a", "test/visible-d"]
+
+
+def test_max_visible_models_roundtrip_and_clamp(models_config):
+    """折叠上限：后台可读写，越界被拒，脏数据夹回合法区间（0 = 不折叠）。"""
+    from app.admin_main import app as admin_app
+    from app.services.runtime_config import MAX_VISIBLE_MODELS_LIMIT, resolve_llm_settings
+
+    models_config([_model_entry(PAID_MODEL_ID)], PAID_MODEL_ID)
+    db = SessionLocal()
+    old_value = get_config_map(db).get("max_visible_models", "")
+    try:
+        # 未配置时默认 0：用户端保持全量显示
+        assert TestClient(app).get("/api/tools/").json()["max_visible_models"] == 0
+
+        client = TestClient(admin_app)
+        response = client.put("/api/admin/config", json={"max_visible_models": 5})
+        assert response.status_code == 200, response.text
+        assert response.json()["config"]["max_visible_models"] == "5"
+        assert client.get("/api/admin/config").json()["config"]["max_visible_models"] == "5"
+        # 用户端接口把上限一并下发，前端据此折叠
+        assert TestClient(app).get("/api/tools/").json()["max_visible_models"] == 5
+
+        # 超出合法区间直接拒绝
+        assert client.put("/api/admin/config", json={"max_visible_models": 999}).status_code == 422
+
+        # 脏数据（负数 / 非数字 / 超上限）在解析时归一
+        set_config_values(db, {"max_visible_models": "-3"})
+        assert resolve_llm_settings(db)["max_visible_models"] == 0
+        set_config_values(db, {"max_visible_models": "abc"})
+        assert resolve_llm_settings(db)["max_visible_models"] == 0
+        set_config_values(db, {"max_visible_models": "999"})
+        assert resolve_llm_settings(db)["max_visible_models"] == MAX_VISIBLE_MODELS_LIMIT
+    finally:
+        set_config_values(db, {"max_visible_models": old_value})
+        db.close()
+
+
 def test_admin_config_roundtrip_keeps_free_fields(models_config):
     """管理端保存配置后免费字段必须原样保留（serialize 往返不会静默剔除）。"""
     from app.admin_main import app as admin_app

@@ -19,6 +19,7 @@ CONFIG_KEYS = [
     "max_tokens",
     "timeout",
     "first_token_timeout",
+    "max_visible_models",
     "log_payload",
     "log_retention_days",
     "mineru_mode",
@@ -45,6 +46,9 @@ FREE_LIMIT_KEYS = ("minute", "hour", "day", "week", "month")
 
 # 限额取值上限：纯防误填天文数字导致 SQL 计数形同虚设
 FREE_LIMIT_MAX = 1_000_000
+
+# 用户端模型下拉最大显示数的取值上限（0 = 不折叠，保留全量显示）
+MAX_VISIBLE_MODELS_LIMIT = 50
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +290,7 @@ def _env_defaults() -> dict[str, str]:
         "chores_model": settings.chores_model,
         "max_tokens": str(settings.max_tokens),
         "timeout": str(settings.timeout),
+        "max_visible_models": str(settings.max_visible_models),
         "log_payload": "true" if settings.log_payload else "false",
         "log_retention_days": str(settings.log_retention_days),
         "mineru_mode": settings.mineru_mode,
@@ -450,6 +455,13 @@ def resolve_llm_settings(db: Session) -> dict:
         first_token_timeout = settings.first_token_timeout
     first_token_timeout = max(5, min(600, first_token_timeout))
 
+    # 模型下拉最大显示数：0 与非数字都视为「不折叠」，负数夹到 0，超上限夹回上限
+    try:
+        max_visible_models = int(cfg.get("max_visible_models") or settings.max_visible_models)
+    except ValueError:
+        max_visible_models = settings.max_visible_models
+    max_visible_models = max(0, min(MAX_VISIBLE_MODELS_LIMIT, max_visible_models))
+
     if not model_list:
         model_list = [{
             "id": default_model,
@@ -577,6 +589,7 @@ def resolve_llm_settings(db: Session) -> dict:
         "max_tokens": max_tokens,
         "timeout": timeout,
         "first_token_timeout": first_token_timeout,
+        "max_visible_models": max_visible_models,
         "log_payload": log_payload,
         "log_retention_days": log_retention_days,
         "providers": providers,

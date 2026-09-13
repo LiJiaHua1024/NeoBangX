@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     # 只约束流式生成的建连与首块，出字之后仍按 timeout 的按块读超时判定
     first_token_timeout: int = 30
 
+    # 用户端模型下拉默认显示的数量，超出折叠为「展开全部」，0 = 不折叠
+    max_visible_models: int = 0
+
     # MinerU 文档解析（PDF）：模式 precision=精准解析API（推荐）/ agent=轻量解析API；
     # 模型仅精准模式有效 pipeline（推荐）/ vlm；token 仅精准模式必填；base_url 硬编码官方地址
     mineru_mode: str = "precision"

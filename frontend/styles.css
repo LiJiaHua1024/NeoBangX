@@ -855,7 +855,45 @@ html[data-theme="sora"] .mascot-peeking {
   border-radius: 0.9rem;
   z-index: 70;
   transform-origin: top right;
+  /* 列表滚动区 + 底部「展开全部」按钮分列：按钮不随列表滚动 */
+  display: flex;
+  flex-direction: column;
 }
+/* 模型较多时列表内部滚动，展开后也不会把面板顶出屏幕（与 .retry-model-list 同款上限） */
+.ms-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ms-more {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.5rem 0.6rem;
+  /* 与 .ms-item 同款圆角，悬停底色才是圆角块而非直角块 */
+  border-radius: 0.65rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+/* 与列表的分隔线：用内缩伪元素画，画成 border-top 会跟着圆角把线两端一起拐弯 */
+.ms-more::before {
+  content: "";
+  position: absolute;
+  top: -0.16rem;
+  left: 0.45rem;
+  right: 0.45rem;
+  height: 1px;
+  background: var(--border);
+}
+.ms-more:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.ms-more .chev { display: inline-flex; transition: transform 0.4s var(--ease-spring); }
+.ms-more.on .chev { transform: rotate(180deg); color: var(--accent); }
 .ms-anim { transition: transform 0.4s var(--ease-spring), opacity 0.28s ease; }
 .ms-anim-from { opacity: 0; transform: scale(0.9) translateY(-10px); }
 .ms-anim-to { opacity: 1; transform: scale(1) translateY(0); }

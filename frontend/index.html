@@ -301,9 +301,9 @@
               </div>
               <div class="ml-auto flex items-center gap-2">
                 <span class="text-xs text-faint hidden sm:inline">模型</span>
-                <div class="ms-wrap" @click.outside="modelMenuOpen = false">
+                <div class="ms-wrap" @click.outside="closeModelMenu()">
                   <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
-                          @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
+                          @click="toggleModelMenu()" aria-label="选择模型" :aria-expanded="modelMenuOpen">
                     <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
                     <span class="truncate" x-text="shortModel(selectedModel)"></span>
                     <span class="ms-free" x-show="isFreeModel()" title="免费模型：调用不消耗使用码次数">免费</span>
@@ -312,27 +312,34 @@
                   <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
                        x-transition:enter="ms-anim" x-transition:enter-start="ms-anim-from" x-transition:enter-end="ms-anim-to"
                        x-transition:leave="ms-anim-leave" x-transition:leave-start="ms-anim-to" x-transition:leave-end="ms-anim-from">
-                    <template x-for="m in allModels" :key="m.id">
-                      <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
-                        <div class="min-w-0">
-                          <div class="ms-item-title">
-                            <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
-                            <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                    <div class="ms-list scroll-thin">
+                      <template x-for="m in visibleModels" :key="m.id">
+                        <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
+                          <div class="min-w-0">
+                            <div class="ms-item-title">
+                              <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
+                              <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                            </div>
+                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                           </div>
-                          <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
-                        </div>
-                        <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
-                          <svg viewBox="0 0 24 24">
-                            <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
-                            <circle class="ms-ring-bar" cx="12" cy="12" r="10"
-                                    :stroke="modelScoreColor(m.score)"
-                                    stroke-dasharray="62.83"
-                                    :stroke-dashoffset="modelRingOffset(m.score)"></circle>
-                          </svg>
-                          <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
-                        </span>
-                      </button>
-                    </template>
+                          <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
+                            <svg viewBox="0 0 24 24">
+                              <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
+                              <circle class="ms-ring-bar" cx="12" cy="12" r="10"
+                                      :stroke="modelScoreColor(m.score)"
+                                      stroke-dasharray="62.83"
+                                      :stroke-dashoffset="modelRingOffset(m.score)"></circle>
+                            </svg>
+                            <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
+                          </span>
+                        </button>
+                      </template>
+                    </div>
+                    <button class="ms-more" x-show="modelsCollapsible" :class="{ 'on': modelsExpanded }"
+                      @click="modelsExpanded = !modelsExpanded">
+                      <span x-text="modelsExpanded ? '收起' : `展开全部（共 ${models.length} 个）`"></span>
+                      <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -559,9 +566,9 @@
               </div>
               <div class="ml-auto flex items-center gap-2">
                 <span class="text-xs text-faint hidden sm:inline">模型</span>
-                <div class="ms-wrap" @click.outside="modelMenuOpen = false">
+                <div class="ms-wrap" @click.outside="closeModelMenu()">
                   <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
-                          @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
+                          @click="toggleModelMenu()" aria-label="选择模型" :aria-expanded="modelMenuOpen">
                     <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
                     <span class="truncate" x-text="shortModel(selectedModel)"></span>
                     <span class="ms-free" x-show="isFreeModel()" title="免费模型：调用不消耗使用码次数">免费</span>
@@ -570,27 +577,34 @@
                   <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
                        x-transition:enter="ms-anim" x-transition:enter-start="ms-anim-from" x-transition:enter-end="ms-anim-to"
                        x-transition:leave="ms-anim-leave" x-transition:leave-start="ms-anim-to" x-transition:leave-end="ms-anim-from">
-                    <template x-for="m in allModels" :key="m.id">
-                      <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
-                        <div class="min-w-0">
-                          <div class="ms-item-title">
-                            <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
-                            <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                    <div class="ms-list scroll-thin">
+                      <template x-for="m in visibleModels" :key="m.id">
+                        <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
+                          <div class="min-w-0">
+                            <div class="ms-item-title">
+                              <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
+                              <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                            </div>
+                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                           </div>
-                          <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
-                        </div>
-                        <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
-                          <svg viewBox="0 0 24 24">
-                            <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
-                            <circle class="ms-ring-bar" cx="12" cy="12" r="10"
-                                    :stroke="modelScoreColor(m.score)"
-                                    stroke-dasharray="62.83"
-                                    :stroke-dashoffset="modelRingOffset(m.score)"></circle>
-                          </svg>
-                          <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
-                        </span>
-                      </button>
-                    </template>
+                          <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
+                            <svg viewBox="0 0 24 24">
+                              <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
+                              <circle class="ms-ring-bar" cx="12" cy="12" r="10"
+                                      :stroke="modelScoreColor(m.score)"
+                                      stroke-dasharray="62.83"
+                                      :stroke-dashoffset="modelRingOffset(m.score)"></circle>
+                            </svg>
+                            <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
+                          </span>
+                        </button>
+                      </template>
+                    </div>
+                    <button class="ms-more" x-show="modelsCollapsible" :class="{ 'on': modelsExpanded }"
+                      @click="modelsExpanded = !modelsExpanded">
+                      <span x-text="modelsExpanded ? '收起' : `展开全部（共 ${models.length} 个）`"></span>
+                      <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -726,9 +740,9 @@
               </div>
               <div class="ml-auto flex items-center gap-2">
                 <span class="text-xs text-faint hidden sm:inline">模型</span>
-                <div class="ms-wrap" @click.outside="modelMenuOpen = false">
+                <div class="ms-wrap" @click.outside="closeModelMenu()">
                   <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
-                          @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
+                          @click="toggleModelMenu()" aria-label="选择模型" :aria-expanded="modelMenuOpen">
                     <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
                     <span class="truncate" x-text="shortModel(selectedModel)"></span>
                     <span class="ms-free" x-show="isFreeModel()" title="免费模型：调用不消耗使用码次数">免费</span>
@@ -737,27 +751,34 @@
                   <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
                        x-transition:enter="ms-anim" x-transition:enter-start="ms-anim-from" x-transition:enter-end="ms-anim-to"
                        x-transition:leave="ms-anim-leave" x-transition:leave-start="ms-anim-to" x-transition:leave-end="ms-anim-from">
-                    <template x-for="m in allModels" :key="m.id">
-                      <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
-                        <div class="min-w-0">
-                          <div class="ms-item-title">
-                            <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
-                            <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                    <div class="ms-list scroll-thin">
+                      <template x-for="m in visibleModels" :key="m.id">
+                        <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
+                          <div class="min-w-0">
+                            <div class="ms-item-title">
+                              <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
+                              <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                            </div>
+                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                           </div>
-                          <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
-                        </div>
-                        <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
-                          <svg viewBox="0 0 24 24">
-                            <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
-                            <circle class="ms-ring-bar" cx="12" cy="12" r="10"
-                                    :stroke="modelScoreColor(m.score)"
-                                    stroke-dasharray="62.83"
-                                    :stroke-dashoffset="modelRingOffset(m.score)"></circle>
-                          </svg>
-                          <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
-                        </span>
-                      </button>
-                    </template>
+                          <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
+                            <svg viewBox="0 0 24 24">
+                              <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
+                              <circle class="ms-ring-bar" cx="12" cy="12" r="10"
+                                      :stroke="modelScoreColor(m.score)"
+                                      stroke-dasharray="62.83"
+                                      :stroke-dashoffset="modelRingOffset(m.score)"></circle>
+                            </svg>
+                            <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
+                          </span>
+                        </button>
+                      </template>
+                    </div>
+                    <button class="ms-more" x-show="modelsCollapsible" :class="{ 'on': modelsExpanded }"
+                      @click="modelsExpanded = !modelsExpanded">
+                      <span x-text="modelsExpanded ? '收起' : `展开全部（共 ${models.length} 个）`"></span>
+                      <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1275,42 +1296,49 @@
               </div>
               <div class="ml-auto flex items-center gap-2">
                 <span class="text-xs text-faint hidden sm:inline">模型</span>
-                <div class="ms-wrap" @click.outside="modelMenuOpen = false">
+                <div class="ms-wrap" @click.outside="closeModelMenu()">
                   <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
-                          @click="modelMenuOpen = !modelMenuOpen" aria-label="选择模型" :aria-expanded="modelMenuOpen">
+                          @click="toggleModelMenu()" aria-label="选择模型" :aria-expanded="modelMenuOpen">
                     <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
                     <span class="truncate" x-text="shortModel(selectedModel)"></span>
                     <span class="ms-free" x-show="isFreeModel()" title="免费模型：调用不消耗使用码次数">免费</span>
                     <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
                   </button>
-                    <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
+                  <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
                        x-transition:enter="ms-anim"
                        x-transition:enter-start="ms-anim-from"
                        x-transition:enter-end="ms-anim-to"
                        x-transition:leave="ms-anim-leave"
                        x-transition:leave-start="ms-anim-to"
                        x-transition:leave-end="ms-anim-from">
-                    <template x-for="m in allModels" :key="m.id">
-                      <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
-                        <div class="min-w-0">
-                          <div class="ms-item-title">
-                            <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
-                            <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                    <div class="ms-list scroll-thin">
+                      <template x-for="m in visibleModels" :key="m.id">
+                        <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
+                          <div class="min-w-0">
+                            <div class="ms-item-title">
+                              <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
+                              <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                            </div>
+                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                           </div>
-                          <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
-                        </div>
-                        <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
-                          <svg viewBox="0 0 24 24">
-                            <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
-                            <circle class="ms-ring-bar" cx="12" cy="12" r="10"
-                                    :stroke="modelScoreColor(m.score)"
-                                    stroke-dasharray="62.83"
-                                    :stroke-dashoffset="modelRingOffset(m.score)"></circle>
-                          </svg>
-                          <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
-                        </span>
-                      </button>
-                    </template>
+                          <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
+                            <svg viewBox="0 0 24 24">
+                              <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
+                              <circle class="ms-ring-bar" cx="12" cy="12" r="10"
+                                      :stroke="modelScoreColor(m.score)"
+                                      stroke-dasharray="62.83"
+                                      :stroke-dashoffset="modelRingOffset(m.score)"></circle>
+                            </svg>
+                            <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
+                          </span>
+                        </button>
+                      </template>
+                    </div>
+                    <button class="ms-more" x-show="modelsCollapsible" :class="{ 'on': modelsExpanded }"
+                      @click="modelsExpanded = !modelsExpanded">
+                      <span x-text="modelsExpanded ? '收起' : `展开全部（共 ${models.length} 个）`"></span>
+                      <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
                   </div>
                 </div>
               </div>

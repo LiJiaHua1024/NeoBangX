@@ -220,13 +220,18 @@
       "free_no_code": true
     }
   ],
-  "default_model": "openrouter/google/gemini-2.5-flash"
+  "default_model": "openrouter/google/gemini-2.5-flash",
+  "max_visible_models": 5
 }
 ```
 
 `is_free` 表示免费模型（限额内不扣次数，限额命中后持可用使用码时转按次扣减），
 `free_no_code` 表示该模型无码可用；前端据此渲染「免费」标签，
 并在无使用码时默认选中可免码试用的模型。
+
+`max_visible_models` 为管理后台配置的模型下拉最大显示数（`0` = 不折叠）。
+`models` 已过滤掉**已禁用**与**仅 Chores**模型，因此该数组长度就是折叠计数的基数，
+前端按 `min(长度, max_visible_models)` 渲染，超出部分折叠为「展开全部」。
 
 ### GET `/api/tools/models`
 
@@ -854,6 +859,7 @@ data: [DONE]
     "chores_api_key": "",
     "max_tokens": "4096",
     "timeout": "120",
+    "max_visible_models": "5",
     "log_payload": "false",
     "log_retention_days": "0"
   },
@@ -878,6 +884,7 @@ data: [DONE]
   "models": "model1,model2",
   "llm_api_key": "sk-...",
   "max_tokens": 4096,
+  "max_visible_models": 5,
   "log_payload": true,
   "log_retention_days": 30
 }
@@ -885,6 +892,9 @@ data: [DONE]
 
 说明：API Key 字段若含 `****` 则视为未修改；留空字符串则清除密钥。
 `log_retention_days` 取值范围 `0 ~ 36500`，越界返回 422。
+`max_visible_models` 为用户端模型下拉的最大显示数，取值范围 `0 ~ 50`
+（`0` = 不折叠，保持全量显示），越界返回 422；只统计用户端可见模型，
+已禁用与仅 Chores 模型不计入。该值经 `GET /api/tools/` 下发到前端。
 两项日志配置**保存后即时生效**（主站在每次请求时读取），无需重启。
 
 `models` 为结构化数组（管理端提交 `ModelEntry` 列表），每项字段：
@@ -979,3 +989,4 @@ openrouter/deepseek/deepseek-chat
 | 1.7.0 | 2026-09-13 | 使用码重置用量：新增 `POST /api/admin/codes/{id}/reset-usage` 把已用次数清零（剩余次数恢复，使用日志保留）；管理后台使用码操作列新增「重置用量」+ 自研确认弹窗 |
 | 1.8.0 | 2026-09-13 | 使用码额度支持有限 ↔ 无限互转（改为无限清零已用；改回有限从 0 起算），生成使用码也可直接指定无限（-1）；免费模型限额命中后，持可用使用码的调用自动转为按次扣减（不再 429），迁移批次同步升级为付费批 |
 | 1.9.0 | 2026-09-13 | 使用码不再区分类型：移除 code_type（数据库列在启动时自动迁移删除，历史管理员码保留无限额度，旧 NBXA 码继续有效），管理后台移除类型筛选/展示与创建类型选择；初始使用码改为无限额度普通码并写入 bootstrap_code.txt |
+| 1.10.0 | 2026-09-13 | 模型下拉折叠：新增全局配置 `max_visible_models`（0~50，0 = 不折叠），`GET /api/tools/` 随模型列表下发该值，用户端下拉超出后折叠为前 N 个并提供「展开全部」；仅统计可见模型，已禁用与仅 Chores 模型不计入 |

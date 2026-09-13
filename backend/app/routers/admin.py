@@ -52,6 +52,7 @@ from app.services.request_log import (
 )
 from app.services.runtime_config import (
     CONFIG_KEYS,
+    MAX_VISIBLE_MODELS_LIMIT,
     MINERU_MODES,
     MINERU_MODELS,
     REASONING_EFFORTS,
@@ -150,6 +151,12 @@ class ConfigUpdateRequest(BaseModel):
     timeout: Optional[int] = None
     first_token_timeout: Optional[int] = Field(
         None, ge=5, le=600, description="单家 Provider 首块等待上限（秒），超时即切下一家"
+    )
+    max_visible_models: Optional[int] = Field(
+        None,
+        ge=0,
+        le=MAX_VISIBLE_MODELS_LIMIT,
+        description="用户端模型下拉最大显示数，超出折叠为「展开全部」，0=不折叠",
     )
     log_payload: Optional[bool] = Field(None, description="是否记录原始输入/输出数据")
     log_retention_days: Optional[int] = Field(None, ge=0, le=36500, description="日志保留天数，0=永久")

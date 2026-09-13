@@ -1337,6 +1337,9 @@ function nbx() {
     /* --- 数据 --- */
     groups: [],
     models: [],
+    // 模型下拉最大显示数（后台配置，0 = 不折叠）与本次展开状态
+    maxVisibleModels: 0,
+    modelsExpanded: false,
     toolsLoaded: false,
     toolsError: "",
     currentTool: null,
@@ -2883,7 +2886,9 @@ function nbx() {
         const data = await res.json();
         this.groups = data.groups || [];
         // models 为结构化列表：[{ id, name, description, score, is_free, free_no_code }]
+        // 后端已滤掉禁用与仅 Chores 模型，该列表长度即「可见模型数」，折叠计数以它为准
         this.models = data.models || [];
+        this.maxVisibleModels = Number(data.max_visible_models) || 0;
         // 默认模型优先级：本机保存的选择 > 未登录时的免费（无码可用）模型 > 后端默认模型；
         // 无码用户若默认落在收费模型上，一执行就被要求输码，免费试用形同虚设
         const saved = localStorage.getItem(LS.model);
@@ -2904,6 +2909,16 @@ function nbx() {
 
     get allModels() {
       return [...this.models];
+    },
+
+    // 下拉里实际渲染的模型：超出后台配置上限时折叠为前 N 个，展开后与 allModels 一致
+    get visibleModels() {
+      const limit = this.maxVisibleModels;
+      if (!limit || this.modelsExpanded || this.models.length <= limit) return [...this.models];
+      return this.models.slice(0, limit);
+    },
+    get modelsCollapsible() {
+      return this.maxVisibleModels > 0 && this.models.length > this.maxVisibleModels;
     },
 
     /* ============ 工具选择 ============ */
@@ -3068,7 +3083,17 @@ function nbx() {
     chooseModel(m) {
       this.selectedModel = m;
       this.modelMenuOpen = false;
+      // 收起列表状态：下次打开回到折叠态，而不是停在上次的展开态
+      this.modelsExpanded = false;
       try { localStorage.setItem(LS.model, m); } catch {}
+    },
+    toggleModelMenu() {
+      this.modelMenuOpen = !this.modelMenuOpen;
+      if (!this.modelMenuOpen) this.modelsExpanded = false;
+    },
+    closeModelMenu() {
+      this.modelMenuOpen = false;
+      this.modelsExpanded = false;
     },
 
     /* ============ UI 持久化 ============ */

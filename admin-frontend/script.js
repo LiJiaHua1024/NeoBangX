@@ -584,6 +584,7 @@ function adminApp() {
       max_tokens: 4096,
       timeout: 120,
       first_token_timeout: 30,
+      max_visible_models: 0,
       log_payload: false,
       log_retention_days: 0,
       tool_reasoning_rules: [],
@@ -2179,6 +2180,7 @@ function adminApp() {
           max_tokens: Number(cfg.max_tokens) || 4096,
           timeout: Number(cfg.timeout) || 120,
           first_token_timeout: Number(cfg.first_token_timeout) || 30,
+          max_visible_models: Number(cfg.max_visible_models) || 0,
           log_payload: /^(1|true|yes|on)$/i.test(String(cfg.log_payload ?? "")),
           log_retention_days: Number(cfg.log_retention_days) || 0,
           tool_reasoning_rules: Array.isArray(cfg.tool_reasoning_rules)
@@ -2625,6 +2627,7 @@ function adminApp() {
           max_tokens: this.configForm.max_tokens,
           timeout: this.configForm.timeout,
           first_token_timeout: this.configForm.first_token_timeout,
+          max_visible_models: Math.max(0, Math.min(50, Math.floor(Number(this.configForm.max_visible_models) || 0))),
           log_payload: !!this.configForm.log_payload,
           log_retention_days: Math.max(0, Math.floor(Number(this.configForm.log_retention_days) || 0)),
           tool_reasoning_rules: this.configForm.tool_reasoning_rules.map((r) => ({

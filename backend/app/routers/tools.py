@@ -121,6 +121,8 @@ class ToolGroupsResponse(BaseModel):
     groups: List[dict]
     models: List[dict]
     default_model: str
+    # 模型下拉默认显示数量（0 = 不折叠）；前端据此折叠，禁用与仅 Chores 模型已在下方过滤
+    max_visible_models: int = 0
 
 
 @router.get("/", response_model=ToolGroupsResponse)
@@ -201,6 +203,7 @@ async def list_tools(
             for m in filtered_models
         ],
         "default_model": llm_cfg["default_model"],
+        "max_visible_models": llm_cfg.get("max_visible_models", 0),
     }
 
 
