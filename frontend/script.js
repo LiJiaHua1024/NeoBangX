@@ -1491,7 +1491,8 @@ function nbx() {
 
     /* --- 内部 --- */
     _abortCtrl: null,
-    _stopRequested: false,
+    // 生成代次：切换工具/新建题目会作废在途流，旧流的 finalize 据此不再回写状态
+    _runSeq: 0,
     _timer: null,
     _thinkTimer: null,
     _startTs: 0,
@@ -2531,17 +2532,9 @@ function nbx() {
     stopVocabReplace() {
       if (!this.vocab || !this.vocab.replacing) return;
       this.vocab.stopRequested = true;
-      try {
-        fetch("/api/chat/stop", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...this.authHeaders(),
-          },
-          body: JSON.stringify({ request_id: this.vocab.requestId }),
-        });
-      } catch {}
+      // 与 stop() 一致：先断本地流让 UI 立即恢复，再异步通知后端
       try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
+      this.notifyStop(this.vocab.requestId);
     },
 
     /* ============ 初始化 ============ */
@@ -2918,7 +2911,7 @@ function nbx() {
       // 工具列表与工具界面始终可预览；是否需要使用码在执行时按所选模型判定
       if (this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing)) {
         if (!confirm("正在生成中，切换工具将停止本次生成。确定切换吗？")) return;
-        if (this.streaming) this.stop();
+        if (this.streaming) this.abortActiveGeneration();
         if (this.migration && this.migration.generating) this.stopMigration();
         if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
       }
@@ -2952,7 +2945,7 @@ function nbx() {
     goHome() {
       if (this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing)) {
         if (!confirm("正在生成中，返回首页将停止本次生成。确定吗？")) return;
-        if (this.streaming) this.stop();
+        if (this.streaming) this.abortActiveGeneration();
         if (this.migration && this.migration.generating) this.stopMigration();
         if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
       }
@@ -3781,22 +3774,15 @@ function nbx() {
         delete this._migrationAbortControllers[card.requestId];
       }
     },
-    async stopMigration() {
+    stopMigration() {
       if (!this.migration || !this.migration.generating) return;
       this.migration.stopRequested = true;
       const requests = this.migration.results.map((card) => card.requestId).filter(Boolean);
-      const controllers = { ...this._migrationAbortControllers };
-      await Promise.all(requests.map((requestId) => fetch("/api/chat/stop", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...this.authHeaders(),
-        },
-        body: JSON.stringify({ request_id: requestId }),
-      }).catch(() => null)));
-      Object.values(controllers).forEach((controller) => {
+      // 与 stop() 一致：先断本地流让 UI 立即恢复，再异步通知后端
+      Object.values({ ...this._migrationAbortControllers }).forEach((controller) => {
         try { controller.abort(); } catch {}
       });
+      requests.forEach((requestId) => this.notifyStop(requestId));
     },
     migrationCardText(card, markdown = false) {
       const heading = markdown ? `## 错因：${card.cause}\n\n` : `错因：${card.cause}\n\n`;
@@ -4091,7 +4077,7 @@ function nbx() {
       this.thinking = true;
       this.thinkingSec = 0;
       this.resetReasoning();
-      this._stopRequested = false;
+      const seq = ++this._runSeq;
       this.status = "connecting";
       this._nearBottom = true;
       // request_id 带随机熵：服务端按其校验停止请求属主，可预测的毫秒时间戳会被枚举滥用
@@ -4115,9 +4101,11 @@ function nbx() {
           toolId: this.currentTool.id,
           input: text,
           requestId: this.requestId,
-          onReasoning: (text) => this.appendReasoning(text),
-          onFallback: (info) => this.updateFallback(info),
+          onReasoning: (text) => { if (seq === this._runSeq) this.appendReasoning(text); },
+          onFallback: (info) => { if (seq === this._runSeq) this.updateFallback(info); },
           onToken: (text) => {
+            // 作废后可能还有已排队未处理的 chunk，别再写进已被清空的输出
+            if (seq !== this._runSeq) return;
             if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
             this.finishReasoningOnToken();
             this.status = "streaming";
@@ -4126,16 +4114,18 @@ function nbx() {
             this.scheduleRender();
           },
         });
-        this.finalize(state === "stopped" ? "stopped" : "done");
+        this.finalize(state === "stopped" ? "stopped" : "done", undefined, seq);
       } catch (e) {
+        // 已被「切换工具/新建题目」作废：旧流收尾交给新流程，不再回写状态
+        if (seq !== this._runSeq) return true;
         if (e && e.name === "AbortError") {
-          this.finalize("stopped");
+          this.finalize("stopped", undefined, seq);
         } else {
           // 登录/额度类错误模型根本没执行，不标记；后端 error 事件回传的实际模型优先，快照兜底
           if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
           this.errorLimited = !!(e && e.limited);
-          this.finalize("error", describeError(e, "生成失败，请稍后重试"));
+          this.finalize("error", describeError(e, "生成失败，请稍后重试"), seq);
         }
       }
       return true;
@@ -4274,20 +4264,36 @@ function nbx() {
       return { state: stopped ? "stopped" : "done" };
     },
 
-    async stop() {
+    // 通知后端尽早释放上游调用。不 await：本地中断不依赖网络往返，通知失败也不影响已停止的事实
+    notifyStop(requestId) {
+      if (!requestId) return;
+      fetch("/api/chat/stop", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...this.authHeaders(),
+        },
+        body: JSON.stringify({ request_id: requestId }),
+      }).catch(() => {});
+    },
+    stop() {
       if (!this.streaming) return;
-      this._stopRequested = true;
-      try {
-        await fetch("/api/chat/stop", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...this.authHeaders(),
-          },
-          body: JSON.stringify({ request_id: this.requestId }),
-        });
-      } catch { /* 停止信号失败不阻塞前端中止 */ }
+      const requestId = this.requestId;
+      // 先断本地流：UI 立刻恢复，不会因 /stop 请求挂起而一直卡在生成中
       try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
+      this.notifyStop(requestId);
+    },
+    // 切换工具/新建题目时作废在途生成：递增代次让旧流的收尾失效，同步复位 UI，再通知后端
+    abortActiveGeneration() {
+      this._runSeq += 1;
+      const requestId = this.requestId;
+      try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
+      this.streaming = false;
+      this.thinking = false;
+      this.fallbackInfo = null;
+      this.stopTimer();
+      this.stopThinkTimer();
+      this.notifyStop(requestId);
     },
 
     /* ============ 失败恢复：错误卡上的重试 / 换模型 / 编辑输入 ============ */
@@ -4357,7 +4363,9 @@ function nbx() {
       if (fileName) this.toast(`文件「${fileName}」的内容已转回文本，可直接编辑后重新执行`);
     },
 
-    finalize(state, errMsg) {
+    finalize(state, errMsg, seq) {
+      // 代次不符 = 这次流已被切换工具/新建题目作废，收尾交给新流程
+      if (seq !== undefined && seq !== this._runSeq) return;
       this.streaming = false;
       this.thinking = false;
       this.fallbackInfo = null;
@@ -4421,7 +4429,7 @@ function nbx() {
       this.thinking = true;
       this.thinkingSec = 0;
       this.resetReasoning();
-      this._stopRequested = false;
+      const seq = ++this._runSeq;
       this.status = "connecting";
       this.fallbackInfo = null;
       this.requestId = `13_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -4435,9 +4443,11 @@ function nbx() {
           toolId: "13",
           input: inputText,
           requestId: this.requestId,
-          onReasoning: (text) => this.appendReasoning(text),
-          onFallback: (info) => this.updateFallback(info),
+          onReasoning: (text) => { if (seq === this._runSeq) this.appendReasoning(text); },
+          onFallback: (info) => { if (seq === this._runSeq) this.updateFallback(info); },
           onToken: (tok) => {
+            // 作废后可能还有已排队未处理的 chunk，别再写进已被清空的输出
+            if (seq !== this._runSeq) return;
             if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
             this.finishReasoningOnToken();
             this.status = "streaming";
@@ -4447,19 +4457,23 @@ function nbx() {
             this.vpScheduleRender();
           },
         });
-        this.finalizeVisualPaper(state === "stopped" ? "stopped" : "done", "", updateId ? { updateId } : {});
+        this.finalizeVisualPaper(state === "stopped" ? "stopped" : "done", "", updateId ? { updateId } : {}, seq);
       } catch (e) {
+        // 已被「切换工具/新建题目」作废：旧流收尾交给新流程，不再回写状态
+        if (seq !== this._runSeq) return;
         if (e && e.name === "AbortError") {
-          this.finalizeVisualPaper("stopped", "", updateId ? { updateId } : {});
+          this.finalizeVisualPaper("stopped", "", updateId ? { updateId } : {}, seq);
         } else {
           if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
           this.errorLimited = !!(e && e.limited);
-          this.finalizeVisualPaper("error", describeError(e, "生成失败，请稍后重试"));
+          this.finalizeVisualPaper("error", describeError(e, "生成失败，请稍后重试"), {}, seq);
         }
       }
     },
-    finalizeVisualPaper(state, errMsg, opts = {}) {
+    finalizeVisualPaper(state, errMsg, opts = {}, seq) {
+      // 代次不符 = 这次流已被切换工具/新建题目作废，收尾交给新流程
+      if (seq !== undefined && seq !== this._runSeq) return;
       this.streaming = false;
       this.thinking = false;
       this.fallbackInfo = null;
@@ -5208,7 +5222,7 @@ function nbx() {
         (this.vocab && this.vocab.replacing);
       if (busy) {
         if (!confirm("正在生成中，查看历史将停止本次生成。确定吗？")) return;
-        if (this.streaming) this.stop();
+        if (this.streaming) this.abortActiveGeneration();
         if (this.migration && this.migration.generating) this.stopMigration();
         if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
       }
@@ -5396,6 +5410,13 @@ function nbx() {
       });
     },
     startNewTopic() {
+      // 忙碌守卫与 selectTool/goHome 一致：生成中新建会清空已生成内容
+      if (this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing)) {
+        if (!confirm("正在生成中，开始新题目将停止本次生成。确定吗？")) return;
+        if (this.streaming) this.abortActiveGeneration();
+        if (this.migration && this.migration.generating) this.stopMigration();
+        if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
+      }
       if (this.isMigrationTool) {
         this.resetMigration();
         this.scheduleMascotCheck(80);

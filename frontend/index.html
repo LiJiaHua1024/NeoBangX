@@ -1484,11 +1484,15 @@
 
             <!-- 输入区 -->
             <div class="p-3 sm:p-4 pt-2 shrink-0">
-              <!-- 折叠态：开始新题目按钮 -->
+              <!-- 折叠态：生成中给停止入口，空闲时才给开始新题目 -->
               <div x-show="inputCollapsed" x-transition class="flex justify-center">
-                <button class="btn-new-topic" @click="startNewTopic()">
+                <button x-show="!streaming" class="btn-new-topic" @click="startNewTopic()">
                   <span x-html="icon('plus','w-4 h-4')"></span>
                   <span>开始新题目</span>
+                </button>
+                <button x-show="streaming" class="btn-primary btn-stop" @click="stop()">
+                  <span x-html="icon('stop','w-4 h-4')"></span>
+                  <span>停止生成</span>
                 </button>
               </div>
 
