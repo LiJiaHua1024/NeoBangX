@@ -32,7 +32,10 @@ def _make_code(db, code):
 
 
 def test_parse_summary_tolerant():
-    assert parse_summary(None) == {"os": "", "lang": "", "scr": "", "dpr": "", "cores": "", "tz": ""}
+    # 基础字段必须存在且为空；实现新增字段（model / gpu / touch …）不应让本测试失效
+    empty = parse_summary(None)
+    for key in ("os", "lang", "scr", "dpr", "cores", "tz"):
+        assert empty.get(key) == ""
     assert parse_summary("not-json")["os"] == ""
     parsed = parse_summary(json.dumps({"os": "Win32", "lang": "zh-CN", "scr": "1920x1080", "dpr": 1, "cores": 8, "tz": "Asia/Shanghai"}))
     assert parsed["os"] == "Win32"
@@ -68,9 +71,25 @@ def test_parse_user_agent():
 def test_build_profile_five_items_plus_browser():
     summary = parse_summary(json.dumps({"os": "Win32", "lang": "zh-CN", "scr": "1920x1080", "dpr": 1, "cores": 8, "tz": "Asia/Shanghai"}))
     items = build_profile(summary, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0 Safari/537.36")
-    assert [i["key"] for i in items] == ["os", "lang", "screen", "cores", "tz", "browser"]
-    assert "Windows" in items[0]["value"]
-    assert "简体中文" in items[1]["value"]
+    keys = [i["key"] for i in items]
+    # 「设备识别」结论置顶，浏览器对照垫底；中间基础 5 项保持原顺序，
+    # 扩展维度（touch / gpu / mem…）按上报情况插入，不参与顺序断言
+    assert keys[0] == "identity"
+    assert [k for k in keys if k in ("os", "lang", "screen", "cores", "tz")] == [
+        "os", "lang", "screen", "cores", "tz",
+    ]
+    assert keys[-1] == "browser"
+    by_key = {i["key"]: i["value"] for i in items}
+    assert "Windows" in by_key["os"]
+    assert "简体中文" in by_key["lang"]
+
+
+def test_build_profile_skips_touch_when_not_reported():
+    # 老日志没有 touch 字段：未上报 ≠ 无触屏，不应输出该条目
+    assert "touch" not in [i["key"] for i in build_profile(parse_summary(json.dumps({"os": "Win32"})))]
+    # 上报了 0 才表示确实不支持触屏
+    reported = build_profile(parse_summary(json.dumps({"touch": 0})))
+    assert [i["value"] for i in reported if i["key"] == "touch"] == ["无触屏"]
 
 
 def test_device_detail_endpoint():
@@ -99,10 +118,11 @@ def test_device_detail_endpoint():
     body = resp.json()
     assert body["device"]["id"] == device_id
     assert body["summary_parsed"]["os"] == "Win32"
+    items = {i["key"]: i for i in body["profile"]}
     labels = [i["label"] for i in body["profile"]]
-    assert labels[:5] == ["操作系统", "语言", "屏幕", "CPU", "时区"]
-    assert "Windows" in body["profile"][0]["value"]
-    assert "简体中文" in body["profile"][1]["value"]
+    assert labels[:6] == ["设备识别", "操作系统", "语言", "屏幕", "CPU", "时区"]
+    assert "Windows" in items["os"]["value"]
+    assert "简体中文" in items["lang"]["value"]
     assert body["stats"]["total_logs"] >= 2
     assert len(body["codes"]) == 2
     assert len(body["ips"]) == 2

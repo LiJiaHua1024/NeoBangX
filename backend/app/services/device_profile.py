@@ -939,12 +939,13 @@ def build_profile(summary: dict, top_ua: str = "") -> list[dict]:
                 "hint": "navigator.deviceMemory，Chrome 封顶 8 GB，仅供分档参考",
             }
         )
+    # 空值（老日志未上报）与无法解析都算「未知」，不输出条目：
+    # 未上报不等于「无触屏」，照 0 处理会给出错误结论
     try:
-        touch = int(float(str(summary.get("touch", "")).strip() or 0))
-        has_touch = True
+        touch: int | None = int(float(str(summary.get("touch", "")).strip()))
     except Exception:
-        touch, has_touch = 0, False
-    if has_touch:
+        touch = None
+    if touch is not None:
         items.append(
             {
                 "key": "touch",
