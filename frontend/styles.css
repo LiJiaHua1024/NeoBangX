@@ -1230,13 +1230,29 @@ html[data-theme="sora"] .mascot-peeking {
   top: 0; left: 0; right: 0;
   height: 2px;
   z-index: 5;
+  overflow: hidden;
+}
+/* 扫光改为纯合成器动画（原 background-position 动画需主线程逐帧重绘）。
+   等价换算：原 background-size 200%（磁贴 = 2×面板宽 W），
+   background-position 200% → -200% 即背景图右移 4W、1.4s 无缝循环；
+   这里用 600% 宽、left:-400% 的 ::before 承载 3 块 2W 磁贴
+   （background-size 33.333333% = 2W），translateX 0 → 66.666667% 即右移 4W：
+   位移全程磁贴覆盖窗口（左缘 -4W→0、右缘 2W→6W），
+   4W 恰为 2 个磁贴周期 → 首尾图案一致、无缝循环；
+   同渐变、同磁贴、同向、同速，逐帧相位与原实现完全一致。 */
+.stream-bar::before {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -400%;
+  width: 600%;
   background: linear-gradient(90deg, transparent, var(--accent), var(--accent-2), transparent);
-  background-size: 200% 100%;
+  background-size: 33.333333% 100%;
   animation: stream-slide 1.4s linear infinite;
 }
 @keyframes stream-slide {
-  from { background-position: 200% 0; }
-  to { background-position: -200% 0; }
+  from { transform: translateX(0); }
+  to { transform: translateX(66.666667%); }
 }
 
 .tw-cursor {

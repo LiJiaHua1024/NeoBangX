@@ -175,7 +175,61 @@ function createBackground(canvas) {
     }
   });
 
+  /* 光斑精灵缓存：稳态下同一颜色每帧重复出现（3 漫游光斑 + 鼠标双光晕 +
+     10 云 × 5 团块 + 流星辉光 ≈ 55 次/帧），烘焙一次后统一 drawImage 贴图，
+     省去每帧数十次 createRadialGradient + 6×addColorStop + 大面积渐变填充。
+     颜色键与 rgba() 同样按通道取整；烘焙精灵的透明度衰减曲线
+     (1 / .82 / .56 / .34 / .16 / 0) 与原渐变逐档一致，绘制时用 globalAlpha
+     承载原 alpha —— 预乘合成下与逐帧建渐变的像素数学完全等价。
+     主题过渡期颜色逐帧漂移、键不稳定：连续两帧出现同色才烘焙，
+     过渡帧走原有直接建渐变路径，过渡观感与从前逐帧一致。 */
+  const GLOW_SPRITE = 256;
+  const GLOW_STOPS = [0, 0.2, 0.42, 0.64, 0.84, 1];
+  const GLOW_DECAY = [1, 0.82, 0.56, 0.34, 0.16, 0];
+  let frameNo = 0;
+  const glowSeen = new Map();   // 颜色键 -> 首次出现帧号（只记一次，烘焙后即删）
+  const glowCache = new Map();  // 颜色键 -> 烘焙好的精灵画布（稳态每主题 ≤ 6 张）
+
+  function bakeGlowSprite(r0, g0, b0) {
+    const c = document.createElement("canvas");
+    c.width = c.height = GLOW_SPRITE;
+    const g = c.getContext("2d");
+    const half = GLOW_SPRITE / 2;
+    const grad = g.createRadialGradient(half, half, 0, half, half, half);
+    for (let i = 0; i < GLOW_STOPS.length; i++) {
+      grad.addColorStop(GLOW_STOPS[i], `rgba(${r0},${g0},${b0},${GLOW_DECAY[i]})`);
+    }
+    g.fillStyle = grad;
+    g.fillRect(0, 0, GLOW_SPRITE, GLOW_SPRITE);
+    return c;
+  }
+
   function glowSpot(x, y, r, color, alpha) {
+    const r0 = color[0] | 0, g0 = color[1] | 0, b0 = color[2] | 0;
+    const key = r0 * 65536 + g0 * 256 + b0;
+    const sprite = glowCache.get(key);
+    if (sprite) {
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(sprite, x - r, y - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+      return;
+    }
+    const seen = glowSeen.get(key);
+    if (seen !== undefined && seen !== frameNo) {
+      // 连续帧同色：烘焙精灵，此后该颜色永久走贴图
+      const s = bakeGlowSprite(r0, g0, b0);
+      glowCache.set(key, s);
+      glowSeen.delete(key);
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(s, x - r, y - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+      return;
+    }
+    if (seen === undefined) {
+      if (glowSeen.size > 2000) glowSeen.clear(); // 防御：长期切主题的键位堆积上限
+      glowSeen.set(key, frameNo);
+    }
+    // 首见帧 / 过渡漂移帧：保持原路径（逐帧建渐变）
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
     // 多段柔和衰减：减小相邻像素的色阶跳变，明显压制 radial-gradient 的色带
     g.addColorStop(0, rgba(color, alpha));
@@ -196,7 +250,25 @@ function createBackground(canvas) {
     }
   }
 
-  /* 悠空·白昼：云隙光——角度缓缓摇摆、亮度呼吸脉动的阳光光束 */
+  /* 悠空·白昼：云隙光——角度缓缓摇摆、亮度呼吸脉动的阳光光束。
+     光束的横向线性渐变只随 x 变化，按宽度烘焙 2px 高的横条后竖向拉伸绘制，
+     逐列颜色与原逐帧建渐变完全一致（竖向无变化，拉伸不引入任何插值差异）。 */
+  const beamCache = new Map();
+  function beamStrip(w) {
+    let s = beamCache.get(w);
+    if (s) return s;
+    const c = document.createElement("canvas");
+    c.width = w; c.height = 2;
+    const g = c.getContext("2d");
+    const grad = g.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, "rgba(255,246,222,0)");
+    grad.addColorStop(0.5, "rgba(255,246,222,1)");
+    grad.addColorStop(1, "rgba(255,246,222,0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, w, 2);
+    beamCache.set(w, c);
+    return c;
+  }
   function drawSunRays(W, H, strength, time) {
     const sway = Math.sin(time * 2.2) * 0.06;
     const pulse = 0.78 + 0.22 * Math.sin(time * 3.1);
@@ -204,13 +276,11 @@ function createBackground(canvas) {
     ctx.translate(W * 0.8, -H * 0.15);
     ctx.rotate(0.42 + sway);
     for (const [ox, w, a] of [[0, 150, 0.075], [220, 90, 0.05], [-200, 60, 0.032]]) {
-      const g = ctx.createLinearGradient(ox, 0, ox + w, 0);
-      g.addColorStop(0, "rgba(255,246,222,0)");
-      g.addColorStop(0.5, `rgba(255,246,222,${(a * strength * pulse).toFixed(4)})`);
-      g.addColorStop(1, "rgba(255,246,222,0)");
-      ctx.fillStyle = g;
-      ctx.fillRect(ox, 0, w, H * 1.9);
+      // 与原实现一致按 4 位小数取整 alpha，输入合成器的数值逐位相同
+      ctx.globalAlpha = Number((a * strength * pulse).toFixed(4));
+      ctx.drawImage(beamStrip(w), ox, 0, w, H * 1.9);
     }
+    ctx.globalAlpha = 1;
     ctx.restore();
   }
 
@@ -286,6 +356,7 @@ function createBackground(canvas) {
   }
 
   function frame(staticOnly) {
+    frameNo += 1;
     const W = innerWidth, H = innerHeight;
     cur = {
       g1: lerp3(cur.g1, tgt.g1, 0.06), g2: lerp3(cur.g2, tgt.g2, 0.06),

@@ -471,12 +471,78 @@ function createBackground(canvas) {
     mouse.x = e.clientX; mouse.y = e.clientY;
     halo.tx = e.clientX; halo.ty = e.clientY;
   }, { passive: true });
+  /* 帧循环暂停：两个独立开关——页面隐藏（visibilitychange）与全屏讲解等
+     遮没场景的程序性暂停（suspend/resume），互不覆盖；循环在任一开关置位后
+     的下一跳自行退出，两个开关都清除后才重新拉起。 */
+  let hiddenPause = false;
+  let manualPause = false;
+
+  function stopChain() {
+    if (raf) { cancelAnimationFrame(raf); raf = null; }
+  }
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) { if (raf) cancelAnimationFrame(raf), (raf = null); }
-    else if (!raf && !reduced) loop();
+    if (document.hidden) { hiddenPause = true; stopChain(); }
+    else {
+      hiddenPause = false;
+      if (!raf && !manualPause && !reduced) loop();
+    }
   });
 
+  /* 光斑精灵缓存：稳态下同一颜色每帧重复出现（3 漫游光斑 + 鼠标双光晕 +
+     10 云 × 5 团块 + 流星辉光 ≈ 55 次/帧），烘焙一次后统一 drawImage 贴图，
+     省去每帧数十次 createRadialGradient + 6×addColorStop + 大面积渐变填充。
+     颜色键与 rgba() 同样按通道取整；烘焙精灵的透明度衰减曲线
+     (1 / .82 / .56 / .34 / .16 / 0) 与原渐变逐档一致，绘制时用 globalAlpha
+     承载原 alpha —— 预乘合成下与逐帧建渐变的像素数学完全等价。
+     主题过渡期颜色逐帧漂移、键不稳定：连续两帧出现同色才烘焙，
+     过渡帧走原有直接建渐变路径，过渡观感与从前逐帧一致。 */
+  const GLOW_SPRITE = 256;
+  const GLOW_STOPS = [0, 0.2, 0.42, 0.64, 0.84, 1];
+  const GLOW_DECAY = [1, 0.82, 0.56, 0.34, 0.16, 0];
+  let frameNo = 0;
+  const glowSeen = new Map();   // 颜色键 -> 首次出现帧号（只记一次，烘焙后即删）
+  const glowCache = new Map();  // 颜色键 -> 烘焙好的精灵画布（稳态每主题 ≤ 6 张）
+
+  function bakeGlowSprite(r0, g0, b0) {
+    const c = document.createElement("canvas");
+    c.width = c.height = GLOW_SPRITE;
+    const g = c.getContext("2d");
+    const half = GLOW_SPRITE / 2;
+    const grad = g.createRadialGradient(half, half, 0, half, half, half);
+    for (let i = 0; i < GLOW_STOPS.length; i++) {
+      grad.addColorStop(GLOW_STOPS[i], `rgba(${r0},${g0},${b0},${GLOW_DECAY[i]})`);
+    }
+    g.fillStyle = grad;
+    g.fillRect(0, 0, GLOW_SPRITE, GLOW_SPRITE);
+    return c;
+  }
+
   function glowSpot(x, y, r, color, alpha) {
+    const r0 = color[0] | 0, g0 = color[1] | 0, b0 = color[2] | 0;
+    const key = r0 * 65536 + g0 * 256 + b0;
+    const sprite = glowCache.get(key);
+    if (sprite) {
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(sprite, x - r, y - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+      return;
+    }
+    const seen = glowSeen.get(key);
+    if (seen !== undefined && seen !== frameNo) {
+      // 连续帧同色：烘焙精灵，此后该颜色永久走贴图
+      const s = bakeGlowSprite(r0, g0, b0);
+      glowCache.set(key, s);
+      glowSeen.delete(key);
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(s, x - r, y - r, r * 2, r * 2);
+      ctx.globalAlpha = 1;
+      return;
+    }
+    if (seen === undefined) {
+      if (glowSeen.size > 2000) glowSeen.clear(); // 防御：长期切主题的键位堆积上限
+      glowSeen.set(key, frameNo);
+    }
+    // 首见帧 / 过渡漂移帧：保持原路径（逐帧建渐变）
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
     // 多段柔和衰减：减小相邻像素的色阶跳变，明显压制 radial-gradient 的色带
     g.addColorStop(0, rgba(color, alpha));
@@ -497,7 +563,25 @@ function createBackground(canvas) {
     }
   }
 
-  /* 悠空·白昼：云隙光——角度缓缓摇摆、亮度呼吸脉动的阳光光束 */
+  /* 悠空·白昼：云隙光——角度缓缓摇摆、亮度呼吸脉动的阳光光束。
+     光束的横向线性渐变只随 x 变化，按宽度烘焙 2px 高的横条后竖向拉伸绘制，
+     逐列颜色与原逐帧建渐变完全一致（竖向无变化，拉伸不引入任何插值差异）。 */
+  const beamCache = new Map();
+  function beamStrip(w) {
+    let s = beamCache.get(w);
+    if (s) return s;
+    const c = document.createElement("canvas");
+    c.width = w; c.height = 2;
+    const g = c.getContext("2d");
+    const grad = g.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, "rgba(255,246,222,0)");
+    grad.addColorStop(0.5, "rgba(255,246,222,1)");
+    grad.addColorStop(1, "rgba(255,246,222,0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, w, 2);
+    beamCache.set(w, c);
+    return c;
+  }
   function drawSunRays(W, H, strength, time) {
     const sway = Math.sin(time * 2.2) * 0.06;
     const pulse = 0.78 + 0.22 * Math.sin(time * 3.1);
@@ -505,13 +589,11 @@ function createBackground(canvas) {
     ctx.translate(W * 0.8, -H * 0.15);
     ctx.rotate(0.42 + sway);
     for (const [ox, w, a] of [[0, 150, 0.075], [220, 90, 0.05], [-200, 60, 0.032]]) {
-      const g = ctx.createLinearGradient(ox, 0, ox + w, 0);
-      g.addColorStop(0, "rgba(255,246,222,0)");
-      g.addColorStop(0.5, `rgba(255,246,222,${(a * strength * pulse).toFixed(4)})`);
-      g.addColorStop(1, "rgba(255,246,222,0)");
-      ctx.fillStyle = g;
-      ctx.fillRect(ox, 0, w, H * 1.9);
+      // 与原实现一致按 4 位小数取整 alpha，输入合成器的数值逐位相同
+      ctx.globalAlpha = Number((a * strength * pulse).toFixed(4));
+      ctx.drawImage(beamStrip(w), ox, 0, w, H * 1.9);
     }
+    ctx.globalAlpha = 1;
     ctx.restore();
   }
 
@@ -587,6 +669,7 @@ function createBackground(canvas) {
   }
 
   function frame(staticOnly) {
+    frameNo += 1;
     const W = innerWidth, H = innerHeight;
     cur = {
       g1: lerp3(cur.g1, tgt.g1, 0.06), g2: lerp3(cur.g2, tgt.g2, 0.06),
@@ -692,15 +775,27 @@ function createBackground(canvas) {
   }
 
   function loop() {
+    if (hiddenPause || manualPause) { raf = null; return; }
     t += 0.0035;
     frame(false);
     raf = requestAnimationFrame(loop);
+  }
+
+  function suspend() {
+    manualPause = true;
+    stopChain();
+  }
+  function resume() {
+    manualPause = false;
+    if (!raf && !hiddenPause && !reduced && !document.hidden) loop();
   }
 
   if (reduced) { frame(true); }
   else { loop(); }
 
   return {
+    /* 全屏讲解等遮没场景：canvas 被不透明面板完全盖住时暂停渲染 */
+    suspend, resume,
     attract(x, y) {
       halo.tx = x; halo.ty = y;
       pulses.push({ x, y, r: 6, a: 0.7 });
@@ -1373,6 +1468,9 @@ function nbx() {
     _thinkTimer: null,
     _startTs: 0,
     _renderPending: false,
+    // 渲染脏标记：只有输出内容变化（新 token / 载入历史）才需要重新渲染，
+    // 避免 finalize 定稿与在途节流 tick 对同一份全文做重复的全量重渲染
+    _outputDirty: true,
     _nearBottom: true,
     _draftTimer: null,
     _bg: null,
@@ -1759,8 +1857,9 @@ function nbx() {
     },
     normalizeVisualPaper(data) {
       if (!data || typeof data !== "object") return null;
-      let out;
-      try { out = JSON.parse(JSON.stringify(data)); } catch { return null; }
+      // 入参恒为本轮新建的解析结果（自定义解析 / JSON.parse 产物），从未被共享；
+      // 原来的 JSON 深克隆每个渲染 tick 都要整树复制一次，纯属冗余，直接就地规范
+      const out = data;
       if (!out.paper || typeof out.paper !== "object") out.paper = { title: "", subject: "英语", year: "" };
       out.paper.title = out.paper.title || "";
       out.paper.subject = out.paper.subject || "英语";
@@ -1959,6 +2058,9 @@ function nbx() {
       this.vpOverviewOpen = false;
       this.vpTopHidden = false;
       this.vpBottomHidden = false;
+      // 全屏讲解舞台用不透明背景盖住整个视口，bgfx 完全不可见：暂停其渲染，
+      // 把整帧预算让给讲解页面（退出时 resume，视觉零变化）
+      if (this._bg) this._bg.suspend();
       // 防御：若页面曾被程序化滚动（如 scrollIntoView），进入全屏前归位
       document.documentElement.scrollTop = 0;
       document.body.scrollTop = 0;
@@ -2006,6 +2108,8 @@ function nbx() {
       this.vpTopHidden = false;
       this.vpBottomHidden = false;
       this._vpStopChromeTimer();
+      // 恢复背景渲染（未处于暂停态时为幂等空操作）
+      if (this._bg) this._bg.resume();
       if (this._vpBoundHandler) { document.removeEventListener("keydown", this._vpBoundHandler); this._vpBoundHandler = null; }
       if (this._vpActivityHandler) {
         ["pointermove", "pointerdown", "touchstart"].forEach((t) =>
@@ -2347,6 +2451,7 @@ function nbx() {
             }
             this.finishVocabReasoningOnToken();
             this.vocab.output += text;
+            this._outputDirty = true;
             this.scheduleRender();
           },
         });
@@ -3945,6 +4050,7 @@ function nbx() {
             this.finishReasoningOnToken();
             this.status = "streaming";
             this.output += text;
+            this._outputDirty = true;
             this.scheduleRender();
           },
         });
@@ -4245,6 +4351,7 @@ function nbx() {
             this.status = "streaming";
             this.output += tok;
             if (this.visualPaper) this.visualPaper.rawJson = this.output;
+            this._outputDirty = true;
             this.vpScheduleRender();
           },
         });
@@ -4351,6 +4458,9 @@ function nbx() {
       }, 80);
     },
     vpDoRender() {
+      // 输出未变化时跳过整份重解析（定稿与在途节流 tick 重叠时不再重复解析全文）
+      if (!this._outputDirty) return;
+      this._outputDirty = false;
       const raw = this.output || (this.visualPaper && this.visualPaper.rawJson) || "";
       if (!raw.trim()) return;
       const { data, error } = this.tryParseVisualPaper(raw);
@@ -4481,7 +4591,12 @@ function nbx() {
       }
     },
     scrollReasoning() {
-      this.$nextTick(() => {
+      // 推理 chunk 到达频率可远高于帧率：rAF 合并为每帧至多一次滚动。
+      // rAF 在 Alpine 的响应式微任务之后、绘制之前执行，DOM 文本已更新，
+      // 每帧最终滚动位置与逐 chunk 直滚完全一致。
+      if (this._reasoningScrollRaf) return;
+      this._reasoningScrollRaf = requestAnimationFrame(() => {
+        this._reasoningScrollRaf = null;
         const el = this.$refs.reasoningBody;
         if (el) el.scrollTop = el.scrollHeight;
       });
@@ -4503,7 +4618,13 @@ function nbx() {
         this.vocab.reasoningTruncated = true;
       }
       this.vocab.reasoning = next;
-      this.$nextTick(() => {
+      this.scrollVocabReasoning();
+    },
+    scrollVocabReasoning() {
+      // 与主推理盒同策略：rAF 合并，每帧至多一次滚动
+      if (this._vocabScrollRaf) return;
+      this._vocabScrollRaf = requestAnimationFrame(() => {
+        this._vocabScrollRaf = null;
         const el = this.$refs.vocabReasoningBody;
         if (el) el.scrollTop = el.scrollHeight;
       });
@@ -4544,6 +4665,9 @@ function nbx() {
       }, 60);
     },
     doRender() {
+      // 输出未变化（如定稿与在途节流 tick 重叠）时跳过整份重渲染
+      if (!this._outputDirty) return;
+      this._outputDirty = false;
       this.rendered = renderMd(this.output);
       if (this.vocab) this.vocab.rendered = renderMd(this.vocab.output || "");
       this.$nextTick(() => {
@@ -4866,6 +4990,7 @@ function nbx() {
       this.errorMsg = "";
       this.status = "history";
       this.resetReasoning();
+      this._outputDirty = true; // 载入历史同样属于输出变化，须走完整渲染
       this.doRender();
       this.rightMobileOpen = false;
       this.$nextTick(() => {
@@ -4976,6 +5101,7 @@ function nbx() {
         }
       }
       this.rightMobileOpen = false;
+      this._outputDirty = true; // 载入历史同样属于输出变化，须走完整重解析
       this.$nextTick(() => {
         this.vpDoRender();
         this.scheduleMascotCheck(80);
