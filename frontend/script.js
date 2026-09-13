@@ -59,6 +59,8 @@ const ICON_PATHS = {
   "stop": '<rect x="6" y="6" width="12" height="12" rx="2.5"/>',
   "send": '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>',
   "eye": '<path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/>',
+  "bold": '<path d="M6.5 4h7a4 4 0 0 1 0 8h-7zM6.5 12h8a4 4 0 0 1 0 8h-8z"/>',
+  "highlight": '<path d="m13.6 4.4 6 6-7 7H7.4l-1.9-3.9 8.1-9.1Z"/><path d="M4 20.5h16"/>',
   "eye-off": '<path d="m4 4 16 16"/><path d="M10.5 6c.5-.1 1-.15 1.5-.15 6 0 9.5 6.15 9.5 6.15a16.8 16.8 0 0 1-2.7 3.25M6.6 6.9A16.5 16.5 0 0 0 2.5 12S6 18.15 12 18.15c1.15 0 2.25-.2 3.25-.57"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   "plus": '<path d="M12 5v14M5 12h14"/>',
   "insert": '<path d="M12 4v9.5M7.5 10 12 14.5 16.5 10"/><path d="M4 16.5V18a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1.5"/>',
@@ -1359,6 +1361,130 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+/* ---------------- 试卷可视化全解：行内格式（加粗 / 高亮） ----------------
+   老师只看到排版、看不到标记，存储与导出仍是 Markdown 标记：**加粗** ==高亮==
+   （只用这两种双字符成对标记：不会误伤英语原文里的单个星号）。
+   · vpInlineParts：扫描出「成对标记 → 片段」，落单或空对的标记直接丢弃；
+   · vpFmt：先转义再套 <b>/<mark>，返回值可直接 innerHTML（无注入面）；
+   · vpDetag：只去标记不留格式（答案徽章、总览小格、纯文本复制用）；
+   · vpDomToMd：把编辑区 DOM 还原成标记文本（编辑器写回数据时用）。 */
+const VP_GROUP_IDS = ["reading", "cloze7", "cloze", "grammar", "writing_app", "writing_cont", "other"];
+
+function vpInlineParts(text) {
+  const s = String(text == null ? "" : text);
+  const parts = [];
+  let buf = "";
+  let i = 0;
+  const pushBuf = () => { if (buf) { parts.push({ k: "t", v: buf }); buf = ""; } };
+  while (i < s.length) {
+    let marker = "";
+    if (s.startsWith("**", i)) marker = "**";
+    else if (s.startsWith("==", i)) marker = "==";
+    if (!marker) { buf += s[i]; i += 1; continue; }
+    const end = s.indexOf(marker, i + 2);
+    if (end === -1) { i += 2; continue; }                    // 落单标记：丢弃
+    const inner = s.slice(i + 2, end);
+    if (!inner.trim() || inner.includes(marker)) { i += 2; continue; }  // 空对 / 同种嵌套：丢标记
+    pushBuf();
+    parts.push({ k: marker === "**" ? "b" : "m", v: inner });
+    i = end + 2;
+  }
+  pushBuf();
+  return parts;
+}
+
+function vpFmt(text) {
+  return vpInlineParts(text).map((p) => {
+    if (p.k === "b") return `<b>${vpFmt(p.v)}</b>`;
+    if (p.k === "m") return `<mark class="vp-hl">${vpFmt(p.v)}</mark>`;
+    return escapeHtml(p.v);
+  }).join("");
+}
+
+function vpDetag(text) {
+  return vpInlineParts(text).map((p) => p.v).join("");
+}
+
+/* 归一化标记文本：压缩同种嵌套产生的重复标记，再走一遍配对扫描丢掉落单标记 */
+function vpNormalizeInline(text) {
+  const s = String(text == null ? "" : text).replace(/\*{3,}/g, "**").replace(/={3,}/g, "==");
+  return vpInlineParts(s).map((p) => {
+    if (p.k === "b") return `**${vpNormalizeInline(p.v)}**`;
+    if (p.k === "m") return `==${vpNormalizeInline(p.v)}==`;
+    return p.v;
+  }).join("");
+}
+
+/* 编辑区 DOM → 标记文本：b/strong/mark 转标记，br/div/p 转换行，其余元素透明穿透 */
+function vpDomToMd(root) {
+  const walk = (node) => {
+    let out = "";
+    const kids = node.childNodes || [];
+    for (let i = 0; i < kids.length; i++) {
+      const n = kids[i];
+      if (n.nodeType === 3) { out += n.nodeValue.replace(/\u00a0/g, " "); continue; }
+      if (n.nodeType !== 1) continue;
+      const tag = n.tagName;
+      if (tag === "BR") { out += "\n"; continue; }
+      const inner = walk(n);
+      if (tag === "B" || tag === "STRONG") out += `**${inner}**`;
+      else if (tag === "MARK") out += `==${inner}==`;
+      else if (tag === "DIV" || tag === "P") out += (out && !out.endsWith("\n") ? "\n" : "") + inner + "\n";
+      else out += inner;
+    }
+    return out;
+  };
+  /* 浏览器把每行包成 <div>，末尾会多出一个换行，去掉它避免反复编辑攒空行 */
+  return vpNormalizeInline(walk(root)).replace(/\n+$/, "");
+}
+
+/* 在编辑区里给选区加/去格式：已整体处于该标签内则解包，否则包裹 */
+function vpClosestInline(node, root, tag) {
+  const want = tag.toUpperCase();
+  for (let n = node && node.nodeType === 1 ? node : (node ? node.parentNode : null); n && n !== root; n = n.parentNode) {
+    if (n.tagName === want) return n;
+  }
+  return null;
+}
+
+function vpToggleTag(root, tag) {
+  const sel = document.getSelection ? document.getSelection() : window.getSelection();
+  if (!sel || !sel.rangeCount) return false;
+  const range = sel.getRangeAt(0);
+  if (range.collapsed) return false;
+  if (!root.contains(range.commonAncestorContainer)) return false;
+  const host = vpClosestInline(range.commonAncestorContainer, root, tag);
+  if (host) {
+    const parent = host.parentNode;
+    const moved = [];
+    while (host.firstChild) moved.push(parent.insertBefore(host.firstChild, host));
+    parent.removeChild(host);
+    if (moved.length) {
+      // 重新选中刚解包的内容，方便连续切换格式
+      const after = document.createRange();
+      after.setStartBefore(moved[0]);
+      after.setEndAfter(moved[moved.length - 1]);
+      sel.removeAllRanges();
+      sel.addRange(after);
+    }
+    return true;
+  }
+  const wrap = document.createElement(tag);
+  try {
+    range.surroundContents(wrap);
+  } catch {
+    // 选区跨节点：抽取内容再包一层（可能顺带拆分原有标签，序列化时会归一化）
+    wrap.appendChild(range.extractContents());
+    range.insertNode(wrap);
+  }
+  sel.removeAllRanges();
+  const after = document.createRange();
+  after.selectNodeContents(wrap);
+  sel.addRange(after);
+  return true;
+}
+
+
 /* PDF 导出（浏览器打印）专用样式：
    镜像页面 .md 排版规则，但固定为纸面友好的浅色配色，
    并补充分页控制（表格行/代码块不切断、表头跨页重复等）。 */
@@ -1520,6 +1646,15 @@ function nbx() {
     vpExportTitle: "",
     vpExportBusy: false,
     _vpAssets: null,
+    // 修改模式（所见即所得）：开关 / 脏标记 / 自动保存计时
+    vpEditing: false,
+    vpEditDirty: false,
+    _vpEditTimer: null,
+    _vpEditEl: null,
+    _vpToolTimer: null,
+    _vpEditListenersBound: false,
+    _vpDragging: false,
+    vpSelActive: false,
 
     /* --- 智能错题迁移 --- */
     migration: null,
@@ -1761,6 +1896,14 @@ function nbx() {
       return !this.streaming && !this.vpHasData && !!this.output.trim() && this.vpHasCustomFragment;
     },
     resetVisualPaper() {
+      // 换工具 / 换试卷前先退掉修改模式：避免带着编辑态进到下一个上下文。
+      // 若还有没落盘的改动（防抖时间窗内切走），先补一次写入，别丢最近的几笔修改。
+      if (this.vpEditing && this.vpEditDirty) this.vpFlushEdits();
+      this.vpEditing = false;
+      this.vpEditDirty = false;
+      this.vpSelActive = false;
+      this._vpStopEditTimer();
+      this.vpHideTools();
       this.visualPaper = this.newVisualPaperState();
       this.vpCloseFullscreen();
       this.vpActiveTab = "reference";
@@ -2165,13 +2308,31 @@ function nbx() {
       this.visualPaper.currentGroupIdx = gIdx;
       this.visualPaper.currentQIdx = qIdx;
       this.vpActiveTab = "reference";
+      this.vpEditBeforeLeave();
       // 若全屏，保持全屏；否则滚动到顶部
       this.$nextTick(() => {
         const el = this.$refs.vpRightPane;
         if (el) el.scrollTop = 0;
         const leftEl = this.$refs.vpLeftPane;
         if (leftEl) leftEl.scrollTop = 0;
+        this.vpMountAll();
       });
+    },
+    /* 切题/切 Tab 前：把改动过的编辑区写回数据，再重新挂载。
+       只写「真的动过」的格子——挂载后内容与数据必然一致，没动过的格子
+       不写回就不会把任何界面陈旧内容带进数据里。 */
+    vpEditBeforeLeave() {
+      if (!this.vpEditing) return;
+      document.querySelectorAll('[data-vp-path][data-vp-edited="1"]').forEach((el) => {
+        if (el.dataset.vpPath) this.vpSetField(el.dataset.vpPath, vpDomToMd(el));
+        el.dataset.vpEdited = "";
+      });
+    },
+    vpSetTab(tab) {
+      if (this.vpActiveTab === tab) return;
+      this.vpEditBeforeLeave();
+      this.vpActiveTab = tab;
+      this.$nextTick(() => this.vpMountAll());
     },
     vpIsCurrent(gIdx, qIdx) {
       return this.visualPaper && this.visualPaper.currentGroupIdx === gIdx && this.visualPaper.currentQIdx === qIdx;
@@ -2195,9 +2356,11 @@ function nbx() {
         if (ng >= this.visualPaper.groups.length) return;
       }
       this.vpActiveTab = "reference";
+      this.vpEditBeforeLeave();
       this.$nextTick(() => {
         const el = this.$refs.vpRightPane;
         if (el) el.scrollTop = 0;
+        this.vpMountAll();
       });
     },
     vpPrevQuestion() {
@@ -2218,13 +2381,17 @@ function nbx() {
         if (ng < 0) return;
       }
       this.vpActiveTab = "reference";
+      this.vpEditBeforeLeave();
       this.$nextTick(() => {
         const el = this.$refs.vpRightPane;
         if (el) el.scrollTop = 0;
+        this.vpMountAll();
       });
     },
     toggleVpFullscreen() {
       if (this.vpFullscreen) { this.vpCloseFullscreen(); return; }
+      // 修改模式下进全屏：先保存并退出修改（讲台是只读投影，不在这里编辑）
+      if (this.vpEditing) this.toggleVpEdit();
       this.vpFullscreen = true;
       this.vpOverviewOpen = false;
       this.vpTopHidden = false;
@@ -4744,6 +4911,12 @@ function nbx() {
         this.toast("没有可续写的试卷", "warn");
         return;
       }
+      // 修改模式下续写：先保存并退出修改模式——续写会重解析整份文本，
+      // 编辑态留在屏幕上会被新结构覆盖
+      if (this.vpEditing) {
+        this.toggleVpEdit();
+        this.toast("修改已保存，继续生成剩余题目");
+      }
       if (!this.ensureCanRun("当前模型需要输入使用码后才能续写")) return;
       const keepId = this.visualPaper.historyId || null;
       // 连总数都没解析出来 → 整卷重跑，原记录上覆盖，不新增记录
@@ -4776,6 +4949,7 @@ function nbx() {
     },
     vpScheduleRender() {
       if (this._vpRenderPending) return;
+      if (this.vpEditing) return;   // 修改模式下不重解析，否则会替换掉正在编辑的 DOM
       this._vpRenderPending = true;
       setTimeout(() => {
         this._vpRenderPending = false;
@@ -4880,8 +5054,461 @@ function nbx() {
       return md;
     },
     vpGetExportPlain() {
-      // 复用 Markdown 转纯文本
-      return markdownToPlainText(this.vpGetExportMarkdown());
+      // 复用 Markdown 转纯文本；先去掉行内标记（加粗/高亮），复制出来是干净文字
+      return markdownToPlainText(vpDetag(this.vpGetExportMarkdown()));
+    },
+
+    /* ============ 可视化讲解：修改模式（所见即所得） ============ */
+    /* 老师全程看不到 Markdown 标记：进入修改模式后每个字段就是一段可编辑的排版文字，
+       选中文字用浮动工具条加粗/高亮，存盘仍是 **加粗** / ==高亮== 标记。
+       保存走「结构 → @@TAG@@ 原始文本 → 重新解析对账」：原始文本是这条管线里
+       唯一真源（历史回放重解析它、续写往它追加、导出读它解析出的结构），
+       所以改完导出、改完续写、关掉页面再从历史打开，三条路都保留修改。 */
+    toggleVpEdit() {
+      if (!this.vpEditing) {
+        if (!this.vpHasData) { this.toast("暂无可修改的内容", "error"); return; }
+        if (this.streaming) { this.toast("生成中不能修改，请先停止生成", "warn"); return; }
+        this.maskOn = false;                    // 边改边看得到答案
+        this.vpEditing = true;
+        this.vpEditDirty = false;
+        this.vpSelActive = false;
+        this._vpBindEditListeners();
+        this.$nextTick(() => this.vpMountAll());
+        return;
+      }
+      // 退出：先把改动过的编辑区内容写回结构（防抖可能还没到点），再序列化落盘
+      this.vpEditBeforeLeave();
+      this.vpEditing = false;
+      this.vpSelActive = false;
+      this._vpStopEditTimer();
+      this.vpHideTools();
+      this.vpCommitEdits();
+      this.toast("修改已保存");
+    },
+    _vpBindEditListeners() {
+      if (this._vpEditListenersBound) return;
+      this._vpEditListenersBound = true;
+      // 编辑区滚动/窗口变化时让浮动工具条跟着走
+      document.addEventListener("scroll", () => { if (this._vpEditEl) this.vpRepositionTools(); }, { passive: true, capture: true });
+      window.addEventListener("resize", () => { if (this._vpEditEl) this.vpRepositionTools(); });
+      // 选中文字才浮出按钮：选区一变就同步（取消选中即消失）
+      document.addEventListener("selectionchange", () => { if (this.vpEditing) this.vpSyncToolsFromSelection(); });
+      // 拖选过程中先不浮出，松手后再出现（避免跟随鼠标闪烁）
+      document.addEventListener("pointerdown", () => { this._vpDragging = true; }, { passive: true, capture: true });
+      document.addEventListener("pointerup", () => {
+        this._vpDragging = false;
+        if (this.vpEditing) this.vpSyncToolsFromSelection();
+      }, { passive: true, capture: true });
+      // 拖到窗口外松手等情况下清掉拖拽标记，避免之后选字不浮出
+      document.addEventListener("pointercancel", () => { this._vpDragging = false; }, { passive: true, capture: true });
+      window.addEventListener("blur", () => { this._vpDragging = false; });
+    },
+    _vpStopEditTimer() { clearTimeout(this._vpEditTimer); this._vpEditTimer = null; },
+
+    /* --- 字段路径读写：paper.* / g<序号>.* / q.*（q 指当前题） --- */
+    vpResolvePath(path) {
+      const segs = String(path || "").split(".");
+      if (!segs.length || !this.visualPaper) return null;
+      let host = null;
+      if (segs[0] === "paper") host = this.visualPaper.paper;
+      else if (/^g\d+$/.test(segs[0])) host = this.vpGroups[Number(segs[0].slice(1))];
+      else if (segs[0] === "q") host = this.vpCurrentQuestion;
+      if (!host) return null;
+      const rest = segs.slice(1);
+      if (!rest.length) return null;
+      for (let i = 0; i < rest.length - 1; i++) {
+        const k = rest[i];
+        host = host[/^\d+$/.test(k) ? Number(k) : k];
+        if (host == null) return null;
+      }
+      const key = rest[rest.length - 1];
+      return { host, key: Array.isArray(host) && /^\d+$/.test(key) ? Number(key) : key };
+    },
+    vpFieldGet(path) {
+      const t = this.vpResolvePath(path);
+      if (!t) return "";
+      const v = t.host[t.key];
+      return v == null ? "" : v;
+    },
+    vpSetField(path, value) {
+      const t = this.vpResolvePath(path);
+      if (!t) return;
+      t.host[t.key] = value;
+      this.vpMarkDirty();
+    },
+
+    /* --- 挂载编辑区：只在目标变化时灌内容，避免打字时被自己覆盖 --- */
+    vpMountKey(path) {
+      const vp = this.visualPaper || {};
+      return `${path}#${vp.currentGroupIdx || 0}-${vp.currentQIdx || 0}`;
+    },
+    vpMountAll() {
+      if (!this.vpEditing) return;
+      document.querySelectorAll("[data-vp-path]").forEach((el) => this.vpEditMount(el));
+    },
+    vpEditMount(el) {
+      if (!el || !el.dataset || !this.vpEditing) return;
+      const path = el.dataset.vpPath;
+      if (!path) return;
+      const key = this.vpMountKey(path);
+      if (el.dataset.vpKey === key) return;
+      el.dataset.vpKey = key;
+      el.dataset.vpEdited = "";
+      el.setAttribute("contenteditable", "true");
+      el.setAttribute("spellcheck", "false");
+      const multi = el.dataset.vpMulti === "1";
+      el.setAttribute("role", "textbox");
+      el.setAttribute("aria-multiline", multi ? "true" : "false");
+      const label = el.parentElement ? el.parentElement.querySelector(".vp-edit-label") : null;
+      if (label && label.textContent.trim()) el.setAttribute("aria-label", label.textContent.trim());
+      el.classList.add("vp-editable");
+      el.innerHTML = vpFmt(this.vpFieldGet(path));
+      if (!el.dataset.vpBound) {
+        el.dataset.vpBound = "1";
+        el.addEventListener("input", () => this.vpOnEditInput(el));
+        el.addEventListener("paste", (e) => this.vpOnEditPaste(e));
+        el.addEventListener("keydown", (e) => this.vpOnEditKeydown(e, el));
+        el.addEventListener("focus", () => this.vpShowTools(el));
+        el.addEventListener("mouseup", () => this.vpShowTools(el));
+        el.addEventListener("blur", () => { this.vpSelActive = false; this.vpHideToolsSoon(); });
+      }
+      this.vpSyncCount(el);
+    },
+    vpOnEditInput(el) {
+      const path = el.dataset.vpPath;
+      if (!path) return;
+      el.dataset.vpEdited = "1";
+      this.vpSetField(path, vpDomToMd(el));
+      this.vpSyncCount(el);
+    },
+    vpSyncCount(el) {
+      const max = Number(el.dataset.vpMax || 0);
+      const box = el.parentElement ? el.parentElement.querySelector(".vp-edit-count") : null;
+      if (!box) return;
+      if (!max) { box.hidden = true; return; }
+      const len = String(this.vpFieldGet(el.dataset.vpPath) || "").length;
+      box.hidden = len < max * 0.9;
+      box.textContent = `${len} / ${max}`;
+      box.classList.toggle("over", len > max);
+    },
+
+    /* --- 输入行为：粘贴纯文本、回车、快捷键 --- */
+    vpOnEditPaste(e) {
+      const text = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
+      e.preventDefault();
+      // 插纯文本，杜绝从 Word/网页粘来的样式洪水；insertText 保留撤销栈
+      if (!text) return;
+      document.execCommand("insertText", false, text);
+      this.vpOnEditInput(e.currentTarget || e.target);
+    },
+    vpOnEditKeydown(e, el) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && String(e.key).toLowerCase() === "b") {
+        e.preventDefault();
+        this.vpFormatSelection(el, "b");
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (el.dataset.vpMulti === "1") {
+          const before = vpDomToMd(el);
+          document.execCommand("insertLineBreak");
+          // 少数浏览器不支持 insertLineBreak：退化成插入换行文本（pre-wrap 下同样换行）
+          if (vpDomToMd(el) === before) document.execCommand("insertText", false, "\n");
+          this.vpOnEditInput(el);
+        } else {
+          el.blur();
+        }
+        return;
+      }
+      if (e.key === "Escape") el.blur();
+    },
+    vpFormatSelection(el, tag) {
+      if (!el) return;
+      if (!vpToggleTag(el, tag)) { this.toast("先选中要加格式的文字", "warn"); return; }
+      el.dataset.vpEdited = "1";
+      this.vpSetField(el.dataset.vpPath, vpDomToMd(el));
+      el.focus();
+      this.vpRepositionTools();
+    },
+    /* 工具条按钮：作用于当前聚焦的编辑区（mousedown.prevent 保住了选区） */
+    vpFormatFocused(tag) {
+      const el = this._vpEditEl;
+      if (!el) { this.toast("先点一下要修改的文字，再选中它", "warn"); return; }
+      this.vpFormatSelection(el, tag);
+    },
+
+    /* --- 浮动格式工具条：只在真的选中了文字时才出现（没选中就完全没有这层浮层） --- */
+    vpShowTools(el) {
+      this._vpEditEl = el;               // 记住当前编辑的格子，浮层显隐由选区决定
+      this.vpSyncToolsFromSelection();
+    },
+    vpSyncToolsFromSelection() {
+      if (!this.vpEditing) { this.vpSelActive = false; this.vpHideTools(); return; }
+      const el = this._vpEditEl;
+      const sel = document.getSelection ? document.getSelection() : null;
+      const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+      const ok = !!(el && el.isConnected && range && !range.collapsed
+        && el.contains(range.commonAncestorContainer));
+      this.vpSelActive = ok;
+      if (!ok || this._vpDragging) { this.vpHideTools(); return; }
+      const tools = this.$refs.vpEditTools;
+      if (!tools) return;
+      tools.hidden = false;
+      this.vpRepositionTools();
+    },
+    vpRepositionTools() {
+      const tools = this.$refs.vpEditTools;
+      const el = this._vpEditEl;
+      if (!tools || tools.hidden || !el || !el.isConnected) return;
+      // 贴着选区浮出（选区矩形拿不到时退回整格的位置）
+      let rect = null;
+      const sel = document.getSelection ? document.getSelection() : null;
+      if (sel && sel.rangeCount && !sel.isCollapsed && el.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+        const rr = sel.getRangeAt(0).getBoundingClientRect();
+        if (rr && (rr.width || rr.height)) rect = rr;
+      }
+      if (!rect) rect = el.getBoundingClientRect();
+      const w = tools.offsetWidth || 92;
+      const h = tools.offsetHeight || 34;
+      const left = Math.max(8, Math.min(rect.left + Math.min(rect.width / 2, 60), window.innerWidth - w - 8));
+      let top = rect.top - h - 8;
+      if (top < 8) top = Math.min(window.innerHeight - h - 8, rect.bottom + 8);
+      tools.style.left = `${Math.round(left)}px`;
+      tools.style.top = `${Math.round(top)}px`;
+    },
+    vpHideTools() {
+      const tools = this.$refs.vpEditTools;
+      if (tools) tools.hidden = true;
+      this._vpEditEl = null;
+    },
+    vpHideToolsSoon() {
+      clearTimeout(this._vpToolTimer);
+      this._vpToolTimer = setTimeout(() => {
+        const el = this._vpEditEl;
+        if (el && el === document.activeElement) return;
+        this.vpHideTools();
+      }, 140);
+    },
+
+    /* --- 列表增删：易错点 / 范式步骤 / 选项 / 写作要点 --- */
+    /* 列表增删后，同一条目位置上的编辑区「路径没变、内容已变」，挂载键认不出来：
+       先把这一栏所有编辑区的挂载键清掉，下一次 vpMountAll 会按当前结构整栏重灌，
+       否则删中间一条时，前面那格还停留在被删条目的文字上，接着编辑就会写脏数据。 */
+    vpRemountList(path) {
+      const box = document.querySelector(`[data-vp-list="${path}"]`);
+      if (!box) return;
+      box.querySelectorAll("[data-vp-path]").forEach((el) => {
+        delete el.dataset.vpKey;
+        delete el.dataset.vpEdited;
+      });
+    },
+    vpNewItem(path) {
+      if (path.endsWith("options")) return { label: "", text: "" };
+      if (path.endsWith("pitfalls")) return { title: "", desc: "" };
+      return "";
+    },
+    vpAddItem(path) {
+      const t = this.vpResolvePath(path);
+      if (!t) return;
+      const arr = t.host[t.key];
+      if (!Array.isArray(arr)) return;
+      if (path.endsWith("pattern.steps") && arr.length >= 5) {
+        this.toast("考点范式最多 5 步，先删再补", "warn");
+        return;
+      }
+      this.vpEditBeforeLeave();          // 先把在改的内容写回，再动数组
+      arr.push(this.vpNewItem(path));
+      if (path.endsWith("options")) arr.forEach((o, i) => { if (o && typeof o === "object") o.label = String.fromCharCode(65 + i); });
+      this.vpMarkDirty();
+      this.vpRemountList(path);
+      this.$nextTick(() => {
+        this.vpMountAll();
+        const box = document.querySelector(`[data-vp-list="${path}"]`);
+        const eds = box ? box.querySelectorAll(".vp-editable") : [];
+        if (eds.length) eds[eds.length - 1].focus();
+      });
+    },
+    vpRemoveItem(path, idx) {
+      const t = this.vpResolvePath(path);
+      if (!t) return;
+      const arr = t.host[t.key];
+      if (!Array.isArray(arr) || idx < 0 || idx >= arr.length) return;
+      this.vpEditBeforeLeave();          // 先把在改的内容写回，再动数组
+      if (path.endsWith("options")) {
+        const ansPath = path.startsWith("q.transfer") ? "q.transfer.answer" : "q.answer";
+        const ans = String(this.vpFieldGet(ansPath) || "").trim().toUpperCase();
+        const removed = String((arr[idx] && arr[idx].label) || "").trim().toUpperCase();
+        // 删掉的正是正确项时先拦一下：否则答案会变成一个不存在的字母
+        if (ans && removed && ans === removed) {
+          this.toast(`第 ${removed} 项是当前答案，先改答案再删它`, "warn");
+          return;
+        }
+        arr.splice(idx, 1);
+        arr.forEach((o, i) => { if (o && typeof o === "object") o.label = String.fromCharCode(65 + i); });
+        const oldIdx = ans ? ans.charCodeAt(0) - 65 : -1;
+        if (oldIdx > idx && oldIdx <= arr.length) this.vpSetField(ansPath, String.fromCharCode(64 + oldIdx));
+      } else {
+        arr.splice(idx, 1);
+      }
+      this.vpMarkDirty();
+      this.vpRemountList(path);
+      this.$nextTick(() => this.vpMountAll());
+    },
+
+    /* --- 保存：防抖落盘 + 退出时序列化对账 --- */
+    vpMarkDirty() {
+      if (!this.vpEditing) return;
+      this.vpEditDirty = true;
+      clearTimeout(this._vpEditTimer);
+      this._vpEditTimer = setTimeout(() => this.vpFlushEdits(), 1200);
+    },
+    vpFlushEdits() {
+      this._vpStopEditTimer();
+      if (!this.vpEditing || !this.vpEditDirty) return;
+      if (!this.visualPaper || !this.visualPaper.groups || !this.visualPaper.groups.length) return;
+      this.vpEditDirty = false;
+      const raw = this.vpSerializeRaw();
+      this.output = raw;
+      this.visualPaper.rawJson = raw;
+      this._vpPersistEdits();
+    },
+    _vpPersistEdits() {
+      const id = this.visualPaper && this.visualPaper.historyId;
+      if (!id) return;
+      const item = this.history.find((h) => h.id === id);
+      if (!item) return;
+      this._hydrateHistory(item);
+      item.output = this.output;
+      item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
+      this._persistHistoryItem(item);
+    },
+    /* 超出上限的字段：重解析会按 normalizeVisualPaper 截断，这里先收集好明确告知老师 */
+    vpEditOverLimit() {
+      const out = [];
+      const check = (label, val, max) => { if (typeof val === "string" && val.length > max) out.push(label); };
+      for (const g of this.vpGroups) {
+        check("大题导语", g.intro, 200);
+        for (const q of (g.questions || [])) {
+          check(`第 ${q.no} 题语篇`, q.passage, 4000);
+          check(`第 ${q.no} 题题干`, q.stem, 1000);
+          if (q.reference) {
+            check("参考答案·证据", q.reference.evidence, 800);
+            check("参考答案·推理", q.reference.reason, 800);
+            check("参考答案·干扰项", q.reference.distractor, 800);
+          }
+          for (const p of (q.pitfalls || [])) check("易错点描述", p.desc, 500);
+          for (const s of ((q.pattern && q.pattern.steps) || [])) check("考点范式步骤", s, 300);
+          if (q.transfer) check("迁移训练语篇", q.transfer.passage, 800);
+        }
+      }
+      return [...new Set(out)];
+    },
+    /* 结构 → @@TAG@@ 契约文本（与 parseCustomVisualPaper 的口径严格对应：
+       QTYPE 值必须同行、每题必须 @@END_Q@@ 收题、易错点用 :: 分隔、组信息用 | 分隔） */
+    vpSerializeRaw() {
+      const vp = this.visualPaper || {};
+      const paper = vp.paper || {};
+      // 字段内容里的 @@标签@@ 形状会被解析器当标签，插一个零宽空格打断（肉眼无差别）
+      const guard = (s) => String(s == null ? "" : s).replace(/[＠@]{2,}/g, (m) => m[0] + "\u200b" + m.slice(1));
+      const flat = (s) => guard(String(s == null ? "" : s).replace(/\r?\n/g, " ")).trim();
+      const block = (s) => guard(String(s == null ? "" : s));
+      const out = [];
+      const total = Number(vp.total) > 0 ? Number(vp.total) : this.vpQuestionCount;
+      out.push(`@@TOTAL@@ ${total}`);
+      out.push(`@@PAPER@@ ${flat(paper.title)}`);
+      out.push(`@@NOTICE@@ ${flat(vp.notice)}`);
+      for (const g of this.vpGroups) {
+        const gid = VP_GROUP_IDS.includes(g.id) ? g.id : "other";
+        out.push(`@@GROUP@@ ${gid}|${flat(String(g.title || "").replace(/\|/g, "｜"))}|${flat(String(g.intro || "").replace(/\|/g, "｜"))}`);
+        for (const q of (g.questions || [])) {
+          const qtype = (q.qtype === "choice" || q.qtype === "blank" || q.qtype === "writing") ? q.qtype : "blank";
+          out.push(`@@Q@@ ${String(q.no == null ? "" : q.no).trim() || "1"}`);
+          out.push(`@@QTYPE@@ ${qtype}`);
+          out.push("@@PASSAGE@@");
+          out.push(block(q.passage));
+          out.push("@@STEM@@");
+          out.push(block(q.stem));
+          out.push("@@OPTIONS@@");
+          (q.options || []).forEach((o, i) => {
+            if (!o) return;
+            out.push(`${flat(o.label) || String.fromCharCode(65 + i)}. ${flat(o.text)}`);
+          });
+          out.push("@@ANSWER@@");
+          out.push(flat(q.answer));
+          out.push("@@EVIDENCE@@");
+          out.push(block(q.reference ? q.reference.evidence : ""));
+          out.push("@@REASON@@");
+          out.push(block(q.reference ? q.reference.reason : ""));
+          out.push("@@DISTRACTOR@@");
+          out.push(block(q.reference ? q.reference.distractor : ""));
+          out.push("@@PITFALLS@@");
+          for (const p of (q.pitfalls || [])) {
+            if (!p) continue;
+            const title = flat(p.title).replace(/::/g, "：");
+            const desc = flat(p.desc).replace(/::/g, "：");
+            out.push(desc ? `${title}::${desc}` : title);
+          }
+          out.push("@@PATTERN_NAME@@");
+          out.push(flat(q.pattern ? q.pattern.name : ""));
+          out.push("@@PATTERN_STEPS@@");
+          for (const s of ((q.pattern && q.pattern.steps) || [])) out.push(flat(s));
+          if (qtype === "writing") {
+            const wg = q.writingGuide || { points: [], outline: "", sample: "" };
+            out.push("@@WRITING_POINTS@@");
+            for (const s of (wg.points || [])) out.push(flat(s));
+            out.push("@@WRITING_OUTLINE@@");
+            out.push(flat(wg.outline));
+            out.push("@@WRITING_SAMPLE@@");
+            out.push(block(wg.sample));
+          } else if (q.transfer) {
+            out.push("@@TRANSFER_PASSAGE@@");
+            out.push(block(q.transfer.passage));
+            out.push("@@TRANSFER_STEM@@");
+            out.push(block(q.transfer.stem));
+            out.push("@@TRANSFER_OPTIONS@@");
+            (q.transfer.options || []).forEach((o, i) => {
+              if (!o) return;
+              out.push(`${flat(o.label) || String.fromCharCode(65 + i)}. ${flat(o.text)}`);
+            });
+            out.push("@@TRANSFER_ANSWER@@");
+            out.push(flat(q.transfer.answer));
+            out.push("@@TRANSFER_EXPL@@");
+            out.push(block(q.transfer.explanation));
+          }
+          out.push("@@END_Q@@");
+        }
+      }
+      return `${out.join("\n")}\n`;
+    },
+    /* 退出修改模式：先序列化写回原始文本，再重解析对账（答案速查表/题量随之更新） */
+    vpCommitEdits() {
+      if (!this.visualPaper || !this.visualPaper.groups || !this.visualPaper.groups.length) return;
+      const before = this.vpQuestionCount;
+      const over = this.vpEditOverLimit();
+      // 极端兜底用的结构快照：万一序列化出的文本解析不出题目，宁可回滚也不丢老师的内容
+      const backup = JSON.parse(JSON.stringify({
+        paper: this.visualPaper.paper, groups: this.visualPaper.groups,
+        answerMap: this.visualPaper.answerMap, notice: this.visualPaper.notice, total: this.visualPaper.total,
+      }));
+      const raw = this.vpSerializeRaw();
+      this.output = raw;
+      this.visualPaper.rawJson = raw;
+      this._outputDirty = true;
+      this.vpDoRender();
+      this._outputDirty = false;
+      if (before > 0 && this.vpQuestionCount === 0) {
+        // 校验未通过：回滚界面结构，且不写入历史（历史保持上一版，至少不会更差）
+        this.visualPaper.paper = backup.paper;
+        this.visualPaper.groups = backup.groups;
+        this.visualPaper.answerMap = backup.answerMap;
+        this.visualPaper.notice = backup.notice;
+        this.visualPaper.total = backup.total;
+        this.toast("保存校验未通过，这次修改没有写入历史记录；请检查内容后重试", "error");
+        return;
+      }
+      this._vpPersistEdits();
+      if (this.vpQuestionCount !== before) this.toast(`保存提示：题数由 ${before} 变成 ${this.vpQuestionCount}`, "warn");
+      else if (over.length) this.toast(`有内容超出长度上限，已截断：${over.join("、")}`, "warn");
     },
 
     /* --- 推理过程（有界展示：截头保尾 + 盒内滚动 + 首 token 自动收起） --- */
@@ -5470,7 +6097,7 @@ function nbx() {
       let out = assets.html;
       out = put(out, "{{VP_THEME}}", theme);
       out = put(out, "{{VP_SKY}}", sky ? ` data-sky="${sky}"` : "");
-      out = put(out, "{{VP_TITLE}}", escapeHtml(title));
+      out = put(out, "{{VP_TITLE}}", escapeHtml(vpDetag(title)));   // 标签页标题不带格式标记
       out = put(out, "{{VP_ICONS}}", this.vpExportIconSprite());
       out = put(out, "{{VP_CSS}}", assets.css);
       out = put(out, "{{VP_DATA}}", data);

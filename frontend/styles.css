@@ -1423,6 +1423,113 @@ html[data-theme="sora"] .mascot-peeking {
 .mask-answers .ans { filter: blur(7px); opacity: 0.8; cursor: pointer; }
 .mask-answers .ans:hover { filter: none; opacity: 1; }
 
+/* 行内格式：==高亮== → <mark>（老师在界面上只看到效果，看不到标记） */
+mark, .vp-hl {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: inherit;
+  border-radius: 4px;
+  padding: 0 0.15em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* ============================================================
+   修改模式（所见即所得：编辑区与正文同字号，聚焦才有边框）
+   ============================================================ */
+.vp-edit-cell { display: flex; flex-direction: column; gap: 0.2rem; }
+.vp-edit-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+}
+.vp-editable {
+  min-height: 1.9rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.55rem;
+  border: 1px dashed color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--panel-soft) 60%, transparent);
+  color: var(--text);
+  font-size: 0.94rem;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.vp-editable:hover { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.vp-editable:focus {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: var(--panel-soft);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.vp-editable-passage { min-height: 8rem; }
+.vp-edit-count { font-size: 0.65rem; color: var(--text-faint); text-align: right; }
+.vp-edit-count.over { color: #e5604c; font-weight: 600; }
+.vp-edit-row { display: flex; align-items: flex-start; gap: 0.45rem; }
+.vp-edit-row .vp-editable { flex: 1; min-width: 0; }
+.vp-edit-item { position: relative; }
+.vp-edit-del {
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 0.5rem;
+  color: var(--text-faint);
+  font-size: 1.05rem;
+  line-height: 1;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.vp-edit-del:hover { background: color-mix(in srgb, #c03e2a 14%, transparent); color: #e5604c; }
+.vp-edit-item > .vp-edit-del { position: absolute; top: 0.3rem; right: 0.3rem; }
+.vp-edit-add {
+  align-self: flex-start;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--accent);
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+.vp-edit-add:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.vp-edit-add:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 顶栏格式组（仅修改模式显示）：选中文字后按钮亮起，与浮出的小按钮等效 */
+.vp-fmt-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding-left: 0.35rem;
+  border-left: 1px solid var(--border);
+}
+.vp-fmt-group .icon-btn:disabled { opacity: 0.35; }
+
+/* 浮动格式按钮：选中文字时才出现（fixed 定位，贴着选区） */
+.vp-edit-tools {
+  position: fixed;
+  z-index: 78;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+}
+.vp-edit-tools[hidden] { display: none; }
+.vp-edit-tool {
+  width: 2.1rem;
+  height: 2rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.vp-edit-tool:hover { background: var(--hover-bg); color: var(--text); }
+.vp-edit-tool:active { transform: scale(0.92); transition-duration: 0.08s; }
+
 /* ============================================================
    试卷可视化全解（v3 定版）
    ============================================================ */

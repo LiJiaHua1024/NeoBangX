@@ -92,6 +92,49 @@
   }
   function noop() {}
 
+  /* ---------------- 行内格式（与 frontend/script.js 的 vpFmt 保持一致） ----------------
+     存储里是 **加粗** 与 ==高亮==，这里渲染成排版效果：先转义再套标签，无注入面。 */
+  function vpInlineParts(text) {
+    var s = String(text == null ? "" : text);
+    var parts = [];
+    var buf = "";
+    var i = 0;
+    var pushBuf = function () { if (buf) { parts.push({ k: "t", v: buf }); buf = ""; } };
+    while (i < s.length) {
+      var marker = "";
+      if (s.startsWith("**", i)) marker = "**";
+      else if (s.startsWith("==", i)) marker = "==";
+      if (!marker) { buf += s[i]; i += 1; continue; }
+      var end = s.indexOf(marker, i + 2);
+      if (end === -1) { i += 2; continue; }
+      var inner = s.slice(i + 2, end);
+      if (!inner.trim() || inner.includes(marker)) { i += 2; continue; }
+      pushBuf();
+      parts.push({ k: marker === "**" ? "b" : "m", v: inner });
+      i = end + 2;
+    }
+    pushBuf();
+    return parts;
+  }
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function vpFmt(text) {
+    return vpInlineParts(text).map(function (p) {
+      if (p.k === "b") return "<b>" + vpFmt(p.v) + "</b>";
+      if (p.k === "m") return '<mark class="vp-hl">' + vpFmt(p.v) + "</mark>";
+      return esc(p.v);
+    }).join("");
+  }
+  function vpDetag(text) {
+    return vpInlineParts(text).map(function (p) { return p.v; }).join("");
+  }
+  function setRich(node, text) {
+    if (node) node.innerHTML = vpFmt(text);
+    return node;
+  }
+
   /* ---------------- 元素引用 ---------------- */
   var cover = $("vp-cover"), present = $("vp-present"), stage = $("st-stage");
   var cvPaper = $("cv-paper"), cvTitle = $("cv-title"), cvFeatures = $("cv-features"),
@@ -180,10 +223,10 @@
 
   /* ---------------- 封面 ---------------- */
   function buildCover() {
-    cvPaper.textContent = has(PAPER.title) ? PAPER.title : "";
+    cvPaper.textContent = has(PAPER.title) ? vpDetag(PAPER.title) : "";
     cvPaper.hidden = !has(PAPER.title);
-    cvTitle.textContent = TITLE;
-    stTitle.textContent = TITLE;
+    setRich(cvTitle, TITLE);
+    setRich(stTitle, TITLE);
 
     clear(cvFeatures);
     FEATURES.forEach(function (f) {
@@ -204,10 +247,10 @@
     if (has(PAPER.subject)) bits.push(PAPER.subject);
     if (has(PAPER.year)) bits.push(PAPER.year);
     cvMeta.textContent = bits.join(" · ");
-    cvNotice.textContent = NOTICE;
+    setRich(cvNotice, NOTICE);
     cvNotice.hidden = !NOTICE;
     cvStart.disabled = !FLAT.length;
-    document.title = TITLE;
+    document.title = vpDetag(TITLE);
   }
 
   /* ---------------- 讲台 ---------------- */
@@ -222,7 +265,7 @@
     var keys = Object.keys(ANSWER_MAP);
     ansMap.hidden = !keys.length;
     keys.forEach(function (no) {
-      var label = no + ": " + str(ANSWER_MAP[no]);
+      var label = no + ": " + vpDetag(ANSWER_MAP[no]);
       var chip = el("span", "chip neutral vp-ans-chip ans", label);
       chip.title = label;
       ansList.appendChild(chip);
@@ -233,7 +276,7 @@
     var card = el("div", "vp-option-card" + (correct ? " correct" : "") + (correct && masked ? " masked" : ""));
     card.dataset.correct = correct ? "1" : "0";
     card.appendChild(el("span", "vp-option-label", str(opt.label)));
-    card.appendChild(el("span", "vp-option-text", str(opt.text)));
+    card.appendChild(setRich(el("span", "vp-option-text"), opt.text));
     return card;
   }
   function renderTab() {
@@ -263,7 +306,7 @@
             if (!has(pair[1])) return;
             var line = el("div", "vp-line");
             line.appendChild(el("span", "semibold", pair[0]));
-            line.appendChild(el("span", null, str(pair[1])));
+            line.appendChild(setRich(el("span"), pair[1]));
             lines.appendChild(line);
           });
         tabPanel.appendChild(lines);
@@ -284,8 +327,8 @@
       var box = el("div", "vp-pitfall-list");
       list.forEach(function (p, i) {
         var item = el("div", "vp-pitfall-item");
-        item.appendChild(el("div", "vp-pitfall-title", (i + 1) + ". " + str(p.title)));
-        item.appendChild(el("div", "vp-pitfall-desc", str(p.desc)));
+        item.appendChild(setRich(el("div", "vp-pitfall-title"), (i + 1) + ". " + str(p.title)));
+        item.appendChild(setRich(el("div", "vp-pitfall-desc"), p.desc));
         box.appendChild(item);
       });
       tabPanel.appendChild(box);
@@ -297,12 +340,12 @@
       var ptn = q.pattern || {};
       var pline = el("div", "vp-line");
       pline.appendChild(el("span", "semibold", "范式："));
-      pline.appendChild(el("span", "ans", str(ptn.name)));
+      pline.appendChild(setRich(el("span", "ans"), ptn.name));
       tabPanel.appendChild(pline);
       var steps = (ptn.steps || []).filter(has);
       if (steps.length) {
         var ol = el("ol", "vp-steps");
-        steps.forEach(function (s) { ol.appendChild(el("li", "vp-line", s)); });
+        steps.forEach(function (s) { ol.appendChild(setRich(el("li", "vp-line"), s)); });
         tabPanel.appendChild(ol);
       }
       return;
@@ -311,7 +354,9 @@
     /* transfer */
     var tr = q.transfer;
     if (!tr) {
-      tabPanel.appendChild(el("div", "vp-line dim", "该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。"));
+      tabPanel.appendChild(el("div", "vp-line dim", q.qtype === "writing"
+        ? "该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。"
+        : "该题暂无迁移训练内容。"));
       return;
     }
     var thead = el("div", "vp-tab-title");
@@ -319,8 +364,8 @@
     thead.appendChild(el("span", "vp-tab-sub", "（同构新题，话题不同 · 范式相同）"));
     tabPanel.appendChild(thead);
     var card = el("div", "glass-soft vp-card");
-    if (has(tr.passage)) card.appendChild(el("div", "vp-pre vp-line mb2", str(tr.passage)));
-    if (has(tr.stem)) card.appendChild(el("div", "semibold vp-line mb2", str(tr.stem)));
+    if (has(tr.passage)) card.appendChild(setRich(el("div", "vp-pre vp-line mb2"), tr.passage));
+    if (has(tr.stem)) card.appendChild(setRich(el("div", "semibold vp-line mb2"), tr.stem));
     var grid = el("div", "vp-options-grid");
     (tr.options || []).filter(Boolean).forEach(function (opt) {
       grid.appendChild(optionCard(opt, tr.answer, state.mask));
@@ -328,9 +373,9 @@
     if (grid.childNodes.length) card.appendChild(grid);
     var foot = el("div", "vp-transfer-foot");
     var ansline = el("div", "vp-line");
-    ansline.appendChild(el("span", "semibold ans", "答案：" + str(tr.answer)));
+    ansline.appendChild(setRich(el("span", "semibold ans"), "答案：" + str(tr.answer)));
     foot.appendChild(ansline);
-    if (has(tr.explanation)) foot.appendChild(el("div", "vp-line dim", str(tr.explanation)));
+    if (has(tr.explanation)) foot.appendChild(setRich(el("div", "vp-line dim"), tr.explanation));
     card.appendChild(foot);
     tabPanel.appendChild(card);
   }
@@ -341,7 +386,7 @@
     var pos = state.cur + 1;
 
     stPos.textContent = "第 " + pos + " / " + FLAT.length + " 题";
-    stGroup.textContent = str(group.title);
+    setRich(stGroup, group.title);
     stGroup.hidden = !has(group.title);
     dockPos.textContent = pos + " / " + FLAT.length;
     navPrev.disabled = state.cur <= 0;
@@ -350,13 +395,13 @@
     $("q-no").textContent = "第 " + str(q.no) + " 题";
     $("q-type-blank").hidden = q.qtype !== "blank";
     $("q-type-writing").hidden = q.qtype !== "writing";
-    $("q-group").textContent = str(group.title);
+    setRich($("q-group"), group.title);
     $("q-pos").textContent = pos + " / " + FLAT.length;
-    $("q-stem").textContent = str(q.stem);
+    setRich($("q-stem"), q.stem);
 
     /* 语篇（写作题/语法填空可能无独立语篇） */
     var passage = $("q-passage");
-    passage.textContent = str(q.passage);
+    setRich(passage, q.passage);
     passage.hidden = !has(q.passage);
     $("q-nopassage").hidden = has(q.passage);
 
@@ -373,9 +418,9 @@
     var wbox = $("q-writing");
     wbox.hidden = !wg;
     if (wg) {
-      $("q-writing-points").textContent = "审题要点：" + ((wg.points || []).filter(has).join("；"));
-      $("q-writing-outline").textContent = "结构框架：" + str(wg.outline);
-      $("q-writing-sample").textContent = str(wg.sample);
+      setRich($("q-writing-points"), "审题要点：" + ((wg.points || []).filter(has).join("；")));
+      setRich($("q-writing-outline"), "结构框架：" + str(wg.outline));
+      setRich($("q-writing-sample"), wg.sample);
     }
 
     renderTab();
@@ -454,10 +499,10 @@
     GROUPS.forEach(function (g, gi) {
       var wrap = el("div", "vp-overview-group");
       var head = el("div", "vp-overview-group-title");
-      head.appendChild(el("span", "vp-gname", str(g.title)));
+      head.appendChild(setRich(el("span", "vp-gname"), g.title));
       head.appendChild(el("span", "t-xs faint", g.questions.length + " 题"));
       wrap.appendChild(head);
-      if (has(g.intro)) wrap.appendChild(el("div", "t-xs dim vp-overview-intro", str(g.intro)));
+      if (has(g.intro)) wrap.appendChild(setRich(el("div", "t-xs dim vp-overview-intro"), g.intro));
       var grid = el("div", "vp-overview-grid");
       g.questions.forEach(function (q, qi) {
         var flat = flatIndexOf(gi, qi);
@@ -466,7 +511,7 @@
         chip.dataset.flat = String(flat);
         chip.appendChild(el("span", null, str(q.no)));
         if (has(q.answer)) {
-          var a = el("span", "vp-q-chip-ans" + (state.mask ? " masked" : ""), str(q.answer));
+          var a = el("span", "vp-q-chip-ans" + (state.mask ? " masked" : ""), vpDetag(q.answer));
           chip.appendChild(a);
         }
         chip.addEventListener("click", function () {

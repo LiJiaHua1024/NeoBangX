@@ -535,6 +535,29 @@ html[data-theme="sora"][data-sky="night"] {
 .mask-answers .ans { filter: blur(7px); opacity: 0.8; cursor: pointer; }
 .mask-answers .ans:hover { filter: none; opacity: 1; }
 
+/* 行内格式（**加粗** / ==高亮==，与 App 内修改模式写入的标记一致） */
+mark, .vp-hl {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: inherit;
+  border-radius: 4px;
+  padding: 0 0.15em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* 换行一致性：这些字段的原文可能带换行（证据逐条、易错点描述、步骤等），
+   必须保留换行，不能压成一行（与 App 内编辑/阅读两侧一致） */
+.vp-stem,
+.vp-option-text,
+.vp-pitfall-title,
+.vp-pitfall-desc,
+.vp-overview-intro,
+.vp-tab-panel .vp-line,
+.vp-writing .t-xs {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ============================================================
    试卷可视化组件（镜像 styles.css 的 vp 段）
    ============================================================ */
