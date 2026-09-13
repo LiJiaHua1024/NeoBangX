@@ -1828,8 +1828,11 @@ body.modal-open .panel-stack {
 .ana-stack { display: flex; flex-direction: column; gap: 12px; transition: opacity 0.25s ease; }
 /* 换窗请求进行中：整块轻压暗给出即时反馈；opacity 走合成器，不加重排 */
 .ana-stack.ana-updating { opacity: 0.55; pointer-events: none; }
-.ana-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.ana-kpi-grid { grid-template-columns: repeat(3, 1fr); }
+/* 网格项默认 min-width:auto 会按内容最小宽度撑开轨道：卡内柱状图的横向滚动容器
+   把约 1000px 的内容宽度透传上来，整页被撑出横向滚动（实测 390px 视口 +587px） */
+.ana-grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.ana-grid-2 > *, .ana-kpi-grid > *, .ana-stack > * { min-width: 0; }
+.ana-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .delta { display: inline-block; margin-left: 0.5rem; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; }
 .delta.good { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent); }
 .delta.bad { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); }
@@ -1858,13 +1861,15 @@ body.modal-open .panel-stack {
 .ana-row { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
 .ana-row:last-child { border-bottom: 0; }
 .ana-row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; font-size: 0.82rem; font-weight: 650; }
-.ana-row-foot { margin-top: 0.25rem; font-size: 0.72rem; line-height: 1.6; }
+/* mono 长串（模型名 / Provider / 使用码 / 设备标识）默认 min-width:auto 拒绝收缩，会撑破卡片引发整页横向滚动 */
+.ana-row-head > span { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.ana-row-foot { margin-top: 0.25rem; font-size: 0.72rem; line-height: 1.6; overflow-wrap: anywhere; word-break: break-word; }
 .ana-clickable { cursor: pointer; border-radius: 0.6rem; padding-left: 0.5rem; padding-right: 0.5rem; margin-left: -0.5rem; margin-right: -0.5rem; }
 .ana-clickable:hover { background: var(--hover); }
 /* 状态环形：SVG 圆环 + 透明底，中央文字独立悬浮，不再用半透明色块做“遮罩” */
 .ana-donut-row { display: flex; flex-direction: column; gap: 0.55rem; align-items: stretch; }
 .ana-donut-svg.ana-donut-wide { width: 100%; max-width: 330px; height: auto; aspect-ratio: 280 / 132; }
-.ana-donut-foot { font-size: 0.76rem; }
+.ana-donut-foot { font-size: 0.76rem; overflow-wrap: anywhere; }
 .ana-donut-svg { position: relative; width: 116px; height: 116px; flex-shrink: 0; }
 .ana-donut-svg svg { display: block; width: 100%; height: 100%; }
 .ana-donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
@@ -1900,12 +1905,13 @@ body.modal-open .panel-stack {
 .ana-recent-kind { font-size: 0.76rem; font-weight: 750; }
 .ana-recent-time { font-size: 0.7rem; color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .ana-recent-meta { grid-column: 1 / -1; font-size: 0.72rem; color: var(--dim); display: flex; flex-wrap: wrap; gap: 0.3rem 0.6rem; }
+.ana-recent-meta > span { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .ana-recent-why { grid-column: 1 / -1; font-size: 0.78rem; line-height: 1.6; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .ana-table-wrap { padding: 0; }
 .data-table th.num, .data-table td.num { text-align: right; }
 
 @media (max-width: 960px) {
-  .ana-grid-2 { grid-template-columns: 1fr; }
+  .ana-grid-2 { grid-template-columns: minmax(0, 1fr); }
   .ana-kpi-grid { display: flex; }
   .ana-heat { grid-template-columns: repeat(6, 1fr); }
   .ana-toolbar { align-items: stretch; }
@@ -1919,6 +1925,8 @@ body.modal-open .panel-stack {
   .ana-recent-card { grid-template-columns: auto 1fr; }
   .ana-recent-time { grid-column: 2; text-align: left; }
   .ana-err-top .link-btn { min-height: 32px; }
+  /* 表格卡片化后单元格变窄，固定的 120px 最小宽度会顶破网格轨道 */
+  .data-table .ana-hbar { min-width: 0; flex: 1 1 auto; }
 }
 
 /* ============ AI 用户画像 Markdown 渲染 ============ */
