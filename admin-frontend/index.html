@@ -1348,18 +1348,11 @@
           </label>
           <label class="field" x-show="createForm.code_type === 'user'">
             <span>额度（次）</span>
-            <div class="custom-select" @click.outside="createQuotaMenuOpen = false">
-              <button class="custom-select-trigger" :class="{ open: createQuotaMenuOpen }"
-                      @click="createQuotaMenuOpen = !createQuotaMenuOpen">
-                <span x-text="createForm.quota"></span>
-                <span class="chev">▼</span>
-              </button>
-              <div class="custom-select-menu" x-show="createQuotaMenuOpen" x-cloak>
-                <template x-for="q in quotaPresets" :key="q">
-                  <button class="custom-select-item" :class="{ on: createForm.quota === q }"
-                          @click="createForm.quota = q; createQuotaMenuOpen = false" x-text="q"></button>
-                </template>
-              </div>
+            <div class="preset-chips">
+              <template x-for="q in quotaPresets" :key="q">
+                <button class="preset-chip" :class="{ on: createForm.quota === q }"
+                        @click="createForm.quota = q" x-text="q"></button>
+              </template>
             </div>
           </label>
           <label class="field">
@@ -1401,18 +1394,11 @@
           <p class="muted mb-3" x-text="`使用码：${editingQuotaCode} · 已用 ${editingQuotaUsed} 次`"></p>
           <label class="field">
             <span>新额度</span>
-            <div class="custom-select" @click.outside="editQuotaMenuOpen = false">
-              <button class="custom-select-trigger" :class="{ open: editQuotaMenuOpen }"
-                      @click="editQuotaMenuOpen = !editQuotaMenuOpen">
-                <span x-text="editingQuotaValue"></span>
-                <span class="chev">▼</span>
-              </button>
-              <div class="custom-select-menu" x-show="editQuotaMenuOpen" x-cloak>
-                <template x-for="q in quotaPresets" :key="q">
-                  <button class="custom-select-item" :class="{ on: editingQuotaValue === q }"
-                          @click="editingQuotaValue = q; editQuotaMenuOpen = false" x-text="q"></button>
-                </template>
-              </div>
+            <div class="preset-chips">
+              <template x-for="q in quotaPresets" :key="q">
+                <button class="preset-chip" :class="{ on: editingQuotaValue === q }"
+                        @click="editingQuotaValue = q" x-text="q"></button>
+              </template>
             </div>
           </label>
           <p class="field-hint">也可直接输入自定义数字；新额度不能小于已用次数。</p>

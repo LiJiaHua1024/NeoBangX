@@ -631,7 +631,6 @@ function adminApp() {
     creating: false,
     createForm: { code_type: "user", quota: 10, count: 1, note: "" },
     createTypeMenuOpen: false,
-    createQuotaMenuOpen: false,
     quotaPresets: [1, 3, 5, 10, 50, 100, 200, 500, 1000],
     createdItems: [],
     quotaModalOpen: false,
@@ -644,7 +643,6 @@ function adminApp() {
     editingQuotaCode: "",
     editingQuotaUsed: 0,
     editingQuotaValue: 10,
-    editQuotaMenuOpen: false,
     toasts: [],
 
     get pageTitle() {
@@ -955,7 +953,6 @@ function adminApp() {
       this.createdItems = [];
       this.createOpen = true;
       this.createTypeMenuOpen = false;
-      this.createQuotaMenuOpen = false;
     },
 
     async createCodes() {
@@ -1032,7 +1029,6 @@ function adminApp() {
       this.editingQuotaCode = c.code;
       this.editingQuotaUsed = c.used_count;
       this.editingQuotaValue = c.quota;
-      this.editQuotaMenuOpen = false;
       this.quotaModalOpen = true;
     },
 

@@ -601,6 +601,29 @@ select option { background: var(--bg); color: var(--text); }
 .custom-select-item:hover { background: var(--hover); }
 .custom-select-item.on { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 
+/* 预设额度快选：下拉浮层放在小弹窗里会被 modal-body 裁切、且必须滚动才看得全，
+   改成标签块把全部预设一屏铺开，桌面与移动端行为一致 */
+.preset-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.preset-chip {
+  min-width: 2.9rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.82rem; font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s var(--ease-spring);
+}
+.preset-chip:hover { background: var(--hover-bg); }
+.preset-chip:active { transform: scale(0.97); }
+.preset-chip.on {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
 /* 工具推理规则弹窗：分组工具多选 + 不支持策略选择 */
 .rule-tool-groups { display: flex; flex-direction: column; gap: 0.7rem; max-height: 300px; overflow: auto; padding-right: 2px; }
 .rule-tool-group { border: 1px solid var(--border); border-radius: 0.65rem; padding: 0.55rem 0.7rem 0.7rem; }
@@ -1548,6 +1571,7 @@ body.modal-open .panel-stack {
   .switch-slider::after { top: 3px; left: 3px; width: 26px; height: 26px; }
   .switch input:checked + .switch-slider::after { transform: translateX(23px); }
   .custom-select-item { min-height: 44px; }
+  .preset-chip { min-height: 44px; min-width: 3.4rem; padding: 0.45rem 0.7rem; }
   .cal-nav { width: 2.6rem; height: 2.6rem; }
 
   /* ---------- 13. 输入框字号必须 ≥16px，否则 iOS 聚焦时自动放大页面且不缩回 ---------- */
@@ -1774,6 +1798,8 @@ body.modal-open .panel-stack {
   }
   .btn-primary:hover { background: var(--btn-bg); }
   .link-btn:hover { text-decoration: none; }
+  /* 触屏点击后 hover 会粘住；已选中的块要保持 .on 的强调色 */
+  .preset-chip:not(.on):hover { background: var(--input-bg); }
 }
 
 /* ============ 用量分析（自研 UI：分段选择 + div 条形 + SVG 折线 + conic 环形） ============ */
