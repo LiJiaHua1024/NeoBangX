@@ -25,13 +25,20 @@
       <h1 class="cover-title" id="cv-title"></h1>
       <div class="cover-features" id="cv-features"></div>
       <div class="cover-meta t-xs" id="cv-meta"></div>
-      <button class="btn-primary cover-start" id="cv-start">
-        <svg class="vp-ic" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
-        <span>开始讲解</span>
-      </button>
-      <button class="cover-print" id="cv-print" title="打印 / 存为 PDF（A4：教师详解版 / 学生练习版）">
-        <svg class="vp-ic" aria-hidden="true"><use href="#i-print"></use></svg><span>打印</span>
-      </button>
+      <div class="cover-actions">
+        <button class="btn-primary cover-start" id="cv-start">
+          <svg class="vp-ic" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+          <span>开始讲解</span>
+        </button>
+        <div class="cover-actions-sub">
+          <button class="cover-print" id="cv-print" title="打印 / 存为 PDF（A4：教师详解版 / 学生练习版）">
+            <svg class="vp-ic" aria-hidden="true"><use href="#i-print"></use></svg><span>打印</span>
+          </button>
+          <button class="cover-exit" id="cv-exit" title="退出：关闭本页">
+            <svg class="vp-ic" aria-hidden="true"><use href="#i-x"></use></svg><span>退出</span>
+          </button>
+        </div>
+      </div>
       <div class="cover-hint t-xs" id="cv-notice"></div>
     </div>
     <button class="icon-btn cover-fs" id="cv-fs" title="进入全屏（F11 亦可）" aria-label="切换全屏"></button>

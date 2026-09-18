@@ -492,14 +492,23 @@ html[data-theme="sora"][data-sky="night"] {
 .cv-feature-name { font-size: 0.82rem; font-weight: 650; line-height: 1.4; }
 .cv-feature-desc { font-size: 0.68rem; color: var(--text-faint); margin-top: 0.15rem; line-height: 1.5; }
 .cover-meta { margin-top: 1.35rem; color: var(--text-dim); letter-spacing: 0.06em; line-height: 1.6; }
-.cover-start { margin-top: 2rem; padding: 0.95rem 2.3rem; font-size: 1rem; border-radius: 999px; }
+/* 封面动作区：主操作「开始讲解」独占一行居中，次级操作「打印 / 退出」并排落在它下面一行 */
+.cover-actions {
+  margin-top: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+}
+.cover-actions-sub { display: flex; align-items: center; justify-content: center; gap: 0.7rem; }
+.cover-start { padding: 0.95rem 2.3rem; font-size: 1rem; border-radius: 999px; }
 .cover-start .vp-ic { width: 1.25rem; height: 1.25rem; }
-/* 封面的第二个动作：打印。与「开始讲解」同行排布、基线对齐，做成次级按钮不抢主操作 */
+/* 第二行的两个次级动作：打印（灰）与退出（强调色描边）尺寸完全一致，
+   退出靠配色区别出来，落在正中下方的第二行而不是边角落，不至于被忽略 */
 .cover-print {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  margin: 2rem 0 0 0.7rem;
   padding: 0.62rem 1.4rem;
   border-radius: 999px;
   font-size: 0.9rem;
@@ -517,6 +526,24 @@ html[data-theme="sora"][data-sky="night"] {
   line-height: 1.7;
 }
 .cover-fs { position: absolute; left: 1.1rem; bottom: 1.1rem; z-index: 2; }
+/* 退出（关闭本页）：与「打印」同尺寸的次级按钮，用主题强调色描边把自己区分出来 */
+.cover-exit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.62rem 1.4rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--panel-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+.cover-exit:hover {
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  border-color: var(--accent);
+}
 .cover-themes {
   position: absolute;
   right: 1.1rem;
@@ -998,6 +1025,9 @@ mark, .vp-hl {
    ============================================================ */
 @media (max-width: 640px) {
   .cover-inner { width: 92vw; }
+  .cover-exit, .cover-print { padding: 0.55rem 1.05rem; font-size: 0.85rem; }
+  .cover-actions { margin-top: 1.6rem; gap: 0.7rem; }
+  .cover-actions-sub { gap: 0.5rem; }
   .cv-feature { min-width: 7.6rem; padding: 0.55rem 0.7rem; }
   .cover-themes { gap: 0.4rem; }
   .cover-themes .theme-dot, .vp-stage-themes .theme-dot { width: 1.25rem; height: 1.25rem; }

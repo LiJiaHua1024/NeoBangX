@@ -158,7 +158,7 @@
   var cover = $("vp-cover"), present = $("vp-present"), stage = $("st-stage");
   var cvPaper = $("cv-paper"), cvTitle = $("cv-title"), cvFeatures = $("cv-features"),
       cvMeta = $("cv-meta"), cvNotice = $("cv-notice"), cvStart = $("cv-start"),
-      cvFs = $("cv-fs"), cvThemes = $("cv-themes");
+      cvFs = $("cv-fs"), cvExit = $("cv-exit"), cvThemes = $("cv-themes");
   var leftPane = $("vp-left"), rightPane = $("vp-right"), tabPanel = $("q-tab"),
       ansList = $("ans-list"), ansMap = $("ans-map");
   var stTitle = $("st-title"), stPos = $("st-pos"), stGroup = $("st-group"),
@@ -971,6 +971,7 @@
     window.addEventListener("beforeunload", function (e) {
       flushEdits();
       if (!fileDirty) return;
+      needsPrompt = true;      /* 确认框已经弹出，说明这次关闭被受理了 */
       e.preventDefault();
       e.returnValue = "";
       return "";
@@ -1431,6 +1432,23 @@
     stopHide();
   }
 
+  /* ---------------- 退出（关掉这份单文件） ----------------
+     浏览器只允许脚本关闭「由脚本打开的窗口」：双击打开的标签页会被拒绝。
+     允许关闭的浏览器（Firefox 等）在有未保存改动时会先弹它自带的确认框，
+     那一刻 needsPrompt 被置真，免得误报「关不掉」。真被拦下时给一句按键提示，
+     别让人以为按钮坏了。 */
+  var needsPrompt = false;
+  function closeFile() {
+    flushEdits();                            /* 防抖中的改动先落本机，别丢 */
+    needsPrompt = false;
+    try { window.close(); } catch (e) {}
+    if (window.closed) return;
+    setTimeout(function () {
+      if (window.closed || needsPrompt) return;
+      toast("浏览器不允许页面关闭自己，请按 Ctrl+W（Mac：⌘W）关掉本页", "warn");
+    }, 200);
+  }
+
   /* ---------------- 事件绑定 ---------------- */
   /* 打印：把当前讲解交给 A4 排版引擎（vp-print.js）重排成纸面，
      教师详解版 / 学生练习版在弹窗里选。先把在改的内容写回、把速查表刷新一遍，
@@ -1449,6 +1467,7 @@
   function bindEvents() {
     cvStart.addEventListener("click", startPresentation);
     cvFs.addEventListener("click", toggleFs);
+    cvExit.addEventListener("click", closeFile);
     stFs.addEventListener("click", toggleFs);
     stCover.addEventListener("click", backToCover);
     if (cvPrint) cvPrint.addEventListener("click", doPrint);
