@@ -860,7 +860,7 @@
             <div x-show="vpTotal > 0 && (vpHasData || streaming) && !vpFullscreen" class="px-4 sm:px-5 py-2 shrink-0" style="border-bottom:1px solid var(--border);background:color-mix(in srgb, var(--accent) 3%, transparent)">
               <div class="flex items-center gap-3">
                 <div class="flex-1 h-1.5 rounded-full overflow-hidden" style="background:var(--border)">
-                  <div class="h-full transition-all duration-500" style="background:linear-gradient(90deg,var(--accent),var(--accent-2))" :style="'width:' + vpProgressPercent + '%'"></div>
+                  <div class="h-full transition-all duration-500" style="background:linear-gradient(90deg,var(--accent),var(--accent-2))" :style="{ width: vpProgressPercent + '%' }"></div>
                 </div>
                 <span class="text-xs text-dim whitespace-nowrap" x-text="vpQuestionCount + ' / ' + vpTotal + ' 题'"></span>
                 <span class="text-xs font-medium whitespace-nowrap" :class="vpRemaining===0 ? 'text-emerald-600' : 'text-dim'" x-text="streaming ? (vpRemaining>0 ? '剩余 ' + vpRemaining + ' 题' : '即将完成…') : (vpRemaining===0 ? '已完成' : '已生成 ' + vpProgressPercent + '%')"></span>
