@@ -1739,6 +1739,27 @@ mark, .vp-hl {
   word-break: break-word;
   white-space: pre-wrap;
 }
+/* 语篇编号徽章：标出本题引用的是哪一篇（同一篇正文只输出一次，靠编号复用） */
+.vp-passage-badge {
+  display: inline-block;
+  padding: 0.05rem 0.42rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+}
+/* 编号引用的语篇没找到声明（截断或模型漏声明）：明确告警，绝不显示一篇对不上的语篇 */
+.vp-passage-warn {
+  margin-bottom: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--panel-soft);
+  font-size: 0.78rem;
+  line-height: 1.65;
+}
 .vp-options-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

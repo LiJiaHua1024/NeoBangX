@@ -207,7 +207,7 @@ const CARD_REASONING_LIMIT = 2000;
 const VP_TAG_NAMES = [
   "TRANSFER_PASSAGE", "TRANSFER_STEM", "TRANSFER_OPTIONS", "TRANSFER_ANSWER", "TRANSFER_EXPL",
   "WRITING_POINTS", "WRITING_OUTLINE", "WRITING_SAMPLE", "PATTERN_NAME", "PATTERN_STEPS",
-  "PITFALLS", "DISTRACTOR", "EVIDENCE", "OPTIONS", "PASSAGE", "ANSWER", "REASON",
+  "PASSAGE_DEF", "PASSAGE_REF", "PITFALLS", "DISTRACTOR", "EVIDENCE", "OPTIONS", "PASSAGE", "ANSWER", "REASON",
   "QTYPE", "GROUP", "NOTICE", "TOTAL", "PAPER", "STEM", "END_Q", "Q",
 ];
 const _VP_TAG_DELIM = String.raw`([＠@]{2,}|[=＝]|[:：]{1,2})`;
@@ -220,6 +220,11 @@ const VP_HAS_TAG_RE = new RegExp(`[＠@]{2,}\\s*(?:${VP_TAG_NAMES.join("|")})\\s
 // 广义残片判定：任何形如 @@词@@ / @@词= / @@词: 的 token（含白名单外的自造标签）。
 // 仅供"不裸奔原文"的门卫使用——宁可置空显示也不能把原始标记当 Markdown 泄露出去。
 const VP_ANY_TAG_RE = /[＠@]{2,}[A-Za-z_]{1,}\s*(?:[＠@]{2,}|[=＝]|[:：])/;
+// 语篇编号规范化：模型可能写成 p3 / P-3 / "P3."，统一成大写去符号的键做查表，
+// 展示时仍用 @@PASSAGE_DEF@@ 行上的原始写法（它才是权威拼法）
+const vpNormPassageRef = (v) => String(v == null ? "" : v).replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+// 显式声明「本题无语篇」的编号写法（写作题）
+const VP_NO_PASSAGE_REFS = new Set(["", "-", "NONE", "NOPASSAGE", "NULL"]);
 
 /* ---------------- 浏览器指纹（ThumbmarkJS，仅用于识别共享，不做拦截） ----------------
    UMD 经 CDN 引入（frontend/index.html），计算失败/被拦截时静默降级为空，
@@ -1962,6 +1967,10 @@ function nbx() {
       let currentQ = null;
       let currentField = null;
       let fieldBuf = [];
+      // 语篇按编号复用（@@PASSAGE_DEF@@ P1 + 全文 / @@PASSAGE_REF@@ P1）：先收齐全部定义，
+      // 收尾时再统一解析引用，声明写在引用之后、跨组复用、截断与续写都能对上
+      const passageDefs = {};
+      let pendingDefRef = "";
       // @@Q@@ 独占一行、题号落在下一行时的等待标记（见下方逐行解析）
       let pendingQNo = false;
       // 迁移块可整块重复（每题 N 道），块以 TRANSFER_PASSAGE 开头：
@@ -1977,12 +1986,22 @@ function nbx() {
         return d;
       };
       const flushField = () => {
-        if (currentField === null || currentQ === null) { fieldBuf = []; currentField = null; return; }
+        if (currentField === null) { fieldBuf = []; return; }
         const content = fieldBuf.join("\n").trim();
         fieldBuf = [];
         const cf = currentField;
         currentField = null;
+        if (cf === "PASSAGE_DEF") {
+          // 同行的是编号，正文从下一行起：同号重复声明保留首个非空正文（正文只应出现一次）
+          const key = vpNormPassageRef(pendingDefRef);
+          if (key && content && !passageDefs[key]) passageDefs[key] = {ref: pendingDefRef.trim(), text: content};
+          pendingDefRef = "";
+          return;
+        }
+        if (currentQ === null) return;
         if (cf === "PASSAGE") {
+          // 旧内联格式（历史记录）：正文写在本题里。空值或「同上」等占位沿用同组上一题的正文，
+          // 但标记为「继承」——收尾解析时若本题另有 @@PASSAGE_REF@@ 编号，以编号引用为准
           let finalPassage = content;
           const stripped = content.trim();
           let isPlaceholder = false;
@@ -1991,7 +2010,7 @@ function nbx() {
           else if (stripped.includes("同上") && stripped.length < 30) isPlaceholder = true;
           if (isPlaceholder && currentGroup && currentGroup.questions && currentGroup.questions.length) {
             const prev = currentGroup.questions[currentGroup.questions.length - 1].passage;
-            if (prev) finalPassage = prev;
+            if (prev) { finalPassage = prev; currentQ._passage_inherited = true; }
           }
           currentQ.passage = finalPassage;
         }
@@ -2091,6 +2110,9 @@ function nbx() {
           no: String(no).trim(),
           qtype: qtype,
           passage: currentQ.passage || "",
+          passageRef: (currentQ._passage_ref || "").trim(),
+          // 旧内联格式下「空值/占位符沿用上一题」只算继承，收尾解析时若有编号引用以引用为准
+          _passageInherited: !!currentQ._passage_inherited,
           stem: currentQ.stem || "",
           options: options,
           answer: currentQ._answer_raw || null,
@@ -2105,6 +2127,8 @@ function nbx() {
         currentGroup.questions.push(qObj);
         currentQ = null;
       };
+      // 当前是否在往字段里收正文：@@PASSAGE_DEF@@ 可以出现在第一道题之前（此时还没有 currentQ）
+      const collecting = () => currentField !== null && (currentQ !== null || currentField === "PASSAGE_DEF");
       // 逐行解析；一行内出现多个标签时逐段切分，前段文本归入当前字段
       for (let rawLine of lines) {
         let work = rawLine.replace(/\r$/, "");
@@ -2118,18 +2142,18 @@ function nbx() {
         while (true) {
           const fm = work.match(VP_TAG_FIND_RE);
           if (!fm) {
-            if (currentField !== null && currentQ !== null) fieldBuf.push(work);
+            if (collecting()) fieldBuf.push(work);
             break;
           }
           if (fm.index > 0) {
             const prefix = work.slice(0, fm.index);
-            if (currentField !== null && currentQ !== null && prefix) fieldBuf.push(prefix);
+            if (collecting() && prefix) fieldBuf.push(prefix);
             work = work.slice(fm.index);
           }
           const m = work.match(VP_TAG_LINE_RE);
           if (!m) {
             // 理论不可达（find 与 line 同一定界符规则），防御性兜底
-            if (currentField !== null && currentQ !== null) fieldBuf.push(work);
+            if (collecting()) fieldBuf.push(work);
             break;
           }
           const tag = m[1].toUpperCase();
@@ -2196,6 +2220,14 @@ function nbx() {
               const v = value.trim().toLowerCase();
               currentQ.qtype = (v === "choice" || v === "blank" || v === "writing") ? v : v;
             }
+          } else if (tag === "PASSAGE_REF") {
+            // 单行值标签：本题所属语篇的编号（写作题写 -）
+            if (currentQ !== null) currentQ._passage_ref = value.trim();
+          } else if (tag === "PASSAGE_DEF") {
+            // 值在同行（编号）、正文从下一行起：编号单独存，正文按多行字段收集
+            currentField = tag;
+            fieldBuf = [];
+            pendingDefRef = value;
           } else if (tag === "END_Q") {
             commitQuestion();
             currentField = null;
@@ -2209,7 +2241,30 @@ function nbx() {
           work = rest;
         }
       }
+      // 收尾：最后一个字段也要落地（截断、或 @@PASSAGE_DEF@@ 落在文末时没有下一个标签来触发 flush）。
+      // 未遇 @@END_Q@@ 的题仍不提交，写进 currentQ 的内容随对象一起丢弃
+      if (currentField !== null) flushField();
       if (!groups.length && totalDeclared === null && !paperTitle && !notice) return null;
+      // 语篇引用解析（第二趟）：定义已全部收齐，这里把 @@PASSAGE_REF@@ 的编号换成对应全文。
+      // 内联全文优先；只是「继承」来的正文让位给编号引用；编号查不到定义时标记未解析
+      // （截断/漏声明），绝不静默顶上一篇别的语篇——宁可让左栏提示，也不能给学生看错文
+      for (const g of groups) for (const q of g.questions) {
+        const inherited = !!q._passageInherited;
+        delete q._passageInherited;
+        const rawRef = String(q.passageRef || "").trim();
+        const key = vpNormPassageRef(rawRef);
+        const declaredNone = VP_NO_PASSAGE_REFS.has(key) || VP_NO_PASSAGE_REFS.has(rawRef.toUpperCase());
+        const def = key ? passageDefs[key] : null;
+        if (def) {
+          if (!q.passage || inherited) q.passage = def.text;
+          q.passageRef = def.ref || key;
+        } else if (key && !declaredNone) {
+          q.passageUnresolved = true;
+          q.passageRef = rawRef;
+        } else {
+          q.passageRef = "";
+        }
+      }
       const answerMap = {};
       for (const g of groups) for (const q of g.questions) {
         if (q.answer) answerMap[String(q.no)] = String(q.answer);
@@ -5221,6 +5276,16 @@ function nbx() {
         lines.push(`板块写法：接下来的题若仍属于 ${label}，直接输出 \`@@Q@@\` 行；只有跨进新板块时，才输出新的 \`@@GROUP@@ id|title|intro\` 行。`);
       }
       lines.push("题号写法：题号以试卷原文为准，上面提到的题号只是进度提示，与原文不一致时照录原文题号。");
+      // 已用过的语篇编号（编号 → 板块标题）也要交代：模型才知道该沿用哪个号，而不是另起一个
+      const refSeen = new Map();
+      for (const g of groups) for (const q of (g.questions || [])) {
+        const key = vpNormPassageRef(q.passageRef);
+        if (key && !refSeen.has(key)) refSeen.set(key, String(g.title || g.id || "").trim());
+      }
+      const refList = [...refSeen.entries()].map(([k, t]) => (t ? `${k}（${t}）` : k));
+      lines.push(refList.length
+        ? `语篇写法：已用编号 ${refList.join("、")}，这些语篇一律写 \`@@PASSAGE_REF@@ 编号\`、不要重复正文；只有遇到新语篇时，才在它首次出现处输出一次 \`@@PASSAGE_DEF@@ 新编号\` 加全文。`
+        : "语篇写法：每篇语篇在首次出现处输出一次 `@@PASSAGE_DEF@@ P编号` 加全文，之后所有用到它的题只写 `@@PASSAGE_REF@@ 编号`；写作题写 `-`。");
       lines.push(`每道笔试题仍输出 ${this.vpLockedTransferCount} 块迁移（写作题除外）。`);
       return lines.join("\n");
     },
@@ -5730,7 +5795,8 @@ function nbx() {
       return [...new Set(out)];
     },
     /* 结构 → @@TAG@@ 契约文本（与 parseCustomVisualPaper 的口径严格对应：
-       QTYPE 值必须同行、每题必须 @@END_Q@@ 收题、易错点用 :: 分隔、组信息用 | 分隔） */
+       QTYPE 值必须同行、每题必须 @@END_Q@@ 收题、易错点用 :: 分隔、组信息用 | 分隔、
+       语篇用 @@PASSAGE_DEF@@/@@PASSAGE_REF@@ 编号复用，同一篇只写一份正文） */
     vpSerializeRaw() {
       const vp = this.visualPaper || {};
       const paper = vp.paper || {};
@@ -5743,6 +5809,45 @@ function nbx() {
       out.push(`@@TOTAL@@ ${total}`);
       out.push(`@@PAPER@@ ${flat(paper.title)}`);
       out.push(`@@NOTICE@@ ${flat(vp.notice)}`);
+      /* 语篇按编号回写：同一篇只在首次出现处写一份 @@PASSAGE_DEF@@，其余题写 @@PASSAGE_REF@@。
+         编号沿用题目自带的 passageRef；被教师单独改过、与同编号共用正文不一致的题改写内联
+         @@PASSAGE@@，保住「单题独立修改」的语义，也不会污染同篇其他题。 */
+      const emittedRefs = new Set();
+      for (const g of this.vpGroups) for (const q of (g.questions || [])) {
+        const key = vpNormPassageRef(q.passageRef);
+        if (key) emittedRefs.add(key);
+      }
+      const defTextByRef = new Map();
+      const defRefByText = new Map();
+      let refSeq = 0;
+      const nextRef = () => {
+        let id;
+        do { refSeq += 1; id = `P${refSeq}`; } while (emittedRefs.has(id));
+        emittedRefs.add(id);
+        return id;
+      };
+      const pushPassage = (qtype, q) => {
+        const text = String(q.passage == null ? "" : q.passage);
+        const trimmed = text.trim();
+        const declaredRef = String(q.passageRef || "").trim();
+        const key = vpNormPassageRef(declaredRef);
+        if (!trimmed) { out.push("@@PASSAGE_REF@@ -"); return; }
+        if (key && defTextByRef.has(key)) {
+          if (defTextByRef.get(key) === trimmed) { out.push(`@@PASSAGE_REF@@ ${declaredRef || key}`); return; }
+          // 同编号但正文不同 = 这一题被单独改过：内联全文，不影响同篇其他题
+          out.push("@@PASSAGE@@");
+          out.push(block(text));
+          return;
+        }
+        const sameTextRef = defRefByText.get(trimmed);
+        if (sameTextRef) { out.push(`@@PASSAGE_REF@@ ${sameTextRef}`); return; }
+        const id = declaredRef || nextRef();
+        defTextByRef.set(vpNormPassageRef(id) || id, trimmed);
+        defRefByText.set(trimmed, id);
+        out.push(`@@PASSAGE_DEF@@ ${id}`);
+        out.push(block(text));
+        out.push(`@@PASSAGE_REF@@ ${id}`);
+      };
       for (const g of this.vpGroups) {
         const gid = VP_GROUP_IDS.includes(g.id) ? g.id : "other";
         out.push(`@@GROUP@@ ${gid}|${flat(String(g.title || "").replace(/\|/g, "｜"))}|${flat(String(g.intro || "").replace(/\|/g, "｜"))}`);
@@ -5750,8 +5855,7 @@ function nbx() {
           const qtype = (q.qtype === "choice" || q.qtype === "blank" || q.qtype === "writing") ? q.qtype : "blank";
           out.push(`@@Q@@ ${String(q.no == null ? "" : q.no).trim() || "?"}`);
           out.push(`@@QTYPE@@ ${qtype}`);
-          out.push("@@PASSAGE@@");
-          out.push(block(q.passage));
+          pushPassage(qtype, q);
           out.push("@@STEM@@");
           out.push(block(q.stem));
           out.push("@@OPTIONS@@");

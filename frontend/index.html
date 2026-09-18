@@ -1028,8 +1028,14 @@
                   <div x-ref="vpLeftPane" class="vp-pane flex-1 min-h-0 overflow-y-auto scroll-thin p-4 sm:p-5" :class="{ 'mask-answers': maskOn && !vpEditing }">
                     <template x-if="!vpEditing">
                       <div>
+                        <div x-show="vpCurrentQuestion && vpCurrentQuestion.passageUnresolved" class="vp-passage-warn">
+                          该题引用的语篇 <b x-text="vpCurrentQuestion.passageRef || ''"></b> 没有找到对应的 <code>@@PASSAGE_DEF@@</code> 声明（可能被截断或模型漏写）。继续生成后会自动补上；若一直补不上，请核对这道题所属的语篇是否真的输出过。
+                        </div>
+                        <div x-show="vpCurrentQuestion && vpCurrentQuestion.passage && vpCurrentQuestion.passageRef" class="mb-2">
+                          <span class="vp-passage-badge" :title="'本题所属语篇编号：' + (vpCurrentQuestion.passageRef || '')" x-text="vpCurrentQuestion.passageRef"></span>
+                        </div>
                         <div x-show="vpCurrentQuestion && vpCurrentQuestion.passage" class="vp-passage text-sm leading-relaxed whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.passage)"></div>
-                        <div x-show="vpCurrentQuestion && !vpCurrentQuestion.passage" class="text-sm text-dim">该题无独立语篇（写作题或语法填空）</div>
+                        <div x-show="vpCurrentQuestion && !vpCurrentQuestion.passage && !vpCurrentQuestion.passageUnresolved" class="text-sm text-dim">该题无独立语篇（写作题或语法填空）</div>
                       </div>
                     </template>
                     <template x-if="vpEditing">

@@ -11,12 +11,12 @@ ALLOWED_GROUP_IDS = {"reading", "cloze7", "cloze", "grammar", "writing_app", "wr
 # 增量友好的自定义分隔格式标签
 # 单行值标签：tag 行内含值  @@TOTAL@@ 26
 # 多行内容标签：tag 独占一行，内容至下一标签
-SINGLE_VALUE_TAGS = {"TOTAL", "PAPER", "NOTICE", "GROUP", "Q", "QTYPE"}
+SINGLE_VALUE_TAGS = {"TOTAL", "PAPER", "NOTICE", "GROUP", "Q", "QTYPE", "PASSAGE_REF"}
 ALLOWED_QTYPES = {"choice", "blank", "writing"}
 # 选项标号：阅读/完形为 A-D，七选五为 A-G，按原文照录
 OPT_LABEL_RE = re.compile(r"^([A-Ga-g])\s*[\.、:：\)）]?\s*(.*)$")
 MULTILINE_TAGS = {
-    "PASSAGE", "STEM", "OPTIONS", "ANSWER", "EVIDENCE", "REASON", "DISTRACTOR",
+    "PASSAGE", "PASSAGE_DEF", "STEM", "OPTIONS", "ANSWER", "EVIDENCE", "REASON", "DISTRACTOR",
     "PITFALLS", "PATTERN_NAME", "PATTERN_STEPS",
     "TRANSFER_PASSAGE", "TRANSFER_STEM", "TRANSFER_OPTIONS", "TRANSFER_ANSWER", "TRANSFER_EXPL",
     "WRITING_POINTS", "WRITING_OUTLINE", "WRITING_SAMPLE",
@@ -30,7 +30,7 @@ ALL_TAGS = SINGLE_VALUE_TAGS | MULTILINE_TAGS | {"END_Q"}
 _TAG_NAMES = [
     "TRANSFER_PASSAGE", "TRANSFER_STEM", "TRANSFER_OPTIONS", "TRANSFER_ANSWER", "TRANSFER_EXPL",
     "WRITING_POINTS", "WRITING_OUTLINE", "WRITING_SAMPLE", "PATTERN_NAME", "PATTERN_STEPS",
-    "PITFALLS", "DISTRACTOR", "EVIDENCE", "OPTIONS", "PASSAGE", "ANSWER", "REASON",
+    "PASSAGE_DEF", "PASSAGE_REF", "PITFALLS", "DISTRACTOR", "EVIDENCE", "OPTIONS", "PASSAGE", "ANSWER", "REASON",
     "QTYPE", "GROUP", "NOTICE", "TOTAL", "PAPER", "STEM", "END_Q", "Q",
 ]
 _TAG_DELIM = r"([＠@]{2,}|[=＝]|[:：]{1,2})"
@@ -43,6 +43,14 @@ HAS_TAG_RE = re.compile(r"[＠@]{2,}\s*(?:" + "|".join(_TAG_NAMES) + r")\s*" + _
 
 def _is_nonempty_str(v: Any) -> bool:
     return isinstance(v, str) and v.strip() != ""
+
+# 语篇编号规范化：模型可能写成 p3 / P-3 / "P3."，统一成大写去符号的键查表；
+# 展示仍用 @@PASSAGE_DEF@@ 行上的原始写法（它才是权威拼法）
+def _norm_passage_ref(v: Any) -> str:
+    return re.sub(r"[^0-9A-Za-z]", "", "" if v is None else str(v)).upper()
+
+# 显式声明「本题无语篇」的编号写法（写作题）
+NO_PASSAGE_REFS = {"", "-", "NONE", "NOPASSAGE", "NULL"}
 
 # ========== 旧 JSON 解析（保留兼容历史） ==========
 
@@ -101,6 +109,10 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
     current_q: dict | None = None
     current_field: str | None = None
     field_buf: list[str] = []
+    # 语篇按编号复用（@@PASSAGE_DEF@@ P1 + 全文 / @@PASSAGE_REF@@ P1）：先收齐全部定义，
+    # 收尾时统一解析引用，声明写在引用之后、跨组复用、截断与续写都能对上
+    passage_defs: dict[str, dict] = {}
+    pending_def_ref = ""
 
     def begin_transfer_field(key: str) -> dict:
         """迁移块可整块重复（每题 N 道），块以 TRANSFER_PASSAGE 开头。
@@ -120,19 +132,29 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
         return draft
 
     def flush_field():
-        nonlocal current_field, field_buf, current_q
-        if current_field is None or current_q is None:
+        nonlocal current_field, field_buf, current_q, pending_def_ref
+        if current_field is None:
             field_buf = []
-            current_field = None
             return
         content = "\n".join(field_buf).strip()
         # 去除首尾空行，但保留内部换行
         field_buf = []
         cf = current_field
         current_field = None
+        if cf == "PASSAGE_DEF":
+            # 同行的是编号，正文从下一行起：同号重复声明保留首个非空正文（正文只应出现一次）
+            key = _norm_passage_ref(pending_def_ref)
+            text = content.strip()
+            if key and text and key not in passage_defs:
+                passage_defs[key] = {"ref": pending_def_ref.strip(), "text": text}
+            pending_def_ref = ""
+            return
+        if current_q is None:
+            return
         # 将内容写入 current_q 的对应键
         if cf == "PASSAGE":
-            # 同上占位容错：若为 "<同上A篇语篇>" 等或空，直接复用同组上一题的语篇
+            # 旧内联格式（历史记录）：正文写在本题里。空值或「同上」等占位沿用同组上一题的正文，
+            # 但标记为「继承」——收尾解析时若本题另有 @@PASSAGE_REF@@ 编号，以编号引用为准
             stripped = content.strip()
             is_placeholder = False
             if not stripped:
@@ -146,7 +168,15 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 prev_passage = current_group["questions"][-1].get("passage", "") if current_group["questions"] else ""
                 if prev_passage:
                     content = prev_passage
+                    current_q["_passage_inherited"] = True
             current_q["passage"] = content
+        elif cf == "PASSAGE_DEF":
+            # 同行的是编号，正文从下一行起：同号重复声明保留首个非空正文（正文只应出现一次）
+            key = _norm_passage_ref(pending_def_ref)
+            text = content.strip()
+            if key and text and key not in passage_defs:
+                passage_defs[key] = {"ref": pending_def_ref.strip(), "text": text}
+            pending_def_ref = ""
         elif cf == "STEM":
             current_q["stem"] = content
         elif cf == "OPTIONS":
@@ -309,6 +339,9 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
             "no": str(no).strip(),
             "qtype": qtype,
             "passage": current_q.get("passage", ""),
+            "passageRef": (current_q.get("_passage_ref") or "").strip(),
+            # 旧内联格式下「空值/占位符沿用上一题」只算继承，收尾解析时若有编号引用以引用为准
+            "_passageInherited": bool(current_q.get("_passage_inherited")),
             "stem": current_q.get("stem", ""),
             "options": options,
             "answer": current_q.get("_answer_raw", "") or None,
@@ -328,24 +361,28 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
         # 重置 current_q
         current_q = None
 
+    def collecting() -> bool:
+        """当前是否在往字段里收正文：@@PASSAGE_DEF@@ 可以出现在第一道题之前（此时还没有 current_q）"""
+        return current_field is not None and (current_q is not None or current_field == "PASSAGE_DEF")
+
     # 逐行解析；一行内出现多个标签时逐段切分，前段文本归入当前字段
     for raw_line in lines:
         work = raw_line.rstrip("\r")
         while True:
             fm = TAG_FIND_RE.search(work)
             if fm is None:
-                if current_field is not None and current_q is not None:
+                if collecting():
                     field_buf.append(work)
                 break
             if fm.start() > 0:
                 prefix = work[: fm.start()]
-                if current_field is not None and current_q is not None and prefix:
+                if collecting() and prefix:
                     field_buf.append(prefix)
                 work = work[fm.start():]
             m = TAG_LINE_RE.match(work)
             if m is None:
                 # 理论不可达（find 与 line 同一定界符规则），防御性兜底
-                if current_field is not None and current_q is not None:
+                if collecting():
                     field_buf.append(work)
                 break
             tag = m.group(1).upper()
@@ -411,6 +448,15 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 if current_q is not None:
                     v = value.strip().lower()
                     current_q["qtype"] = v if v in ALLOWED_QTYPES else v
+            elif tag == "PASSAGE_REF":
+                # 单行值标签：本题所属语篇的编号（写作题写 -）
+                if current_q is not None:
+                    current_q["_passage_ref"] = value.strip()
+            elif tag == "PASSAGE_DEF":
+                # 值在同行（编号）、正文从下一行起：编号单独存，正文按多行字段收集
+                current_field = tag
+                field_buf = []
+                pending_def_ref = value
             elif tag == "END_Q":
                 # 提交当前题
                 commit_question()
@@ -424,15 +470,40 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     field_buf.append(value)
             else:
                 # 白名单已保证不可达，防御性兜底
-                if current_field is not None and current_q is not None:
+                if collecting():
                     field_buf.append(work)
             work = rest
+
+    # 收尾：最后一个字段也要落地（截断、或 @@PASSAGE_DEF@@ 落在文末时没有下一个标签来触发 flush）。
+    # 未遇 @@END_Q@@ 的题仍不 commit，写进 current_q 的内容随对象一起丢弃
+    if current_field is not None:
+        flush_field()
 
     # 结束时若有未提交的题（无 END_Q），丢弃（保证已提交的都是完整题）
     # 不 commit 不完整题
 
     if not groups and total_declared is None and not paper_title and not notice:
         return None
+
+    # 语篇引用解析（第二趟）：定义已全部收齐，这里把 @@PASSAGE_REF@@ 的编号换成对应全文。
+    # 内联全文优先；只是「继承」来的正文让位给编号引用；编号查不到定义时标记未解析
+    # （截断/漏声明），绝不静默顶上一篇别的语篇——宁可让界面提示，也不能给学生看错文
+    for g in groups:
+        for q in g["questions"]:
+            inherited = bool(q.pop("_passageInherited", False))
+            raw_ref = str(q.get("passageRef") or "").strip()
+            key = _norm_passage_ref(raw_ref)
+            declared_none = key in NO_PASSAGE_REFS or raw_ref.upper() in NO_PASSAGE_REFS
+            definition = passage_defs.get(key) if key else None
+            if definition is not None:
+                if not q.get("passage") or inherited:
+                    q["passage"] = definition["text"]
+                q["passageRef"] = definition.get("ref") or key
+            elif key and not declared_none:
+                q["passageUnresolved"] = True
+                q["passageRef"] = raw_ref
+            else:
+                q["passageRef"] = ""
 
     # 计算 answerMap
     answerMap = {}
