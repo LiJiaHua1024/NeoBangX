@@ -1668,6 +1668,10 @@ function nbx() {
     vpFullscreen: false,
     vpActiveTab: "reference",
     vpParseError: "",
+    // 上一轮生成的收尾方式：done（模型自然写完）/ stopped（用户停止）/ error（报错、断流）。
+    // 空串＝这份卷子还没跑过。与视觉卷数据分开放：它描述的是「这次请求怎么结束的」，
+    // 不是卷子结构，不该跟着历史快照走（历史回放时由 partial/error 重新推导）。
+    vpRunState: "",
     _vpRenderPending: false,
     // 全屏讲解舞台：总览面板 / 控制台自动隐藏（上下两半可独立唤回）/ 固定
     vpOverviewOpen: false,
@@ -1953,6 +1957,7 @@ function nbx() {
       this.vpCloseFullscreen();
       this.vpActiveTab = "reference";
       this.vpParseError = "";
+      this.vpRunState = "";
       this._vpRenderPending = false;
     },
     parseCustomVisualPaper(raw) {
@@ -2423,6 +2428,18 @@ function nbx() {
     },
     get vpRemaining() {
       return Math.max(0, (this.vpTotal || 0) - this.vpQuestionCount);
+    },
+    /* 整卷是否已确认写完——「继续生成」入口与「已完成」字样都以此为准。
+       三条同时成立才算：声明总题数有效、实际题数不少于它、上一轮是自然收尾。
+       缺任何一条都按「没写完」处理：没有 @@TOTAL@@ 时 vpTotal 会退化成已生成题数，
+       「剩余 0」就只是个恒真式；停止/报错/断流时总数可能是被截断的数字前缀、
+       模型也可能自己数错，卡死补全入口比多花一次生成更糟。 */
+    get vpComplete() {
+      if (this.streaming) return false;
+      const declared = Number(this.visualPaper && this.visualPaper.total);
+      if (!Number.isFinite(declared) || declared <= 0) return false;
+      if (this.vpQuestionCount < declared) return false;
+      return this.vpRunState === "done";
     },
     // 是否处于第一/最后一题（考虑跨组空组），供全屏角落按钮禁用
     get vpIsFirstQuestion() {
@@ -5163,6 +5180,8 @@ function nbx() {
       // 代次不符 = 这次流已被切换工具/新建题目作废，收尾交给新流程
       if (seq !== undefined && seq !== this._runSeq) return;
       this.streaming = false;
+      // 收尾方式决定「继续生成」入口是否保留，必须先于渲染落定
+      this.vpRunState = state;
       this.thinking = false;
       this.fallbackInfo = null;
       this.stopTimer();
@@ -6908,12 +6927,15 @@ function nbx() {
       if (item.error) {
         this.errorMsg = item.error;
         this.status = "error";
+        this.vpRunState = "error";
         this.failedModel = item.model || "";
         this.errorRetryable = true;
         this.errorLimited = false;
       } else {
         this.errorMsg = "";
         this.status = "history";
+        // 历史里只有 partial 一个字段记录「上次没写完」，没标就按自然收尾算
+        this.vpRunState = item.partial ? "stopped" : "done";
       }
       this.vpCloseFullscreen();
       this.vpActiveTab = "reference";
