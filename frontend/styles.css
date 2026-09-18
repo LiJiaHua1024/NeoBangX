@@ -588,7 +588,9 @@ html[data-theme="sora"] .mascot-peeking {
 }
 
 /* ============================================================
-   按钮 —— 阴阳实心 + 扫光 + 弹簧按压
+   按钮 —— 阴阳实心 + 扫光 + 高亮悬停 + 弹簧按压
+   悬停反馈一律只做底色/描边/文字高亮，不做位移（上浮）。
+   位移只留给 :active 的按压回缩，别在 hover 上加 transform 把按钮抬起来。
    ============================================================ */
 .btn-primary {
   position: relative;
@@ -619,11 +621,10 @@ html[data-theme="sora"] .mascot-peeking {
   transition: transform 0.8s var(--ease-out);
   pointer-events: none;
 }
-.btn-primary:hover:not(:disabled) { background: var(--btn-hover); transform: translateY(-1.5px); }
+.btn-primary:hover:not(:disabled) { background: var(--btn-hover); }
 .btn-primary:hover:not(:disabled)::after { transform: translateX(130%) skewX(-8deg); }
 .btn-primary:active:not(:disabled) { transform: scale(0.94); transition-duration: 0.08s; }
 .btn-primary:disabled { opacity: 0.5; }
-.migration-retry-btn:hover:not(:disabled) { transform: none; }
 
 .btn-stop {
   color: #fff;
@@ -673,7 +674,7 @@ html[data-theme="sora"] .mascot-peeking {
   white-space: nowrap;
   transition: background 0.2s ease, transform 0.4s var(--ease-spring), border-color 0.2s;
 }
-.btn-ghost:hover:not(:disabled) { background: var(--hover-bg); transform: translateY(-1.5px); }
+.btn-ghost:hover:not(:disabled) { background: var(--hover-bg); }
 .btn-ghost:active:not(:disabled) { transform: scale(0.95); transition-duration: 0.08s; }
 
 .icon-btn {
@@ -1306,7 +1307,6 @@ html[data-theme="sora"] .mascot-peeking {
   background: var(--hover-bg);
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   box-shadow: 0 4px 18px -6px var(--glow);
-  transform: translateY(-1.5px);
 }
 .btn-new-topic:active { transform: scale(0.95); transition-duration: 0.08s; }
 
@@ -1637,10 +1637,48 @@ mark, .vp-hl {
   display: inline-flex;
   align-items: center;
   gap: 0.15rem;
-  padding-left: 0.35rem;
-  border-left: 1px solid var(--border);
 }
 .vp-fmt-group .icon-btn:disabled { opacity: 0.35; }
+
+/* 顶栏模式开关（修改 / 全屏讲题）：图标与文字同在一个按钮内，整块都可点。
+   窄屏（触屏）没地方放字，只留图标，靠 title + aria-label 兜底。 */
+.vp-bar-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 2rem;
+  padding: 0 0.7rem;
+  flex: none;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text-dim);
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.3s var(--ease-spring);
+}
+.vp-bar-pill:hover { background: var(--hover-bg); color: var(--text); }
+.vp-bar-pill:active { transform: scale(0.95); transition-duration: 0.08s; }
+.vp-bar-pill.on {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* 顶栏语义分组（编辑 | 浏览 | 输出）之间的竖线：纯装饰，窄屏折行时撤掉免得落单 */
+.vp-bar-divider {
+  width: 1px;
+  height: 1.1rem;
+  flex: none;
+  margin: 0 0.15rem;
+  background: var(--border);
+}
+@media (max-width: 639.98px) {
+  .vp-bar-pill-text { display: none; }
+  .vp-bar-pill { padding: 0; width: 2rem; justify-content: center; }
+  .vp-bar-divider { display: none; }
+}
 
 /* 浮动格式按钮：选中文字时才出现（fixed 定位，贴着选区） */
 .vp-edit-tools {
@@ -1686,9 +1724,9 @@ mark, .vp-hl {
   background: var(--panel-soft);
   border: 1px solid var(--border);
   cursor: pointer;
-  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.3s var(--ease-spring);
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
 }
-.vp-q-chip:hover { background: var(--hover-bg); color: var(--text); transform: translateY(-1px); }
+.vp-q-chip:hover { background: var(--hover-bg); color: var(--text); }
 .vp-q-chip.active {
   color: var(--text);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -2041,7 +2079,7 @@ mark, .vp-hl {
   border: 1px solid var(--border);
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.3s var(--ease-spring);
 }
-.vp-overview-chip:hover { background: var(--hover-bg); color: var(--text); transform: translateY(-1px); }
+.vp-overview-chip:hover { background: var(--hover-bg); color: var(--text); }
 .vp-overview-chip:active { transform: scale(0.94); transition-duration: 0.08s; }
 .vp-overview-chip.active {
   color: var(--text);
@@ -2211,7 +2249,7 @@ mark, .vp-hl {
 }
 .side-card:hover { background: var(--hover-bg); border-color: var(--border-strong); }
 .side-card.clickable { cursor: pointer; }
-.side-card.clickable:hover { transform: translateY(-2px); box-shadow: 0 8px 22px -10px rgba(0, 0, 0, 0.3); }
+.side-card.clickable:hover { box-shadow: 0 8px 22px -10px rgba(0, 0, 0, 0.3); }
 .side-card.clickable:active { transform: scale(0.98); transition-duration: 0.08s; }
 
 .chip {

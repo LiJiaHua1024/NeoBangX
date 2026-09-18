@@ -834,8 +834,13 @@
                 </template>
               </div>
               <div class="flex items-center gap-1.5 shrink-0 flex-wrap">
-                <button class="icon-btn" style="width:2rem;height:2rem" :class="{ 'on': vpEditing }" @click="toggleVpEdit()" :title="vpEditing ? '完成修改并保存' : '修改模式：点开后所有文字都能改'" x-html="icon(vpEditing ? 'check' : 'pen','w-4 h-4')"></button>
-                <span x-text="vpEditing ? '完成修改' : '修改'" class="text-xs hidden sm:inline" style="margin-left:-4px"></span>
+                <!-- 编辑组：模式开关（图标+文字同在一个按钮里，整块可点） + 开着时才出现的格式按钮 -->
+                <button type="button" class="vp-bar-pill" :class="{ 'on': vpEditing }" @click="toggleVpEdit()"
+                        :title="vpEditing ? '完成修改并保存' : '修改模式：点开后所有文字都能改'"
+                        :aria-label="vpEditing ? '完成修改并保存' : '修改模式：点开后所有文字都能改'">
+                  <span x-html="icon(vpEditing ? 'check' : 'pen','w-4 h-4')"></span>
+                  <span class="vp-bar-pill-text" x-text="vpEditing ? '完成修改' : '修改'"></span>
+                </button>
                 <span class="vp-fmt-group" x-show="vpEditing">
                   <button type="button" class="icon-btn" style="width:2rem;height:2rem" :disabled="!vpSelActive"
                           @mousedown.prevent @click="vpFormatFocused('b')"
@@ -844,15 +849,22 @@
                           @mousedown.prevent @click="vpFormatFocused('mark')"
                           :title="vpSelActive ? '给选中的文字加高亮' : '先用鼠标选中要高亮的文字'" x-html="icon('highlight','w-4 h-4')"></button>
                 </span>
+                <span class="vp-bar-divider"></span>
+                <!-- 浏览组：题号 + 答案显隐 + 翻题 -->
                 <span class="text-xs text-dim hidden sm:inline" x-text="'第 ' + vpCurrentGlobalIndex + ' / ' + vpQuestionCount + ' 题'"></span>
                 <button class="icon-btn" style="width:2rem;height:2rem" :class="{ 'on': maskOn }" @click="toggleMask()" :title="maskOn ? '显示答案' : '隐藏答案'" x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
                 <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpPrevQuestion()" :disabled="vpQuestionCount===0">上一题</button>
                 <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpNextQuestion()" :disabled="vpQuestionCount===0">下一题</button>
+                <span class="vp-bar-divider"></span>
+                <!-- 输出组：复制 / 导出 / 全屏讲题（退出全屏由全屏舞台顶栏负责，这里只有进入态） -->
                 <button class="icon-btn" style="width:2rem;height:2rem" @click="copyResult()"
                         :title="copied ? '已复制' : '复制'" x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
                 <button class="icon-btn" style="width:2rem;height:2rem" @click="openVpExport()" title="下载讲解文件（单文件 HTML，双击即可讲题）" x-html="icon('insert','w-4 h-4')"></button>
-                <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="toggleVpFullscreen()" x-html="vpFullscreen ? icon('x','w-4 h-4') : icon('panel-right','w-4 h-4')"></button>
-                <span x-text="vpFullscreen ? '退出全屏' : '全屏讲题'" class="text-xs hidden sm:inline" style="margin-left:-4px"></span>
+                <button type="button" class="vp-bar-pill" @click="toggleVpFullscreen()"
+                        title="全屏讲题" aria-label="全屏讲题">
+                  <span x-html="icon('expand','w-4 h-4')"></span>
+                  <span class="vp-bar-pill-text">全屏讲题</span>
+                </button>
               </div>
             </div>
 

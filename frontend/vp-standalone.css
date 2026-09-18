@@ -327,7 +327,7 @@ html[data-theme="sora"][data-sky="night"] {
   transition: transform 0.8s var(--ease-out);
   pointer-events: none;
 }
-.btn-primary:hover:not(:disabled) { background: var(--btn-hover); transform: translateY(-1.5px); }
+.btn-primary:hover:not(:disabled) { background: var(--btn-hover); }
 .btn-primary:hover:not(:disabled)::after { transform: translateX(130%) skewX(-8deg); }
 .btn-primary:active:not(:disabled) { transform: scale(0.94); transition-duration: 0.08s; }
 .btn-primary:disabled { opacity: 0.5; }
@@ -572,9 +572,9 @@ mark, .vp-hl {
   color: var(--text-dim);
   background: var(--panel-soft);
   border: 1px solid var(--border);
-  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.3s var(--ease-spring);
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
 }
-.vp-q-chip:hover { background: var(--hover-bg); color: var(--text); transform: translateY(-1px); }
+.vp-q-chip:hover { background: var(--hover-bg); color: var(--text); }
 .vp-q-chip.active {
   color: var(--text);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -927,7 +927,7 @@ mark, .vp-hl {
   border: 1px solid var(--border);
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.3s var(--ease-spring);
 }
-.vp-overview-chip:hover { background: var(--hover-bg); color: var(--text); transform: translateY(-1px); }
+.vp-overview-chip:hover { background: var(--hover-bg); color: var(--text); }
 .vp-overview-chip:active { transform: scale(0.94); transition-duration: 0.08s; }
 .vp-overview-chip.active {
   color: var(--text);
