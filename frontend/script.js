@@ -178,6 +178,16 @@ const LS = {
   auth: "nbx_auth",
   code: "nbx_code",
 };
+/* 侧栏布局分界：视口 ≥ WIDE_MIN（CSS 像素）时左右侧栏并入同一行（三栏并排），
+   以下一律为浮层抽屉（盖在内容之上）。与 index.html 的 2xl: 前缀、
+   styles.css 的 max-width:1535.98px 媒体查询必须保持一致。
+   一律用 matchMedia 判定：它与 CSS 媒体查询同一套口径（innerWidth 在滚动条/缩放下
+   会有偏差），并且能在跨分界时主动通知，不必只靠 resize 兜。
+   注意：分档只切换「行为」（触发钮显隐、遮罩是否可用），不要新写 display 工具类去压
+   自定义 CSS —— 浏览器版 Tailwind 注入样式的位置在 <link> 之前，同权重下 styles.css
+   反而赢，2xl:hidden 这类类名会被自定义类的 display 吃掉。 */
+const WIDE_MIN = 1536;
+const WIDE_MQ = window.matchMedia(`(min-width: ${WIDE_MIN}px)`);
 const HISTORY_LIMIT = 100;
 // 迁移收藏单条体积可观（内嵌全部卡片输出），同样需要上限防止 localStorage 溢出
 const FAVORITES_LIMIT = 100;
@@ -1749,6 +1759,9 @@ function nbx() {
     leftOpen: false,
     rightMobileOpen: false,
     rightCollapsed: false,
+    /* 窄档（浮层侧栏模式）：<2xl 为 true。悬浮触发钮与抽屉遮罩都只看它，
+       不靠 display 工具类——那会和 styles.css 的同权重规则抢，胜负取决于注入顺序。 */
+    isCompact: !WIDE_MQ.matches,
     rightTab: "history",
     collapsedGroups: {},
     modelMenuOpen: false,
@@ -2449,6 +2462,12 @@ function nbx() {
       this.vpOverviewOpen = false;
       this.vpTopHidden = false;
       this.vpBottomHidden = false;
+      // 进沉浸态同理收掉两侧浮层抽屉与导出面板：抽屉层级（z-50）低于讲台，
+      // 若有开着的，会被讲台盖住但状态还在，退出全屏时又冒出来；
+      // 导出面板层级高于讲台，更不能留在屏幕上。
+      this.leftOpen = false;
+      this.rightMobileOpen = false;
+      this.closeExportMenu();
       // 全屏讲解舞台用不透明背景盖住整个视口，bgfx 完全不可见：暂停其渲染，
       // 把整帧预算让给讲解页面（退出时 resume，视觉零变化）
       if (this._bg) this._bg.suspend();
@@ -2967,10 +2986,25 @@ function nbx() {
         }, 400);
       });
 
-      // 视口变化时关闭移动端抽屉
+      // 布局分档同步：跨过 2xl 分界时切换档位，并关掉已不适用的抽屉状态
+      const syncCompact = () => {
+        const compact = !WIDE_MQ.matches;
+        if (!compact) {
+          this.leftOpen = false;
+          this.rightMobileOpen = false;
+        }
+        this.isCompact = compact;
+      };
+      WIDE_MQ.addEventListener("change", syncCompact);
+      syncCompact();
+
+      // 输入坞动效：生成开始/结束、输入区收起/展开时各走一次高度过渡
+      this.$watch("streaming", () => this.syncDocks());
+      this.$watch("inputCollapsed", () => this.syncDocks());
+
+      // 视口变化时关闭浮层抽屉（跨过分界后侧栏已并排，抽屉状态不再适用）
       window.addEventListener("resize", () => {
-        if (window.innerWidth >= 1024) this.leftOpen = false;
-        if (window.innerWidth >= 1280) this.rightMobileOpen = false;
+        syncCompact();
         this.repositionExportMenu();
         this.repositionMigrationExport();
         this.scheduleMascotCheck(80);
@@ -3348,7 +3382,7 @@ function nbx() {
     startFirst() {
       // 未登录也能先逛工具：直接把用户带进第一个工具（执行时再按模型判定是否需码）
       const first = this.groups.flatMap((g) => g.tools || [])[0];
-      if (window.innerWidth < 1024) {
+      if (this.isCompact) {
         this.leftOpen = true;
       } else if (first) {
         this.selectTool(first);
@@ -3469,7 +3503,7 @@ function nbx() {
       this.persistUI();
     },
     toggleRight() {
-      if (window.innerWidth >= 1280) {
+      if (!this.isCompact) {
         this.rightCollapsed = !this.rightCollapsed;
         this.persistUI();
       } else {
@@ -3478,6 +3512,44 @@ function nbx() {
     },
 
     /* ============ 输入区 ============ */
+    /* 输入坞的初始高度：模板渲染时就落定，不播动画（生成中/已收起 = 直接 0 高）。
+       transition 先置 none 再于下一帧交还，避免挂载那一下被过渡成一次闪现。 */
+    dockMount(el, open) {
+      if (!el) return;
+      // 收起的坞只是被裁成 0 高，内容仍在无障碍树里，用 inert 挡掉 Tab 与点击
+      el.inert = !open;
+      if (open) return;
+      el.style.transition = "none";
+      el.style.height = "0px";
+      requestAnimationFrame(() => { el.style.transition = ""; });
+    },
+    /* 输入坞收起 / 展开：显式量高 → 交给 .dock 的 transition。
+       目标高度取内层（普通块盒）的自然高度：它被外层 overflow:hidden 裁剪，
+       但自身布局高度不受外层高度影响，所以在收起状态下也能量准。
+       中途反向（如刚发出去就停止）会从当前动画高度接着走，不会跳。 */
+    _animateDock(el, open) {
+      if (!el) return;
+      const inner = el.firstElementChild;
+      if (!inner) return;
+      clearTimeout(el._dockTimer);
+      const from = el.getBoundingClientRect().height;
+      const target = open ? inner.getBoundingClientRect().height : 0;
+      el.inert = !open;
+      el.classList.toggle("is-open", open);
+      el.style.height = from + "px";
+      void el.offsetHeight;  // 先固定起点：同帧两次赋值会被合并，过渡就没有起点了
+      el.style.height = target + "px";
+      el._dockTimer = setTimeout(() => {
+        el._dockTimer = null;
+        if (open) el.style.height = "";  // 交回自动高度，之后内容变化仍能自适应
+      }, 560);
+    },
+    /* 输入坞的目标状态：未折叠且不在生成中才展开（「开始新题目」已移到状态条，坞里只有输入面板） */
+    syncDocks() {
+      this.$nextTick(() => {
+        this._animateDock(this.$refs.dockComposer, !this.inputCollapsed && !this.streaming);
+      });
+    },
     autoGrow() {
       const el = this.$refs.inputEl;
       if (!el) return;
@@ -4481,6 +4553,9 @@ function nbx() {
       this.outputFoldEligible = false;  // 新生成的内容不做折叠
       this.errorMsg = "";
       this.fallbackInfo = null;
+      // 生成中状态条的导出/复制入口会隐藏，先把可能开着的导出面板收掉，
+      // 否则流结束后它会带着旧定位重新弹出来
+      this.closeExportMenu();
       this.streaming = true;
       this.thinking = true;
       this.thinkingSec = 0;

@@ -540,6 +540,10 @@ html[data-theme="sora"] .mascot-peeking {
 .mascot-anchor-tool,
 .mascot-anchor-vocab,
 .mascot-anchor-migration { top: 5.1rem; right: 0.75rem; }
+/* 2xl 以下首页右上角有历史入口浮钮，同角探出的布玩具右移让位 */
+@media (max-width: 1535.98px) {
+  .mascot-anchor-home { right: 4rem; }
+}
 .mascot-hidden {
   opacity: 0;
   visibility: hidden;
@@ -628,6 +632,17 @@ html[data-theme="sora"] .mascot-peeking {
   animation: stop-breathe 1.6s ease-in-out infinite;
 }
 .btn-stop:hover:not(:disabled) { background: #c5442f; }
+/* 状态条上的停止钮：只放一只图标，做成接近方形。
+   原来「图标 + 停止」两字塞在这条矮行里，横竖比大约 3:1，看着很憋。
+   宽度也顺便收窄（约 34px vs 原来约 73px），一行里更省地方。 */
+.status-stop {
+  flex: none;
+  padding: 0.3rem 0.55rem;
+  border-radius: 0.62rem;
+}
+/* .icon-btn 那一组 hover 规则权重更高，这里必须同名带上 .icon-btn 才压得住红底 */
+.icon-btn.status-stop:hover,
+.icon-btn.status-stop:active { color: #fff; background: #c5442f; border-color: #c5442f; }
 /* 危险操作按钮：形状沿用 btn-primary，只换色（与后台的 .btn-danger 同义） */
 .btn-primary.btn-danger {
   color: #fff;
@@ -789,11 +804,13 @@ html[data-theme="sora"] .mascot-peeking {
 
 /* ============================================================
    侧栏抽屉动效（非线性）
+   注意必须写 translate：Tailwind v4 的 translate-x-* 生成的是 translate
+   属性（不是 transform），只写 transform 抽屉会瞬移。
    ============================================================ */
 .aside-fx {
-  transition: transform 0.55s var(--ease-drawer), opacity 0.4s ease,
-    width 0.55s var(--ease-drawer);
-  will-change: transform;
+  transition: translate 0.55s var(--ease-drawer), transform 0.55s var(--ease-drawer),
+    opacity 0.4s ease, width 0.55s var(--ease-drawer);
+  will-change: translate, transform;
 }
 
 /* ============================================================
@@ -900,9 +917,37 @@ html[data-theme="sora"] .mascot-peeking {
 .ms-anim-leave { transition: transform 0.16s ease-in, opacity 0.14s ease-in; }
 
 /* ============================================================
-   解析设置（试卷可视化全解）：入口在状态条右侧（输入框上方），
-   弹层复用 .ms-menu 的玻璃观感但改为向上展开，不遮住输入框
+   解析设置（试卷可视化全解）：只有「每题迁移题量」一项，
+   放在输入区工具栏里、用原生 select 内联呈现 —— 弹层会被输入坞的
+   overflow:hidden 裁掉（坞要裁剪才收得干净），原生控件没有这个问题。
+   以下 .vp-cfg-trigger / .vp-cfg-menu 一组是旧的浮层版本样式，暂时保留备用。
    ============================================================ */
+.vp-cfg-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.5rem;
+  border-radius: 0.7rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.vp-cfg-inline:hover { border-color: var(--border-strong); color: var(--text); }
+.vp-cfg-inline select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  outline: none;
+  padding: 0 0.1rem;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.78rem;
+  font-weight: 550;
+  cursor: pointer;
+}
 .vp-cfg-trigger { max-width: none; padding: 0.26rem 0.55rem; font-size: 0.74rem; }
 .vp-cfg-badge {
   padding: 0.1rem 0.4rem;
@@ -1050,6 +1095,23 @@ html[data-theme="sora"] .mascot-peeking {
 /* ============================================================
    输入区
    ============================================================ */
+/* 输入坞：挂在面板底部，生成中整块向下收起（单次调用，输入框此时无用），
+   点「开始新题目 / 编辑输入」时再弹回。
+   高度由 JS 量出来（见 script.js 的 _animateDock）再交给这里的过渡：
+   grid-template-rows 的 0fr/1fr 在自动高度的容器里不保证收缩（实测有的结构缩、有的不缩），
+   显式 height 则是任何结构下都稳的普通可动画属性。
+   外层 overflow:hidden 会把内边距一起裁掉，所以收起后是真正的 0 高，
+   不会在正文与状态条之间留下一条看不见的「空气」。
+   展开用带过冲的 --ease-pop（过冲只出现在终点）；收起用 --ease-drawer，
+   且透明度延后 0.32s 才变 —— 先让人看见整块往下滑走，最后才隐去。 */
+.dock {
+  overflow: hidden;
+  transition: height 0.5s var(--ease-drawer), opacity 0.18s ease 0.32s;
+}
+.dock.is-open {
+  transition: height 0.5s var(--ease-pop), opacity 0.3s ease;
+}
+
 .composer textarea {
   width: 100%;
   resize: none;
@@ -1061,6 +1123,8 @@ html[data-theme="sora"] .mascot-peeking {
   line-height: 1.7;
   font-family: var(--font);
   min-height: 4.2rem;
+  /* 矮屏（手机横屏 / 小笔记本）不让输入框吃满整屏，超出内部滚动 */
+  max-height: min(16rem, 32vh);
 }
 .composer textarea::placeholder { color: var(--text-faint); }
 .composer { transition: box-shadow 0.3s ease, border-color 0.3s ease, background 0.3s ease; }
@@ -1750,6 +1814,11 @@ mark, .vp-hl {
   z-index: 60 !important;
   border-radius: 0 !important;
   background: var(--bg) !important;
+  /* 进全屏必须瞬时变不透明：.glass 的 background 是过渡 0.6s 的，
+     而面板底底色本来只有 6%~14% 的重色（毛玻璃靠 backdrop-filter），
+     若跟着过渡，这 0.6s 里整页（宽屏下含左右侧栏）会透过讲台显出鬼影。
+     过渡取决于「变化后的样式」，所以这里写 none 只让进场瞬时，退场仍走 .glass 的淡入。 */
+  transition: none !important;
 }
 .vp-embed-full .vp-passage { font-size: 1rem; }
 
@@ -2333,14 +2402,21 @@ mark, .vp-hl {
   to { opacity: 0; transform: translateY(10px) scale(0.94); }
 }
 
+/* 侧栏遮罩：模糊底层做视觉分离。
+   只做 opacity 过渡——backdrop-filter 动画要逐帧重绘整个底层，抽屉同时还在滑动，
+   低端机上会掉帧；模糊常驻、随遮罩一起淡入，观感一致而代价小得多。 */
 .drawer-mask {
   position: fixed;
   inset: 0;
   z-index: 45;
   background: color-mix(in srgb, var(--bg) 52%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
+.drawer-mask-anim { transition: opacity 0.35s var(--ease-out); }
+.drawer-mask-anim-from { opacity: 0; }
+.drawer-mask-anim-to { opacity: 1; }
+.drawer-mask-anim-leave { transition: opacity 0.25s ease; }
 
 .error-card {
   margin-top: 1rem;

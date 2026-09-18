@@ -9,7 +9,7 @@
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=dlg260913a">
+  <link rel="stylesheet" href="/static/styles.css?v=dlg260919c">
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -34,7 +34,7 @@
   <script defer src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.15.12/dist/cdn.min.js"></script>
   <script defer src="/static/vendor/thumbmark.umd.js"></script>
-  <script defer src="/static/script.js?v=dlg260913a"></script>
+  <script defer src="/static/script.js?v=dlg260919c"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
 </head>
 
@@ -45,14 +45,18 @@
   <!-- Alpine v3 会自动调用 x-data 对象中的 init()，不要再写 x-init="init()"（会执行两次） -->
   <div x-data="nbx()" x-cloak class="app-root h-dvh w-full flex gap-3 p-3">
 
-    <!-- 抽屉遮罩（移动端 / 窄屏） -->
-    <div x-show="leftOpen || rightMobileOpen" class="drawer-mask"
-         x-transition.opacity @click="leftOpen = false; rightMobileOpen = false"></div>
+    <!-- 抽屉遮罩（窄档才有浮层侧栏；宽屏两侧栏并排，遮罩一律不出现） -->
+    <div x-show="isCompact && (leftOpen || rightMobileOpen)" class="drawer-mask"
+         x-transition:enter="drawer-mask-anim" x-transition:enter-start="drawer-mask-anim-from" x-transition:enter-end="drawer-mask-anim-to"
+         x-transition:leave="drawer-mask-anim-leave" x-transition:leave-start="drawer-mask-anim-to" x-transition:leave-end="drawer-mask-anim-from"
+         @click="leftOpen = false; rightMobileOpen = false"
+         @keydown.escape.window="leftOpen = false; rightMobileOpen = false"></div>
 
     <!-- ==================== 左侧：工具栏 ==================== -->
+    <!-- 2xl(1536px) 以下恒为浮层侧栏（盖在内容之上，遮罩模糊底层） -->
     <aside class="glass rounded-[1.4rem] fixed inset-y-3 left-3 z-50 w-[300px] max-w-[86vw]
                   flex flex-col overflow-hidden aside-fx
-                  lg:static lg:z-auto lg:translate-x-0 lg:shrink-0"
+                  2xl:static 2xl:z-auto 2xl:translate-x-0 2xl:shrink-0"
            :class="leftOpen ? 'translate-x-0' : '-translate-x-[calc(100%+1.5rem)]'"
            aria-label="工具列表">
 
@@ -70,7 +74,7 @@
           </div>
           <div x-show="theme !== 'sora'" x-cloak class="text-[11px] text-faint leading-tight truncate">英语教学 AI 工作台</div>
         </div>
-        <span class="ml-auto lg:hidden"><button class="icon-btn" @click="leftOpen = false" title="关闭"
+        <span class="ml-auto 2xl:hidden"><button class="icon-btn" @click="leftOpen = false" title="关闭"
                 x-html="icon('x','w-4 h-4')"></button></span>
       </div>
 
@@ -133,21 +137,7 @@
     </aside>
 
     <!-- ==================== 中栏：主内容区 ==================== -->
-    <main class="flex-1 min-w-0 min-h-0 flex flex-col gap-3">
-
-      <!-- 窄屏顶栏（xl 以下显示；lg 起左栏常驻，隐藏菜单按钮） -->
-      <div class="xl:hidden glass rounded-2xl px-2 py-1.5 flex items-center gap-1 shrink-0">
-        <span class="lg:hidden"><button class="icon-btn" @click="leftOpen = true" title="打开工具列表"
-                x-html="icon('menu','w-5 h-5')"></button></span>
-        <div class="flex items-center gap-2 ml-0.5 cursor-pointer select-none" @click="goHome()">
-          <div class="w-7 h-7 rounded-lg flex items-center justify-center text-white"
-                style="background:linear-gradient(135deg,var(--accent),var(--accent-2))"
-                x-html="icon(theme === 'sora' ? 'cloud' : 'logo','w-4 h-4')"></div>
-          <span class="font-bold text-sm tracking-tight">NeoBangX</span>
-        </div>
-        <button class="icon-btn ml-auto" @click="rightMobileOpen = true" title="历史与收藏"
-                x-html="icon('clock','w-5 h-5')"></button>
-      </div>
+    <main class="flex-1 min-w-0 min-h-0 flex flex-col">
 
       <!-- 主面板 -->
       <section x-ref="mainPanel" class="glass rounded-[1.4rem] flex-1 min-h-0 flex flex-col overflow-hidden relative" :class="(vpFullscreen && isVisualPaperTool) ? 'vp-fullscreen-active' : ''">
@@ -160,6 +150,12 @@
              aria-hidden="true">
           <img src="/static/Sora_Rabbit_Plush.png?v=sora260820" alt="" draggable="false">
         </div>
+
+        <!-- 窄档：首页没有工具头部，历史入口浮在右上角（与工具页头部里那个同一角） -->
+        <button class="icon-btn glass" x-show="isCompact && !currentTool"
+                style="position:absolute;top:1rem;right:1rem;z-index:30;border-radius:999px;width:2.5rem;height:2.5rem;border-color:var(--border)"
+                @click="rightMobileOpen = true" title="历史与收藏" aria-label="打开历史与收藏"
+                x-html="icon('clock','w-5 h-5')"></button>
 
         <!-- ========== 欢迎页 ========== -->
         <div x-show="!currentTool" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
@@ -292,7 +288,11 @@
         <template x-if="currentTool && isMigrationTool">
           <div class="flex-1 min-h-0 flex flex-col migration-shell">
             <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
-              <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
+              <!-- 窄档：顶栏已移除，工具列表入口放在头部行首（左上角）；宽屏两侧栏并排，不需要 -->
+              <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                      @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
+                      x-html="icon('menu','w-5 h-5')"></button>
+              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
               <div class="min-w-0">
@@ -342,6 +342,10 @@
                     </button>
                   </div>
                 </div>
+                <!-- 窄档：历史入口排在模型右侧（整行最右 = 右上角），与模型同排右对齐 -->
+                <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                        @click="rightMobileOpen = true" title="历史与收藏" aria-label="打开历史与收藏"
+                        x-html="icon('clock','w-5 h-5')"></button>
               </div>
             </div>
 
@@ -557,7 +561,11 @@
         <template x-if="currentTool && isVocabTool">
           <div class="flex-1 min-h-0 flex flex-col vocab-shell">
             <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
-              <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
+              <!-- 窄档：顶栏已移除，工具列表入口放在头部行首（左上角）；宽屏两侧栏并排，不需要 -->
+              <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                      @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
+                      x-html="icon('menu','w-5 h-5')"></button>
+              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
               <div class="min-w-0">
@@ -607,6 +615,10 @@
                     </button>
                   </div>
                 </div>
+                <!-- 窄档：历史入口排在模型右侧（整行最右 = 右上角），与模型同排右对齐 -->
+                <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                        @click="rightMobileOpen = true" title="历史与收藏" aria-label="打开历史与收藏"
+                        x-html="icon('clock','w-5 h-5')"></button>
               </div>
             </div>
 
@@ -738,7 +750,11 @@
           <div class="flex-1 min-h-0 flex flex-col" :class="vpFullscreen ? 'vp-embed-full' : ''">
             <!-- 工具头部 -->
             <div x-show="!vpFullscreen" class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
-              <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
+              <!-- 窄档：顶栏已移除，工具列表入口放在头部行首（左上角）；宽屏两侧栏并排，不需要 -->
+              <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                      @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
+                      x-html="icon('menu','w-5 h-5')"></button>
+              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
               <div class="min-w-0">
@@ -788,6 +804,10 @@
                     </button>
                   </div>
                 </div>
+                <!-- 窄档：历史入口排在模型右侧（整行最右 = 右上角），与模型同排右对齐 -->
+                <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                        @click="rightMobileOpen = true" title="历史与收藏" aria-label="打开历史与收藏"
+                        x-html="icon('clock','w-5 h-5')"></button>
               </div>
             </div>
 
@@ -828,6 +848,8 @@
                 <button class="icon-btn" style="width:2rem;height:2rem" :class="{ 'on': maskOn }" @click="toggleMask()" :title="maskOn ? '显示答案' : '隐藏答案'" x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
                 <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpPrevQuestion()" :disabled="vpQuestionCount===0">上一题</button>
                 <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpNextQuestion()" :disabled="vpQuestionCount===0">下一题</button>
+                <button class="icon-btn" style="width:2rem;height:2rem" @click="copyResult()"
+                        :title="copied ? '已复制' : '复制'" x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
                 <button class="icon-btn" style="width:2rem;height:2rem" @click="openVpExport()" title="下载讲解文件（单文件 HTML，双击即可讲题）" x-html="icon('insert','w-4 h-4')"></button>
                 <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="toggleVpFullscreen()" x-html="vpFullscreen ? icon('x','w-4 h-4') : icon('panel-right','w-4 h-4')"></button>
                 <span x-text="vpFullscreen ? '退出全屏' : '全屏讲题'" class="text-xs hidden sm:inline" style="margin-left:-4px"></span>
@@ -1414,77 +1436,44 @@
               </div>
             </template>
 
-            <!-- 状态条 -->
-            <div x-show="!vpFullscreen" class="px-4 sm:px-5 py-1.5 flex items-center gap-2 text-xs text-dim border-t shrink-0" style="border-color:var(--border)">
-              <span :class="status === 'streaming' ? 'status-dot live' : (status === 'done' ? 'status-dot ok' : (status === 'error' ? 'status-dot err' : 'status-dot'))"></span>
-              <span x-text="status === 'streaming' ? '生成中… ' + elapsed + 's' : (status === 'done' ? '已完成 · ' + vpQuestionCount + ' 题' : (status === 'error' ? '生成失败' : (status === 'history' ? '历史记录' : '就绪')))"></span>
-              <span class="text-faint hidden sm:inline" x-show="vpHasData" x-text="'· ' + vpQuestionCount + ' 题'"></span>
-              <span class="text-faint hidden md:inline" x-text="'· ' + shortModel(selectedModel)"></span>
-              <span class="ml-auto flex items-center gap-1">
-                <!-- 解析设置（目前只有每题迁移题量）：弹层向上展开，交互与视觉对齐右上角模型菜单 -->
-                <span class="ms-wrap mr-1" @click.outside="closeVpSettings()">
-                  <button type="button" class="ms-trigger vp-cfg-trigger" :class="{ 'open': vpSettingsOpen }"
-                          @click="toggleVpSettings()" aria-label="解析设置" :aria-expanded="vpSettingsOpen">
-                    <span class="ms-spark" x-html="icon('sliders','w-3.5 h-3.5')"></span>
-                    <span>设置</span>
-                    <span class="vp-cfg-badge" x-text="'迁移 ' + vpTransferCount + ' 题'"></span>
-                    <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
-                  </button>
-                  <div class="ms-menu vp-cfg-menu glass-deep" x-show="vpSettingsOpen" x-cloak
-                       x-transition:enter="vp-cfg-anim" x-transition:enter-start="vp-cfg-anim-from" x-transition:enter-end="vp-cfg-anim-to"
-                       x-transition:leave="vp-cfg-anim-leave" x-transition:leave-start="vp-cfg-anim-to" x-transition:leave-end="vp-cfg-anim-from">
-                    <div class="vp-cfg-head">解析设置</div>
-                    <label class="vp-cfg-row">
-                      <span class="vp-cfg-label">每题迁移题量 <b x-text="vpTransferCount + ' 题'"></b></span>
-                      <input type="range" :min="VP_TRANSFER_MIN" :max="VP_TRANSFER_MAX" step="1"
-                             x-model.number="vpSettings.transferCount"
-                             :aria-label="'每题迁移题量 ' + vpTransferCount + ' 题'">
-                      <span class="vp-cfg-scale"><span x-text="VP_TRANSFER_MIN"></span><span x-text="VP_TRANSFER_MAX"></span></span>
-                    </label>
-                    <p class="vp-cfg-tip">每道笔试题生成几道同构迁移题（写作题不生成），对之后开始的解析与续写生效。题量越大单次输出越长，中断后可点「继续生成剩余 N 题」续上。</p>
-                    <button type="button" class="vp-cfg-reset" @click="vpResetSettings()"
-                            :disabled="vpTransferCount === VP_TRANSFER_MIN">恢复默认（1 题）</button>
-                  </div>
-                </span>
-                <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData" :class="{ 'on': maskOn }" @click="toggleMask()" :title="maskOn ? '显示答案' : '隐藏答案'" x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
-                <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData || output" @click="copyResult()" :title="copied ? '已复制' : '复制'" x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
-                <button class="icon-btn" style="width:2rem;height:2rem" x-show="vpHasData" @click="openVpExport()" title="下载讲解文件（单文件 HTML，双击即可讲题）" x-html="icon('insert','w-4 h-4')"></button>
-              </span>
-            </div>
-
-            <!-- 输入区（复用通用输入：粘贴/Word） -->
-            <div x-show="!vpFullscreen" class="p-3 sm:p-4 pt-2 shrink-0">
-              <div x-show="inputCollapsed && vpHasData" x-transition class="flex justify-center">
-                <button class="btn-new-topic" @click="startNewTopic()">
-                  <span x-html="icon('plus','w-4 h-4')"></span>
-                  <span>开始新试卷</span>
-                </button>
-              </div>
-              <div x-show="!inputCollapsed" x-transition>
-                <div class="composer glass-soft rounded-2xl p-3" x-ref="composer" @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false" @drop.prevent="handleFileDrop($event)" :class="{ 'drag-over': dragOver }">
-                  <div x-show="inputMode === 'file' && attachedFile" class="file-card">
-                    <div class="file-card-icon"><span x-html="icon('file-text','w-6 h-6')"></span></div>
-                    <div class="file-card-info">
-                      <div class="file-card-name" x-text="attachedFile ? attachedFile.name : ''"></div>
-                      <div class="file-card-meta" x-text="parsingFile ? parsingLabel : (attachedFile ? formatFileSize(attachedFile.size) + ' · 内容已读取' + (parseElapsed ? ' · 用时' + parseElapsed : '') : '')"></div>
+            <!-- 输入区（复用通用输入：粘贴/Word）。只有这一个坞：有结果后整块收起，
+                 下方不留任何常驻控件（本工具排版最挤，状态条与本区都已清空）。 -->
+            <div x-show="!vpFullscreen" class="shrink-0">
+              <div class="dock" x-ref="dockComposer" x-init="dockMount($el, !inputCollapsed && !streaming)">
+                <div class="p-3 sm:p-4 pt-2">
+                  <div class="composer glass-soft rounded-2xl p-3" x-ref="composer" @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false" @drop.prevent="handleFileDrop($event)" :class="{ 'drag-over': dragOver }">
+                    <div x-show="inputMode === 'file' && attachedFile" class="file-card">
+                      <div class="file-card-icon"><span x-html="icon('file-text','w-6 h-6')"></span></div>
+                      <div class="file-card-info">
+                        <div class="file-card-name" x-text="attachedFile ? attachedFile.name : ''"></div>
+                        <div class="file-card-meta" x-text="parsingFile ? parsingLabel : (attachedFile ? formatFileSize(attachedFile.size) + ' · 内容已读取' + (parseElapsed ? ' · 用时' + parseElapsed : '') : '')"></div>
+                      </div>
+                      <button class="icon-btn danger" @click="removeAttachedFile()" title="移除文件"><span x-html="icon('x','w-4 h-4')"></span></button>
                     </div>
-                    <button class="icon-btn danger" @click="removeAttachedFile()" title="移除文件"><span x-html="icon('x','w-4 h-4')"></span></button>
-                  </div>
-                  <textarea x-show="inputMode === 'text'" x-ref="inputEl" x-model="input" @input="autoGrow()" @keydown.enter.ctrl="run()" placeholder="粘贴试卷文本或上传 Word（自动跳过听力部分），我将为每一道笔试题提供参考答案、易错点、考点范式与迁移训练…"
-                            rows="4" style="min-height:4.2rem;max-height:16rem;overflow-y:auto"></textarea>
-                  <div class="flex items-center gap-2 mt-2 flex-wrap">
-                    <label class="btn-ghost" style="padding:.45rem .8rem;font-size:.82rem;cursor:pointer">
-                      <span x-html="icon('paperclip','w-4 h-4')"></span>上传 Word
-                      <input type="file" accept=".docx,.doc,.txt,.md,.pdf" style="display:none" @change="handleFileSelect($event)">
-                    </label>
-                    <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf，自动跳过听力</span>
-                    <span class="ml-auto flex items-center gap-2">
-                      <span class="text-xs text-faint" x-show="input.length" x-text="input.length + ' 字'"></span>
-                      <button x-show="!streaming" class="btn-primary" @click="run()" :disabled="!input.trim() || parsingFile">
-                        <span x-html="icon('send','w-4 h-4')"></span>开始解析
-                      </button>
-                      <button x-show="streaming" class="btn-primary btn-stop" @click="stop()"><span x-html="icon('stop','w-4 h-4')"></span>停止</button>
-                    </span>
+                    <textarea x-show="inputMode === 'text'" x-ref="inputEl" x-model="input" @input="autoGrow()" @keydown.enter.ctrl="run()" placeholder="粘贴试卷文本或上传 Word（自动跳过听力部分），我将为每一道笔试题提供参考答案、易错点、考点范式与迁移训练…"
+                              rows="4" style="min-height:4.2rem;max-height:min(16rem,32vh);overflow-y:auto"></textarea>
+                    <div class="flex items-center gap-2 mt-2 flex-wrap">
+                      <label class="btn-ghost" style="padding:.45rem .8rem;font-size:.82rem;cursor:pointer">
+                        <span x-html="icon('paperclip','w-4 h-4')"></span>上传 Word
+                        <input type="file" accept=".docx,.doc,.txt,.md,.pdf" style="display:none" @change="handleFileSelect($event)">
+                      </label>
+                      <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf，自动跳过听力</span>
+                      <span class="ml-auto flex items-center gap-2">
+                        <label class="vp-cfg-inline"
+                               title="每道笔试题生成几道同构迁移题（写作题不生成），对之后开始的解析与续写生效">
+                          <span x-html="icon('sliders','w-3.5 h-3.5')"></span>迁移
+                          <select x-model.number="vpSettings.transferCount" aria-label="每题迁移题量">
+                            <template x-for="n in VP_TRANSFER_MAX - VP_TRANSFER_MIN + 1" :key="n">
+                              <option :value="VP_TRANSFER_MIN + n - 1" x-text="(VP_TRANSFER_MIN + n - 1) + ' 题'"></option>
+                            </template>
+                          </select>
+                        </label>
+                        <span class="text-xs text-faint" x-show="input.length" x-text="input.length + ' 字'"></span>
+                        <button class="btn-primary" @click="run()" :disabled="!input.trim() || parsingFile">
+                          <span x-html="icon('send','w-4 h-4')"></span>开始解析
+                        </button>
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1498,7 +1487,11 @@
 
             <!-- 工具头部 -->
             <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
-              <span class="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0"
+              <!-- 窄档：顶栏已移除，工具列表入口放在头部行首（左上角）；宽屏两侧栏并排，不需要 -->
+              <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                      @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
+                      x-html="icon('menu','w-5 h-5')"></button>
+              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
               <div class="min-w-0">
@@ -1552,6 +1545,10 @@
                     </button>
                   </div>
                 </div>
+                <!-- 窄档：历史入口排在模型右侧（整行最右 = 右上角），与模型同排右对齐 -->
+                <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                        @click="rightMobileOpen = true" title="历史与收藏" aria-label="打开历史与收藏"
+                        x-html="icon('clock','w-5 h-5')"></button>
               </div>
             </div>
 
@@ -1675,15 +1672,23 @@
               <span class="text-faint hidden sm:inline" x-show="output" x-text="'· ' + output.length + ' 字'"></span>
               <span class="text-faint hidden md:inline" x-text="'· ' + shortModel(selectedModel)"></span>
               <span class="ml-auto flex items-center gap-1">
-                <button class="icon-btn" style="width:2rem;height:2rem" x-show="currentTool && currentTool.id === '13' && output"
+                <!-- 开始新题目：原来是输入区上方独占一行的大按钮，收到这一排里，只占一行 -->
+                <button class="icon-btn" style="width:2rem;height:2rem" x-show="inputCollapsed && !streaming"
+                        @click="startNewTopic()" title="开始新题目" aria-label="开始新题目"
+                        x-html="icon('plus','w-4 h-4')"></button>
+                <!-- 生成中：输入区已收起，停止入口改驻状态条（不额外占竖直空间）；只留图标，方形不扁 -->
+                <button x-show="streaming" class="btn-primary btn-stop status-stop"
+                        @click="stop()" title="停止生成（已生成内容会保留）" aria-label="停止生成"
+                        x-html="icon('stop','w-4 h-4')"></button>
+                <button class="icon-btn" style="width:2rem;height:2rem" x-show="!streaming && currentTool && currentTool.id === '13' && output"
                         :class="{ 'on': maskOn }" @click="toggleMask()"
                         :title="maskOn ? '显示答案' : '隐藏答案（课堂投影模式）'"
                         x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
-                <button class="icon-btn" style="width:2rem;height:2rem" x-show="output" @click="copyResult()"
+                <button class="icon-btn" style="width:2rem;height:2rem" x-show="!streaming && output" @click="copyResult()"
                         :title="copied ? '已复制' : '复制纯文本'"
                         x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
                    <!-- 导出菜单 -->
-                  <div class="relative" x-show="output" @click.outside="closeExportMenu()">
+                  <div class="relative" x-show="!streaming && output" @click.outside="closeExportMenu()">
                    <button class="icon-btn" style="width:2rem;height:2rem"
                            :class="{ 'on': exportMenuOpen }" @click="toggleExportMenu($event.currentTarget)"
                            title="导出 / 下载"
@@ -1729,68 +1734,56 @@
               </span>
             </div>
 
-            <!-- 输入区 -->
-            <div class="p-3 sm:p-4 pt-2 shrink-0">
-              <!-- 折叠态：生成中给停止入口，空闲时才给开始新题目 -->
-              <div x-show="inputCollapsed" x-transition class="flex justify-center">
-                <button x-show="!streaming" class="btn-new-topic" @click="startNewTopic()">
-                  <span x-html="icon('plus','w-4 h-4')"></span>
-                  <span>开始新题目</span>
-                </button>
-                <button x-show="streaming" class="btn-primary btn-stop" @click="stop()">
-                  <span x-html="icon('stop','w-4 h-4')"></span>
-                  <span>停止生成</span>
-                </button>
-              </div>
-
+            <!-- 输入区：只有展开态这一个坞，高度由 JS 量高过渡。
+                 生成中/执行过后整块收起，下方不留常驻控件（「开始新题目」已移入上方状态条）。 -->
+            <div class="shrink-0">
               <!-- 展开态：输入面板 -->
-              <div x-show="!inputCollapsed" x-transition>
-                <div class="composer glass-soft rounded-2xl p-3" x-ref="composer"
-                     @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false"
-                     @drop.prevent="handleFileDrop($event)" :class="{ 'drag-over': dragOver }">
+              <div class="dock" x-ref="dockComposer" x-init="dockMount($el, !inputCollapsed && !streaming)">
+                <div class="p-3 sm:p-4 pt-2">
+                  <div class="composer glass-soft rounded-2xl p-3" x-ref="composer"
+                       @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false"
+                       @drop.prevent="handleFileDrop($event)" :class="{ 'drag-over': dragOver }">
 
-                  <!-- 文件模式：文件卡片 -->
-                  <div x-show="inputMode === 'file' && attachedFile" class="file-card">
-                    <div class="file-card-icon">
-                      <span x-html="icon('file-text','w-6 h-6')"></span>
+                    <!-- 文件模式：文件卡片 -->
+                    <div x-show="inputMode === 'file' && attachedFile" class="file-card">
+                      <div class="file-card-icon">
+                        <span x-html="icon('file-text','w-6 h-6')"></span>
+                      </div>
+                      <div class="file-card-info">
+                        <div class="file-card-name" x-text="attachedFile ? attachedFile.name : ''"></div>
+                        <div class="file-card-meta" x-text="parsingFile ? parsingLabel : (attachedFile ? formatFileSize(attachedFile.size) + ' · 内容已读取' + (parseElapsed ? ' · 用时' + parseElapsed : '') : '')"></div>
+                      </div>
+                      <button class="icon-btn danger" @click="removeAttachedFile()" title="移除文件，回到文字输入"
+                              x-html="icon('x','w-4 h-4')"></button>
                     </div>
-                    <div class="file-card-info">
-                      <div class="file-card-name" x-text="attachedFile ? attachedFile.name : ''"></div>
-                      <div class="file-card-meta" x-text="parsingFile ? parsingLabel : (attachedFile ? formatFileSize(attachedFile.size) + ' · 内容已读取' + (parseElapsed ? ' · 用时' + parseElapsed : '') : '')"></div>
+
+                    <!-- 文字模式：文本输入 -->
+                    <div x-show="inputMode === 'text'">
+                      <textarea x-ref="inputEl" x-model="input" rows="3" @input="autoGrow()"
+                                @keydown="if (($event.ctrlKey || $event.metaKey) && $event.key === 'Enter') { $event.preventDefault(); run(); }"
+                                placeholder="在这里粘贴语篇、作文、试卷或题目…（Ctrl + Enter 快速执行）"></textarea>
                     </div>
-                    <button class="icon-btn danger" @click="removeAttachedFile()" title="移除文件，回到文字输入"
-                            x-html="icon('x','w-4 h-4')"></button>
-                  </div>
 
-                  <!-- 文字模式：文本输入 -->
-                  <div x-show="inputMode === 'text'">
-                    <textarea x-ref="inputEl" x-model="input" rows="3" @input="autoGrow()"
-                              @keydown="if (($event.ctrlKey || $event.metaKey) && $event.key === 'Enter') { $event.preventDefault(); run(); }"
-                              placeholder="在这里粘贴语篇、作文、试卷或题目…（Ctrl + Enter 快速执行）"></textarea>
-                  </div>
-
-                  <!-- 工具栏 -->
-                  <div class="flex items-center gap-1.5 mt-1">
-                    <button class="icon-btn" @click="$refs.fileInput.click()"
-                            :title="inputMode === 'file' ? '重新选择文件' : '上传文件（将替换当前文字）'"
-                            x-html="icon('paperclip','w-[18px] h-[18px]')"></button>
-                    <input type="file" x-ref="fileInput" class="hidden"
-                           accept=".txt,.md,.markdown,.docx,.doc,.pdf"
-                           @change="handleFileSelect($event)">
-                    <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf</span>
-                    <button class="icon-btn" x-show="inputMode === 'text'" @click="saveFavoriteFromInput()" title="收藏这段输入"
-                            x-html="icon('bookmark-plus','w-[18px] h-[18px]')"></button>
-                    <button class="icon-btn danger" x-show="input && inputMode === 'text'" @click="clearInput()" title="清空输入"
-                            x-html="icon('eraser','w-[18px] h-[18px]')"></button>
-                    <span class="text-[11px] text-faint ml-1"
-                          x-text="inputMode === 'text' && input.length > 0 ? input.length + ' 字' : ''"></span>
-                    <div class="ml-auto">
-                      <button x-show="!streaming" class="btn-primary" @click="run()" :disabled="parsingFile">
-                        <span x-html="icon('send','w-4 h-4')"></span><span x-text="parsingFile ? '解析中…' : '执行'"></span>
-                      </button>
-                      <button x-show="streaming" class="btn-primary btn-stop" @click="stop()">
-                        <span x-html="icon('stop','w-4 h-4')"></span>停止
-                      </button>
+                    <!-- 工具栏 -->
+                    <div class="flex items-center gap-1.5 mt-1">
+                      <button class="icon-btn" @click="$refs.fileInput.click()"
+                              :title="inputMode === 'file' ? '重新选择文件' : '上传文件（将替换当前文字）'"
+                              x-html="icon('paperclip','w-[18px] h-[18px]')"></button>
+                      <input type="file" x-ref="fileInput" class="hidden"
+                             accept=".txt,.md,.markdown,.docx,.doc,.pdf"
+                             @change="handleFileSelect($event)">
+                      <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf</span>
+                      <button class="icon-btn" x-show="inputMode === 'text'" @click="saveFavoriteFromInput()" title="收藏这段输入"
+                              x-html="icon('bookmark-plus','w-[18px] h-[18px]')"></button>
+                      <button class="icon-btn danger" x-show="input && inputMode === 'text'" @click="clearInput()" title="清空输入"
+                              x-html="icon('eraser','w-[18px] h-[18px]')"></button>
+                      <span class="text-[11px] text-faint ml-1"
+                            x-text="inputMode === 'text' && input.length > 0 ? input.length + ' 字' : ''"></span>
+                      <div class="ml-auto">
+                        <button class="btn-primary" @click="run()" :disabled="parsingFile">
+                          <span x-html="icon('send','w-4 h-4')"></span><span x-text="parsingFile ? '解析中…' : '执行'"></span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1840,15 +1833,16 @@
     </div>
 
     <!-- ==================== 右侧：历史 / 收藏 ==================== -->
+    <!-- 2xl(1536px) 以下恒为浮层侧栏，同上 -->
     <aside class="glass rounded-[1.4rem] fixed inset-y-3 right-3 z-50 w-[320px] max-w-[86vw]
                   overflow-hidden aside-fx
-                  xl:static xl:z-auto xl:max-w-none xl:translate-x-0 xl:shrink-0"
+                  2xl:static 2xl:z-auto 2xl:max-w-none 2xl:translate-x-0 2xl:shrink-0"
            :class="[
              rightMobileOpen ? 'translate-x-0' : 'translate-x-[calc(100%+1.5rem)]',
-             rightCollapsed ? 'xl:w-0 xl:opacity-0 xl:pointer-events-none' : ''
+             rightCollapsed ? '2xl:w-0 2xl:opacity-0 2xl:pointer-events-none' : ''
            ]"
            aria-label="历史与收藏">
-      <div class="h-full flex flex-col w-full xl:w-[320px] xl:shrink-0">
+      <div class="h-full flex flex-col w-full 2xl:w-[320px] 2xl:shrink-0">
 
         <!-- 选项卡头 -->
         <div class="flex items-center gap-2 px-3.5 pt-3.5 pb-3 shrink-0">
@@ -1862,9 +1856,9 @@
           </div>
           <button class="icon-btn danger" x-show="rightTab === 'history' && history.length"
                   @click="clearHistory()" title="清空全部历史" x-html="icon('trash','w-4 h-4')"></button>
-          <span class="xl:hidden"><button class="icon-btn" @click="rightMobileOpen = false" title="关闭"
+          <span class="2xl:hidden"><button class="icon-btn" @click="rightMobileOpen = false" title="关闭"
                   x-html="icon('x','w-4 h-4')"></button></span>
-          <span class="hidden xl:inline-flex"><button class="icon-btn" @click="rightCollapsed = true; persistUI()" title="收起侧栏"
+          <span class="hidden 2xl:inline-flex"><button class="icon-btn" @click="rightCollapsed = true; persistUI()" title="收起侧栏"
                   x-html="icon('chevrons-right','w-4 h-4')"></button></span>
         </div>
 
@@ -1940,8 +1934,8 @@
       </div>
     </aside>
 
-    <!-- 桌面端：右栏收起后的展开按钮 -->
-    <div x-show="rightCollapsed" class="hidden xl:block">
+    <!-- 桌面端：右栏收起后的展开按钮（仅宽档；窄档用右上悬浮钮唤出） -->
+    <div x-show="!isCompact && rightCollapsed">
       <button class="icon-btn glass fixed right-4 top-1/2 -translate-y-1/2 z-30"
               style="width:2.5rem;height:2.5rem;border-radius:999px"
               @click="rightCollapsed = false; persistUI()" title="展开历史栏"
