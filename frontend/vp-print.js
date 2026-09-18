@@ -885,14 +885,31 @@
   function dlgCss() {
     return ""
       + "#" + DLG_ID + "{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;"
-      + "background:rgba(10,8,6,.5);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);"
-      + "font-family:var(--font,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif);color:var(--text,#1d1a15)}"
+      /* 遮罩照 App 的 .modal-mask：主题背景色兑 55% 透明 + 10px 毛玻璃。
+         前一行是给不支持 color-mix 的老浏览器留的旧色。 */
+      + "background:rgba(10,8,6,.5);background:color-mix(in srgb,var(--bg,#fff) 55%,transparent);"
+      + "-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);"
+      + "font-family:var(--font,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif);color:var(--text,#1d1a15);"
+      /* 入场效果与 App 里「下载讲解文件」的弹窗完全一致：遮罩淡入 + 卡片弹入，
+         用同一条 0.45s 弹簧曲线。这套样式会被内联进导出的单文件，
+         所以曲线写进 var 回退里，不依赖页面上的缓动变量。 */
+      + "animation:vppd-mask-in .15s ease both}"
+      + "@keyframes vppd-mask-in{from{opacity:0}to{opacity:1}}"
+      + "@keyframes vppd-card-in{from{opacity:0;transform:scale(.92) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}"
       + "#" + DLG_ID + " *{box-sizing:border-box}"
       + "#" + DLG_ID + " .vppd-card{width:min(30rem,100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column;"
-      + "border-radius:16px;overflow:hidden;border:1px solid var(--border-strong,rgba(0,0,0,.12));"
+      + "border-radius:1.3rem;overflow:hidden;"
+      /* 卡片面照 App 的 .modal-card + .glass-deep：同一层毛玻璃、同一条描边、同一个投影。
+         不支持 color-mix 时退回上一行的实底色与后面的回退值，不至于把卡片画没。 */
       + "background-color:var(--bg,#fff);"
-      + "background-image:linear-gradient(0deg,var(--panel-strong,rgba(255,255,255,.86)),var(--panel-strong,rgba(255,255,255,.86)));"
-      + "box-shadow:0 24px 60px -20px rgba(0,0,0,.45)}"
+      + "background:linear-gradient(180deg,color-mix(in srgb,var(--glass-spec,#fffdf8) 12%,transparent) 0%,"
+      + "color-mix(in srgb,var(--glass-spec,#fffdf8) 0%,transparent) 14%),var(--panel-strong,rgba(255,255,255,.86));"
+      + "border:1px solid var(--border,rgba(0,0,0,.08));"
+      + "backdrop-filter:blur(var(--glass-blur-deep,5px)) saturate(var(--glass-sat,150%)) contrast(var(--glass-contrast,104%));"
+      + "-webkit-backdrop-filter:blur(var(--glass-blur-deep,5px)) saturate(var(--glass-sat,150%)) contrast(var(--glass-contrast,104%));"
+      + "box-shadow:inset 0 1px 0 color-mix(in srgb,var(--glass-spec,#fffdf8) 26%,transparent),"
+      + "inset 0 -1px 0 color-mix(in srgb,var(--glass-spec,#fffdf8) 8%,transparent),var(--shadow,0 20px 55px -14px rgba(0,0,0,.45));"
+      + "animation:vppd-card-in .45s var(--ease-spring,cubic-bezier(.34,1.45,.64,1)) both}"
       + "#" + DLG_ID + " .vppd-head{display:flex;align-items:center;gap:8px;padding:14px 18px;border-bottom:1px solid var(--border,rgba(0,0,0,.08))}"
       + "#" + DLG_ID + " .vppd-head h3{margin:0;font-size:.9rem;font-weight:700}"
       + "#" + DLG_ID + " .vppd-x{margin-left:auto;width:28px;height:28px;border-radius:8px;border:1px solid var(--border,rgba(0,0,0,.1));"
@@ -944,7 +961,10 @@
       + "#" + DLG_ID + " .vppd-btn:hover{background:var(--hover-bg,rgba(0,0,0,.06))}"
       + "#" + DLG_ID + " .vppd-btn[disabled]{opacity:.5;cursor:default}"
       + "#" + DLG_ID + " .vppd-btn.primary{margin-left:auto;background:var(--btn-bg,#1d1a15);color:var(--btn-text,#f5f2ea);border-color:var(--btn-bg,#1d1a15)}"
-      + "#" + DLG_ID + " .vppd-btn.primary:hover{opacity:.9}";
+      + "#" + DLG_ID + " .vppd-btn.primary:hover{opacity:.9}"
+      /* 系统开了「减少动态效果」就不弹入：App 页面里 styles.css 有全局同类规则，
+         导出的单文件没有，这里自带一条。 */
+      + "@media (prefers-reduced-motion:reduce){#" + DLG_ID + ",#" + DLG_ID + " .vppd-card{animation:none}}";
   }
   function injectDlgCss() {
     if (document.getElementById(DLG_CSS_ID)) return;
