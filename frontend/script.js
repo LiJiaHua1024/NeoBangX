@@ -1943,6 +1943,7 @@ function nbx() {
       this.vpSelActive = false;
       this._vpStopEditTimer();
       this.vpHideTools();
+      this.closeVpSettings();
       this.visualPaper = this.newVisualPaperState();
       this.vpCloseFullscreen();
       this.vpActiveTab = "reference";
@@ -2454,9 +2455,45 @@ function nbx() {
     },
     toggleVpSettings() {
       this.vpSettingsOpen = !this.vpSettingsOpen;
+      // 浮层挂在坞外、固定定位，位置得按触发器的实时位置算；进场首帧 opacity 为 0，
+      // 所以进场之后再落位也看不到跳动
+      if (this.vpSettingsOpen) this.$nextTick(() => this.positionVpSettings());
     },
     closeVpSettings() {
       this.vpSettingsOpen = false;
+    },
+    /* 浮层落位：与触发器右对齐、向上展开，左右与上下都做视口兜底，
+       上方放不下就翻到触发器下方（写法与 vpRepositionTools 一致）。
+       正常路径用 bottom 锚定（不依赖量到的高度），只有需要判断"上方放不放得下"
+       和翻到下方时才用高度，量不到就按兜底值算。 */
+    positionVpSettings() {
+      const menu = this.$refs.vpCfgMenu;
+      const trigger = this.$refs.vpCfgTrigger;
+      if (!menu || !trigger) return;
+      const r = trigger.getBoundingClientRect();
+      const w = menu.offsetWidth || 288;
+      const h = menu.offsetHeight || 180;
+      const gap = 8;
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const left = Math.max(8, Math.min(r.right - w, vw - w - 8));
+      menu.style.left = Math.round(left) + "px";
+      if (r.top - gap - h >= 8) {
+        menu.style.top = "auto";
+        menu.style.bottom = Math.round(vh - r.top + gap) + "px";
+      } else {
+        menu.style.bottom = "auto";
+        menu.style.top = Math.round(Math.max(8, Math.min(vh - h - 8, r.bottom + gap))) + "px";
+      }
+    },
+    /* 浮层在坞外，不是触发器的子节点：@click.outside 会把面板内的点击误判成"外部"，
+       所以走窗口级 pointerdown 判定——落在触发器或面板里（data-vp-cfg）就放行。
+       用 pointerdown 而不是 click：拖滑块时若松手落在面板外，click 的目标会被算成
+       两者的共同祖先（body），浮层会在拖动中途被判成"外部点击"关掉。 */
+    vpSettingsOutsideHide(e) {
+      if (!this.vpSettingsOpen) return;
+      const t = e.target;
+      if (t && t.closest && t.closest("[data-vp-cfg]")) return;
+      this.closeVpSettings();
     },
     vpResetSettings() {
       this.vpSettings.transferCount = this.VP_TRANSFER_MIN;
@@ -5010,6 +5047,9 @@ function nbx() {
     // 可视化流式共享入口：updateId 非空时在原历史记录上追加更新，不新增记录
     async _runVisualStream(inputText, updateId) {
       this.retreatMascot();
+      // 续写/重试也走这里（不经 resetVisualPaper）：开跑就收浮层，
+      // 否则输入坞一收起，浮层会孤零零留在半空中
+      this.closeVpSettings();
       this.streaming = true;
       this.thinking = true;
       this.thinkingSec = 0;
@@ -5133,6 +5173,10 @@ function nbx() {
         }
         if (state === "stopped") this.toast("已停止生成", "warn");
       }
+      // 一题都没解析出来（中断/失败）→ 输入坞弹回原位：此时「每题迁移题量」还可能被改
+      // （重新生成用的就是当前设置），坞收着且没有唤回入口就等于把设置一起锁死了。
+      // 解析出题目则维持原来的紧凑收起（卷子已有数据，题量也已随卷锁定）。
+      if (!this.vpHasData) this.inputCollapsed = false;
     },
     // 最后一个「完整题」的结束位置（返回结束标签之后的下标；没有则 -1）。
     // 定界符与解析器共用一套：模型把 END_Q 写成 @@END_Q: / @@@END_Q@@ 时也要能切准。
@@ -6816,6 +6860,8 @@ function nbx() {
           }
         }
       }
+      // 这条记录没有解析出题目（失败/中断）→ 输入坞留在原位，别把「每题迁移题量」一起藏掉
+      if (!this.vpHasData) this.inputCollapsed = false;
       this.rightMobileOpen = false;
       this._outputDirty = true; // 载入历史同样属于输出变化，须走完整重解析
       this.$nextTick(() => {

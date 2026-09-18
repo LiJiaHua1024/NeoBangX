@@ -9,7 +9,7 @@
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=dlg260919e">
+  <link rel="stylesheet" href="/static/styles.css?v=dlg260919f">
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -34,8 +34,8 @@
   <script defer src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.15.12/dist/cdn.min.js"></script>
   <script defer src="/static/vendor/thumbmark.umd.js"></script>
-  <script defer src="/static/script.js?v=dlg260919e"></script>
-  <script defer src="/static/vp-print.js?v=dlg260919e"></script>
+  <script defer src="/static/script.js?v=dlg260919f"></script>
+  <script defer src="/static/vp-print.js?v=dlg260919f"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
 </head>
 
@@ -748,7 +748,8 @@
 
         <!-- ========== 试卷可视化全解 ========== -->
         <template x-if="currentTool && isVisualPaperTool">
-          <div class="flex-1 min-h-0 flex flex-col" :class="vpFullscreen ? 'vp-embed-full' : ''">
+          <div class="flex-1 min-h-0 flex flex-col" :class="vpFullscreen ? 'vp-embed-full' : ''"
+               @pointerdown.window="vpSettingsOutsideHide($event)" @keydown.escape.window="closeVpSettings()">
             <!-- 工具头部 -->
             <div x-show="!vpFullscreen" class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
               <!-- 窄档：顶栏已移除，工具列表入口放在头部行首（左上角）；宽屏两侧栏并排，不需要 -->
@@ -1475,15 +1476,17 @@
                       </label>
                       <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf，自动跳过听力</span>
                       <span class="ml-auto flex items-center gap-2">
-                        <label class="vp-cfg-inline"
-                               title="每道笔试题生成几道同构迁移题（写作题不生成），对之后开始的解析与续写生效">
-                          <span x-html="icon('sliders','w-3.5 h-3.5')"></span>迁移
-                          <select x-model.number="vpSettings.transferCount" aria-label="每题迁移题量">
-                            <template x-for="n in VP_TRANSFER_MAX - VP_TRANSFER_MIN + 1" :key="n">
-                              <option :value="VP_TRANSFER_MIN + n - 1" x-text="(VP_TRANSFER_MIN + n - 1) + ' 题'"></option>
-                            </template>
-                          </select>
-                        </label>
+                        <!-- 解析设置：整块胶囊是一个按钮（图标/文字/徽标/箭头都在按钮内），
+                             点任意位置都能开浮层；浮层本体在坞外，见文件末尾 .vp-cfg-menu -->
+                        <button type="button" class="ms-trigger vp-cfg-trigger" x-ref="vpCfgTrigger" data-vp-cfg
+                                :class="{ 'open': vpSettingsOpen }" @click="toggleVpSettings()"
+                                aria-label="解析设置" :aria-expanded="vpSettingsOpen"
+                                :title="'每题迁移题量：' + vpTransferCount + ' 题（写作题不生成），对下一次解析/重新生成生效'">
+                          <span class="ms-spark" x-html="icon('sliders','w-3.5 h-3.5')"></span>
+                          <span>迁移</span>
+                          <span class="vp-cfg-badge" x-text="vpTransferCount + ' 题'"></span>
+                          <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                        </button>
                         <span class="text-xs text-faint" x-show="input.length" x-text="input.length + ' 字'"></span>
                         <button class="btn-primary" @click="run()" :disabled="!input.trim() || parsingFile">
                           <span x-html="icon('send','w-4 h-4')"></span>开始解析
@@ -2028,6 +2031,26 @@
               title="加粗（也可按 Ctrl+B）" x-html="icon('bold','w-4 h-4')"></button>
       <button type="button" class="vp-edit-tool" @mousedown.prevent @click="vpFormatFocused('mark')"
               title="高亮" x-html="icon('highlight','w-4 h-4')"></button>
+    </div>
+
+    <!-- ==================== 解析设置浮层（每题迁移题量） ====================
+         必须挂在输入坞外面：坞要 overflow:hidden 才收得干净，挂坞里会被裁掉。
+         定位由 JS 落位（positionVpSettings，仿上面的格式按钮浮层）。 -->
+    <div class="vp-cfg-menu glass-deep" x-ref="vpCfgMenu" data-vp-cfg x-show="vpSettingsOpen" x-cloak
+         @resize.window="vpSettingsOpen && positionVpSettings()"
+         x-transition:enter="vp-cfg-anim" x-transition:enter-start="vp-cfg-anim-from" x-transition:enter-end="vp-cfg-anim-to"
+         x-transition:leave="vp-cfg-anim-leave" x-transition:leave-start="vp-cfg-anim-to" x-transition:leave-end="vp-cfg-anim-from">
+      <div class="vp-cfg-head">解析设置</div>
+      <label class="vp-cfg-row">
+        <span class="vp-cfg-label">每题迁移题量 <b x-text="vpTransferCount + ' 题'"></b></span>
+        <input type="range" :min="VP_TRANSFER_MIN" :max="VP_TRANSFER_MAX" step="1"
+               x-model.number="vpSettings.transferCount"
+               :aria-label="'每题迁移题量 ' + vpTransferCount + ' 题'">
+        <span class="vp-cfg-scale"><span x-text="VP_TRANSFER_MIN"></span><span x-text="VP_TRANSFER_MAX"></span></span>
+      </label>
+      <p class="vp-cfg-tip">每道笔试题生成几道同构迁移题（写作题不生成）。改的是下一次「开始解析 / 重新生成」的题量；同一份卷子续写沿用生成时锁定的题量，免得一份卷子里题量前后不一致。</p>
+      <button type="button" class="vp-cfg-reset" @click="vpResetSettings()"
+              :disabled="vpTransferCount === VP_TRANSFER_MIN">恢复默认（1 题）</button>
     </div>
 
     <!-- ==================== 换个模型重试弹窗 ==================== -->

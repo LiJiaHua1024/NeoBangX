@@ -918,37 +918,12 @@ html[data-theme="sora"] .mascot-peeking {
 .ms-anim-leave { transition: transform 0.16s ease-in, opacity 0.14s ease-in; }
 
 /* ============================================================
-   解析设置（试卷可视化全解）：只有「每题迁移题量」一项，
-   放在输入区工具栏里、用原生 select 内联呈现 —— 弹层会被输入坞的
-   overflow:hidden 裁掉（坞要裁剪才收得干净），原生控件没有这个问题。
-   以下 .vp-cfg-trigger / .vp-cfg-menu 一组是旧的浮层版本样式，暂时保留备用。
+   解析设置（试卷可视化全解）：只有「每题迁移题量」一项。
+   触发器是输入区工具栏里的整块胶囊（复用 .ms-trigger，图标/文字/徽标
+   都在按钮内，整块可点）；浮层挂在输入坞外面、position:fixed —— 坞要
+   overflow:hidden 才收得干净，浮层留在坞里会被裁掉。落位由 JS 负责
+   （positionVpSettings），进出场沿用 .vp-cfg-anim 那套弹簧过渡。
    ============================================================ */
-.vp-cfg-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.22rem 0.5rem;
-  border-radius: 0.7rem;
-  font-size: 0.78rem;
-  color: var(--text-dim);
-  background: var(--panel-soft);
-  border: 1px solid var(--border);
-  transition: border-color 0.18s ease, background 0.18s ease;
-}
-.vp-cfg-inline:hover { border-color: var(--border-strong); color: var(--text); }
-.vp-cfg-inline select {
-  appearance: none;
-  -webkit-appearance: none;
-  border: none;
-  outline: none;
-  padding: 0 0.1rem;
-  background: transparent;
-  color: var(--text);
-  font-family: var(--font);
-  font-size: 0.78rem;
-  font-weight: 550;
-  cursor: pointer;
-}
 .vp-cfg-trigger { max-width: none; padding: 0.26rem 0.55rem; font-size: 0.74rem; }
 .vp-cfg-badge {
   padding: 0.1rem 0.4rem;
@@ -960,14 +935,22 @@ html[data-theme="sora"] .mascot-peeking {
   transition: color 0.15s ease, background 0.15s ease;
 }
 .ms-trigger.open .vp-cfg-badge { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+/* 浮层本体：坞外固定定位。left/top 由 JS 按触发器位置落位，
+   不能在这里写死锚点（写成 bottom/right 的百分比会相对视口而不是触发器）。 */
 .vp-cfg-menu {
-  top: auto;
-  bottom: calc(100% + 0.75rem);
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
   min-width: 18rem;
   max-width: min(22rem, 92vw);
-  transform-origin: bottom right;
+  /* 圆角原来由 .ms-menu 提供，这里自包含 */
+  border-radius: 0.9rem;
   padding: 0.75rem;
   gap: 0.6rem;
+  transform-origin: bottom right;
 }
 .vp-cfg-head { font-size: 0.8rem; font-weight: 650; }
 .vp-cfg-row { display: block; }
