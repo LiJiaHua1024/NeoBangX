@@ -2685,10 +2685,14 @@ function nbx() {
     },
     scheduleMascotCheck(delay = 0) {
       clearTimeout(this._mascotCheckTimer);
+      // 输入坞展开过渡期间布局未落定，基于中间态的判定会来回翻转；
+      // 统一推迟到落定后再判（_animateDock 设置的安静窗口）
+      const quiet = (this._mascotQuietUntil || 0) - Date.now();
+      const wait = Math.max(delay, quiet, 0);
       this._mascotCheckTimer = setTimeout(() => {
         this._mascotCheckTimer = null;
         this.$nextTick(() => this.reconcileMascot());
-      }, delay);
+      }, wait);
     },
     setupMascotObservers() {
       const panel = this.$refs.mainPanel;
@@ -2724,6 +2728,14 @@ function nbx() {
       if (image && !image.complete) image.addEventListener("load", schedule, { once: true });
     },
     reconcileMascot() {
+      // 探出 / 收回动画进行中不做反向的空间判定：过渡期间布局每帧都在变，
+      // 判定结果来回翻转会把一次探出反复打断重启（视觉上连续鬼畜弹跳）。
+      // 空间是否安全交给动画结束回调基于落定后的布局再判；只有「探出资格」
+      // 消失（提交、开始生成等明确的状态变化）才立即收回。
+      if (this.mascotState === "entering" || this.mascotState === "retreating") {
+        if (!this.mascotCanPeek) this.retreatMascot();
+        return;
+      }
       if (this.mascotCanPeek && this.mascotHasSafeSpace()) this.showMascot();
       else this.retreatMascot();
     },
@@ -3539,6 +3551,9 @@ function nbx() {
       el.style.height = from + "px";
       void el.offsetHeight;  // 先固定起点：同帧两次赋值会被合并，过渡就没有起点了
       el.style.height = target + "px";
+      // 展开期间避让区（输入区）位置每帧都在变，mascot 的空间判定
+      // 推迟到过渡结束后（scheduleMascotCheck 里读），避免基于中间态判定
+      if (open) this._mascotQuietUntil = Date.now() + 620;
       el._dockTimer = setTimeout(() => {
         el._dockTimer = null;
         if (open) el.style.height = "";  // 交回自动高度，之后内容变化仍能自适应
