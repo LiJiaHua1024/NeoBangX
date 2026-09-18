@@ -1230,15 +1230,9 @@ html[data-theme="sora"] .mascot-peeking {
   text-overflow: ellipsis;
   min-width: 0;
 }
-.submitted-preview {
-  color: var(--text-faint);
-  font-size: 0.74rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1;
-}
+/* 短输入的头部只是名称，不是开关：不给手型、不给悬停反馈 */
+.submitted-head.is-static { cursor: default; }
+.submitted-head.is-static:hover { background: transparent; }
 .submitted-head .chev {
   color: var(--text-faint);
   transition: transform 0.35s var(--ease-spring);
@@ -1273,6 +1267,11 @@ html[data-theme="sora"] .mascot-peeking {
 .submitted-card.expanded .submitted-text {
   max-height: 18rem;
   overflow-y: auto;
+}
+/* 不折叠的卡片（短输入）：正文全量铺开，不存在「藏起来看不到」的部分 */
+.submitted-card.fixed-open .submitted-text {
+  max-height: none;
+  overflow: visible;
 }
 /* 毛玻璃覆盖层：盖在文字上方，收起时显示 */
 .submitted-frost {

@@ -1578,19 +1578,24 @@
                 <p class="text-sm text-dim mt-1.5">在下方输入或上传文件，点击「执行」即可开始</p>
               </div>
 
-              <!-- 已提交的输入（折叠卡片） -->
+              <!-- 已提交的输入（短输入不做折叠，整段铺开） -->
               <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 pt-5" x-show="submittedInput" x-collapse>
-                <div class="submitted-card" :class="{ 'expanded': submittedExpanded }">
-                  <button class="submitted-head" @click="submittedExpanded = !submittedExpanded">
+                <div class="submitted-card" :class="{ 'expanded': submittedOpen, 'fixed-open': !submittedFoldable }">
+                  <button class="submitted-head" x-show="submittedFoldable" @click="submittedExpanded = !submittedExpanded"
+                          :aria-expanded="submittedExpanded">
                     <span class="submitted-ico" x-html="icon(submittedFileName ? 'file-text' : 'document-magnifier','w-4 h-4')"></span>
                     <span class="submitted-label" x-text="submittedFileName || '我的输入'"></span>
-                    <span class="submitted-preview" x-show="!submittedFileName && !submittedExpanded" x-text="excerpt(submittedInput, 40)"></span>
                     <span class="chev ml-auto" x-html="icon('chevron-down','w-4 h-4')"></span>
                   </button>
+                  <!-- 短输入：头部只是名称，不可点开（文字输入也没有标题可写） -->
+                  <div class="submitted-head is-static" x-show="!submittedFoldable">
+                    <span class="submitted-ico" x-html="icon(submittedFileName ? 'file-text' : 'document-magnifier','w-4 h-4')"></span>
+                    <span class="submitted-label" x-text="submittedFileName || '我的输入'"></span>
+                  </div>
                   <div class="submitted-body">
                     <pre class="submitted-text scroll-thin" x-text="submittedInput"></pre>
                     <!-- 收起时的毛玻璃覆盖层 -->
-                    <div class="submitted-frost" x-show="!submittedExpanded" x-transition.opacity.duration.300ms></div>
+                    <div class="submitted-frost" x-show="!submittedOpen" x-transition.opacity.duration.300ms></div>
                   </div>
                 </div>
               </div>

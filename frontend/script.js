@@ -966,6 +966,22 @@ function balanceTruncatedMarkdown(head, full, cut) {
   return head;
 }
 
+/* ---------------- 已提交输入卡片的折叠门槛 ----------------
+   收起态只露约 3 行（.submitted-text 的 4.8rem），短输入一眼看完，再套一层
+   「点开才看全」纯属多余交互，所以阈值之内不给折叠入口，整段始终铺开。
+   按估算行数而非纯字数判断：换行多的输入，实际行数远超字数暗示的规模。 */
+const SUBMITTED_FOLD_LINES = 4;
+const SUBMITTED_LINE_CHARS = 45;
+
+function submittedNeedsFold(text) {
+  let used = 0;
+  for (const line of String(text || "").split("\n")) {
+    used += Math.max(1, Math.ceil(line.length / SUBMITTED_LINE_CHARS));
+    if (used > SUBMITTED_FOLD_LINES) return true;
+  }
+  return false;
+}
+
 /* 把后端错误 detail 转成可读文案；无法识别时返回 null，由调用方回退默认提示 */
 function formatApiDetail(detail) {
   if (typeof detail === "string") return detail;
@@ -3569,6 +3585,13 @@ function nbx() {
     },
 
     /* ============ 输入区 ============ */
+    /* 已提交输入卡片：短输入没有折叠入口，直接当展开态用（见 submittedNeedsFold） */
+    get submittedFoldable() {
+      return submittedNeedsFold(this.submittedInput);
+    },
+    get submittedOpen() {
+      return !this.submittedFoldable || this.submittedExpanded;
+    },
     /* 输入坞的初始高度：模板渲染时就落定，不播动画（生成中/已收起 = 直接 0 高）。
        transition 先置 none 再于下一帧交还，避免挂载那一下被过渡成一次闪现。 */
     dockMount(el, open) {
