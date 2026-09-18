@@ -12,7 +12,8 @@
    黑白打印取向（每一处都不是随手定的）：
    · 全灰阶：颜色一律中性灰（R=G=B）。彩色打印机的灰成分替换会把中性灰保持成
      纯 K，于是不会出现四色黑、偏色、套印不准；正文一律 100% K，大面积填充最浅。
-   · 语义不靠颜色：正确项 = 左侧粗线 + √ + 字母加粗 + 浅底，四重编码；
+   · 语义不靠颜色：正确项 = 浅底（不再加左粗线 + √：左粗线是语篇块的身份标记，
+     给选项用既会被读成引用块，又会把正确项推歪）；
      答案解析用【】黑体标签；高亮 ==…== 变成 10% 灰底，不是黄底。
    · 字体分工：正文 / 语篇 / 解析用宋体（西文走 Times），标题 / 标签 / 加粗用黑体。
      宋体没有真粗体，font-synthesis:none 禁掉浏览器伪粗——合成粗体在纸上会糊成双影。
@@ -309,19 +310,18 @@ body.vpp {
 .vpp-ogrid { display: grid; grid-template-columns: 1fr; gap: 1.4mm 6mm; }
 .vpp-ogrid[data-cols="2"] { grid-template-columns: 1fr 1fr; }
 .vpp-o { display: flex; align-items: flex-start; gap: 1.6mm; line-height: 1.6; }
+/* 字母位：min-width 是四个选项正文左端对齐的基准，不能删（字母只剩一个字也照样占满 6mm）。
+   display 必须留着，否则行内元素吃不到 min-width。 */
 .vpp-o-l {
   font-family: var(--sans); font-weight: 700; flex: 0 0 auto;
-  min-width: 6mm; display: inline-flex; gap: 0.8mm;
+  min-width: 6mm; display: inline-flex;
 }
 .vpp-o-t { flex: 1 1 auto; white-space: pre-wrap; }
-.vpp-o-mark { flex: 0 0 auto; font-family: var(--sans); font-weight: 700; }
 
-/* 正确选项：粗线 + √ + 字母加粗 + 浅底。四重编码，缺任何一项都还认得出来 */
-.vpp-o[data-correct="1"] {
-  background: var(--tint-1);
-  border-left: var(--heavy) solid var(--ink);
-  padding: 0.6mm 2mm 0.6mm 2.6mm;
-}
+/* 正确选项：只用浅底。这里绝不能加 border-left / padding——四个选项共用同一套
+   盒模型，字母与正文才会对齐；一旦只给正确项加左竖线和内边距，它就会比同排选项
+   右移 3mm、下移 0.6mm，正文列宽也少 2mm。左边的竖线语义保留给语篇块。 */
+.vpp-o[data-correct="1"] { background: var(--tint-1); }
 
 /* ============================ 答案解析 ============================ */
 

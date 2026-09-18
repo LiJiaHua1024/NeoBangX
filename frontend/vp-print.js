@@ -458,16 +458,18 @@
   function slabelHtml(text, mark) {
     return '<span class="vpp-mark vpp-mark-' + mark + '"></span><span>' + esc(text) + "</span>";
   }
-  /* 正确项四重编码：粗线 + √ + 字母加粗 + 浅底。黑白打印丢任何一层都还认得出来 */
-  function optionsHtml(list, answer, showMark, width) {
+  /* 正确项只用浅底标记，不加边框也不加内边距：盒模型与其它选项完全一致，
+     字母和正文才会横竖都对齐。左粗线 + √ 的老做法会把正确项整体推右 3mm、推下 0.6mm，
+     而且左粗线是语篇块（.vpp-passage）的身份标记，套在选项上会被读成引用块。 */
+  function optionsHtml(list, answer, highlight, width) {
     var opts = (list || []).filter(function (o) { return o && has(o.text); });
     if (!opts.length) return "";
     var cols = chooseCols(opts, width);
     var h = '<div class="vpp-ogrid" data-cols="' + cols + '">';
     opts.forEach(function (o) {
-      var ok = showMark && has(answer) && sameLabel(o.label, answer);
+      var ok = highlight && has(answer) && sameLabel(o.label, answer);
       h += '<div class="vpp-o"' + (ok ? ' data-correct="1"' : "") + ">"
-        + '<span class="vpp-o-l">' + esc(o.label) + (ok ? '<span class="vpp-o-mark">√</span>' : "") + "</span>"
+        + '<span class="vpp-o-l">' + esc(o.label) + "</span>"
         + '<span class="vpp-o-t">' + fmt(o.text) + "</span></div>";
     });
     return h + "</div>";
