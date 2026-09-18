@@ -1518,7 +1518,10 @@ html[data-theme="sora"] .mascot-peeking {
 .reasoning-head .chev { display: inline-flex; color: var(--text-faint); transition: transform 0.35s var(--ease-spring); }
 .reasoning-box.collapsed .reasoning-head .chev { transform: rotate(-90deg); }
 .reasoning-body {
+  /* 高度上限跟着视口走：大屏多给几行，矮窗口仍然只占一小条。
+     先写定值兜底，再叠 clamp（不认 dvh / clamp 的浏览器保留上一行） */
   max-height: 9rem;
+  max-height: clamp(9rem, 38dvh, 24rem);
   overflow-y: auto;
   border-top: 1px solid var(--border);
   padding: 0.6rem 0.8rem;
@@ -1533,7 +1536,10 @@ html[data-theme="sora"] .mascot-peeking {
   font-family: var(--font);
 }
 .reasoning-truncated { margin-top: 0.4rem; font-size: 0.68rem; color: var(--text-faint); }
-.reasoning-box-narrow { max-width: 28rem; width: 100%; text-align: left; }
+/* 居中 flex 列（加载态）里的推理卡：交叉轴 align-items:center 会把子项收缩成 fit-content，
+   所以必须显式撑满一列。宽度上限交给外层的正文列容器，卡片本身不再自带上限——
+   思考面板与正文同列，宽度只有一个来源。text-align:left 用于抵消容器的 text-center */
+.reasoning-box-fill { width: 100%; text-align: left; }
 .reasoning-box-card { margin: 0.6rem 0 0; }
 .reasoning-box-card .reasoning-body { max-height: 7rem; }
 

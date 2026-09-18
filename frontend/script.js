@@ -5191,6 +5191,10 @@ function nbx() {
         this.reasoningDone = true;
         this.reasoningOpen = false;
       }
+      // 一题都没解析出来、正文也一个字没有（在思考阶段就被停掉）→ 清掉思考残留。
+      // 这次请求等于什么都没留下，页面该干净地回到初始状态，不该挂一条没归属的
+      // 「思考过程」条和它的 token 统计（有正文时保留，那是正常的中断续写场景）
+      if (!this.vpHasData && !this.output.trim()) this.resetReasoning();
       this.vpDoRender();
       if (state === "error") {
         this.status = "error";
