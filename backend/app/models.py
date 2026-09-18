@@ -173,6 +173,11 @@ class UsageLog(Base):
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 输入侧缓存命中的 token 数（供应商前缀缓存，LiteLLM 已归一到
+    # prompt_tokens_details.cached_tokens）。NULL 的语义是「这次请求没上报命中信息」
+    # （旧库存量行 / 网关不回传 / 本地估算补齐），与「上报了 0、确认没命中」不是一回事，
+    # 因此 to_dict 保留 None 交给前端显示为「—」。
+    cached_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # tokens 是否为本地估算（供应商未回传 usage 时按 tokenizer 近似补齐）。
     # 旧库补列后的存量行读回 NULL，语义是「当时无从判断」，前端不显示估算标记
     tokens_estimated: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -210,6 +215,7 @@ class UsageLog(Base):
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
+            "cached_tokens": self.cached_tokens,
             "tokens_estimated": self.tokens_estimated,
             "ip": self.ip or "",
             "user_agent": self.user_agent or "",

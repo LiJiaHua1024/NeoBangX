@@ -1896,8 +1896,9 @@ function nbx() {
         answerMap: {},
         notice: "",
         total: null,
-        // 这份卷子生成时用的每题迁移题量（随历史记录一起存，续写时沿用）
-        transferCount: 1,
+        // 这份卷子生成时锁定的每题迁移题量，随历史记录一起存。
+        // 未锁定（null）＝还没跑过，第一次发起时用当前设置盖章
+        transferCount: null,
         historyId: null,
         rawJson: "",
         parseError: "",
@@ -1943,6 +1944,8 @@ function nbx() {
       let currentQ = null;
       let currentField = null;
       let fieldBuf = [];
+      // @@Q@@ 独占一行、题号落在下一行时的等待标记（见下方逐行解析）
+      let pendingQNo = false;
       // 迁移块可整块重复（每题 N 道），块以 TRANSFER_PASSAGE 开头：
       // 本块已有内容且该字段写过（或这正是开头标签）→ 上一块结束，先收进列表再开新草稿；
       // 这样模型省略 passage 直接开下一块时也能正确切分
@@ -2032,7 +2035,7 @@ function nbx() {
       const commitQuestion = () => {
         if (currentQ === null || currentGroup === null) return;
         if (currentField !== null && fieldBuf.length) flushField();
-        const no = currentQ.no || "1";
+        const no = currentQ.no || "?";
         const options = currentQ._raw_options || [];
         const pitfalls = currentQ._pitfalls_raw || [];
         const patternName = currentQ._pattern_name_raw || "";
@@ -2087,6 +2090,13 @@ function nbx() {
       // 逐行解析；一行内出现多个标签时逐段切分，前段文本归入当前字段
       for (let rawLine of lines) {
         let work = rawLine.replace(/\r$/, "");
+        // 模型偶尔把题号写到 @@Q@@ 的下一行：这一行若是独立的 1-3 位数字就当题号收下，
+        // 空行不算（跳过继续等），不是数字则放弃等待、交回正常流程
+        if (pendingQNo && work.trim()) {
+          pendingQNo = false;
+          const bare = work.trim();
+          if (/^\d{1,3}$/.test(bare) && currentQ) { currentQ.no = bare; continue; }
+        }
         while (true) {
           const fm = work.match(VP_TAG_FIND_RE);
           if (!fm) {
@@ -2105,6 +2115,8 @@ function nbx() {
             break;
           }
           const tag = m[1].toUpperCase();
+          // 任何新标签都意味着「下一行是裸题号」的窗口已经过去
+          if (tag !== "Q") pendingQNo = false;
           // 同行值只取到下一个标签标记为止，行内剩余标签留给下一轮
           let value = m[3];
           const vm = value.match(VP_TAG_FIND_RE);
@@ -2117,9 +2129,10 @@ function nbx() {
             const num = value.match(/\d+/);
             if (num) totalDeclared = parseInt(num[0], 10);
           } else if (tag === "PAPER") {
-            paperTitle = value;
+            // 续写时模型偶尔会重发总览行：空值不覆盖已有内容，免得把前面写好的标题/提示抹掉
+            if (value) paperTitle = value;
           } else if (tag === "NOTICE") {
-            notice = value;
+            if (value) notice = value;
           } else if (tag === "GROUP") {
             if (currentQ !== null) { currentQ = null; currentField=null; fieldBuf=[]; }
             const parts = value.split("|").map(p=>p.trim());
@@ -2132,15 +2145,33 @@ function nbx() {
               title = parts[1] || gid;
               intro = parts[2] || "";
             }
-            currentGroup = {id: gid, title: title, intro: intro, questions: []};
-            groups.push(currentGroup);
+            // 相邻且表头三项完全相同的分组 = 同一板块被重复声明（续写时模型又把 @@GROUP@@ 头写了一遍），
+            // 复用而不是新建；标题/导语不同的同 id 分组是合法拆分（完形可按叙事分 2-3 组），照旧新建。
+            const prevGroup = groups[groups.length - 1];
+            if (prevGroup && prevGroup.id === gid && prevGroup.title === title && prevGroup.intro === intro) {
+              currentGroup = prevGroup;
+            } else {
+              currentGroup = {id: gid, title: title, intro: intro, questions: []};
+              groups.push(currentGroup);
+            }
           } else if (tag === "Q") {
             if (currentQ !== null) { currentQ = null; currentField=null; fieldBuf=[]; }
-            const no = value.trim() || "1";
-            currentQ = {no: no};
+            // 题号没写在同行时留待下一行；再等不到就标成 "?"（未知）。
+            // 不用 "1" 兜底：多道题都叫 "1" 会让答案速查表互相覆盖，
+            // 静默给出错数据，比一个看得见的占位符糟得多
+            const inlineNo = value.trim();
+            currentQ = {no: inlineNo || "?"};
+            pendingQNo = !inlineNo;
             if (currentGroup === null) {
-              currentGroup = {id:"other", title:"未分组", intro:"", questions:[]};
-              groups.push(currentGroup);
+              // 没有板块头的题接到最后一个已有分组上：续写已明确要求「同板块不要重发 @@GROUP@@」，
+              // 这些题本就属于上一板块；全新生成时 groups 为空，仍然落到「未分组」。
+              if (groups.length) {
+                currentGroup = groups[groups.length - 1];
+                if (!Array.isArray(currentGroup.questions)) currentGroup.questions = [];
+              } else {
+                currentGroup = {id:"other", title:"未分组", intro:"", questions:[]};
+                groups.push(currentGroup);
+              }
             }
           } else if (tag === "QTYPE") {
             if (currentQ !== null) {
@@ -2305,8 +2336,13 @@ function nbx() {
     },
     get vpTotal() {
       if (!this.visualPaper) return 0;
-      if (this.visualPaper.total != null && this.visualPaper.total > 0) return this.visualPaper.total;
-      return this.vpQuestionCount;
+      const count = this.vpQuestionCount;
+      // 声明的总数可能只是数字前缀（@@TOTAL@@ 26 被截断成 "2"），已生成题数反超它时以实际为准，
+      // 否则续写指令会把「剩余 N 题」说少，模型就照着少生成
+      if (this.visualPaper.total != null && this.visualPaper.total > 0) {
+        return Math.max(this.visualPaper.total, count);
+      }
+      return count;
     },
     get vpProgressPercent() {
       if (!this.vpTotal) return 0;
@@ -2390,6 +2426,14 @@ function nbx() {
     },
     get vpTransferCount() {
       return this._vpClampTransferCount(this.vpSettings && this.vpSettings.transferCount);
+    },
+    /* 续写/重跑要用的迁移题量：这份卷子已经锁定过就沿用它，而不是当前设置。
+       不锁会有两个代价——内容上一份卷子前后迁移题数不一致；
+       缓存上 {{transfer_count}} 出现在模板前半部分（"结构化思考步骤"那几段），
+       一动整个前缀从第 587 个字符起就分叉，复用率从 99% 掉到 1%。 */
+    get vpLockedTransferCount() {
+      const locked = this.visualPaper && this.visualPaper.transferCount;
+      return this._vpClampTransferCount(locked == null ? this.vpTransferCount : locked);
     },
     toggleVpSettings() {
       this.vpSettingsOpen = !this.vpSettingsOpen;
@@ -4957,9 +5001,10 @@ function nbx() {
       this.startThinkTimer();
       // 与 run() 相同：发起时快照模型，失败归因以它为准
       const modelUsed = this.selectedModel;
-      // 迁移题量随记录一起存：关掉页面再从历史续写时题量不会掉回默认值
+      // 迁移题量随记录一起存：关掉页面再从历史续写时题量不会掉回默认值；
+      // 已经锁定过的卷子一律沿用锁定值，避免续写中途改设置导致前后不一致 + 缓存全失效
       if (!this.visualPaper) this.visualPaper = this.newVisualPaperState();
-      const transferCount = this.vpTransferCount;
+      const transferCount = this.vpLockedTransferCount;
       this.visualPaper.transferCount = transferCount;
       try {
         const { state } = await this._streamChat({
@@ -5065,6 +5110,52 @@ function nbx() {
         if (state === "stopped") this.toast("已停止生成", "warn");
       }
     },
+    // 最后一个「完整题」的结束位置（返回结束标签之后的下标；没有则 -1）。
+    // 定界符与解析器共用一套：模型把 END_Q 写成 @@END_Q: / @@@END_Q@@ 时也要能切准。
+    vpLastCompleteEnd(raw) {
+      const re = new RegExp(`[＠@]{2,}\\s*END_Q\\s*${_VP_TAG_DELIM}`, "gi");
+      let last = -1, m;
+      while ((m = re.exec(raw || "")) !== null) last = m.index + m[0].length;
+      return last;
+    },
+    /* 续写指令：只把「模型猜不到的那几条私有信息」交给它——进度、当前板块、输出写法。
+       不回传已生成正文，是因为正文会让每轮输入多吞一份输出（输出量常比试卷原文还大），
+       而且为了清洗残片去改动回传内容，前缀缓存就会从改动点起全部失效。
+       进度全部取自解析出来的结构：最后一题 = 最后一个「有题的分组」的最后一题
+       （分组里可能夹着空组），它的 id|title 就是续写题该归属的板块。 */
+    vpContinueBrief() {
+      const vp = this.visualPaper || {};
+      const groups = vp.groups || [];
+      const total = this.vpTotal || 0;
+      const count = this.vpQuestionCount;
+      const remaining = Math.max(0, total - count);
+      const allNos = [];
+      for (const g of groups) for (const q of (g.questions || [])) allNos.push(q.no);
+      const filled = groups.filter((g) => (g.questions || []).length);
+      const lastGroup = filled.length ? filled[filled.length - 1] : null;
+      const lastQ = lastGroup ? lastGroup.questions[lastGroup.questions.length - 1] : null;
+      const label = lastGroup ? `\`${lastGroup.id}|${lastGroup.title}\`` : "";
+      // 题号没识别出来时（"?"）不要把占位符喂给模型——它会当成真题号照抄进 @@Q@@ 行
+      const known = !!(lastQ && lastQ.no && lastQ.no !== "?");
+      const lastLabel = known ? `第 ${lastQ.no} 题` : "最后一道已完成题（题号未能识别）";
+      const nosList = allNos.filter((n) => n && n !== "?");
+      const lines = ["【续写指令】你的输出会被原样追加在前面已生成内容的后面，接着往下写。"];
+      if (!lastQ) {
+        lines.push(`进度：全卷 ${total} 题，还没有题目完成。请从试卷的第一道笔试题开始，按原文顺序输出全部 ${total} 题。`);
+        lines.push("板块写法：每进入一个板块时输出一行 `@@GROUP@@ id|title|intro`，该板块的题跟在它后面。");
+      } else {
+        lines.push(`进度：全卷 ${total} 题，已完成 ${count} 题（题号 ${nosList.join(",")}），最后一题是${lastLabel}，属于板块 ${label}。`);
+        if (remaining > 0) {
+          lines.push(`接着${lastLabel}之后的题继续写，直到写完剩余 ${remaining} 题。`);
+        } else {
+          lines.push(`如果试卷原文中还有未被覆盖的笔试题，接着${lastLabel}之后的题按同样格式补全。`);
+        }
+        lines.push(`板块写法：接下来的题若仍属于 ${label}，直接输出 \`@@Q@@\` 行；只有跨进新板块时，才输出新的 \`@@GROUP@@ id|title|intro\` 行。`);
+      }
+      lines.push("题号写法：题号以试卷原文为准，上面提到的题号只是进度提示，与原文不一致时照录原文题号。");
+      lines.push(`每道笔试题仍输出 ${this.vpLockedTransferCount} 块迁移（写作题除外）。`);
+      return lines.join("\n");
+    },
     async continueVisualPaper() {
       if (this.streaming) return;
       if (!this.visualPaper || !this.submittedInput) {
@@ -5091,17 +5182,15 @@ function nbx() {
         await this._runVisualStream(text, keepId);
         return;
       }
-      if (this.vpRemaining <= 0) {
-        this.toast("已全部生成，无需续写");
-        return;
+      // 尾巴上的未完成片段（半道题、半句语篇、被截断的 @@GROUP@@ 头）在续写前整段丢掉：
+      // 它们既没进结构也没显示过，留着只会让重解析在同一个位置反复走死路
+      const cut = this.vpLastCompleteEnd(this.output);
+      if (cut > 0) {
+        this.output = this.output.slice(0, cut);
+        this._outputDirty = true;
       }
-      const alreadyNos = [];
-      for (const g of this.visualPaper.groups) for (const q of g.questions) alreadyNos.push(q.no);
-      const lastNo = alreadyNos.length ? Math.max(...alreadyNos.map(n=>parseInt(n)||0)) : 0;
-      const nextNo = lastNo + 1;
-      const remaining = this.vpRemaining;
-      const contInput = this.submittedInput + `\n\n【续写指令】已生成 ${this.vpQuestionCount}/${this.vpTotal} 题，题号 ${alreadyNos.join(",")} 已完成，请继续生成剩余 ${remaining} 题，从 @@Q@@ ${nextNo} 开始，按相同 @@TAG@@ 格式输出，每题以 @@END_Q@@ 结束，不要重复已生成题，也不要重新输出 @@TOTAL@@/@@PAPER@@/@@NOTICE@@。续写的每道笔试题同样要输出 ${this.vpTransferCount} 块迁移（写作题除外）。`;
       if (this.output && !this.output.endsWith("\n")) this.output += "\n";
+      const contInput = this.submittedInput + "\n\n" + this.vpContinueBrief();
       const baseLen = this.output.length;
       await this._runVisualStream(contInput, keepId);
       // 若续写未新增任何内容（模型未按指令），提示
@@ -5591,7 +5680,7 @@ function nbx() {
         out.push(`@@GROUP@@ ${gid}|${flat(String(g.title || "").replace(/\|/g, "｜"))}|${flat(String(g.intro || "").replace(/\|/g, "｜"))}`);
         for (const q of (g.questions || [])) {
           const qtype = (q.qtype === "choice" || q.qtype === "blank" || q.qtype === "writing") ? q.qtype : "blank";
-          out.push(`@@Q@@ ${String(q.no == null ? "" : q.no).trim() || "1"}`);
+          out.push(`@@Q@@ ${String(q.no == null ? "" : q.no).trim() || "?"}`);
           out.push(`@@QTYPE@@ ${qtype}`);
           out.push("@@PASSAGE@@");
           out.push(block(q.passage));

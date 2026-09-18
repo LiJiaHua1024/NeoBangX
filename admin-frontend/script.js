@@ -1558,6 +1558,15 @@ function adminApp() {
     anaKpis() {
       return (this.analyticsData && this.analyticsData.kpis) || {};
     },
+    // 输入侧缓存命中率：命中 token 占输入 token 的比例（跨请求汇总）。
+    // 供应商未上报命中的请求在库里是 NULL、汇总时按 0 计，所以这个比例是下限——
+    // 「有没有上报」看日志详情的「缓存命中」一行。
+    cacheHitText(k) {
+      const prompt = (k && k.prompt_tokens) || 0;
+      if (!prompt) return "";
+      const hit = (k && k.cached_tokens) || 0;
+      return ` · 缓存命中 ${((hit / prompt) * 100).toFixed(1)}%`;
+    },
     anaDeltas() {
       return (this.analyticsData && this.analyticsData.deltas) || null;
     },
@@ -2107,6 +2116,9 @@ function adminApp() {
         `状态：${this.logStatusLabel(l.status)}`,
         `耗时：${this.fmtDuration(l.duration_ms)}`,
         `Tokens：输入 ${l.prompt_tokens ?? "—"} / 输出 ${l.completion_tokens ?? "—"} / 合计 ${l.total_tokens ?? "—"}${l.tokens_estimated ? "（估算值）" : ""}`,
+        l.cached_tokens != null
+          ? `缓存命中：${l.cached_tokens} Tokens（占输入 ${l.prompt_tokens ? ((l.cached_tokens / l.prompt_tokens) * 100).toFixed(1) + "%" : "—"}）`
+          : "缓存命中：未上报",
         `扣费：${this.fmtUnits(l.units)}`,
         `IP：${l.ip || "—"}`,
         `UA：${l.user_agent || "—"}`,

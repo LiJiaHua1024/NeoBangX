@@ -8,6 +8,33 @@ from litellm import acompletion
 logger = logging.getLogger(__name__)
 
 
+def _usage_field(usage, key):
+    """兼容对象与 dict 两种 usage 形态取值。"""
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        return usage.get(key)
+    return getattr(usage, key, None)
+
+
+def extract_cache_hit_tokens(usage) -> Optional[int]:
+    """输入侧缓存命中的 token 数。
+
+    LiteLLM 把各家的命中数归一到 ``prompt_tokens_details.cached_tokens``
+    （Gemini 的 cached_content_token_count、OpenAI 的自动前缀缓存等），
+    Anthropic 原生的 ``cache_read_input_tokens`` 作为回落。
+    两者都没给时返回 None：语义是「这次没有上报命中信息」而非「没命中」，
+    管理台要区分这两种情况，所以不能收敛成 0。
+    """
+    details = _usage_field(usage, "prompt_tokens_details")
+    hit = _usage_field(details, "cached_tokens") if details is not None else None
+    if hit is None:
+        hit = _usage_field(usage, "cache_read_input_tokens")
+    if isinstance(hit, (int, float)):
+        return int(hit)
+    return None
+
+
 def extract_usage(usage, out: dict) -> None:
     """从 litellm 的 usage 对象提取 token 计数到 out；字段缺失时静默跳过。"""
     if usage is None:
@@ -16,6 +43,9 @@ def extract_usage(usage, out: dict) -> None:
         value = getattr(usage, key, None)
         if isinstance(value, (int, float)):
             out[key] = int(value)
+    hit = extract_cache_hit_tokens(usage)
+    if hit is not None:
+        out["cached_tokens"] = hit
 
 
 def _get_delta_field(delta, key: str):

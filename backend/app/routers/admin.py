@@ -277,6 +277,7 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
                 func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
                 func.coalesce(func.sum(UsageLog.completion_tokens), 0).label("completion_tokens"),
                 func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+                func.coalesce(func.sum(UsageLog.cached_tokens), 0).label("cached_tokens"),
                 func.avg(UsageLog.duration_ms).label("avg_ms"),
                 func.coalesce(func.sum(UsageLog.units), 0).label("units"),
                 func.coalesce(func.sum(case((UsageLog.tokens_estimated.is_(True), 1), else_=0)), 0).label("estimated"),
@@ -292,6 +293,7 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
             return {
                 "total": 0, "success": 0, "cancelled": 0, "error": 0,
                 "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                "cached_tokens": 0,
                 "avg_duration_ms": None, "units": 0, "estimated": 0,
                 "missing_tokens": 0, "missing_duration": 0,
                 "active_codes": 0, "active_models": 0, "active_tools": 0,
@@ -316,6 +318,7 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
             "prompt_tokens": int(row.prompt_tokens or 0),
             "completion_tokens": int(row.completion_tokens or 0),
             "total_tokens": total_tokens,
+            "cached_tokens": int(row.cached_tokens or 0),
             "avg_duration_ms": avg_ms,
             "units": int(row.units or 0),
             "estimated": int(row.estimated or 0),

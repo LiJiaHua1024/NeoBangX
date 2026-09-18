@@ -193,7 +193,7 @@
                 <div class="stat-label">总 Tokens（输入 / 输出）</div>
                 <div class="stat-value" x-text="fmtCompact(anaKpis().total_tokens)" :title="fmtNum(anaKpis().total_tokens)"></div>
                 <div class="stat-foot">
-                  <span x-text="`${fmtCompact(anaKpis().prompt_tokens)} / ${fmtCompact(anaKpis().completion_tokens)} · 平均 ${anaKpis().avg_tokens_per_req ?? '—'} Tokens/次`"></span>
+                  <span x-text="`${fmtCompact(anaKpis().prompt_tokens)} / ${fmtCompact(anaKpis().completion_tokens)} · 平均 ${anaKpis().avg_tokens_per_req ?? '—'} Tokens/次${cacheHitText(anaKpis())}`"></span>
                   <span class="delta" :class="deltaTone(anaDeltas()?.total_tokens)" x-show="anaDeltas()" x-text="`环比 ${fmtDeltaRatio(anaDeltas()?.total_tokens)}`"></span>
                 </div>
               </div>
@@ -813,7 +813,7 @@
                   <td class="num mono" data-label="耗时" x-text="fmtDuration(l.duration_ms)"></td>
                   <td class="num mono" data-label="Tokens"
                       x-text="l.total_tokens != null ? (l.tokens_estimated ? '≈' : '') + fmtNum(l.total_tokens) : '—'"
-                      :title="l.total_tokens != null ? `输入 ${l.prompt_tokens ?? '—'} / 输出 ${l.completion_tokens ?? '—'}${l.tokens_estimated ? '（估算值）' : ''}` : ''"></td>
+                      :title="l.total_tokens != null ? `输入 ${l.prompt_tokens ?? '—'} / 输出 ${l.completion_tokens ?? '—'}${l.tokens_estimated ? '（估算值）' : ''}${l.cached_tokens != null ? ` · 缓存命中 ${fmtNum(l.cached_tokens)}` : ' · 缓存命中未上报'}` : ''"></td>
                   <td class="mono dim truncate-cell" data-label="IP" :title="l.ip || ''" x-text="l.ip || '—'"></td>
                   <td class="truncate-cell" data-label="设备" :title="deviceTitle(l)">
                     <span class="fp-badge" x-show="l.device">

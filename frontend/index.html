@@ -881,11 +881,13 @@
               <div x-show="streaming" class="text-[11px] text-faint mt-1.5">每完成一道题即实时预览，已生成内容即使中断也不会丢失</div>
             </div>
 
-            <!-- 续写按钮（中断恢复） -->
-            <div x-show="vpHasData && vpRemaining > 0 && !streaming && !vpFullscreen" class="px-4 sm:px-5 py-2 flex justify-center shrink-0" style="border-bottom:1px solid var(--border)">
-              <button class="btn-primary" @click="continueVisualPaper()">
+            <!-- 续写按钮（中断恢复）：剩余为 0 也保留入口——@@TOTAL@@ 可能是被截断的数字
+                 前缀、或模型自己数错，此时「剩余 0」不代表卷子真的写完，卡死入口比多花一次生成更糟 -->
+            <div x-show="vpHasData && !streaming && !vpFullscreen" class="px-4 sm:px-5 py-2 flex justify-center shrink-0" style="border-bottom:1px solid var(--border)">
+              <button class="btn-primary" @click="continueVisualPaper()"
+                      :title="vpRemaining > 0 ? '从已完成的最后一题之后接着生成，不会新增记录' : '如果原文还有未覆盖的题，点此接着补全'">
                 <span x-html="icon('refresh','w-4 h-4')"></span>
-                <span x-text="'继续生成剩余 ' + vpRemaining + ' 题'"></span>
+                <span x-text="vpRemaining > 0 ? '继续生成剩余 ' + vpRemaining + ' 题' : '继续生成'"></span>
               </button>
             </div>
 
