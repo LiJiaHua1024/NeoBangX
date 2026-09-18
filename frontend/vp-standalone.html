@@ -29,6 +29,9 @@
         <svg class="vp-ic" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
         <span>开始讲解</span>
       </button>
+      <button class="cover-print" id="cv-print" title="打印 / 存为 PDF（A4：教师详解版 / 学生练习版）">
+        <svg class="vp-ic" aria-hidden="true"><use href="#i-print"></use></svg><span>打印</span>
+      </button>
       <div class="cover-hint t-xs" id="cv-notice"></div>
     </div>
     <button class="icon-btn cover-fs" id="cv-fs" title="进入全屏（F11 亦可）" aria-label="切换全屏"></button>
@@ -100,6 +103,9 @@
           <button class="vp-stage-exit" id="st-save" title="保存到文件（首次会让你确认一次，之后直接覆盖）" hidden>
             <svg class="vp-ic" aria-hidden="true"><use href="#i-insert"></use></svg><span>保存文件</span>
           </button>
+          <button class="vp-stage-exit" id="st-print" title="打印 / 存为 PDF（A4：教师详解版 / 学生练习版）">
+            <svg class="vp-ic" aria-hidden="true"><use href="#i-print"></use></svg><span>打印</span>
+          </button>
           <span class="vp-fmt-group" id="st-fmt" hidden>
             <button type="button" class="vp-fmt-btn" id="st-bold" title="加粗选中的文字（也可按 Ctrl+B）" aria-label="加粗"></button>
             <button type="button" class="vp-fmt-btn" id="st-hl" title="高亮选中的文字" aria-label="高亮"></button>
@@ -158,6 +164,10 @@
   <div class="vp-toast glass-deep" id="vp-toast" hidden></div>
 
   <script id="vp-data" type="application/json">{{VP_DATA}}</script>
+  <!-- A4 打印排版引擎：样式放在不渲染的 text/plain 块里，脚本正常执行（定义 window.VPPrint）。
+      两者都由打印引擎在生成「打印版」时原样取走内联，所以打印版离线也能用。 -->
+  <script type="text/plain" id="vpp-css-src">{{VP_PRINT_CSS}}</script>
+  <script id="vpp-js-src">{{VP_PRINT_JS}}</script>
   <script>{{VP_JS}}</script>
 </body>
 </html>

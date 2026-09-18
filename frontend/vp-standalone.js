@@ -173,7 +173,7 @@
   var qHead = $("q-head"), qPassage = $("q-passage"), qNoPassage = $("q-nopassage");
   var qEditMeta = $("q-edit-meta"), qEditHead = $("q-edit-head");
   var stEdit = $("st-edit"), stSave = $("st-save"), stFmt = $("st-fmt"),
-      stBold = $("st-bold"), stHl = $("st-hl");
+      stBold = $("st-bold"), stHl = $("st-hl"), stPrint = $("st-print"), cvPrint = $("cv-print");
   var toolBar = $("vp-edit-tools"), toolBold = $("vp-tool-bold"), toolHl = $("vp-tool-hl");
   var toastBox = $("vp-toast");
   var dataScript = $("vp-data");
@@ -1432,11 +1432,27 @@
   }
 
   /* ---------------- 事件绑定 ---------------- */
+  /* 打印：把当前讲解交给 A4 排版引擎（vp-print.js）重排成纸面，
+     教师详解版 / 学生练习版在弹窗里选。先把在改的内容写回、把速查表刷新一遍，
+     保证纸上印的就是屏幕上看到的。 */
+  function doPrint() {
+    if (!window.VPPrint) { toast("打印组件不可用，请重新导出讲解文件", "error"); return; }
+    try {
+      flushEdits();
+      DATA.answerMap = deriveAnswerMap();
+      window.VPPrint.openDialog(DATA);
+    } catch (e) {
+      toast("打印失败：" + ((e && e.message) || e), "error");
+    }
+  }
+
   function bindEvents() {
     cvStart.addEventListener("click", startPresentation);
     cvFs.addEventListener("click", toggleFs);
     stFs.addEventListener("click", toggleFs);
     stCover.addEventListener("click", backToCover);
+    if (cvPrint) cvPrint.addEventListener("click", doPrint);
+    if (stPrint) stPrint.addEventListener("click", doPrint);
     navPrev.addEventListener("click", goPrev);
     navNext.addEventListener("click", goNext);
     dockMask.addEventListener("click", toggleMask);

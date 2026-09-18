@@ -1,0 +1,396 @@
+/* ============================================================================
+   NeoBangX · 可视化试卷全解 —— A4 打印样式
+
+   这份样式只服务于「打印文档」：由 vp-print.js 内联进打印文档（预览 / 下载的
+   打印版单文件 / 打印用的隐藏 iframe）。它绝不加载进应用页面——这里声明的
+   @page 会改掉宿主自己的打印行为，.vpp-* 也会和页面的 .vp-* 撞车。
+
+   版面模型：整张纸自己画。@page 边距归零，页边距、页眉、页脚、页码全部由
+   .vpp-sheet 内部承担，所以「第 X 页 / 共 Y 页」这种要数完总页数才知道的信息
+   才印得出来（浏览器自带的页眉页脚只会印出网址和日期，已弃用）。
+
+   黑白打印取向（每一处都不是随手定的）：
+   · 全灰阶：颜色一律中性灰（R=G=B）。彩色打印机的灰成分替换会把中性灰保持成
+     纯 K，于是不会出现四色黑、偏色、套印不准；正文一律 100% K，大面积填充最浅。
+   · 语义不靠颜色：正确项 = 左侧粗线 + √ + 字母加粗 + 浅底，四重编码；
+     答案解析用【】黑体标签；高亮 ==…== 变成 10% 灰底，不是黄底。
+   · 字体分工：正文 / 语篇 / 解析用宋体（西文走 Times），标题 / 标签 / 加粗用黑体。
+     宋体没有真粗体，font-synthesis:none 禁掉浏览器伪粗——合成粗体在纸上会糊成双影。
+   · 线宽：0.5pt 分隔线 / 0.75pt 元素边框 / 1.5pt 强调线。低于 0.4pt 在普通激光机上会丢线。
+   · 不用 emoji 与生僻字形（宋体没有 ✓ U+2713、没有 ⚠）：只用 √ × ■ ● ◆ ※ 【】 →
+     和 CSS 画的方块，任何机器上都印得出来。
+   ========================================================================= */
+
+:root { color-scheme: light; }
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  /* 阴影 / 文字阴影 / 毛玻璃 / 渐变在打印路径里可能被栅格化成位图：
+     变四色、发糊、加大文件体积。灰阶语义完全用不到它们，直接清零最省心。 */
+  box-shadow: none !important;
+  text-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background-image: none !important;
+}
+
+html { font-size: 10.5pt; }
+html, body { margin: 0; padding: 0; background: #fff; }
+
+/* 纸张尺寸与页边距全部由 .vpp-sheet 承担，这里只声明纸型 */
+@page { size: A4; margin: 0; }
+
+body.vpp {
+  /* 正文：西文 Times、中文宋体——中文试卷的传统搭配，也是黑白下最耐读的组合 */
+  --serif: "Times New Roman", "SimSun", "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", serif;
+  /* 标题 / 标签：黑体 */
+  --sans: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Noto Sans CJK SC", sans-serif;
+  /* 强调（**加粗**）：西文 Times Bold，中文落到雅黑 Bold——两边都是真粗体，不会伪粗 */
+  --emb: "Times New Roman", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
+
+  --fs-body: 10.5pt;   /* 五号，试卷正文常规 */
+  --fs-small: 9.5pt;
+  --fs-mini: 8.5pt;
+  --fs-head: 8pt;      /* 页眉页脚 */
+  --fs-h1: 16pt;
+  --fs-h2: 12.5pt;
+  --fs-h3: 11pt;
+
+  --ink: #000;         /* 100% K */
+  --ink-2: #333;       /* 次级文字最浅到这，再浅小字在激光机上就糊了 */
+  --ink-3: #4d4d4d;
+  --tint-1: #f5f5f5;   /* 5% 网点：语篇底、正确选项底 */
+  --tint-2: #ececec;   /* 8%：高亮、标记底 */
+  --tint-3: #dcdcdc;   /* 15%：全篇最深处，只用于极小的强调块 */
+
+  --rule: 0.5pt;       /* 分隔线 */
+  --frame: 0.75pt;     /* 元素边框 */
+  --heavy: 1.5pt;      /* 强调线 */
+
+  color: var(--ink);
+  background: #fff;
+  font-family: var(--serif);
+  font-size: var(--fs-body);
+  font-weight: 400;
+  line-height: 1.72;
+  font-synthesis: none;             /* 禁止伪粗 / 伪斜 */
+  text-rendering: optimizeLegibility;
+  word-break: normal;
+  overflow-wrap: break-word;
+  -webkit-print-color-adjust: exact; /* 不 exact 的话 Chrome 默认 economy 会把所有底色丢光 */
+  print-color-adjust: exact;
+}
+
+/* ============================ 纸张 ============================ */
+
+.vpp-sheet {
+  width: 210mm;
+  height: 296.6mm;   /* 比 A4 矮 0.4mm：页高正好等于纸高时，Chrome 会因舍入多吐一张空白页 */
+  padding: 14mm 16mm 12mm;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 每一张纸自己承担一次分页；最后一张后面不再分页，否则会多一页空白 */
+.vpp-sheet + .vpp-sheet {
+  break-before: page;
+  page-break-before: always;
+}
+
+.vpp-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6mm;
+  font-family: var(--sans);
+  font-size: var(--fs-head);
+  color: var(--ink-3);
+  line-height: 1.2;
+  padding-bottom: 1.4mm;
+  border-bottom: var(--rule) solid var(--ink);
+  margin-bottom: 4.5mm;   /* 内容区高度是量出来的：这里的 margin 会被算进去 */
+}
+.vpp-head-l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.vpp-head-r { flex: 0 0 auto; }
+
+/* 量纸：与真纸同宽同结构，只是藏到屏幕外。
+   绝不能用 display:none——那样量不出任何高度。 */
+.vpp-probe { position: absolute; left: -2000mm; top: 0; visibility: hidden; pointer-events: none; }
+
+/* 正文区：高度由 flex 自动撑满，装订时以「空纸的 clientHeight」作为每页容量，
+   所以这里绝不能有 padding（clientHeight 含 padding，会把容量算大导致溢出）。 */
+.vpp-mbody { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+
+.vpp-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  font-family: var(--sans);
+  font-size: var(--fs-head);
+  color: var(--ink-3);
+  line-height: 1.2;
+  margin-top: 4mm;
+  padding-top: 1.4mm;
+  border-top: var(--rule) solid var(--ink);
+}
+
+/* 屏幕上（预览标签页）才做的装饰：纸缝、纸张描边。
+   用 outline 而不是 border——border 会挤掉内容宽度，让屏幕上的测量与打印时不一致。 */
+@media screen {
+  body.vpp { background: #eef0f2; padding: 8mm 0 20mm; }
+  .vpp-sheet { margin: 0 auto 8mm; outline: 0.4pt solid #c2c8d0; }
+  /* 预览 / 下载出来的打印版单文件，自己带一个打印按钮（打印时隐藏） */
+  .vpp-printbtn {
+    position: fixed; right: 18px; bottom: 18px; z-index: 9;
+    display: inline-flex; align-items: center; gap: 6px;
+    font: 500 13px/1 var(--sans);
+    padding: 10px 16px; border-radius: 999px;
+    color: #fff; background: #333; border: 0; cursor: pointer;
+  }
+  .vpp-printbtn:hover { background: #000; }
+}
+@media print {
+  body.vpp { background: #fff; padding: 0; }
+  .vpp-sheet { margin: 0; outline: 0; }
+  .vpp-printbtn { display: none; }
+}
+
+/* ============================ 块与行内 ============================
+   块的垂直节奏只用 margin-bottom：装订时按 offsetHeight + margin-bottom 累加，
+   不涉及 margin 折叠的推算，量出来是多少就是多少。 */
+
+.vpp-blk { margin: 0 0 3mm; }
+
+.vpp-p { margin: 0; }
+.vpp-p + .vpp-p { margin-top: 1.4mm; }
+.vpp-p:empty { display: none; }
+
+/* 断行对齐：英文为主的行左对齐——浏览器不做英文连字符，两端对齐会拉出一道道「河」；
+   中文为主的行两端对齐，方块字的行尾本来就该齐。脚本属性由排版引擎按字符比例标出。 */
+.vpp-blk[data-script="cjk"] .vpp-p { text-align: justify; }
+.vpp-blk[data-script="latin"] .vpp-p { text-align: left; }
+
+/* 悬挂缩进：题号、易错点编号这类前缀，换行后的文字与前缀之后的文字对齐，
+   而不是缩到编号底下。只作用于段首行，后续段落回到普通缩进。 */
+.vpp-hang { padding-left: var(--hang, 7mm); text-indent: calc(-1 * var(--hang, 7mm)); }
+.vpp-hang .vpp-p + .vpp-p { text-indent: 0; }
+/* 切到下一页的续排段：前缀已经印在上一页了，只保留对齐缩进，不再负缩进 */
+.vpp-hang-cont { padding-left: var(--hang, 7mm); }
+
+/* 行内标记：**加粗** 换黑体真粗体；==高亮== 换 8% 灰底 */
+.vpp-b { font-family: var(--emb); font-weight: 700; }
+.vpp-hl {
+  background: var(--tint-2);
+  padding: 0 0.15em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* 语篇：左侧 1.5pt 粗线是它的身份标记，也是最抗黑白损耗的分区手段 */
+.vpp-passage {
+  margin-bottom: 3.6mm;
+  padding: 2.6mm 3.4mm 2.6mm 4mm;
+  background: var(--tint-1);
+  border-left: var(--heavy) solid var(--ink);
+  line-height: 1.66;
+}
+
+/* ============================ 题头（第 1 页） ============================ */
+
+.vpp-masthead { margin-bottom: 4mm; }
+.vpp-mh-overline {
+  font-family: var(--sans); font-size: var(--fs-mini); color: var(--ink-3);
+  letter-spacing: 0.06em; margin-bottom: 1.2mm;
+}
+.vpp-mh-title {
+  font-family: var(--sans); font-size: var(--fs-h1); font-weight: 700;
+  line-height: 1.35; letter-spacing: 0.02em;
+  margin: 0 0 2.2mm;
+  padding-bottom: 2mm;
+  border-bottom: var(--heavy) solid var(--ink);
+}
+.vpp-mh-meta {
+  font-family: var(--sans); font-size: var(--fs-mini); color: var(--ink-3);
+  display: flex; flex-wrap: wrap; gap: 0 4mm; margin-bottom: 3mm;
+}
+.vpp-mh-notice {
+  border: var(--frame) solid var(--ink);
+  padding: 2mm 3mm;
+  font-size: var(--fs-small);
+  line-height: 1.6;
+}
+.vpp-mh-nlabel {
+  font-family: var(--sans); font-weight: 700; font-size: var(--fs-mini);
+  margin-right: 1.5mm;
+}
+
+/* ============================ 答案速查表 ============================ */
+
+.vpp-ansmap { margin-bottom: 4mm; }
+.vpp-am-cap {
+  font-family: var(--sans); font-size: var(--fs-mini); font-weight: 700;
+  letter-spacing: 0.08em; margin-bottom: 1.6mm;
+}
+.vpp-amt {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: var(--fs-small);
+}
+.vpp-amt td {
+  /* 细线一律 100% K：0.5pt 的线宽只有 0.18mm，网点屏在这么细的线上分辨不出来，
+     印出来会是断断续续的虚边；实黑细线在任何机器上都是干净的实线。 */
+  border: var(--rule) solid var(--ink);
+  padding: 0.8mm 1.4mm;
+  vertical-align: top;
+  line-height: 1.45;
+}
+/* 题号列窄（约 7.5mm）：内边距收紧一点，三位数题号也不会顶到答案列去 */
+.vpp-amt .vpp-am-no {
+  font-family: var(--sans); font-weight: 700; text-align: right;
+  white-space: nowrap; padding-left: 0.6mm; padding-right: 0.9mm;
+}
+.vpp-amt .vpp-am-ans { overflow-wrap: anywhere; }
+
+/* ============================ 大题标题 ============================ */
+
+.vpp-group {
+  padding-top: 2.6mm;
+  border-top: var(--heavy) solid var(--ink);
+  margin-bottom: 3.6mm;
+}
+.vpp-gh-line { display: flex; align-items: baseline; gap: 3mm; }
+.vpp-gh-title {
+  font-family: var(--sans); font-size: var(--fs-h2); font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.vpp-gh-count {
+  margin-left: auto; font-family: var(--sans); font-size: var(--fs-mini); color: var(--ink-3);
+}
+.vpp-gh-intro {
+  margin-top: 1.4mm;
+  font-size: var(--fs-small); color: var(--ink-2); line-height: 1.6;
+}
+.vpp-gh-intro::before {
+  content: "命题说明　";
+  font-family: var(--sans); font-weight: 700; font-size: var(--fs-mini);
+  color: var(--ink-3);
+}
+
+/* 分册大标题（学生版的「参考答案与解析」） */
+.vpp-part {
+  padding-top: 3.4mm;
+  border-top: var(--heavy) solid var(--ink);
+  margin-bottom: 4mm;
+  font-family: var(--sans); font-size: var(--fs-h2); font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.vpp-part-sub {
+  font-family: var(--sans); font-size: var(--fs-mini); font-weight: 400;
+  color: var(--ink-3); margin-left: 3mm;
+}
+
+/* ============================ 题干与选项 ============================ */
+
+.vpp-qhead { margin-bottom: 2.2mm; }
+.vpp-qno {
+  font-family: var(--sans); font-weight: 700;
+  font-size: var(--fs-h3);
+  margin-right: 1.5mm;
+}
+.vpp-qtag {
+  font-family: var(--sans); font-size: var(--fs-mini); font-weight: 700;
+  border: var(--rule) solid var(--ink);
+  padding: 0 1mm; margin-left: 1.5mm; white-space: nowrap;
+}
+
+.vpp-opts { margin-bottom: 2.8mm; }
+.vpp-ogrid { display: grid; grid-template-columns: 1fr; gap: 1.4mm 6mm; }
+.vpp-ogrid[data-cols="2"] { grid-template-columns: 1fr 1fr; }
+.vpp-o { display: flex; align-items: flex-start; gap: 1.6mm; line-height: 1.6; }
+.vpp-o-l {
+  font-family: var(--sans); font-weight: 700; flex: 0 0 auto;
+  min-width: 6mm; display: inline-flex; gap: 0.8mm;
+}
+.vpp-o-t { flex: 1 1 auto; white-space: pre-wrap; }
+.vpp-o-mark { flex: 0 0 auto; font-family: var(--sans); font-weight: 700; }
+
+/* 正确选项：粗线 + √ + 字母加粗 + 浅底。四重编码，缺任何一项都还认得出来 */
+.vpp-o[data-correct="1"] {
+  background: var(--tint-1);
+  border-left: var(--heavy) solid var(--ink);
+  padding: 0.6mm 2mm 0.6mm 2.6mm;
+}
+
+/* ============================ 答案解析 ============================ */
+
+.vpp-ansbar { margin-bottom: 2.6mm; }
+.vpp-ansbox {
+  display: inline-block;
+  font-family: var(--sans); font-weight: 700;
+  border: var(--frame) solid var(--ink);
+  padding: 0.5mm 2.6mm;
+  letter-spacing: 0.04em;
+}
+
+.vpp-ref { margin-bottom: 2.6mm; font-size: var(--fs-small); line-height: 1.66; }
+.vpp-ref .vpp-p { text-align: left; }
+.vpp-lab { font-family: var(--sans); font-weight: 700; }
+
+/* 小节标签：只用形状区分语义，不用颜色 */
+.vpp-slabel {
+  display: flex; align-items: center; gap: 1.6mm;
+  font-family: var(--sans); font-size: var(--fs-small); font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-bottom: 2mm;
+}
+.vpp-mark { display: inline-block; background: var(--ink); flex: 0 0 auto; }
+.vpp-mark-sq { width: 1.9mm; height: 1.9mm; }
+.vpp-mark-ci { width: 1.9mm; height: 1.9mm; border-radius: 50%; }
+
+/* 易错点：编号 + 黑体标题 + 宋体说明 */
+.vpp-pf { margin-bottom: 2.2mm; }
+.vpp-pf-no { font-family: var(--sans); font-weight: 700; margin-right: 1mm; }
+.vpp-pf-title { font-family: var(--sans); font-weight: 700; }
+.vpp-pf-desc { font-size: var(--fs-small); color: var(--ink-2); line-height: 1.62; }
+
+/* 考点范式 */
+.vpp-pat { margin-bottom: 2.6mm; font-size: var(--fs-small); }
+.vpp-steps { margin: 0; padding-left: 5.5mm; }
+.vpp-steps li { line-height: 1.6; margin-bottom: 0.8mm; }
+.vpp-steps li::marker { font-family: var(--sans); font-weight: 700; color: var(--ink); }
+
+/* ============================ 链式块 ============================
+   迁移训练 / 写作指导这类「一整块内容」，用左侧细线串联若干小块而不是整体套框：
+   任何一块都可能在页脚被切开，套框会在页面接缝处断得很难看，左线续排则天然自然。
+   链内不加下边距，靠 padding-bottom 撑出行距，竖线才不会出现断口。 */
+
+.vpp-chain { border-left: var(--frame) solid var(--ink); padding: 0 0 1.8mm 3.4mm; margin-bottom: 0; }
+.vpp-chain-end { margin-bottom: 3.2mm; }
+.vpp-chain-cap {
+  font-family: var(--sans); font-size: var(--fs-mini); font-weight: 700;
+  color: var(--ink-3); letter-spacing: 0.04em; margin-bottom: 1mm;
+}
+
+/* 作答横线（学生版）：填空题 3 行、写作题 9 行。实黑细线，与答题卡的观感一致 */
+.vpp-wl { margin-bottom: 3.4mm; }
+.vpp-wl-row { height: 8.5mm; border-bottom: var(--rule) solid var(--ink); }
+.vpp-wl-cap {
+  font-family: var(--sans); font-size: var(--fs-mini); color: var(--ink-3);
+  margin-bottom: 1.2mm;
+}
+
+/* ============================ 答案册的题头 ============================ */
+
+.vpp-qref {
+  padding-top: 2.4mm;
+  border-top: var(--frame) solid var(--ink);
+  margin-bottom: 2.4mm;
+  display: flex; align-items: baseline; gap: 3mm; flex-wrap: wrap;
+}
+.vpp-qref-no {
+  font-family: var(--sans); font-weight: 700; font-size: var(--fs-h3);
+  letter-spacing: 0.02em;
+}
+.vpp-qref-tag { font-family: var(--sans); font-size: var(--fs-mini); color: var(--ink-3); }

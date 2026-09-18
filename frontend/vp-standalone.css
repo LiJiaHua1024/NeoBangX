@@ -494,6 +494,22 @@ html[data-theme="sora"][data-sky="night"] {
 .cover-meta { margin-top: 1.35rem; color: var(--text-dim); letter-spacing: 0.06em; line-height: 1.6; }
 .cover-start { margin-top: 2rem; padding: 0.95rem 2.3rem; font-size: 1rem; border-radius: 999px; }
 .cover-start .vp-ic { width: 1.25rem; height: 1.25rem; }
+/* 封面的第二个动作：打印。与「开始讲解」同行排布、基线对齐，做成次级按钮不抢主操作 */
+.cover-print {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 2rem 0 0 0.7rem;
+  padding: 0.62rem 1.4rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.cover-print:hover { background: var(--hover-bg); color: var(--text); }
 .cover-hint {
   margin: 1.1rem auto 0;
   max-width: 32rem;

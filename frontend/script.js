@@ -80,6 +80,7 @@ const ICON_PATHS = {
   "pin": '<path d="M12 16.5V21"/><path d="M9.5 3h5v6.2l2.7 3.6a1 1 0 0 1-.8 1.6H7.6a1 1 0 0 1-.8-1.6l2.7-3.6V3Z"/>',
   "chevron-left": '<path d="m15 18-6-6 6-6"/>',
   "chevron-up": '<path d="m18 15-6-6-6 6"/>',
+  "print": '<path d="M7 8V3h10v5"/><path d="M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><rect x="7" y="14" width="10" height="7" rx="1"/>',
 };
 
 function icon(name, cls = "w-5 h-5") {
@@ -6269,6 +6270,27 @@ function nbx() {
     get vpExportFilenamePreview() {
       return this.vpSafeFilename(this.vpExportTitle) + ".html";
     },
+    /* 打印：把当前讲解交给 A4 排版引擎（vp-print.js）重排成纸面。
+       刻意不复用页面的 @media print——分栏视图与暗色主题在纸上没法看，
+       引擎会自己分页、自己数页数，并在弹窗里让老师选教师版 / 学生版。 */
+    printVisualPaper() {
+      if (!this.vpHasData) {
+        this.toast("暂无可打印的讲解内容", "error");
+        return;
+      }
+      if (!window.VPPrint) {
+        this.toast("打印组件未加载，请检查网络后刷新", "error");
+        return;
+      }
+      this.closeExportMenu();
+      const paper = this.visualPaper && this.visualPaper.paper ? this.visualPaper.paper : {};
+      const title = (paper.title || "").trim() || "试卷讲解";
+      try {
+        window.VPPrint.openDialog(this.vpExportPayload(title));
+      } catch (e) {
+        this.toast("打印组件初始化失败，请刷新后重试", "error");
+      }
+    },
     openVpExport() {
       if (!this.vpHasData) {
         this.toast("暂无可导出的讲解内容", "error");
@@ -6357,24 +6379,27 @@ function nbx() {
     vpExportIconSprite() {
       const names = ["x", "check", "chevron-left", "chevron-right", "chevron-down", "chevron-up",
         "eye", "eye-off", "grid", "pin", "projector", "target", "lightbulb", "route", "puzzle",
-        "expand", "compress", "pen", "insert", "bold", "highlight"];
+        "expand", "compress", "pen", "insert", "bold", "highlight", "print"];
       const symbols = names
         .map((n) => `<symbol id="i-${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[n] || ""}</symbol>`)
         .join("");
       return `<svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">${symbols}</svg>`;
     },
+    /* 导出文件要能离线打印，所以把 A4 打印引擎的样式与脚本一并内联进去 */
     async vpLoadStandaloneAssets() {
       if (this._vpAssets) return this._vpAssets;
       const load = (url) => fetch(url, { cache: "no-cache" }).then((r) => {
         if (!r.ok) throw new Error(`${url} → ${r.status}`);
         return r.text();
       });
-      const [html, css, js] = await Promise.all([
+      const [html, css, js, printCss, printJs] = await Promise.all([
         load("/static/vp-standalone.html"),
         load("/static/vp-standalone.css"),
         load("/static/vp-standalone.js"),
+        load("/static/vp-print.css"),
+        load("/static/vp-print.js"),
       ]);
-      this._vpAssets = { html, css, js };
+      this._vpAssets = { html, css, js, printCss, printJs };
       return this._vpAssets;
     },
     vpBuildStandaloneHtml(assets, title, payload) {
@@ -6392,8 +6417,10 @@ function nbx() {
       out = put(out, "{{VP_ICONS}}", this.vpExportIconSprite());
       out = put(out, "{{VP_CSS}}", assets.css);
       out = put(out, "{{VP_DATA}}", data);
+      out = put(out, "{{VP_PRINT_CSS}}", assets.printCss);
+      out = put(out, "{{VP_PRINT_JS}}", assets.printJs);
       out = put(out, "{{VP_JS}}", assets.js);
-      const leftover = out.match(/\{\{VP_(THEME|SKY|TITLE|ICONS|CSS|DATA|JS)\}\}/);
+      const leftover = out.match(/\{\{VP_(THEME|SKY|TITLE|ICONS|CSS|DATA|JS|PRINT_CSS|PRINT_JS)\}\}/);
       if (leftover) throw new Error(`模板占位符未替换：${leftover[0]}`);
       return out;
     },
