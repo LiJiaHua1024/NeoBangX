@@ -2918,7 +2918,8 @@ function nbx() {
         clearInterval(this._timer);
         this._timer = null;
         this.vocab.replacing = false;
-        if (this.vocab.reasoning) {
+        // 同 finalize：只在正文从未开始时收一次
+        if (this.vocab.reasoning && !this.vocab.reasoningDone) {
           this.vocab.reasoningDone = true;
           this.vocab.reasoningOpen = false;
         }
@@ -4085,6 +4086,7 @@ function nbx() {
           requestId: `${state.batchId}_${index}`,
           reasoning: "",
           reasoningOpen: true,
+          reasoningDone: false,
           reasoningTruncated: false,
           reasoningTokens: 0,
         }));
@@ -4235,7 +4237,11 @@ function nbx() {
             } catch {}
             if (text) {
               // 首个正文 token 到达即收起本卡推理盒，避免答案被顶下去。
-              if (card.reasoning) card.reasoningOpen = false;
+              // 只收一次：每个 token 都收会把用户的手动展开立刻打回去。
+              if (card.reasoning && !card.reasoningDone) {
+                card.reasoningDone = true;
+                card.reasoningOpen = false;
+              }
               card.output += text;
               this.scheduleCardRender(card);
             }
@@ -4244,7 +4250,10 @@ function nbx() {
             if (card._renderTimer) { clearTimeout(card._renderTimer); card._renderTimer = null; }
             card._renderPending = false;
             card.rendered = renderMd(card.output);
-            if (card.reasoning) card.reasoningOpen = false;
+            if (card.reasoning && !card.reasoningDone) {
+              card.reasoningDone = true;
+              card.reasoningOpen = false;
+            }
             if (data === "[CANCELLED]") card.status = "stopped";
             else card.status = "done";
           }
@@ -4870,8 +4879,9 @@ function nbx() {
       this.fallbackInfo = null;
       this.stopTimer();
       this.stopThinkTimer();
-      // 推理盒收起：答案已定稿，推理只留作可展开回看，不再占版面。
-      if (this.reasoning) {
+      // 推理盒定稿：正文从未开始过（还没自动收起过）才收一次，
+      // 否则会把流式期间用户手动展开的盒子在收尾时又打回去。
+      if (this.reasoning && !this.reasoningDone) {
         this.reasoningDone = true;
         this.reasoningOpen = false;
       }
@@ -4993,7 +5003,8 @@ function nbx() {
       this.fallbackInfo = null;
       this.stopTimer();
       this.stopThinkTimer();
-      if (this.reasoning) {
+      // 与 finalize 同规则：只在正文从未开始时收一次，不动用户的手动展开
+      if (this.reasoning && !this.reasoningDone) {
         this.reasoningDone = true;
         this.reasoningOpen = false;
       }
@@ -5805,7 +5816,9 @@ function nbx() {
       // 正文开始即等待结束：备用通道面板收起
       if (this.fallbackInfo) this.fallbackInfo = null;
       // 正文开始后推理即收起，避免把答案顶下去；用户可手动展开回看。
-      if (this.reasoning) {
+      // 只在首个 token 收一次：本函数每个 token 都会被调用，若无条件收起，
+      // 用户点开的盒子会被紧接着的下一个 token 立刻收回去（流一停反而点得开）。
+      if (this.reasoning && !this.reasoningDone) {
         this.reasoningDone = true;
         this.reasoningOpen = false;
       }
@@ -5850,7 +5863,8 @@ function nbx() {
       });
     },
     finishVocabReasoningOnToken() {
-      if (this.vocab && this.vocab.reasoning) {
+      // 同主推理盒：每个 token 都调用，故只收一次，别打回用户的手动展开
+      if (this.vocab && this.vocab.reasoning && !this.vocab.reasoningDone) {
         this.vocab.reasoningDone = true;
         this.vocab.reasoningOpen = false;
       }
@@ -6571,6 +6585,7 @@ function nbx() {
         requestId: "",
         reasoning: "",
         reasoningOpen: false,
+        reasoningDone: true,
         reasoningTruncated: false,
         reasoningTokens: 0,
       }));
