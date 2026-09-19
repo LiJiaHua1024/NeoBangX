@@ -901,8 +901,9 @@
 
             <!-- 主内容区 -->
             <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
-              <!-- 空状态：双占位 -->
-              <div x-show="!vpHasData && !streaming && !errorMsg" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
+              <!-- 空状态：双占位。中途失败时正文已经产出过，这里要放行——错误卡在那个场景
+                   整张隐藏，中断卡（含继续/重新生成入口）就在这块里，挡住它等于没有入口 -->
+              <div x-show="!vpHasData && !streaming && (!errorMsg || vpFailedMidStream)" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
                 <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6">
                   <!-- 生成中断（残片无完整题）：不展示原文裸标签，提供继续/重跑 -->
                   <div x-show="vpInterrupted" class="glass-soft rounded-2xl p-5 text-center">
@@ -926,7 +927,9 @@
                     </div>
                   </div>
                   <div x-show="visualPaper && visualPaper.notice" class="error-card mt-4" x-text="visualPaper.notice"></div>
-                  <div x-show="vpParseError" class="error-card mt-4">
+                  <!-- 中途失败时不挂这张格式异常卡：失败原因已由 toast 提示，这里再顶一条
+                       「已回退为 Markdown 展示」既不准（不是格式问题）也和中断卡抢位置 -->
+                  <div x-show="vpParseError && !vpFailedMidStream" class="error-card mt-4">
                     <div class="font-semibold mb-1">解析格式异常，已回退为 Markdown 展示</div>
                     <div class="text-xs opacity-80" x-text="vpParseError"></div>
                   </div>
@@ -984,8 +987,9 @@
                 </div>
               </template>
 
-              <!-- 解析失败回退 Markdown（仅流结束后展示，生成中绝不裸奔原文） -->
-              <div x-show="!vpHasData && output && vpParseError && !streaming" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
+              <!-- 解析失败回退 Markdown（仅流结束后展示，生成中绝不裸奔原文）。
+                   中途失败改走上面的中断卡：那里有继续生成的入口，比铺一屏残片有用 -->
+              <div x-show="!vpHasData && output && vpParseError && !streaming && !vpFailedMidStream" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
                 <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 py-6">
                   <div class="error-card mb-4">模型返回格式异常，已按 Markdown 回退展示（不影响导出）。</div>
                   <div class="md" x-html="rendered"></div>
@@ -1342,8 +1346,10 @@
                   <div x-show="!vpCurrentQuestion" class="text-sm text-dim">请选择左侧题目查看解析</div>
                 </div>
               </div>
-              <!-- 错误提示 -->
-              <div x-show="errorMsg" class="px-4 sm:px-5 py-3">
+              <!-- 错误提示。中途失败（正文已经出过）时整张卡都不挂：错误原因已由 toast 提示，
+                   页面保留已解析出的题目，恢复入口就只剩上面的「继续生成」，卡片再讲一遍
+                   只会和它重复 -->
+              <div x-show="errorMsg && !vpFailedMidStream" class="px-4 sm:px-5 py-3">
                 <div class="error-card">
                   <div class="font-semibold mb-1">这次生成没有成功</div>
                   <div x-text="errorMsg"></div>

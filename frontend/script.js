@@ -2006,9 +2006,11 @@ function nbx() {
       const raw = this.output || "";
       return VP_ANY_TAG_RE.test(raw);
     },
-    // 生成中断且无完整题：展示中断卡，不裸奔原文
+    /* 生成中断且无完整题：展示中断卡，不裸奔原文。中途失败也走这里——那种情况下错误卡
+       已经整张隐藏，中断卡是页面上唯一的恢复入口，所以残片有没有完整标签都得给出来。 */
     get vpInterrupted() {
-      return !this.streaming && !this.vpHasData && !!this.output.trim() && this.vpHasCustomFragment;
+      return !this.streaming && !this.vpHasData && !!this.output.trim()
+        && (this.vpHasCustomFragment || this.vpFailedMidStream);
     },
     resetVisualPaper() {
       // 换工具 / 换试卷前先退掉修改模式：避免带着编辑态进到下一个上下文。
@@ -2507,6 +2509,13 @@ function nbx() {
       if (!Number.isFinite(declared) || declared <= 0) return false;
       if (this.vpQuestionCount < declared) return false;
       return this.vpRunState === "done";
+    },
+    /* 失败是否发生在正文已经开始输出之后。判据用 errorMsg + output：只有正文 token 会
+       追加进 output，思考内容进的是 reasoning，所以在思考阶段就断掉的失败没有 output，
+       仍按「整卷重跑」处理；一旦出过正文，页面保持已解析出的内容、恢复动作收敛成
+       「继续生成」，不再挂一张和它重复的错误卡。 */
+    get vpFailedMidStream() {
+      return !!this.errorMsg && !this.streaming && !!this.output.trim();
     },
     // 是否处于第一/最后一题（考虑跨组空组），供全屏角落按钮禁用
     get vpIsFirstQuestion() {
