@@ -3195,7 +3195,12 @@ function nbx() {
       // 悠空 · 两时段天空：每分钟校准一次，回到前台时立即校准
       this._skyTimer = setInterval(() => this.updateSkyPeriod(), 60000);
       document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) this.updateSkyPeriod();
+        if (!document.hidden) {
+          this.updateSkyPeriod();
+          // 本页开着但没被看着时，对端推来的偏好只落在 nbx_prefs 上，页面收不到通知；
+          // 回到前台对账一次。LWW 保证本页更晚的选择不会被对端旧值顶掉。
+          this._mirrorApplyPrefs();
+        }
       });
 
       // 动态光影背景
@@ -7263,9 +7268,10 @@ function nbx() {
       const g = this.importPreviewGroups;
       const n = (k) => { const x = g.find((i) => i.key === k); return x ? x.rows.length : 0; };
       const total = this.importPreviewTotal;
-      return total
-        ? `将合并 ${total} 条变更：新增 ${n("added")} · 更新 ${n("updated")} · 删除 ${n("removed")}`
-        : "";
+      if (!total) return "";
+      const text = `将合并 ${total} 条变更：新增 ${n("added")} · 更新 ${n("updated")} · 删除 ${n("removed")}`;
+      // 偏好只在真的有变更时才出现在明细里：没有此项的导入不该多一行噪声
+      return n("prefs") ? `${text} · 偏好 ${n("prefs")}` : text;
     },
     get importPreviewFiltered() {
       const q = String(this.importPreviewFilter || "").trim().toLowerCase();
@@ -7312,20 +7318,48 @@ function nbx() {
     },
     /* 本机全量数据 → envelope。正文优先取内存里的版本（可能刚改过还没落盘），
        未水合的条目直读 localStorage —— 不走 _hydrateHistory，避免把整份正文
-       一次性灌进内存列表。 */
-    _localEnvelope() {
+       一次性灌进内存列表。导出传 {forExport:true}（偏好要补全），导入合并不传。 */
+    _localEnvelope(opts) {
+      const forExport = !!(opts && opts.forExport);
       const history = [];
       for (const item of this.history) {
         if (!item || !item.id) continue;
         const body = item._bodyLoaded ? historyBodyOf(item) : this._readBodyRaw(item.id);
         history.push({ index: historyIndexOf(item), body: body || historyBodyOf(item) });
       }
+      const stamp = Date.now();
       return NbxMirror.buildEnvelope({
+        exportedAt: stamp,
         source: (typeof location !== "undefined" && location.hostname) || "",
         history,
         favorites: this.favorites,
         tombstones: this._tombstones(),
+        prefs: this._envelopePrefs(forExport, stamp),
       });
+    },
+    /* 本机偏好 → envelope 的 prefs（{theme:{v,at}, model:{v,at}}）。
+       有 nbx_prefs 记录就用记录（时间戳是「用户什么时候做的选择」，LWW 才有意义）；
+       导出时（forExport）缺记录的键用当前界面值补一条、时间戳取导出时刻 ——
+       单线路部署从不写 nbx_prefs（镜像没跑，store 也就没 init），不补的话偏好
+       根本进不了导出文件，「导出/导入带上偏好」就成了空话。
+
+       合并的本地一侧（forExport 为假）绝不补：那等于宣称「导入这一刻我的选择是
+       最新的」，会用现在的时间戳顶掉文件里更早的真实选择 —— 用户导回自己的备份，
+       主题反而恢复不了。本地没有记录时留给文件的值胜出，才符合「导入」的直觉。 */
+    _envelopePrefs(forExport, stamp) {
+      let prefs = {};
+      try {
+        if (typeof NbxMirrorStore !== "undefined" && NbxMirrorStore.ready()) {
+          prefs = NbxMirrorStore.readPrefs();
+        }
+      } catch (e) { prefs = {}; }
+      if (!forExport) return prefs;
+      const cur = { theme: this.theme, model: this.selectedModel };
+      for (const key of ["theme", "model"]) {
+        if (prefs[key] || !cur[key]) continue;
+        prefs[key] = { v: cur[key], at: stamp };
+      }
+      return prefs;
     },
     /* 把合并结果写回本机。分块 + 块间让出主线程：一次全量合并可能涉及上百条
        正文、数 MB 的 JSON.stringify 与 localStorage 写入，密集同步写会卡住 UI。
@@ -7368,6 +7402,19 @@ function nbx() {
 
       lsSet(LS_TOMB, merged.tombstones);
       if (failed) storageFullWarn(true);
+      // 偏好：合并结果既要落进 nbx_prefs（镜像在跑时那是共享真相，下面
+      // _mirrorAnnounceImported 会把它带给对端），也要套到界面上 —— 单线路部署
+      // 根本没跑镜像，只写存储等于什么都没发生。
+      // 直接写 localStorage 而不经 NbxMirrorStore：对端不可达时镜像整场都不会启动、
+      // store 也就没 init，而「镜像失效改用导入」正是这个功能的用途。写不进去的话，
+      // 下次加载 _mirrorApplyPrefs 会拿 nbx_prefs 里的旧值把导入的偏好顶回去。
+      if (merged.prefs && Object.keys(merged.prefs).length) {
+        lsSet(LS_PREFS, merged.prefs);
+        this._applyPrefMap(merged.prefs);
+        // 镜像没跑：清掉「偏好已播种」标记，让下一次镜像启动重新播种，把这次导入的
+        // 偏好带给对端（标记还在的话它会认为没有可送的东西）
+        if (!_mirror.started) lsRemove(MIRROR_PREFS_SEEDED_KEY);
+      }
       this._mirrorAnnounceImported(merged);
     },
     /* 导入 / 合并进本机的数据也要流向对端，否则用户得在两条线路上各导入一次。
@@ -7382,6 +7429,11 @@ function nbx() {
         }
         for (const fav of merged.favorites || []) {
           if (fav && fav.id) NbxMirrorStore.outboxAdd("f", fav.id, NbxMirror.updatedAtOf(fav), false);
+        }
+        // 偏好：队列只存键与时间戳（值在 nbx_prefs 里，发送时由 buildOp 取出）
+        for (const key of ["theme", "model"]) {
+          const p = merged.prefs && merged.prefs[key];
+          if (p) NbxMirrorStore.outboxAdd("p", key, p.at, false);
         }
         this._mirrorSchedulePush();
       } catch (e) {
@@ -7399,7 +7451,8 @@ function nbx() {
         return;
       }
       try {
-        const env = this._localEnvelope();
+        // forExport：偏好要在导出时补全（缺 nbx_prefs 记录的键用当前界面值补）
+        const env = this._localEnvelope({ forExport: true });
         if (!env.history.length && !env.favorites.length) {
           this.toast("本机还没有可导出的历史或收藏", "warn");
           return;
@@ -7417,7 +7470,8 @@ function nbx() {
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
-        this.toast(`已导出 ${env.history.length} 条历史、${env.favorites.length} 条收藏`);
+        this.toast(`已导出 ${env.history.length} 条历史、${env.favorites.length} 条收藏`
+          + (env.prefs ? "，以及主题 / 模型偏好" : ""));
       } catch (e) {
         this.toast("导出失败，请重试", "error");
       }
@@ -7451,8 +7505,19 @@ function nbx() {
       const p = (n) => String(n).padStart(2, "0");
       return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
     },
-    /* 打开导入预览并等用户决定。分组按警觉度排序：删除（危险色）→ 更新 → 新增；
-       行内时间：删除用墓碑时间，更新/新增用条目 updatedAt。 */
+    /* 偏好的展示名：主题 / 模型 id → 中文名。取不到就退回 id —— 对端可能有个本
+       线路还没有的模型，显示成空白会让预览里的偏好行没法判断。 */
+    _prefLabel(key, id) {
+      if (!id) return "未设置";
+      if (key === "theme") {
+        const t = THEMES.find((x) => x && x.id === id);
+        return t ? t.name : id;
+      }
+      const m = (Array.isArray(this.models) ? this.models : []).find((x) => x && x.id === id);
+      return (m && m.name) || id;
+    },
+    /* 打开导入预览并等用户决定。分组按警觉度排序：删除（危险色）→ 更新 → 新增
+       → 偏好；行内时间：删除用墓碑时间，更新/新增用条目 updatedAt。 */
     _confirmImportPreview(merged) {
       const ch = merged.changes || {};
       const row = (d, verb, tsKey) => ({
@@ -7466,6 +7531,11 @@ function nbx() {
           rows: [].concat(ch.historyUpdated || [], ch.favoriteUpdated || []).map((d) => row(d, "更新", "updatedAt")) },
         { key: "added", label: "新增", danger: false,
           rows: [].concat(ch.historyAdded || [], ch.favoriteAdded || []).map((d) => row(d, "创建", "updatedAt")) },
+        { key: "prefs", label: "偏好", danger: false,
+          rows: (ch.prefsChanged || []).map((p) => ({
+            title: `${p.key === "theme" ? "主题" : "模型"}：${this._prefLabel(p.key, p.from)} → ${this._prefLabel(p.key, p.to)}`,
+            time: `同步于 ${this._fmtShortTime(p.at)}`,
+          })) },
       ].filter((g) => g.rows.length);
       return new Promise((resolve) => {
         if (this.importPreviewOpen) { resolve(false); return; }
@@ -7516,7 +7586,8 @@ function nbx() {
       if (s.favoriteAdded) parts.push(`新增 ${s.favoriteAdded} 条收藏`);
       if (s.favoriteUpdated) parts.push(`更新 ${s.favoriteUpdated} 条收藏`);
       if (s.favoriteRemoved) parts.push(`删除 ${s.favoriteRemoved} 条收藏`);
-      // 条目级预览（删除/更新/新增分组，可搜索），确认后才动本机数据
+      if (s.prefsChanged) parts.push(`更新 ${s.prefsChanged} 项偏好`);
+      // 条目级预览（删除/更新/新增/偏好分组，可搜索），确认后才动本机数据
       const ok = await this._confirmImportPreview(merged);
       if (!ok) return;
       await this._applyMerged(merged);
@@ -7584,24 +7655,36 @@ function nbx() {
         this._mirrorChanged("p", key, false, now);
       } catch (e) { /* 偏好同步失败不影响换主题/模型本身 */ }
     },
-    /* 对端把偏好推进本 origin 后应用到界面。未知值拒收：两条线路的可用
-       主题/模型可能不同，硬套会选中不存在的东西。 */
+    /* 把一份偏好（{theme:{v,at}, model:{v,at}}）套到界面上：判据（哪些值该应用、
+       本线路没有的值拒收）全在 pickPrefUpdates 里。
+       该函数是纯函数，镜像没启用（store 没 init）时导入路径也要用它。 */
+    _applyPrefMap(prefs) {
+      if (typeof NbxMirrorStore === "undefined" || typeof NbxMirrorStore.pickPrefUpdates !== "function") return;
+      const next = NbxMirrorStore.pickPrefUpdates(
+        prefs,
+        { theme: this.theme, model: this.selectedModel },
+        {
+          theme: THEMES.map((t) => t && t.id),
+          model: (Array.isArray(this.models) ? this.models : []).map((m) => m && m.id),
+        }
+      );
+      if (!next.theme && !next.model) return;
+      // 置 applyingRemote：由应用引起的主题/模型变更不得回写同步队列（同值 ping-pong）。
+      // 导入路径的传播由 _mirrorAnnounceImported 显式登记，不依赖这个回调。
+      _mirror.applyingRemote = true;
+      try {
+        if (next.theme) this.setTheme(next.theme);
+        if (next.model) this.chooseModel(next.model);
+      } finally {
+        _mirror.applyingRemote = false;
+      }
+    },
+    /* 对端把偏好推进本 origin 后应用到界面 */
     _mirrorApplyPrefs() {
       if (typeof NbxMirrorStore === "undefined" || !NbxMirrorStore.ready()) return;
       let prefs;
       try { prefs = NbxMirrorStore.readPrefs(); } catch (e) { return; }
-      _mirror.applyingRemote = true;
-      try {
-        const t = prefs.theme && prefs.theme.v;
-        if (t && t !== this.theme && THEMES.some((x) => x && x.id === t)) this.setTheme(t);
-        const m = prefs.model && prefs.model.v;
-        if (m && m !== this.selectedModel
-          && Array.isArray(this.models) && this.models.some((x) => x && x.id === m)) {
-          this.chooseModel(m);
-        }
-      } finally {
-        _mirror.applyingRemote = false;
-      }
+      this._applyPrefMap(prefs);
     },
     /* 连续编辑（改标题、连删多条）合并成一次推送 */
     _mirrorSchedulePush() {
@@ -7661,6 +7744,11 @@ function nbx() {
         if (baseline) NbxMirrorStore.writePrefs(prefs);
         NbxMirrorStore.seedPrefsOnce(MIRROR_PREFS_SEEDED_KEY);
       } catch (e) { /* 偏好播种失败只影响偏好同步 */ }
+      // 对端在本线路关着的时候推来的偏好只落在 nbx_prefs，页面启动读的却是
+      // LS.theme / LS.model，必须在这里补一次「落到界面」。
+      // 不能指望 onApplied：偏好 op 不携带任何条目，推送方收到回执就把队列清了，
+      // 本页事后握手收不到任何一批 op，那个回调永远不会来。
+      this._mirrorApplyPrefs();
       // 上次会话里删掉、但对端还没收到删除的条目，先按墓碑清一次本机
       try {
         const swept = NbxMirrorStore.sweepTombstoned();

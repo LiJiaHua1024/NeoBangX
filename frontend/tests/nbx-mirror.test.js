@@ -297,6 +297,88 @@ test("validateEnvelope 校验 sha256：匹配放行、篡改拒绝、缺字段�
   assert.strictEqual(M.validateEnvelope(pretty).ok, true, "重排格式不影响校验");
 });
 
+/* ---------------- 偏好（主题 / 选中模型） ---------------- */
+
+/* 这一条是导出/导入带上偏好时最容易踩坏的地方：摘要是对 buildEnvelope 的输出序列
+   算的，字段形状一变，用户手里已有的备份会全部被判成「校验和不匹配」。 */
+test("buildEnvelope：无偏好时输出形状与加偏好之前完全一致，旧文件的摘要仍然有效", () => {
+  const raw = {
+    v: 1, exportedAt: 1000, source: "www",
+    history: [entry("a", 10)],
+    favorites: [],
+    tombstones: { history: [], favorites: [] },
+  };
+  const env = M.buildEnvelope(raw);
+  // 字段与顺序一并钉死（JSON.stringify 按插入顺序输出，摘要因此可复现）
+  assert.deepStrictEqual(Object.keys(env), ["v", "exportedAt", "source", "history", "favorites", "tombstones"]);
+  assert.strictEqual(env.prefs, undefined, "没有偏好时不该出现 prefs 字段");
+
+  // 模拟「偏好功能之前导出的文件」：摘要按当时的形状算，本版本必须照单全收
+  const legacy = JSON.stringify(Object.assign({}, env, { sha256: M.sha256Hex(M.serializeEnvelope(env)) }));
+  assert.strictEqual(M.validateEnvelope(legacy).ok, true, "旧备份必须仍然能导入");
+});
+
+test("buildEnvelope / validateEnvelope：偏好随文件走，且受校验和保护", () => {
+  const raw = {
+    v: 1, exportedAt: 1000, source: "www",
+    history: [entry("a", 10)], favorites: [], tombstones: { history: [], favorites: [] },
+    prefs: { theme: { v: "sora", at: 900 }, model: { v: "m1", at: 800 }, draft: { v: "x", at: 700 } },
+  };
+  const env = M.buildEnvelope(raw);
+  assert.deepStrictEqual(Object.keys(env).slice(-1), ["prefs"], "prefs 应作为最后一个字段出现");
+  assert.deepStrictEqual(env.prefs, { theme: { v: "sora", at: 900 }, model: { v: "m1", at: 800 } },
+    "白名单外的偏好键必须丢掉，键顺序固定");
+
+  const file = JSON.stringify(Object.assign({}, env, { sha256: M.sha256Hex(M.serializeEnvelope(env)) }));
+  const res = M.validateEnvelope(file);
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(res.envelope.prefs, { theme: { v: "sora", at: 900 }, model: { v: "m1", at: 800 } },
+    "校验后的 envelope 必须带着偏好，否则导入侧拿不到");
+
+  // 偏好被改成别的主题 → 摘要对不上，整份拒绝（校验和确实覆盖了偏好）
+  const tampered = JSON.parse(file);
+  tampered.prefs.theme.v = "paper";
+  assert.strictEqual(M.validateEnvelope(JSON.stringify(tampered)).ok, false, "篡改偏好必须拒绝");
+});
+
+test("sanitizePrefs：非字符串值、无时间戳、超长值一律丢弃", () => {
+  const got = M.sanitizePrefs({
+    theme: { v: 5, at: 1 },
+    model: { v: "", at: 1 },
+    other: { v: "x", at: 1 },
+    paper: { v: "paper", at: 0 },
+    sora: { v: "sora", at: "abc" },
+  });
+  assert.deepStrictEqual(got, {});
+  assert.deepStrictEqual(M.sanitizePrefs(null), {});
+  assert.strictEqual(M.sanitizePrefs({ theme: { v: "x".repeat(500), at: 1 } }).theme.v.length, 128, "超长值应截断");
+});
+
+test("mergeRemote：偏好逐键 LWW，时间戳相同保留本地", () => {
+  const local = { history: [entry("a", 10)], favorites: [], prefs: { theme: { v: "paper", at: 500 } } };
+  const remote = { history: [entry("a", 10)], favorites: [], prefs: { theme: { v: "sora", at: 400 }, model: { v: "m1", at: 300 } } };
+
+  const out = M.mergeRemote(local, remote);
+  assert.strictEqual(out.prefs.theme.v, "paper", "对端的主题更旧，本机值应保留");
+  assert.strictEqual(out.prefs.theme.at, 500);
+  assert.strictEqual(out.prefs.model.v, "m1", "本机没有记录时取对端的值");
+  assert.strictEqual(out.stats.prefsChanged, 1, "只有模型真的变了，不该把更旧的主题也报成变更");
+  assert.deepStrictEqual(out.changes.prefsChanged.map((p) => p.key), ["model"]);
+  assert.deepStrictEqual(out.changes.prefsChanged[0], { key: "model", from: "", to: "m1", at: 300 });
+
+  // 同刻不翻转：两端反复合并应稳定（与条目合并同一套幂等口径）
+  const again = M.mergeRemote({ history: [], favorites: [], prefs: { theme: { v: "sora", at: 500 } } },
+    { history: [], favorites: [], prefs: { theme: { v: "paper", at: 500 } } });
+  assert.strictEqual(again.prefs.theme.v, "sora", "同刻保留本地");
+  assert.strictEqual(again.stats.prefsChanged, 0, "同刻不算变更");
+});
+
+test("hasChanges：只带偏好变更的文件不能被判成「无需导入」", () => {
+  assert.strictEqual(M.hasChanges({ prefsChanged: 1 }), true);
+  assert.strictEqual(M.hasChanges({ prefsChanged: 0 }), false);
+  assert.strictEqual(M.hasChanges(null), false);
+});
+
 /* ---------------- 执行 ---------------- */
 
 let failed = 0;

@@ -23,7 +23,9 @@
 (function (global) {
   "use strict";
 
-  // 数据格式版本：字段语义或合并规则变化时递增，旧版本一律拒绝导入（宁可拒绝，不猜）
+  // 数据格式版本：字段语义或合并规则变化时递增，旧版本一律拒绝导入（宁可拒绝，不猜）。
+  // 例外：新增「可选」字段不必递增 —— 见 buildEnvelope 里 prefs 只在非空时输出的说明。
+  // 递增版本的代价是用户手里已有的备份全部变砖，所以这条路只在语义不兼容时才走。
   var MIRROR_VERSION = 1;
 
   // 条目数量上限，与 script.js 的 HISTORY_LIMIT / FAVORITES_LIMIT 保持一致。
@@ -56,6 +58,12 @@
   // 对端旧副本 / 多年前的旧备份会把已删除的条目带回来」——删除意图不该有保质期。
   // 1000 条上限已把体积钉死在几十 KB，正常使用自然轮换，不会无限增长。
   var TOMBSTONE_MAX_COUNT = 1000;
+
+  /* 偏好（主题 / 选中模型）的键白名单与值长上限，必须与 nbx-mirror-store.js 的
+     PREF_KEYS / PREF_VAL_CAP 一致：两处各管一段（那边管存储与镜像，这边管
+     envelope 与合并），不一致会让同一条数据在一处合法、在另一处被悄悄丢掉。 */
+  var PREF_KEYS = { theme: 1, model: 1 };
+  var PREF_VAL_CAP = 128;
 
   /* ---------------- 基础工具 ---------------- */
 
@@ -285,6 +293,28 @@
     return out;
   }
 
+  /* 偏好：{theme?: {v, at}, model?: {v, at}}，LWW 的键是 at。
+     键顺序固定（按白名单顺序构造），否则同一个信封换个键序算出的摘要就不一样，
+     校验和会无端失配。值只接字符串：数字 / 对象一律丢弃，不做 String() 强转，
+     免得把 "5" 这种非 id 的垃圾值写进存储再经镜像传出去。
+     at <= 0 视为无效（与 store 的 applyOps 同一判据）：没有时间戳的偏好无法参与
+     「谁更新」的判断，留着只会在合并时被随意覆盖。 */
+  function sanitizePrefs(raw) {
+    var out = {};
+    if (!isPlainObject(raw)) return out;
+    var names = Object.keys(PREF_KEYS);
+    for (var i = 0; i < names.length; i += 1) {
+      var key = names[i];
+      var p = raw[key];
+      if (!isPlainObject(p)) continue;
+      var v = typeof p.v === "string" ? str(p.v, PREF_VAL_CAP) : "";
+      var at = num(p.at, 0);
+      if (!v || at <= 0) continue;
+      out[key] = { v: v, at: at };
+    }
+    return out;
+  }
+
   function sanitizeTombstones(raw) {
     var out = { history: [], favorites: [] };
     if (!isPlainObject(raw)) return out;
@@ -349,7 +379,7 @@
       var fav = sanitizeFavorite(rawFavs[j]);
       if (fav) favorites.push(fav);
     }
-    return {
+    var env = {
       v: MIRROR_VERSION,
       exportedAt: num(src.exportedAt, Date.now()),
       source: str(src.source, MAX_FIELD.toolName),
@@ -357,6 +387,13 @@
       favorites: favorites,
       tombstones: trimTombstones(src.tombstones),
     };
+    /* 偏好只在非空时才作为一个字段出现。这不是洁癖：sha256 是对本函数的输出序列
+       计算的，字段一旦总是出现，「偏好功能之前导出的文件」重算出来的摘要就会变，
+       用户手里的旧备份会全部被判定为「校验和不匹配」。缺席即保持旧形状，
+       旧文件照常导入（旧文件本来也没有偏好），新文件里偏好一并受校验和保护。 */
+    var prefs = sanitizePrefs(src.prefs);
+    if (Object.keys(prefs).length) env.prefs = prefs;
+    return env;
   }
 
   function serializeEnvelope(envelope) {
@@ -394,7 +431,10 @@
         return { ok: false, reason: "文件校验和格式不正确" };
       }
       if (sha256Hex(serializeEnvelope(buildEnvelope(value))) !== expect) {
-        return { ok: false, reason: "文件校验和不匹配，数据可能已损坏，请重新导出" };
+        // 除了真损坏，还有一种情形会走到这里：文件由更新版本的应用导出，而那个版本
+        // 往信封里加了本版本不认识、因而不参与摘要计算的字段。判语里说清楚，
+        // 免得用户拿「数据已损坏」去折腾一个其实完好的备份。
+        return { ok: false, reason: "文件校验和不匹配：文件可能已损坏，或用更新版本的应用导出过，请重新导出" };
       }
     }
     // 先按上限截断再逐条归一：超大文件不该让我们遍历几十万条
@@ -404,6 +444,7 @@
       history: value.history.slice(0, limits.history),
       favorites: value.favorites.slice(0, limits.favorites),
       tombstones: value.tombstones,
+      prefs: value.prefs,
     });
     if (!envelope.history.length && !envelope.favorites.length) {
       return { ok: false, reason: "数据里没有任何可导入的记录" };
@@ -574,10 +615,34 @@
     return { list: arr, dropped: [] };
   }
 
+  /* 偏好合并：逐键 LWW，时间戳相同时保留本地 —— 与条目合并同一套幂等口径
+     （同刻不翻转，两端反复合并不会来回抖）。
+     changed 只列「本机值真的变了」的键：对端带了个更旧的偏好过来时合并结果仍是
+     本机的值，就不该在导入预览里显示成一条变更。 */
+  function mergePrefs(local, remote) {
+    var l = sanitizePrefs(local);
+    var r = sanitizePrefs(remote);
+    var prefs = {};
+    var changed = [];
+    var names = Object.keys(PREF_KEYS);
+    for (var i = 0; i < names.length; i += 1) {
+      var key = names[i];
+      var a = l[key];
+      var b = r[key];
+      if (!a && !b) continue;
+      var win = a && b ? (b.at > a.at ? b : a) : (a || b);
+      prefs[key] = { v: win.v, at: win.at };
+      var cur = a ? a.v : "";
+      if (cur !== win.v) changed.push({ key: key, from: cur, to: win.v, at: win.at });
+    }
+    return { prefs: prefs, changed: changed };
+  }
+
   /* 把两份数据合并成一份。返回：
-     {history, favorites, tombstones, stats, changes, droppedHistory, droppedFavorites}
+     {history, favorites, prefs, tombstones, stats, changes, droppedHistory, droppedFavorites}
      dropped* 是被条数上限截掉的条目，调用方需要据此清理它们的正文键。
-     changes 是逐条变更清单（id + 标题 + 时间），供导入预览展示用。 */
+     changes 是逐条变更清单（id + 标题 + 时间），供导入预览展示用；
+     prefs 是逐键合并后的偏好（LWW），调用方要把它落盘并套到界面上。 */
   function mergeRemote(local, remote, opts) {
     var limits = (opts && opts.limits) || DEFAULT_LIMITS;
     var l = isPlainObject(local) ? local : {};
@@ -596,11 +661,13 @@
     };
     var h = mergeHistory(l.history, r.history, tombstones);
     var f = mergeFavorites(l.favorites, r.favorites, tombstones);
+    var p = mergePrefs(l.prefs, r.prefs);
     var th = trimHistory(h.list, limits.history);
     var tf = trimHistory(f.list, limits.favorites);
     return {
       history: th.list,
       favorites: tf.list,
+      prefs: p.prefs,
       tombstones: tombstones,
       stats: {
         historyAdded: h.stats.added,
@@ -609,6 +676,7 @@
         favoriteAdded: f.stats.added,
         favoriteUpdated: f.stats.updated,
         favoriteRemoved: f.stats.removed,
+        prefsChanged: p.changed.length,
       },
       changes: {
         historyAdded: h.changes.added,
@@ -617,17 +685,20 @@
         favoriteAdded: f.changes.added,
         favoriteUpdated: f.changes.updated,
         favoriteRemoved: f.changes.removed,
+        prefsChanged: p.changed,
       },
       droppedHistory: th.dropped,
       droppedFavorites: tf.dropped,
     };
   }
 
-  /* 合并是否真的改变了什么（用于决定要不要落盘、要不要重渲染）。 */
+  /* 合并是否真的改变了什么（用于决定要不要落盘、要不要重渲染）。
+     偏好算数：只带了偏好变更的文件不能被判成「本机数据已是最新」。 */
   function hasChanges(stats) {
     if (!stats) return false;
     return !!(stats.historyAdded || stats.historyUpdated || stats.historyRemoved
-      || stats.favoriteAdded || stats.favoriteUpdated || stats.favoriteRemoved);
+      || stats.favoriteAdded || stats.favoriteUpdated || stats.favoriteRemoved
+      || stats.prefsChanged);
   }
 
   var api = {
@@ -642,11 +713,13 @@
     sanitizeIndex: sanitizeIndex,
     sanitizeBody: sanitizeBody,
     sanitizeFavorite: sanitizeFavorite,
+    sanitizePrefs: sanitizePrefs,
     trimTombstones: trimTombstones,
     pruneTombstones: pruneTombstones,
     buildEnvelope: buildEnvelope,
     serializeEnvelope: serializeEnvelope,
     validateEnvelope: validateEnvelope,
+    mergePrefs: mergePrefs,
     mergeRemote: mergeRemote,
     hasChanges: hasChanges,
   };

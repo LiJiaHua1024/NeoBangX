@@ -351,6 +351,37 @@ test("偏好同步：A 换主题与模型，B 收到并落进偏好存储", asyn
   assert.strictEqual(prefs.model.v, "m1", "B 应收到 A 的模型");
 });
 
+/* 偏好只送达、不落界面，是一个曾经真实存在的缺口，根因就在这条时序里：
+   偏好 op 不携带任何条目，推送方一收到回执队列即清空，接收页事后握手收不到任何
+   一批 op，于是 onApplied 永远不触发。接收页只能自己读 nbx_prefs 落到界面上
+   （mirrorStart 与回到前台时各对账一次）。这条用例把这个前提钉住。 */
+test("偏好推完即被回执出队：接收页事后握手无 op 可收，只能自己应用 nbx_prefs", async () => {
+  const { A, B } = makePair();
+  seed(A, []);
+  seed(B, []);
+  useSide(A);
+  Store.writePrefs({ theme: { v: "sora", at: T - 2 * MIN } });
+  Store.seedPrefsOnce("nbx_mo_seeded_prefs");
+  useSide(B);
+  Store.seedPrefsOnce("nbx_mo_seeded_prefs");
+  bus.length = 0;
+
+  useSide(B);
+  B.post({ nbx: Peer.PROTO, t: "ready", summary: Store.localSummary() });
+  await pump();
+
+  useSide(B);
+  assert.strictEqual(Store.readPrefs().theme.v, "sora", "B 应收到主题");
+  // A 已被 B 的回执清理干净：此后无论再握手多少次，都没有 op 能送到 B 的页面
+  useSide(A);
+  assert.strictEqual(Store.outboxCount(), 0, "偏好 op 应已被回执清出队列");
+  assert.deepStrictEqual(Store.outboxOps(), [], "此后握手无 op 可发");
+  // 值就在 B 自己的存储里（无需网络即可取用），页面据此应用
+  assert.notStrictEqual(B.storage.getItem("nbx_prefs"), null, "B 本地应留有偏好存储");
+  // 镜像不写页面启动时读的主题键 —— 这正是「必须由页面自己翻译」的原因
+  assert.strictEqual(B.storage.getItem("nbx_theme"), null, "镜像不碰页面专有的 LS 键");
+});
+
 /* ---------------- 执行 ---------------- */
 
 (async function run() {

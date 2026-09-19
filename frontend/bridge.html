@@ -27,12 +27,13 @@
 
      ⚠️ 下面三个 script 的 ?v= 必须与 index.html 里引用同名文件时保持一致。
      两者若用了不同的 URL，浏览器会各缓存一份；部署更新后桥接页可能仍在跑旧版本，
-     而两侧的 MIRROR_PROTO 一旦不一致，镜像会**静默失效**（协议版本不匹配时
-     消息被直接忽略，没有任何报错）。改动这三个模块时，两个文件的 ?v= 一起改。
+     而两侧的消息协议版本（NbxMirrorPeer.PROTO）一旦不一致，镜像会**静默失效**
+     （协议版本不匹配时消息被直接忽略，没有任何报错）。改动这三个模块时，
+     两个文件的 ?v= 一起改。
      ============================================================ -->
-<script src="/static/nbx-mirror.js?v=mirror2"></script>
-<script src="/static/nbx-mirror-store.js?v=mirror2"></script>
-<script src="/static/nbx-mirror-peer.js?v=mirror2"></script>
+<script src="/static/nbx-mirror.js?v=mirror3"></script>
+<script src="/static/nbx-mirror-store.js?v=mirror3"></script>
+<script src="/static/nbx-mirror-peer.js?v=mirror3"></script>
 <script>
 (function () {
   "use strict";

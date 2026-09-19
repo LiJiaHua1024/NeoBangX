@@ -383,6 +383,51 @@ test("buildOp / seedPrefsOnce / buildAllOps 覆盖偏好", () => {
   assert.deepStrictEqual(Store.buildAllOps().map((o) => o.k + "|" + o.id), ["p|theme"]);
 });
 
+/* 偏好从 nbx_prefs 落到界面这一步：页面启动读的是 LS.theme / LS.model（nbx_theme /
+   nbx_model），与镜像维护的 nbx_prefs 是两个键，必须由 pickPrefUpdates 决定
+   「哪些值该套上去」。这一步漏了，偏好就只是躺在存储里不生效。 */
+test("pickPrefUpdates：只返回需要改且本线路存在的值", () => {
+  const valid = { theme: ["paper", "sora"], model: ["m1", "m2"] };
+  const prefs = { theme: { v: "sora", at: T }, model: { v: "m1", at: T } };
+
+  // 主题与当前不同 → 应用；模型与当前一致 → 不返回（省掉无谓的主题转场与重渲染）
+  assert.deepStrictEqual(
+    Store.pickPrefUpdates(prefs, { theme: "paper", model: "m1" }, valid),
+    { theme: "sora" }
+  );
+  // 两个都该改
+  assert.deepStrictEqual(
+    Store.pickPrefUpdates(prefs, { theme: "paper", model: "m2" }, valid),
+    { theme: "sora", model: "m1" }
+  );
+  // 本页已经就是这个值 → 空
+  assert.deepStrictEqual(Store.pickPrefUpdates(prefs, { theme: "sora", model: "m1" }, valid), {});
+});
+
+test("pickPrefUpdates：本线路没有的主题/模型一律拒收", () => {
+  // 两条线路的可用集合可能不同：对端选了本线路没有的值，硬套会选中不存在的东西
+  assert.deepStrictEqual(
+    Store.pickPrefUpdates(
+      { theme: { v: "obsidian", at: T }, model: { v: "m9", at: T } },
+      { theme: "paper", model: "" },
+      { theme: ["paper", "sora"], model: ["m1"] }
+    ),
+    {}
+  );
+  // 可用集合缺失（模型列表还没加载完）时同样不应用，等下次对账再来
+  assert.deepStrictEqual(Store.pickPrefUpdates({ theme: { v: "sora", at: T } }, { theme: "paper" }, {}), {});
+  // 畸形入参不抛异常
+  assert.deepStrictEqual(Store.pickPrefUpdates(null, null, null), {});
+  assert.deepStrictEqual(
+    Store.pickPrefUpdates(
+      { theme: { v: "", at: T }, model: { v: 5, at: T } },
+      { theme: "paper" },
+      { theme: ["paper"] }
+    ),
+    {}
+  );
+});
+
 let failed = 0;
 for (const c of cases) {
   try {

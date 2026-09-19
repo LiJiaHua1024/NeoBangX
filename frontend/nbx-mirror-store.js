@@ -21,8 +21,6 @@
 (function (global) {
   "use strict";
 
-  var MIRROR_PROTO = 2; // 消息协议版本：v2 新增偏好同步（k:"p"，主题/模型）；两侧不一致时拒绝套用
-
   var KEYS = null;
   var storage = null;
 
@@ -127,6 +125,30 @@
   }
   function writePrefs(prefs) {
     return writeRaw(KEYS.prefs, JSON.stringify(prefs || {}));
+  }
+
+  /* 从偏好存储里挑出「本次需要应用到界面」的值，返回 {theme?, model?}。
+     纯函数，不碰存储：判据（LWW、白名单、未知值拒收）放这里才能用 node 验证，
+     调用方只负责把结果套到界面上。
+
+     valid 传本线路可用的 id 集合：两条线路的可用主题/模型可能不同，硬套一个
+     对端有、本线路没有的 id 会选中不存在的东西。与当前值相同的键不返回，
+     避免无谓的重渲染与主题转场。 */
+  function pickPrefUpdates(prefs, current, valid) {
+    var out = {};
+    var cur = current && typeof current === "object" ? current : {};
+    var allow = valid && typeof valid === "object" ? valid : {};
+    var names = Object.keys(PREF_KEYS);
+    for (var i = 0; i < names.length; i += 1) {
+      var key = names[i];
+      var p = prefs && typeof prefs === "object" ? prefs[key] : null;
+      if (!p || typeof p.v !== "string" || !p.v) continue;
+      if (p.v === cur[key]) continue;
+      var list = allow[key];
+      if (!Array.isArray(list) || list.indexOf(p.v) === -1) continue;
+      out[key] = p.v;
+    }
+    return out;
   }
 
   /* ---------------- 变更队列 ---------------- */
@@ -568,7 +590,6 @@
   }
 
   var api = {
-    MIRROR_PROTO: MIRROR_PROTO,
     init: init,
     ready: ready,
     readHistoryIndex: readHistoryIndex,
@@ -578,6 +599,7 @@
     localSummary: localSummary,
     readPrefs: readPrefs,
     writePrefs: writePrefs,
+    pickPrefUpdates: pickPrefUpdates,
     outboxAdd: outboxAdd,
     outboxTrim: outboxTrim,
     outboxList: outboxList,
