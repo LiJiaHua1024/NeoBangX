@@ -84,6 +84,16 @@ class Settings(BaseSettings):
     # 日志保留天数，超过后自动清理；0 = 永久保留
     log_retention_days: int = 0
 
+    # 线路镜像：让同一套应用的多条线路（如主线路 + 备份线路）共用一份历史与收藏。
+    # 前端在两条线路之间互嵌隐藏的同站 iframe，把变更推进对方 origin 自己的
+    # localStorage；后端不参与数据，只提供这份配置。
+    # 默认关闭：只有真的部署了第二条线路才需要开启。
+    mirror_enabled: bool = False
+    # 参与镜像的线路地址，逗号或换行分隔（例：https://a.example.com,https://b.example.com）。
+    # 必须是纯 origin（scheme://host[:port]，不带路径）；支持 IP 与端口，
+    # 便于内网环境用 http://192.168.1.10:8000 这类地址测试。
+    mirror_origins: str = ""
+
     # SSE 配置
     sse_retry_timeout: int = 30000  # 客户端重连时间（毫秒）
 

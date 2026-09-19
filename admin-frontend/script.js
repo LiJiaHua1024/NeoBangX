@@ -588,7 +588,12 @@ function adminApp() {
       log_payload: false,
       log_retention_days: 0,
       tool_reasoning_rules: [],
+      // 线路镜像：开关 + 两条线路地址（顺序无关，两条线路是对等的）
+      mirror_enabled: false,
+      mirror_origins: ["", ""],
     },
+    // 后端解析出的镜像状态（含 ready / reason），仅用于面板上的状态提示
+    mirror: null,
     savingConfig: false,
     choresModelMenuOpen: false,
     // 工具推理规则（工具注册表来自 GET /api/admin/tools，与用户端分组一致）
@@ -817,6 +822,23 @@ function adminApp() {
     },
     get unboundModelCount() {
       return this.configForm.models.filter((m) => m.enabled !== false && !(this.modelProviderMap[m.id] && this.modelProviderMap[m.id].length)).length;
+    },
+    /* 线路镜像的当前状态文案（以后端已保存的配置为准，不含尚未保存的编辑） */
+    get mirrorStatusText() {
+      const m = this.mirror;
+      if (!m) return "";
+      if (!m.enabled) return "当前状态：未启用。";
+      if (m.reason === "need_two_origins") return "当前状态：已开启，但线路地址不足两条，镜像不会生效。";
+      const origins = Array.isArray(m.origins) ? m.origins : [];
+      return `当前状态：已启用，${origins.join("  ↔  ")}`;
+    },
+    /* 两条线路协议不一致时给出警告：https 页面里加载 http 的 iframe 会被浏览器
+       当作混合内容直接拦掉，那一条线上镜像会静默失效，而配置看起来完全正常。 */
+    get mirrorMixedScheme() {
+      const list = (this.configForm.mirror_origins || []).map((s) => String(s || "").trim()).filter(Boolean);
+      if (list.length < 2) return false;
+      const schemes = new Set(list.map((o) => (o.split("://")[0] || "").toLowerCase()));
+      return schemes.size > 1;
     },
 
     async init() {
@@ -2195,6 +2217,12 @@ function adminApp() {
           max_visible_models: Number(cfg.max_visible_models) || 0,
           log_payload: /^(1|true|yes|on)$/i.test(String(cfg.log_payload ?? "")),
           log_retention_days: Number(cfg.log_retention_days) || 0,
+          mirror_enabled: /^(1|true|yes|on)$/i.test(String(cfg.mirror_enabled ?? "")),
+          // 固定补齐两个输入框，避免数组短于 2 时 x-model 写到越界下标
+          mirror_origins: (() => {
+            const list = Array.isArray(cfg.mirror_origins) ? cfg.mirror_origins.map(String) : [];
+            return [list[0] || "", list[1] || ""];
+          })(),
           tool_reasoning_rules: Array.isArray(cfg.tool_reasoning_rules)
             ? cfg.tool_reasoning_rules.map((r) => ({
                 id: r.id || "",
@@ -2213,6 +2241,7 @@ function adminApp() {
           } catch {}
         }
         this.payloadRecording = this.configForm.log_payload;
+        this.mirror = data.mirror && typeof data.mirror === "object" ? data.mirror : null;
         // 多 Provider 聚合
         this.providers = Array.isArray(data.providers) ? data.providers : [];
         this.modelProviderMap = data.model_provider_map && typeof data.model_provider_map === 'object' ? data.model_provider_map : {};
@@ -2631,6 +2660,14 @@ function adminApp() {
           return;
         }
       }
+      // 线路镜像：开启就必须配够两条，否则前端无法确定自己的对端（后端也会拒）
+      const mirrorOrigins = (this.configForm.mirror_origins || [])
+        .map((s) => String(s || "").trim())
+        .filter(Boolean);
+      if (this.configForm.mirror_enabled && mirrorOrigins.length < 2) {
+        this.toast("启用线路镜像需要填写两条线路地址", "error");
+        return;
+      }
       this.savingConfig = true;
       try {
         const body = {
@@ -2642,6 +2679,10 @@ function adminApp() {
           max_visible_models: Math.max(0, Math.min(50, Math.floor(Number(this.configForm.max_visible_models) || 0))),
           log_payload: !!this.configForm.log_payload,
           log_retention_days: Math.max(0, Math.floor(Number(this.configForm.log_retention_days) || 0)),
+          mirror_enabled: !!this.configForm.mirror_enabled,
+          mirror_origins: (this.configForm.mirror_origins || [])
+            .map((s) => String(s || "").trim())
+            .filter(Boolean),
           tool_reasoning_rules: this.configForm.tool_reasoning_rules.map((r) => ({
             id: r.id || "",
             tool_ids: r.tool_ids.map(String),

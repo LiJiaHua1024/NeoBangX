@@ -182,11 +182,14 @@ async def health_check():
 async def get_config():
     """返回前端需要的配置信息（不返回 API Key）。"""
     from app.database import SessionLocal
-    from app.services.runtime_config import resolve_llm_settings
+    from app.services.runtime_config import get_config_map, parse_mirror_settings, resolve_llm_settings
 
     db = SessionLocal()
     try:
         llm_cfg = resolve_llm_settings(db)
+        # 线路镜像配置：前端与桥接页都要读它（前者找自己的对端，后者校验消息来源）。
+        # 不含敏感信息——线路地址本身就是公开的，配置里也没有密钥。
+        mirror_cfg = parse_mirror_settings(get_config_map(db))
     finally:
         db.close()
 
@@ -209,6 +212,10 @@ async def get_config():
         "version": "1.2.0",
         "slogan": "Bang助教学，大有可AI",
         "auth_required": True,
+        "mirror": {
+            "enabled": mirror_cfg["enabled"],
+            "origins": mirror_cfg["origins"],
+        },
     }
 
 

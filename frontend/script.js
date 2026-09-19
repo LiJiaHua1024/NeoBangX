@@ -74,6 +74,8 @@ const ICON_PATHS = {
   "key": '<circle cx="7.5" cy="15.5" r="2.5"/><path d="m11 12 4-4"/><path d="m13 10 2.5 2.5"/><path d="M15 8h2v2"/>',
   "shield": '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
   "alert": '<circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/>',
+  "download": '<path d="M12 3.5V15M7.5 10.5 12 15l4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+  "upload": '<path d="M12 15V3.5M7.5 8 12 3.5 16.5 8"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
 
   // —— 全屏讲解舞台 ——
   "grid": '<rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/>',
@@ -876,9 +878,56 @@ function storageFullWarn(evicted) {
    停顿随之消失），配额不足时也只牵连单条。旧格式（整个数组含正文）在启动时一次性
    拆分，拆分失败则本次会话退回整份写入，旧数据原样保留。 */
 const HISTORY_BODY_PREFIX = "nbx_h:";
-const HISTORY_INDEX_VERSION = 2;
+const HISTORY_INDEX_VERSION = 3;
 // 索引里保留的输入摘要长度：够卡片在无标题时展示（模板用 excerpt 的默认 46 字）
 const HISTORY_HEAD_CHARS = 60;
+// 删除墓碑（线路镜像用）：合并是集合求并，没有墓碑的话，一端删掉的记录会被另一端
+// 的旧副本原样带回来。墓碑与内容一起同步，合并时「比内容新」即判死。
+const LS_TOMB = "nbx_tomb";
+/* ---------------- 线路镜像 ----------------
+   同门多条线路（主线路 + 备份线路）互嵌一个隐藏的同站 iframe，把本机的变更推进
+   对方 origin 自己的 localStorage。方向是「推」不是「拉」：备用线路要顶的正是
+   主线路挂掉的那一刻，那时主线路的页面加载不了、也就读不到它的存储；提前推进去，
+   故障时对端手里已经有一份，零点击可用。
+
+   参与哪些线路由后端配置决定（管理后台「线路镜像」或 MIRROR_ORIGINS 环境变量），
+   页面启动时从 /api/config 读取，不在前端硬编码 —— 开源部署各有各的域名，
+   内网测试还可能是 IP + 端口。后端不参与数据，只提供这份配置。
+
+   详见 nbx-mirror.js / nbx-mirror-store.js / nbx-mirror-peer.js / bridge.html。 */
+const MIRROR_CONFIG_URL = "/api/config";
+// 待同步队列的键（nbx-mirror-store 用）
+const MIRROR_OUTBOX_KEY = "nbx_mo";
+// 「存量已登记」标记：保证首次启用镜像时只把已有条目灌进队列一次
+const MIRROR_SEEDED_KEY = "nbx_mo_seeded";
+// 「偏好已播种」标记：主题/模型的首次播种独立于条目种子（条目重灌代价大，偏好没有）
+const MIRROR_PREFS_SEEDED_KEY = "nbx_mo_seeded_prefs";
+// 偏好同步的存储键：{theme: {v, at}, model: {v, at}}，at 大者胜（与数据同一 LWW 语义）
+const LS_PREFS = "nbx_prefs";
+// 变更后的推送防抖：连续编辑（改标题、连删多条）合并成一次推送
+const MIRROR_PUSH_DEBOUNCE = 300;
+// 桥接页加载超时与退避重试：对端线路不可达时不该让 iframe 无限挂着
+const MIRROR_LOAD_TIMEOUT = 8000;
+const MIRROR_RETRY_DELAY = 60000;
+const MIRROR_MAX_ATTEMPTS = 2;
+// 导入预览每组最多渲染的行数：300 行全渲染在手机上是灾难，封顶 + 搜索是折中
+const IMPORT_PREVIEW_CAP = 30;
+/* 运行期状态放模块作用域而不是 Alpine 响应式数据：里面存 iframe 元素与回调引用，
+   塞进响应式代理没有必要，还可能带来意外的深代理行为。只有给界面看的字符串
+   才放进响应式数据（mirrorStatus / mirrorHint）。 */
+const _mirror = {
+  started: false,
+  status: "off",
+  peerOrigin: "",
+  iframe: null,
+  peer: null,
+  onMessage: null,
+  loadTimer: null,
+  retryTimer: null,
+  attempts: 0,
+  /* 正在应用对端推来的偏好：此期间本地钩子不得回写队列，否则同值 ping-pong */
+  applyingRemote: false,
+};
 
 function historyHead(input) {
   return String(input || "").replace(/\s+/g, " ").trim().slice(0, HISTORY_HEAD_CHARS);
@@ -898,6 +947,9 @@ function historyIndexOf(item) {
     error: item.error || "",
     partial: !!item.partial,
     createdAt: item.createdAt,
+    // 最后修改时间：线路镜像合并时「谁更新」的唯一判据。存量记录没有这个字段，
+    // 回退到 createdAt（等于「从未改过」），镜像层 (updatedAtOf) 也做同样回退。
+    updatedAt: item.updatedAt || item.createdAt,
     model: item.model || "",
     inputHead: item.input !== undefined ? historyHead(item.input) : (item.inputHead || ""),
     hasMigration: !!item.migration || !!item.hasMigration,
@@ -1799,6 +1851,21 @@ function nbx() {
     favorites: [],
     favModal: false,
     editingFav: { id: null, title: "", content: "" },
+
+    /* --- 线路镜像 --- */
+    // 只有给界面看的字符串进响应式数据；iframe/回调等运行期状态在 _mirror 里
+    mirrorStatus: "off",
+    mirrorHint: "",
+    _mirrorPushTimer: null,
+    _mirrorReloadTimer: null,
+    _mirrorReloadPending: false,
+
+    /* --- 导入预览 --- */
+    importPreviewOpen: false,
+    importPreviewFilter: "",
+    importPreviewGroups: [],
+    importPreviewTotal: 0,
+    _importPreviewResolve: null,
 
     /* --- 主题 --- */
     theme: "paper",
@@ -3273,6 +3340,10 @@ function nbx() {
         this.setupMascotObservers();
         this.scheduleMascotCheck(120);
       });
+
+      // 线路镜像放最后：等应用可交互之后再建隐藏 iframe（空闲时启动），
+      // 让「多一次文档加载 + TLS 握手」落在首屏关键路径之外
+      this._mirrorScheduleStart();
     },
 
     /* ============ 认证 ============ */
@@ -3601,6 +3672,9 @@ function nbx() {
       this.applyTheme();
       try { localStorage.setItem(LS.theme, id); } catch {}
       if (this._bg) this._bg.themeChanged();
+      // 本地主动换主题 → 登记偏好同步；对端推来的应用走 _mirrorApplyPrefs，
+      // 那里置了 applyingRemote，不会回写（防同值 ping-pong）
+      if (!_mirror.applyingRemote) this._mirrorSetPref("theme", id);
     },
     applyTheme() {
       document.documentElement.dataset.theme = this.theme;
@@ -3662,6 +3736,7 @@ function nbx() {
       // 收起列表状态：下次打开回到折叠态，而不是停在上次的展开态
       this.modelsExpanded = false;
       try { localStorage.setItem(LS.model, m); } catch {}
+      if (!_mirror.applyingRemote) this._mirrorSetPref("model", m);
     },
     toggleModelMenu() {
       this.modelMenuOpen = !this.modelMenuOpen;
@@ -4671,6 +4746,7 @@ function nbx() {
       this.favorites.unshift(favorite);
       if (this.favorites.length > FAVORITES_LIMIT) this.favorites.length = FAVORITES_LIMIT;
       lsSet(LS.favorites, this.favorites);
+      this._mirrorChanged("f", favorite.id, false, favorite.createdAt);
       this.toast("已收藏整条迁移记录");
     },
     pushMigrationHistory(partial = false, error = "") {
@@ -6648,6 +6724,9 @@ function nbx() {
       // 防御：索引项没有 input 字段，若调用方在未水合的条目上改过别的字段就落盘，
       // 这里先读回正文，避免用空 input/output 覆盖已存内容（正文一定含 input 键）
       if (!this._historyLegacy && !item._bodyLoaded && item.input === undefined) this._hydrateHistory(item);
+      // 改动时间：线路镜像合并时判断「哪一版更新」的唯一依据。
+      // 所有正文改动都经这里落盘，所以在这一处统一定时即可覆盖（标题改动见 generateTitle）。
+      item.updatedAt = Date.now();
       let ok = true;
       if (!this._historyLegacy) {
         const key = HISTORY_BODY_PREFIX + item.id;
@@ -6656,6 +6735,8 @@ function nbx() {
       }
       ok = this._persistHistoryIndex(item.id) && ok;
       if (!ok) storageFullWarn(true);
+      // 登记待同步并安排推送（镜像未启用时是空操作）
+      this._mirrorChanged("h", item.id, false, item.updatedAt);
       return ok;
     },
     /* 惰性读回正文：列表只持有索引，打开某条时才把大字段合并进来（本地同步读）。
@@ -6668,6 +6749,17 @@ function nbx() {
         if (raw) Object.assign(item, JSON.parse(raw));
       } catch { /* 正文损坏：保留索引元数据，正文留空 */ }
       return item;
+    },
+    /* 直读某条正文，不改动入参、也不把正文带进内存列表。
+       导出整份数据时用：列表里多数条目只有索引，逐条 _hydrateHistory 会把
+       全部正文一次性灌进内存（可能数 MB），而这里只需要序列化出去。 */
+    _readBodyRaw(id) {
+      try {
+        const raw = localStorage.getItem(HISTORY_BODY_PREFIX + id);
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
     },
     /* 启动加载：旧格式就地拆分。正文全部写成功后才覆盖索引键，
        中途失败或崩溃时旧键完好、下次启动重放，不会丢数据。 */
@@ -6778,7 +6870,10 @@ function nbx() {
         if (data.title) {
           item.title = data.title;
           // 标题只存在索引里，写索引即可（迁移失败的会话内部仍写整份数组）
+          // 标题也是一次真实改动，刷新时间戳，否则镜像合并时会被对端的旧版本盖掉
+          item.updatedAt = Date.now();
           this._persistHistoryIndex(item.id);
+          this._mirrorChanged("h", item.id, false, item.updatedAt);
         }
       } catch {
         // 标题生成失败静默处理
@@ -7067,6 +7162,8 @@ function nbx() {
     removeHistory(id) {
       this.history = this.history.filter((h) => h.id !== id);
       lsRemove(HISTORY_BODY_PREFIX + id);
+      // 记墓碑：否则对端（另一条线路）的旧副本会在下次合并时把这条带回来
+      this._addTombstones("history", [id]);
       this._persistHistoryIndex();
       this.toast("已删除该条记录");
     },
@@ -7080,6 +7177,7 @@ function nbx() {
       });
       if (!ok) return;
       for (const item of this.history) lsRemove(HISTORY_BODY_PREFIX + item.id);
+      this._addTombstones("history", this.history.map((h) => h.id));
       this.history = [];
       lsWrite(LS.history, "[]");
       this.toast("历史记录已清空");
@@ -7105,6 +7203,7 @@ function nbx() {
       this.favorites.unshift(fav);
       if (this.favorites.length > FAVORITES_LIMIT) this.favorites.length = FAVORITES_LIMIT;
       lsSet(LS.favorites, this.favorites);
+      this._mirrorChanged("f", fav.id, false, fav.createdAt);
       this.toast("已收藏到笔记本");
     },
     insertFavorite(fav) {
@@ -7131,15 +7230,553 @@ function nbx() {
       if (f) {
         f.title = this.editingFav.title.trim() || "未命名";
         f.content = this.editingFav.content;
+        // 编辑是一次真实改动：刷新时间戳，否则镜像合并时会被对端的旧版本盖掉
+        f.updatedAt = Date.now();
         lsSet(LS.favorites, this.favorites);
+        this._mirrorChanged("f", f.id, false, f.updatedAt);
         this.toast("收藏已更新");
       }
       this.favModal = false;
     },
     removeFavorite(id) {
       this.favorites = this.favorites.filter((f) => f.id !== id);
+      this._addTombstones("favorites", [id]);
       lsSet(LS.favorites, this.favorites);
       this.toast("已删除该收藏");
+    },
+
+    /* ============ 数据导出 / 导入 ============
+       历史与收藏只存在浏览器里（后端是无状态代理，不存任何用户数据）。代价是
+       localStorage 按 origin 隔离，两条线路（www / cf）天然各存一份。这里提供
+       「把两份合成一份」的入口，供两条路径复用：
+
+       1) 用户手动导出 / 导入 JSON —— 备份、换设备、以及镜像失效时的兜底
+       2) PeerMirror 的自动线路镜像 —— 走同一套 envelope 与合并规则
+
+       格式与合并规则全在 nbx-mirror.js（纯函数，可单独跑用例验证）。 */
+
+    get mirrorAvailable() {
+      return typeof NbxMirror !== "undefined" && !!NbxMirror.mergeRemote;
+    },
+    /* 导入预览副标题与过滤后的分组。行数有封顶，组头计数始终是未过滤的总数 */
+    get importPreviewSubtitle() {
+      const g = this.importPreviewGroups;
+      const n = (k) => { const x = g.find((i) => i.key === k); return x ? x.rows.length : 0; };
+      const total = this.importPreviewTotal;
+      return total
+        ? `将合并 ${total} 条变更：新增 ${n("added")} · 更新 ${n("updated")} · 删除 ${n("removed")}`
+        : "";
+    },
+    get importPreviewFiltered() {
+      const q = String(this.importPreviewFilter || "").trim().toLowerCase();
+      return this.importPreviewGroups
+        .map((g) => {
+          const rows = q ? g.rows.filter((r) => String(r.title || "").toLowerCase().indexOf(q) !== -1) : g.rows;
+          const shown = rows.slice(0, IMPORT_PREVIEW_CAP);
+          return {
+            key: g.key,
+            label: g.label,
+            danger: g.danger,
+            rows: shown,
+            total: rows.length,
+            hasMore: rows.length > shown.length,
+            moreText: `还有 ${rows.length - shown.length} 条，可用上方搜索缩小范围`,
+          };
+        })
+        .filter((g) => g.rows.length);
+    },
+    _tombstones() {
+      return NbxMirror.trimTombstones(lsGet(LS_TOMB, null));
+    },
+    /* 批量记墓碑。清空历史会一次传上百个 id，逐条读改写整个墓碑表会退化成 O(n²)。
+       同一个 id 已有墓碑时只把时间推到最新，绝不新增第二条。
+       返回本次使用的时间戳：调用方要拿同一个值登记待同步队列，否则对端回执的 at
+       与队列里的 at 对不上，队列清不干净会反复重发。 */
+    _addTombstones(kind, ids) {
+      const list = (ids || []).filter(Boolean);
+      if (!list.length || !this.mirrorAvailable) return 0;
+      const stone = this._tombstones();
+      const now = Date.now();
+      const seen = Object.create(null);
+      for (const entry of stone[kind]) seen[entry.id] = entry;
+      for (const id of list) {
+        const prev = seen[id];
+        if (prev) prev.at = Math.max(prev.at, now);
+        else stone[kind].push({ id, at: now });
+      }
+      lsSet(LS_TOMB, NbxMirror.trimTombstones(stone));
+      // 删除也要进待同步队列：墓碑表只在握手时整表交换，实时传播靠这个 del op
+      const short = kind === "history" ? "h" : "f";
+      for (const id of list) this._mirrorChanged(short, id, true, now);
+      return now;
+    },
+    /* 本机全量数据 → envelope。正文优先取内存里的版本（可能刚改过还没落盘），
+       未水合的条目直读 localStorage —— 不走 _hydrateHistory，避免把整份正文
+       一次性灌进内存列表。 */
+    _localEnvelope() {
+      const history = [];
+      for (const item of this.history) {
+        if (!item || !item.id) continue;
+        const body = item._bodyLoaded ? historyBodyOf(item) : this._readBodyRaw(item.id);
+        history.push({ index: historyIndexOf(item), body: body || historyBodyOf(item) });
+      }
+      return NbxMirror.buildEnvelope({
+        source: (typeof location !== "undefined" && location.hostname) || "",
+        history,
+        favorites: this.favorites,
+        tombstones: this._tombstones(),
+      });
+    },
+    /* 把合并结果写回本机。分块 + 块间让出主线程：一次全量合并可能涉及上百条
+       正文、数 MB 的 JSON.stringify 与 localStorage 写入，密集同步写会卡住 UI。
+       写入前先比对现有内容，一致就跳过 —— 重复合并（每次启动都会跑一次）应当零写入。 */
+    async _applyMerged(merged) {
+      const CHUNK = 20;
+      let failed = 0;
+      for (let i = 0; i < merged.history.length; i += 1) {
+        if (i && i % CHUNK === 0) await new Promise((r) => setTimeout(r, 0));
+        const entry = merged.history[i];
+        if (!entry.body) continue;
+        const key = HISTORY_BODY_PREFIX + entry.index.id;
+        const payload = JSON.stringify(entry.body);
+        let cur = null;
+        try { cur = localStorage.getItem(key); } catch { cur = null; }
+        if (cur !== payload && !lsWrite(key, payload)) failed += 1;
+      }
+      // 合并后不再存在的条目：正文键一并清理
+      // 注意：这里刻意「不」给对端发删除标记。本地条目消失有两种原因 ——
+      // 被墓碑判死（对端早就知道），以及被本地条数上限截掉（条目在对端仍然存在）。
+      // 后者一旦发删除就会把对端的数据也删掉，而它并非用户意图的删除。
+      // 删除只经墓碑表传播（握手时整表交换），那条路径不会误伤。
+      const alive = new Set(merged.history.map((e) => e.index.id));
+      for (const item of this.history) {
+        if (item && item.id && !alive.has(item.id)) lsRemove(HISTORY_BODY_PREFIX + item.id);
+      }
+      for (const entry of merged.droppedHistory || []) {
+        if (entry && entry.index) lsRemove(HISTORY_BODY_PREFIX + entry.index.id);
+      }
+
+      // 索引整体重写：复用既有的「配额不足 → 淘汰最旧 → 重试」路径
+      this.history = merged.history.map((e) => e.index);
+      this._persistHistoryIndex();
+
+      const favPayload = JSON.stringify(merged.favorites);
+      let curFav = "";
+      try { curFav = localStorage.getItem(LS.favorites) || ""; } catch { curFav = ""; }
+      if (curFav !== favPayload) lsSet(LS.favorites, merged.favorites);
+      this.favorites = merged.favorites;
+
+      lsSet(LS_TOMB, merged.tombstones);
+      if (failed) storageFullWarn(true);
+      this._mirrorAnnounceImported(merged);
+    },
+    /* 导入 / 合并进本机的数据也要流向对端，否则用户得在两条线路上各导入一次。
+       整份登记（而不是只登记增量）是因为合并统计只给数量、不指出是哪些 id，
+       而队列每条只存 id + 时间戳，整份登记的代价可以忽略。 */
+    _mirrorAnnounceImported(merged) {
+      if (!_mirror.started || typeof NbxMirrorStore === "undefined" || !NbxMirrorStore.ready()) return;
+      try {
+        for (const entry of merged.history) {
+          const idx = entry && entry.index;
+          if (idx && idx.id) NbxMirrorStore.outboxAdd("h", idx.id, NbxMirror.updatedAtOf(idx), false);
+        }
+        for (const fav of merged.favorites || []) {
+          if (fav && fav.id) NbxMirrorStore.outboxAdd("f", fav.id, NbxMirror.updatedAtOf(fav), false);
+        }
+        this._mirrorSchedulePush();
+      } catch (e) {
+        /* 镜像未启用：导入本身已经完成，这里失败不影响结果 */
+      }
+    },
+    _dataStamp() {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+    },
+    exportData() {
+      if (!this.mirrorAvailable) {
+        this.toast("导出组件未加载，请刷新页面后重试", "error");
+        return;
+      }
+      try {
+        const env = this._localEnvelope();
+        if (!env.history.length && !env.favorites.length) {
+          this.toast("本机还没有可导出的历史或收藏", "warn");
+          return;
+        }
+        // 内嵌 SHA-256 校验和：导入时整份验证，任何篡改/损坏都当场拒绝。
+        // 摘要对规范化序列计算（见 nbx-mirror.js），手工重排文件格式不影响校验。
+        const payload = NbxMirror.serializeEnvelope(env);
+        const fileText = JSON.stringify(Object.assign({}, env, { sha256: NbxMirror.sha256Hex(payload) }));
+        const blob = new Blob([fileText], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `neobangx-data-${this._dataStamp()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        this.toast(`已导出 ${env.history.length} 条历史、${env.favorites.length} 条收藏`);
+      } catch (e) {
+        this.toast("导出失败，请重试", "error");
+      }
+    },
+    /* 取文件。用动态 input 而不是常驻 DOM 元素：这个入口平时用不到，
+       没必要在页面上多挂一个隐藏控件。用户取消时不会触发 change，靠窗口
+       重新获得焦点兜一次，避免 Promise 永远悬着。 */
+    _pickJsonFile() {
+      return new Promise((resolve) => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "application/json,.json";
+        input.style.display = "none";
+        document.body.appendChild(input);
+        let done = false;
+        const finish = (file) => {
+          if (done) return;
+          done = true;
+          input.remove();
+          resolve(file || null);
+        };
+        input.addEventListener("change", () => finish(input.files && input.files[0]));
+        window.addEventListener("focus", () => setTimeout(() => finish(null), 800), { once: true });
+        input.click();
+      });
+    },
+    /* 短绝对时间：MM-DD HH:mm。预览用相对时间（"3 天前"）对几个月前的旧备份不直观 */
+    _fmtShortTime(ts) {
+      const d = new Date(Number(ts) || 0);
+      if (!Number(ts) || isNaN(d.getTime())) return "";
+      const p = (n) => String(n).padStart(2, "0");
+      return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    },
+    /* 打开导入预览并等用户决定。分组按警觉度排序：删除（危险色）→ 更新 → 新增；
+       行内时间：删除用墓碑时间，更新/新增用条目 updatedAt。 */
+    _confirmImportPreview(merged) {
+      const ch = merged.changes || {};
+      const row = (d, verb, tsKey) => ({
+        title: d.title || "（无标题）",
+        time: `${verb}于 ${this._fmtShortTime(d[tsKey])}`,
+      });
+      const groups = [
+        { key: "removed", label: "删除", danger: true,
+          rows: [].concat(ch.historyRemoved || [], ch.favoriteRemoved || []).map((d) => row(d, "删除", "at")) },
+        { key: "updated", label: "更新", danger: false,
+          rows: [].concat(ch.historyUpdated || [], ch.favoriteUpdated || []).map((d) => row(d, "更新", "updatedAt")) },
+        { key: "added", label: "新增", danger: false,
+          rows: [].concat(ch.historyAdded || [], ch.favoriteAdded || []).map((d) => row(d, "创建", "updatedAt")) },
+      ].filter((g) => g.rows.length);
+      return new Promise((resolve) => {
+        if (this.importPreviewOpen) { resolve(false); return; }
+        this.importPreviewGroups = groups;
+        this.importPreviewTotal = groups.reduce((n, g) => n + g.rows.length, 0);
+        this.importPreviewFilter = "";
+        this._importPreviewResolve = resolve;
+        this.importPreviewOpen = true;
+      });
+    },
+    closeImportPreview(ok) {
+      const resolve = this._importPreviewResolve;
+      this._importPreviewResolve = null;
+      this.importPreviewOpen = false;
+      this.importPreviewFilter = "";
+      if (resolve) resolve(!!ok);
+    },
+    async importData() {
+      if (!this.mirrorAvailable) {
+        this.toast("导入组件未加载，请刷新页面后重试", "error");
+        return;
+      }
+      const file = await this._pickJsonFile();
+      if (!file) return;
+      let text = "";
+      try {
+        text = await file.text();
+      } catch (e) {
+        this.toast("读取文件失败", "error");
+        return;
+      }
+      // 整份校验：格式/版本/形状任何一项不合规都拒绝，绝不动本机数据
+      const res = NbxMirror.validateEnvelope(text);
+      if (!res.ok) {
+        this.toast(`导入失败：${res.reason}`, "error");
+        return;
+      }
+      const merged = NbxMirror.mergeRemote(this._localEnvelope(), res.envelope);
+      const s = merged.stats;
+      if (!NbxMirror.hasChanges(s)) {
+        this.toast("本机数据已是最新，无需导入");
+        return;
+      }
+      const parts = [];
+      if (s.historyAdded) parts.push(`新增 ${s.historyAdded} 条历史`);
+      if (s.historyUpdated) parts.push(`更新 ${s.historyUpdated} 条历史`);
+      if (s.historyRemoved) parts.push(`删除 ${s.historyRemoved} 条历史`);
+      if (s.favoriteAdded) parts.push(`新增 ${s.favoriteAdded} 条收藏`);
+      if (s.favoriteUpdated) parts.push(`更新 ${s.favoriteUpdated} 条收藏`);
+      if (s.favoriteRemoved) parts.push(`删除 ${s.favoriteRemoved} 条收藏`);
+      // 条目级预览（删除/更新/新增分组，可搜索），确认后才动本机数据
+      const ok = await this._confirmImportPreview(merged);
+      if (!ok) return;
+      await this._applyMerged(merged);
+      this.toast(`导入完成：${parts.join("、")}`);
+    },
+
+    /* ============ 线路镜像（PeerMirror） ============
+       同门两条线路互嵌一个隐藏的同站 iframe，把本机变更推进对方 origin 自己的
+       localStorage。方向是「推」不是「拉」—— 备用线路要顶的正是主线路挂掉的
+       那一刻，那时主线路的页面加载不了、也就读不到它的存储。提前推进去，
+       故障时对端手里已经有一份，零点击可用。
+
+       启动时机：等应用完全可用之后再建 iframe（requestIdleCallback），
+       把「多一次文档加载 + TLS 握手」挪出首屏关键路径。对端不可达时熔断退避，
+       整个功能静默失效，应用行为退回现状。 */
+
+    _mirrorSetStatus(status, hint) {
+      _mirror.status = status;
+      this.mirrorStatus = status;
+      this.mirrorHint = hint || "";
+    },
+    /* 对端把数据写进本 origin 存储后，内存列表要重读一次：
+       同步往往晚于启动时的 _loadHistory，不重读用户就得刷新才看得到。
+       但生成过程中不能整份替换 this.history —— finalize 会持有某个条目对象的
+       引用（_persistHistoryItem(origin)），替换会让引用游离、这次的产出落不进
+       索引。所以忙碌时先记待办，等空闲（或生成收尾）再刷。 */
+    _mirrorReload() {
+      this._mirrorReloadPending = true;
+      this._mirrorFlushReload();
+    },
+    _mirrorFlushReload() {
+      clearTimeout(this._mirrorReloadTimer);
+      this._mirrorReloadTimer = setTimeout(() => {
+        if (!this._mirrorReloadPending) return;
+        if (this.isBusy) {
+          this._mirrorFlushReload(); // 生成继续中：稍后再试，不丢这次刷新
+          return;
+        }
+        this._mirrorReloadPending = false;
+        this.history = lsGet(LS.history, []);
+        this.favorites = lsGet(LS.favorites, []);
+      }, 400);
+    },
+    /* 本机发生变更：登记进待同步队列并安排一次推送。
+       at 必须与条目自身的 updatedAt 一致（调用方传入），否则对端回执的 at
+       与队列里的 at 对不上，队列就清不干净、会反复重发。 */
+    _mirrorChanged(kind, id, del, at) {
+      if (!_mirror.started || !id) return;
+      if (typeof NbxMirrorStore === "undefined" || !NbxMirrorStore.ready()) return;
+      NbxMirrorStore.outboxAdd(kind, id, at || Date.now(), !!del);
+      this._mirrorSchedulePush();
+    },
+    /* 本机偏好变更：写进 nbx_prefs（buildOp 从那里取负载）并登记推送。
+       值没变就不写，避免启动加载时制造无意义的队列项。 */
+    _mirrorSetPref(key, value) {
+      if (typeof NbxMirrorStore === "undefined" || !NbxMirrorStore.ready()) return;
+      if (key !== "theme" && key !== "model") return;
+      try {
+        const prefs = NbxMirrorStore.readPrefs();
+        const prev = prefs[key];
+        if (prev && prev.v === value) return;
+        const now = Date.now();
+        prefs[key] = { v: value, at: now };
+        NbxMirrorStore.writePrefs(prefs);
+        this._mirrorChanged("p", key, false, now);
+      } catch (e) { /* 偏好同步失败不影响换主题/模型本身 */ }
+    },
+    /* 对端把偏好推进本 origin 后应用到界面。未知值拒收：两条线路的可用
+       主题/模型可能不同，硬套会选中不存在的东西。 */
+    _mirrorApplyPrefs() {
+      if (typeof NbxMirrorStore === "undefined" || !NbxMirrorStore.ready()) return;
+      let prefs;
+      try { prefs = NbxMirrorStore.readPrefs(); } catch (e) { return; }
+      _mirror.applyingRemote = true;
+      try {
+        const t = prefs.theme && prefs.theme.v;
+        if (t && t !== this.theme && THEMES.some((x) => x && x.id === t)) this.setTheme(t);
+        const m = prefs.model && prefs.model.v;
+        if (m && m !== this.selectedModel
+          && Array.isArray(this.models) && this.models.some((x) => x && x.id === m)) {
+          this.chooseModel(m);
+        }
+      } finally {
+        _mirror.applyingRemote = false;
+      }
+    },
+    /* 连续编辑（改标题、连删多条）合并成一次推送 */
+    _mirrorSchedulePush() {
+      clearTimeout(this._mirrorPushTimer);
+      this._mirrorPushTimer = setTimeout(() => {
+        if (_mirror.peer) _mirror.peer.flush();
+      }, MIRROR_PUSH_DEBOUNCE);
+    },
+    _mirrorScheduleStart() {
+      const start = () => this.mirrorStart();
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(start, { timeout: 3000 });
+      } else {
+        setTimeout(start, 1200);
+      }
+    },
+    async mirrorStart() {
+      if (_mirror.started) return;
+      // 注意：_mirror.started 不能在解析出对端之前置 true —— 它是 _mirrorChanged
+      // 写待同步队列的总闸门，置早了会让「镜像根本没启用」的会话也无限累积 outbox
+      if (!this.mirrorAvailable
+        || typeof NbxMirrorStore === "undefined"
+        || typeof NbxMirrorPeer === "undefined") {
+        this._mirrorSetStatus("off");
+        return;
+      }
+      // 旧格式历史（拆分失败的降级会话）的存储结构与约定不同，不参与镜像
+      if (this._historyLegacy) { this._mirrorSetStatus("off"); return; }
+      const peerOrigin = await this._mirrorResolvePeer();
+      if (!peerOrigin) { this._mirrorSetStatus("off"); return; }
+      try {
+        NbxMirrorStore.init({
+          history: LS.history,
+          favorites: LS.favorites,
+          bodyPrefix: HISTORY_BODY_PREFIX,
+          tomb: LS_TOMB,
+          outbox: MIRROR_OUTBOX_KEY,
+          prefs: LS_PREFS,
+          storage: window.localStorage,
+        });
+      } catch (e) {
+        this._mirrorSetStatus("off");
+        return;
+      }
+      if (!NbxMirrorStore.ready()) { this._mirrorSetStatus("off"); return; }
+      // 偏好播种：nbx_prefs 只在用户换过主题/模型后才有值，启用镜像之前的
+      // 当前值要从 LS.theme / LS.model 补录（只补缺，不覆盖已有的较新记录）
+      try {
+        const prefs = NbxMirrorStore.readPrefs();
+        let baseline = false;
+        try {
+          const t = localStorage.getItem(LS.theme);
+          if (t && !prefs.theme) { prefs.theme = { v: t, at: Date.now() }; baseline = true; }
+          const m = localStorage.getItem(LS.model);
+          if (m && !prefs.model) { prefs.model = { v: m, at: Date.now() }; baseline = true; }
+        } catch (e) { /* 读不到就跳过：偏好不同步不影响数据 */ }
+        if (baseline) NbxMirrorStore.writePrefs(prefs);
+        NbxMirrorStore.seedPrefsOnce(MIRROR_PREFS_SEEDED_KEY);
+      } catch (e) { /* 偏好播种失败只影响偏好同步 */ }
+      // 上次会话里删掉、但对端还没收到删除的条目，先按墓碑清一次本机
+      try {
+        const swept = NbxMirrorStore.sweepTombstoned();
+        if (swept.historyIds.length || swept.favorites) this._mirrorReload();
+      } catch (e) { /* 清扫失败不影响镜像启动 */ }
+      // 首次启用：把已有条目全部登记进队列。缺了这一步，「启用之前就存在的数据」
+      // 永远送不出去 —— 增量队列只记启用之后的变更，而「对端为空才发全量」在对端
+      // 已有数据时不成立（主线路用了一阵、备份线路也可能有自己的历史）
+      try {
+        NbxMirrorStore.seedOutboxOnce(MIRROR_SEEDED_KEY);
+      } catch (e) { /* 忽略：种子失败只影响首次同步，后续变更照常推送 */ }
+      // 走到这里才认为镜像真正「启动」：此后 _mirrorChanged 才会写待同步队列
+      _mirror.started = true;
+      _mirror.peerOrigin = peerOrigin;
+      this._mirrorSetStatus("connecting");
+      this._mirrorCreateFrame();
+    },
+    /* 解析本页的对端 origin：从后端配置里取，挑出「不是我」的那一条。
+       任何一步不成立都返回空串（镜像静默关闭），这包括开关没开、只配了一条、
+       以及当前 origin 不在配置里（开发者用 localhost 打开、或访问地址与配置不符）。 */
+    async _mirrorResolvePeer() {
+      let cfg = null;
+      try {
+        const res = await fetch(MIRROR_CONFIG_URL, { headers: this.authHeaders() });
+        if (!res.ok) return "";
+        cfg = await res.json();
+      } catch (e) {
+        return "";
+      }
+      const mirror = cfg && cfg.mirror;
+      if (!mirror || !mirror.enabled || !Array.isArray(mirror.origins)) return "";
+      const self = String(location.origin || "").toLowerCase();
+      const all = mirror.origins.map((o) => String(o || "").toLowerCase());
+      if (all.indexOf(self) === -1) {
+        // 当前访问地址不在配置的线路列表里（配置了 IP 却用域名访问，或反之）。
+        // 这不算错误，但不说一声的话「镜像为什么没生效」就只能靠猜，留条线索。
+        if (window.console && console.info) {
+          console.info("[线路镜像] 当前地址 " + self + " 不在配置的线路列表里，镜像未启用");
+        }
+        return "";
+      }
+      const others = all.filter((o) => o && o !== self);
+      // 恰好一条才继续：协议是「一对线路互为镜像」（共用一条队列、靠对端回执出队），
+      // 多条对端需要改造成每个对端独立队列，后端也已在保存时拦截超过两条的配置
+      return others.length === 1 ? others[0] : "";
+    },
+    _mirrorCreateFrame() {
+      const peerOrigin = _mirror.peerOrigin;
+      if (!peerOrigin) return;
+      _mirror.attempts += 1;
+      const frame = document.createElement("iframe");
+      frame.setAttribute("aria-hidden", "true");
+      frame.tabIndex = -1;
+      // 用 visibility:hidden 而不是 display:none —— 后者是广告拦截器更偏爱的
+      // 「隐藏框架」特征，容易被当成追踪 iframe 拦掉
+      frame.style.cssText =
+        "position:absolute;left:-9999px;top:0;width:1px;height:1px;border:0;visibility:hidden;pointer-events:none";
+      frame.src = peerOrigin + "/static/bridge.html";
+      _mirror.peer = NbxMirrorPeer.create({
+        post: (msg) => {
+          const f = _mirror.iframe;
+          if (!f || !f.contentWindow) throw new Error("mirror frame unavailable");
+          f.contentWindow.postMessage(msg, peerOrigin);
+        },
+        // 省流/计量网络下不做首次全量（可能数 MB）；增量变更照常
+        allowFullSync: () => {
+          const c = navigator.connection;
+          return !(c && c.saveData);
+        },
+        onApplied: () => {
+          this._mirrorReload();
+          this._mirrorApplyPrefs();
+        },
+      });
+      _mirror.onMessage = (ev) => {
+        if (!_mirror.iframe || ev.source !== _mirror.iframe.contentWindow) return;
+        if (ev.origin !== peerOrigin) return;
+        if (!_mirror.peer) return;
+        const handled = _mirror.peer.handleMessage(ev.data, ev.origin);
+        if (handled && ev.data && ev.data.t === "ready" && _mirror.status !== "on") {
+          if (_mirror.loadTimer) { clearTimeout(_mirror.loadTimer); _mirror.loadTimer = null; }
+          _mirror.attempts = 0;
+          this._mirrorSetStatus("on");
+        }
+      };
+      window.addEventListener("message", _mirror.onMessage);
+      _mirror.loadTimer = setTimeout(() => this._mirrorFail(), MIRROR_LOAD_TIMEOUT);
+      _mirror.iframe = frame;
+      document.body.appendChild(frame);
+    },
+    /* 加载超时或桥接页始终没握手：退避一次后放弃。
+       瞬时抖动（网络切换、对端重启）不该让整个会话都没有镜像，
+       但也不该无限重试打扰用户 —— 最终失败时静默降级到手动导出/导入。 */
+    _mirrorFail() {
+      if (_mirror.status === "on") return;
+      this._mirrorTeardown();
+      if (_mirror.attempts < MIRROR_MAX_ATTEMPTS) {
+        clearTimeout(_mirror.retryTimer);
+        _mirror.retryTimer = setTimeout(() => {
+          if (_mirror.status !== "on" && _mirror.peerOrigin) this._mirrorCreateFrame();
+        }, MIRROR_RETRY_DELAY);
+        return;
+      }
+      this._mirrorSetStatus("failed", "线路镜像未启用（跨线路请用下方「导出 / 导入」搬运）");
+    },
+    _mirrorTeardown() {
+      if (_mirror.loadTimer) { clearTimeout(_mirror.loadTimer); _mirror.loadTimer = null; }
+      if (_mirror.onMessage) {
+        window.removeEventListener("message", _mirror.onMessage);
+        _mirror.onMessage = null;
+      }
+      if (_mirror.iframe) {
+        try { _mirror.iframe.remove(); } catch (e) { /* 忽略 */ }
+        _mirror.iframe = null;
+      }
+      _mirror.peer = null;
     },
 
     /* ============ 小工具 ============ */

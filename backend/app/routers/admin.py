@@ -52,6 +52,7 @@ from app.services.request_log import (
 )
 from app.services.runtime_config import (
     CONFIG_KEYS,
+    MAX_MIRROR_ORIGINS,
     MAX_VISIBLE_MODELS_LIMIT,
     MINERU_MODES,
     MINERU_MODELS,
@@ -60,9 +61,12 @@ from app.services.runtime_config import (
     get_config_map,
     get_config_value,
     mask_config,
+    parse_mirror_settings,
     parse_models,
+    parse_origins,
     parse_tool_reasoning_rules,
     resolve_llm_settings,
+    serialize_mirror_origins,
     serialize_models,
     serialize_tool_reasoning_rules,
     set_config_values,
@@ -161,6 +165,12 @@ class ConfigUpdateRequest(BaseModel):
     log_payload: Optional[bool] = Field(None, description="是否记录原始输入/输出数据")
     log_retention_days: Optional[int] = Field(None, ge=0, le=36500, description="日志保留天数，0=永久")
     tool_reasoning_rules: Optional[List[ToolReasoningRuleEntry]] = None
+    mirror_enabled: Optional[bool] = Field(None, description="是否启用线路镜像")
+    mirror_origins: Optional[List[str]] = Field(
+        None,
+        max_length=MAX_MIRROR_ORIGINS,
+        description="参与镜像的线路地址（纯 origin，如 https://a.example.com）",
+    )
 
 
 class ProviderCreateRequest(BaseModel):
@@ -1799,14 +1809,23 @@ async def generate_device_ai_profile(
     }
 
 
+def _parsed_config(cfg: dict[str, str]) -> dict:
+    """管理后台展示用配置：脱敏 + 把结构化字段从存储字符串还原成对象。
+
+    models / tool_reasoning_rules / mirror_origins 在库里都是 JSON 字符串，
+    直接交给前端会让每个使用点各解析一遍，统一在这里还原。
+    """
+    masked = mask_config(cfg)
+    masked["models"] = parse_models(cfg.get("models", ""))
+    masked["tool_reasoning_rules"] = parse_tool_reasoning_rules(cfg.get("tool_reasoning_rules", ""))
+    masked["mirror_origins"] = parse_origins(cfg.get("mirror_origins"))
+    return masked
+
+
 @router.get("/config")
 async def get_admin_config(db: Annotated[Session, Depends(get_db)]):
     cfg = get_config_map(db)
-    masked = mask_config(cfg)
-    # 模型列表以结构化形式返回（兼容旧逗号格式自动升级，含 chores_only）
-    masked["models"] = parse_models(cfg.get("models", ""))
-    # 工具推理规则以结构化形式返回
-    masked["tool_reasoning_rules"] = parse_tool_reasoning_rules(cfg.get("tool_reasoning_rules", ""))
+    masked = _parsed_config(cfg)
     # 多 Provider 聚合信息
     try:
         from app.services.provider_config import get_model_provider_details
@@ -1831,6 +1850,7 @@ async def get_admin_config(db: Annotated[Session, Depends(get_db)]):
         "model_provider_map": model_provider_map,
         "model_provider_details": model_provider_details,
         "available_model_ids": available_model_ids,
+        "mirror": parse_mirror_settings(cfg),
     }
 
 
@@ -1885,6 +1905,15 @@ async def update_admin_config(
         if key == "tool_reasoning_rules":
             updates[key] = serialize_tool_reasoning_rules([r.model_dump() if hasattr(r, "model_dump") else r for r in value])
             continue
+        if key == "mirror_enabled":
+            updates[key] = "true" if value else "false"
+            continue
+        if key == "mirror_origins":
+            try:
+                updates[key] = serialize_mirror_origins(value)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            continue
         if key == "default_model":
             dm = str(value or "").strip()
             if dm:
@@ -1937,18 +1966,40 @@ async def update_admin_config(
             if _hit is not None and not _hit.get("enabled", True):
                 raise HTTPException(status_code=400, detail=f"Chores 模型已禁用：{_final_chores}，请先切换 Chores 模型再禁用")
 
+    # 线路镜像：开启时必须恰好配两条合法线路，否则前端无法确定自己的对端。
+    # 与 default/chores 同理，按「本次提交 + 存量配置」合并后的**最终值**判断，
+    # 避免先开开关、后填地址的中间态被放行。
+    if "mirror_enabled" in raw or "mirror_origins" in raw:
+        if "mirror_enabled" in raw:
+            _final_mirror_on = bool(raw.get("mirror_enabled"))
+        else:
+            _final_mirror_on = parse_mirror_settings(_old_cfg).get("enabled", False)
+        if "mirror_origins" in updates:
+            _final_origins = parse_origins(updates["mirror_origins"])
+        else:
+            _final_origins = parse_origins(_old_cfg.get("mirror_origins"))
+        if _final_mirror_on and len(_final_origins) < MAX_MIRROR_ORIGINS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"启用线路镜像需要配置 {MAX_MIRROR_ORIGINS} 条线路地址（当前 {len(_final_origins)} 条）",
+            )
+
     if not updates:
         cfg = get_config_map(db)
-        masked = mask_config(cfg)
-        masked["models"] = parse_models(cfg.get("models", ""))
-        masked["tool_reasoning_rules"] = parse_tool_reasoning_rules(cfg.get("tool_reasoning_rules", ""))
+        masked = _parsed_config(cfg)
         try:
             providers = list_providers(db, mask=True)
             model_provider_map = get_model_provider_map(db)
         except Exception:
             providers = []
             model_provider_map = {}
-        return {"config": masked, "providers": providers, "model_provider_map": model_provider_map, "updated": []}
+        return {
+            "config": masked,
+            "providers": providers,
+            "model_provider_map": model_provider_map,
+            "updated": [],
+            "mirror": parse_mirror_settings(cfg),
+        }
 
     cfg = set_config_values(db, updates)
     # 若 models 发生变更，清理悬空的 model_provider 绑定
@@ -1959,9 +2010,7 @@ async def update_admin_config(
             ensure_model_provider_consistency(db)
         except Exception:
             pass
-    masked = mask_config(cfg)
-    masked["models"] = parse_models(cfg.get("models", ""))
-    masked["tool_reasoning_rules"] = parse_tool_reasoning_rules(cfg.get("tool_reasoning_rules", ""))
+    masked = _parsed_config(cfg)
     try:
         providers = list_providers(db, mask=True)
         model_provider_map = get_model_provider_map(db)
@@ -1973,6 +2022,7 @@ async def update_admin_config(
         "providers": providers,
         "model_provider_map": model_provider_map,
         "updated": list(updates.keys()),
+        "mirror": parse_mirror_settings(cfg),
     }
 
 

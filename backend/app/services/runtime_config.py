@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from urllib.parse import urlsplit
 
 from sqlalchemy.orm import Session
 
@@ -26,7 +27,16 @@ CONFIG_KEYS = [
     "mineru_model",
     "mineru_token",
     "tool_reasoning_rules",
+    "mirror_enabled",
+    "mirror_origins",
 ]
+
+# 线路镜像：参与镜像的线路条数上限。
+# 协议按「一对线路互为镜像」设计（共用一条待同步队列、靠对端回执出队），
+# 三条以上需要改造成每对端独立队列，所以这里明确拦截，而不是静默只认前两条。
+MAX_MIRROR_ORIGINS = 2
+# 单条线路地址长度上限（纯 origin 远短于此，仅防误填超长串）
+MAX_MIRROR_ORIGIN_LEN = 200
 
 # MinerU 文档解析合法取值
 MINERU_MODES = {"precision", "agent"}
@@ -110,6 +120,122 @@ def _parse_flag(item: dict, *names: str, default: bool = False) -> bool:
             return False
         return default
     return default
+
+
+def normalize_origin(raw: str) -> str | None:
+    """把一条线路地址规范化成 origin（scheme://host[:port]），非法返回 None。
+
+    只接受纯 origin：带路径 / 查询 / 片段 / 用户信息的一律拒绝。前端要拿这个值
+    去拼 `{origin}/static/bridge.html`，并与 `event.origin` 做**全等**比较，而
+    event.origin 永远只是 scheme://host[:port]，所以任何多余部分都会让比对失败，
+    与其到运行时静默不工作，不如在写入口就拒掉。
+    默认端口（http:80 / https:443）归一为省略写法，保证同一台机器只存成一种样子。
+    """
+    text = (raw or "").strip()
+    if not text or len(text) > MAX_MIRROR_ORIGIN_LEN:
+        return None
+    try:
+        split = urlsplit(text)
+        # 访问 .port 会为非法端口抛 ValueError，一并归入「非法」
+        port = split.port
+    except ValueError:
+        return None
+    if split.scheme not in ("http", "https") or not split.hostname:
+        return None
+    if split.path not in ("", "/") or split.query or split.fragment:
+        return None
+    if split.username or split.password:
+        return None
+    host = split.hostname.lower()
+    # 非 ASCII 主机名（中文域名等）直接拒绝：浏览器 event.origin 是 punycode
+    # （xn--…），Python 侧保留原样，放行也只会到运行时静默失效，不如写入口就报错
+    if not host.isascii():
+        return None
+    # IPv6 字面量：urlsplit 已去方括号，拼回时补上
+    if ":" in host:
+        host = f"[{host}]"
+    if port is None or (split.scheme, port) in (("http", 80), ("https", 443)):
+        return f"{split.scheme}://{host}"
+    return f"{split.scheme}://{host}:{port}"
+
+
+def parse_origins(raw) -> list[str]:
+    """解析线路地址列表：接受 JSON 数组、逗号分隔、换行分隔三种写法。
+
+    前两种覆盖管理后台与 .env，换行便于手工排版。去重保序、最多
+    MAX_MIRROR_ORIGINS 条；非法项直接丢弃（读取侧容错，写入口另有严格校验）。
+    """
+    items: list[str] = []
+    if isinstance(raw, (list, tuple)):
+        items = [str(x) for x in raw]
+    else:
+        text = (raw or "").strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                data = json.loads(text)
+            except ValueError:
+                return []
+            if not isinstance(data, list):
+                return []
+            items = [str(x) for x in data]
+        else:
+            items = text.replace("\r", "").replace("\n", ",").split(",")
+    out: list[str] = []
+    for item in items:
+        origin = normalize_origin(item)
+        if origin and origin not in out:
+            out.append(origin)
+        if len(out) >= MAX_MIRROR_ORIGINS:
+            break
+    return out
+
+
+def validate_mirror_origins(raw) -> list[str]:
+    """写入口的严格校验：非法项抛 ValueError（消息可直接展示给管理员）。
+
+    与 parse_origins 的区别是「不静默丢弃」——管理后台保存时填错了要当场报错，
+    否则用户会以为配置生效了。
+    """
+    items = raw if isinstance(raw, (list, tuple)) else parse_origins(raw)
+    out: list[str] = []
+    for item in items:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        origin = normalize_origin(text)
+        if not origin:
+            raise ValueError(
+                f"线路地址不合法：{text}（需形如 https://a.example.com 或 http://192.168.1.10:8000，不能带路径）"
+            )
+        if origin in out:
+            raise ValueError(f"线路地址重复：{origin}")
+        out.append(origin)
+    if len(out) > MAX_MIRROR_ORIGINS:
+        raise ValueError(f"最多只能配置 {MAX_MIRROR_ORIGINS} 条线路")
+    return out
+
+
+def serialize_mirror_origins(origins) -> str:
+    """序列化为存储用 JSON 字符串（先规范化，非法项在此拦截）。"""
+    return json.dumps(validate_mirror_origins(origins), ensure_ascii=False)
+
+
+def parse_mirror_settings(cfg: dict[str, str]) -> dict:
+    """解析线路镜像配置，供前端与桥接页使用。
+
+    ready 表示「开关已开且恰好配了两条合法线路」。前端还要自己确认
+    location.origin 在列表里 —— 服务器不替它判断：那需要信任 Host / 转发头，
+    而反代与隧道下这两个头未必可靠，由页面拿真实 origin 比对更稳。
+    """
+    enabled = (cfg.get("mirror_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
+    origins = parse_origins(cfg.get("mirror_origins"))
+    if not enabled:
+        return {"enabled": False, "origins": origins, "ready": False, "reason": "disabled"}
+    if len(origins) < 2:
+        return {"enabled": True, "origins": origins, "ready": False, "reason": "need_two_origins"}
+    return {"enabled": True, "origins": origins, "ready": True, "reason": ""}
 
 
 def parse_free_limits(raw) -> dict[str, int]:
@@ -296,6 +422,8 @@ def _env_defaults() -> dict[str, str]:
         "mineru_mode": settings.mineru_mode,
         "mineru_model": settings.mineru_model,
         "mineru_token": settings.mineru_token,
+        "mirror_enabled": "true" if settings.mirror_enabled else "false",
+        "mirror_origins": settings.mirror_origins,
     }
 
 

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>NeoBangX 线路镜像桥</title>
+<meta name="robots" content="noindex">
+</head>
+<body>
+<!-- ============================================================
+     线路镜像桥接页（被对端线路以隐藏 iframe 嵌入，用户不会直接访问）
+
+     它只做一件事：收到父页面的消息 → 写进「本 origin」的 localStorage → 回执。
+     数据因此提前落在本线路自己的存储里；主线路挂掉时，本线路打开就有数据。
+
+     两条硬约束，改动前务必先读：
+     1. 绝不加载主应用（script.js / index.html）。主页面 165KB 且会启动整个应用：
+        ThumbmarkJS 指纹计算、三个 API 调用、多个后台定时器。塞进隐藏 iframe
+        等于把应用完整跑第二遍，白白吃掉内存和 CPU。
+     2. 绝不在本页再创建 iframe。否则 A 嵌 B、B 又嵌 A，无限套娃。
+
+     静态托管：与主站同目录，经既有的 /static 挂载提供，后端无需新增路由。
+
+     安全：真正写入本 origin 存储的闸门是 allowed 白名单，取自「本 origin 自己」
+     的配置接口，绝不接受父页面传来的名单（那等于让攻击者自报家门）。event.origin
+     由浏览器填写、页面无法伪造，所以只要白名单是自家配置的那几条线路，
+     任何第三方页面都无法借这个桥往我们的存储里写东西。
+
+     ⚠️ 下面三个 script 的 ?v= 必须与 index.html 里引用同名文件时保持一致。
+     两者若用了不同的 URL，浏览器会各缓存一份；部署更新后桥接页可能仍在跑旧版本，
+     而两侧的 MIRROR_PROTO 一旦不一致，镜像会**静默失效**（协议版本不匹配时
+     消息被直接忽略，没有任何报错）。改动这三个模块时，两个文件的 ?v= 一起改。
+     ============================================================ -->
+<script src="/static/nbx-mirror.js?v=mirror2"></script>
+<script src="/static/nbx-mirror-store.js?v=mirror2"></script>
+<script src="/static/nbx-mirror-peer.js?v=mirror2"></script>
+<script>
+(function () {
+  "use strict";
+
+  // 参与镜像的线路地址由后端配置提供（管理后台「线路镜像」，或 MIRROR_ORIGINS 环境变量），
+  // 不在本页硬编码 —— 开源部署各有各的域名，内网测试还可能是 IP + 端口。
+  var CONFIG_URL = "/api/config";
+
+  var selfOrigin = String(window.location.origin || "").toLowerCase();
+  var allowed = [];       // 允许的父页面来源，与 event.origin 全等比对
+  var parentOrigin = "";  // 首条合法消息到达后锁定，此后始终复核
+  var peer = null;
+
+  function ready() {
+    return !!(peer && allowed.length);
+  }
+
+  /* 桥就绪：只报「我活着 + 我的概况」，不含任何数据。 */
+  function announce() {
+    try {
+      window.parent.postMessage({
+        nbx: NbxMirrorPeer.PROTO,
+        t: "ready",
+        summary: NbxMirrorStore.localSummary()
+      }, "*");
+    } catch (e) { /* 父页面不可达：静默降级 */ }
+  }
+
+  function start() {
+    // 键名与 script.js 的 LS / HISTORY_BODY_PREFIX 必须一致 —— 本页不加载主应用，
+    // 所以只能各写一份。改键名时两处都要改（script.js 侧传的是它自己的常量）。
+    NbxMirrorStore.init({
+      history: "nbx_history",
+      favorites: "nbx_favorites",
+      bodyPrefix: "nbx_h:",
+      tomb: "nbx_tomb",
+      outbox: "nbx_mo",
+      prefs: "nbx_prefs",
+      storage: window.localStorage
+    });
+    if (!NbxMirrorStore.ready()) return;
+    peer = NbxMirrorPeer.create({
+      post: function (msg) {
+        if (!parentOrigin) return;
+        window.parent.postMessage(msg, parentOrigin);
+      }
+    });
+    announce();
+  }
+
+  /* 读自己的配置决定「是否参与」与「认哪些来源」。
+     任一条件不成立就什么都不做：功能没开、只配了一条线路、本 origin 不在列表里
+     （访问地址与配置不符），或者配置取不到（fail closed）。 */
+  function loadConfig(cb) {
+    var done = false;
+    var finish = function (ok) {
+      if (done) return;
+      done = true;
+      cb(!!ok);
+    };
+    try {
+      fetch(CONFIG_URL, { credentials: "same-origin" })
+        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (cfg) {
+          var m = cfg && cfg.mirror;
+          if (!m || !m.enabled || !Array.isArray(m.origins) || m.origins.length < 2) {
+            finish(false);
+            return;
+          }
+          allowed = m.origins
+            .map(function (o) { return String(o || "").toLowerCase(); })
+            .filter(Boolean);
+          finish(allowed.indexOf(selfOrigin) !== -1);
+        })
+        .catch(function () { finish(false); });
+    } catch (e) {
+      finish(false);
+    }
+  }
+
+  window.addEventListener("message", function (ev) {
+    // 配置未就绪前一律不处理：父页面此时也还没收到 ready，不会发出数据。
+    // 即使它抢先发了，消息没有回执，会留在它自己的待同步队列里等下次握手。
+    if (!ready()) return;
+    if (ev.source !== window.parent || ev.source === window) return;
+    if (allowed.indexOf(ev.origin) === -1) return;
+    if (!parentOrigin) parentOrigin = ev.origin;
+    if (parentOrigin !== ev.origin) return;
+    peer.handleMessage(ev.data, ev.origin);
+  });
+
+  loadConfig(function (ok) {
+    if (!ok) return;
+    start();
+  });
+})();
+</script>
+</body>
+</html>

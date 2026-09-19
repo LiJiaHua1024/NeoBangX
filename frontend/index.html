@@ -9,7 +9,7 @@
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=dlg260919f">
+  <link rel="stylesheet" href="/static/styles.css?v=dlg260919g">
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -34,7 +34,10 @@
   <script defer src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.15.12/dist/cdn.min.js"></script>
   <script defer src="/static/vendor/thumbmark.umd.js"></script>
-  <script defer src="/static/script.js?v=dlg260919f"></script>
+  <script defer src="/static/nbx-mirror.js?v=mirror2"></script>
+  <script defer src="/static/nbx-mirror-store.js?v=mirror2"></script>
+  <script defer src="/static/nbx-mirror-peer.js?v=mirror2"></script>
+  <script defer src="/static/script.js?v=dlg260919g"></script>
   <script defer src="/static/vp-print.js?v=export3mode1"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
 </head>
@@ -1968,6 +1971,25 @@
           </div>
 
         </div>
+
+        <!-- 数据搬运：历史与收藏只存在浏览器里（后端不存任何用户数据），
+             所以备份、换设备、以及在两条线路（www / cf）之间搬运都靠这里的导出/导入。
+             线路镜像可用时这一步通常是自动的，这里的入口是镜像失效时的兜底。 -->
+        <div class="shrink-0 px-3.5 pb-3.5 pt-2.5 border-t" style="border-color:var(--border)">
+          <div class="flex items-center gap-2">
+            <button class="btn-ghost flex-1" style="padding:.45rem .6rem;font-size:.78rem"
+                    @click="exportData()" title="把历史与收藏导出为 JSON 文件（备份、换设备、换线路）">
+              <span x-html="icon('download','w-3.5 h-3.5')"></span>导出
+            </button>
+            <button class="btn-ghost flex-1" style="padding:.45rem .6rem;font-size:.78rem"
+                    @click="importData()" title="从 JSON 文件导入并与本机数据合并">
+              <span x-html="icon('upload','w-3.5 h-3.5')"></span>导入
+            </button>
+          </div>
+          <!-- 线路镜像状态：正常时保持沉默，只在未启用时说明可用的替代手段 -->
+          <p class="text-[11px] text-faint mt-2 leading-relaxed" x-show="mirrorHint"
+             x-text="mirrorHint"></p>
+        </div>
       </div>
     </aside>
 
@@ -2241,6 +2263,50 @@
           <button class="btn-ghost" @click="resolveConfirm(false)" x-text="confirmCancelText"></button>
           <button class="btn-primary" :class="{ 'btn-danger': confirmDanger }" @click="resolveConfirm(true)"
                   x-text="confirmText"></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 导入预览：条目级确认。分「删除 / 更新 / 新增」三组（删除最前、危险色），
+         每组封顶 30 行 + 顶部搜索过滤；行固定单行，窄屏自动变底部抽屉。 -->
+    <div x-show="importPreviewOpen" class="modal-mask" x-transition.opacity x-cloak
+         @click.self="closeImportPreview(false)" @keydown.escape.window="importPreviewOpen && closeImportPreview(false)">
+      <div class="modal-card modal-wide glass-deep pop-in" @click.stop role="alertdialog" aria-modal="true">
+        <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
+          <span class="text-dim" x-html="icon('upload','w-4 h-4')"></span>
+          <div class="min-w-0">
+            <h3 class="font-bold text-sm">导入预览</h3>
+            <p class="text-[11px] mt-0.5" style="color:var(--text-faint)" x-text="importPreviewSubtitle"></p>
+          </div>
+          <button class="icon-btn ml-auto" @click="closeImportPreview(false)" title="关闭" x-html="icon('x','w-4 h-4')"></button>
+        </div>
+        <div class="px-5 pt-3 shrink-0">
+          <input type="text" x-model="importPreviewFilter" placeholder="按标题过滤…">
+        </div>
+        <div class="import-preview-body px-5 py-3">
+          <template x-for="g in importPreviewFiltered" :key="g.key">
+            <div class="mb-3">
+              <div class="import-preview-group" :class="{ danger: g.danger }">
+                <span x-text="g.label"></span>
+                <span x-text="g.total"></span>
+              </div>
+              <template x-for="(row, i) in g.rows" :key="g.key + i">
+                <div class="import-preview-row">
+                  <span class="import-preview-title" x-text="row.title"></span>
+                  <span class="import-preview-time" x-text="row.time"></span>
+                </div>
+              </template>
+              <p class="import-preview-more" x-show="g.hasMore" x-text="g.moreText"></p>
+            </div>
+          </template>
+          <p class="text-[12px] py-6 text-center" style="color:var(--text-faint)"
+             x-show="!importPreviewFiltered.length"
+             x-text="importPreviewFilter ? '没有匹配「' + importPreviewFilter + '」的条目' : '没有可展示的变更'"></p>
+        </div>
+        <div class="px-5 py-4 border-t flex justify-end gap-2 shrink-0" style="border-color:var(--border)">
+          <button class="btn-ghost" @click="closeImportPreview(false)">取消</button>
+          <button class="btn-primary" @click="closeImportPreview(true)"
+                  x-text="'确认导入（' + importPreviewTotal + ' 条变更）'"></button>
         </div>
       </div>
     </div>

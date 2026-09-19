@@ -2403,6 +2403,44 @@ mark, .vp-hl {
 .modal-sm { max-width: 26rem; }
 .modal-md { max-width: 28rem; }
 .modal-lg { max-width: 30rem; }
+/* 导入预览：条目级列表需要比确认弹窗更宽的一档；窄屏仍走下方 ≤640px 的底部抽屉 */
+.modal-wide { max-width: 42rem; }
+
+/* 导入预览列表：行永远单行（标题省略号截断 + 恒定宽度的短时间戳），
+   任何屏宽都不会换行或横向溢出；组内条目多时只滚动弹窗 body 这一区 */
+.import-preview-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.import-preview-group {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: .3rem 0;
+}
+.import-preview-group.danger { color: #f0958a; }
+.import-preview-row {
+  display: flex;
+  align-items: baseline;
+  gap: .75rem;
+  padding: .3rem 0;
+  font-size: .82rem;
+  min-width: 0;
+}
+.import-preview-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-preview-time {
+  flex: 0 0 auto;
+  font-size: .72rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.import-preview-more { font-size: .72rem; color: var(--text-faint); padding: .15rem 0 .3rem; }
 /* 确认弹窗正文：保留文案里的 \n 换行（沿用原生 confirm 的排版习惯） */
 .confirm-msg { white-space: pre-line; }
 

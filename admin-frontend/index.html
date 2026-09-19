@@ -67,6 +67,9 @@
         <button class="nav-item" :class="{ on: tab === 'parse' }" @click="tab = 'parse'; loadMineru()">
           <span>文档解析</span>
         </button>
+        <button class="nav-item" :class="{ on: tab === 'mirror' }" @click="tab = 'mirror'; loadConfig()">
+          <span>线路镜像</span>
+        </button>
       </nav>
 
       <div class="sidebar-foot">
@@ -1307,6 +1310,65 @@
             <button class="btn-danger" @click="purgeLogs()" :disabled="purging">
               <span x-text="purging ? '清理中…' : '立即清理过期日志'"></span>
             </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 线路镜像 -->
+      <section x-show="tab === 'mirror'" class="panel-stack">
+        <div class="glass card">
+          <h2 class="card-title">线路镜像</h2>
+          <p class="muted mb-4">
+            同一套应用由多条线路提供服务时（例如主线路 + 备份线路），让它们共用同一份历史与收藏。
+            做法是两条线路的页面互嵌一个隐藏的同站 iframe，把变更<strong>提前推进</strong>对方浏览器
+            自己的存储里；因此主线路不可用时，打开备份线路就有数据，不需要任何手动导入。
+            后端不保存任何用户数据，本页只提供这份配置。
+          </p>
+
+          <div class="switch-row">
+            <label class="switch" :class="{ disabled: savingConfig }">
+              <input type="checkbox" x-model="configForm.mirror_enabled" :disabled="savingConfig">
+              <span class="switch-slider"></span>
+            </label>
+            <div class="switch-copy">
+              <div class="switch-title">启用线路镜像</div>
+              <div class="field-hint">
+                只有真的部署了第二条线路时才需要开启。默认关闭——单线路部署开启它没有任何作用。
+              </div>
+            </div>
+          </div>
+
+          <div class="form-grid mt-4">
+            <label class="field">
+              <span>线路一</span>
+              <input type="text" x-model="configForm.mirror_origins[0]" :disabled="savingConfig"
+                     placeholder="https://www.example.com">
+            </label>
+            <label class="field">
+              <span>线路二</span>
+              <input type="text" x-model="configForm.mirror_origins[1]" :disabled="savingConfig"
+                     placeholder="https://backup.example.com">
+            </label>
+          </div>
+
+          <div class="field-hint mt-2">
+            填完整地址，含协议与端口，<strong>不能带路径</strong>（如 https://www.example.com、
+            https://cf.example.com；内网测试可用 http://192.168.1.10:8000 与 http://192.168.1.10:8001）。
+            两条线路是对等的，不分主备，顺序随意。<br>
+            生效要求：① 两条线路都能用配置里的地址打开同一个站点；② 站点不得设置
+            <code>X-Frame-Options</code> 或 CSP <code>frame-ancestors</code>，否则 iframe 会被拒绝。
+          </div>
+
+          <p class="field-hint mt-2" style="color:var(--danger,#e5484d)" x-show="mirrorMixedScheme">
+            ⚠ 两条线路的协议不一致：https 页面里加载 http 的 iframe 会被浏览器按混合内容拦掉，
+            那条线上的镜像不会生效。请让两条线路同为 https，或同为 http。
+          </p>
+
+          <p class="field-hint mt-3" x-show="mirrorStatusText" x-text="mirrorStatusText"></p>
+
+          <div class="form-actions">
+            <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存线路镜像</button>
+            <button class="btn-ghost" @click="loadConfig()">重新加载</button>
           </div>
         </div>
       </section>
