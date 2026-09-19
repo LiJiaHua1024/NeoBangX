@@ -35,7 +35,7 @@
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.15.12/dist/cdn.min.js"></script>
   <script defer src="/static/vendor/thumbmark.umd.js"></script>
   <script defer src="/static/script.js?v=dlg260919f"></script>
-  <script defer src="/static/vp-print.js?v=dlg260919f"></script>
+  <script defer src="/static/vp-print.js?v=export3mode1"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
 </head>
 
@@ -862,7 +862,7 @@
                 <button class="icon-btn" style="width:2rem;height:2rem" @click="copyResult()"
                         :title="copied ? '已复制' : '复制'" x-html="icon(copied ? 'check' : 'copy','w-4 h-4')"></button>
                 <button class="icon-btn" style="width:2rem;height:2rem" @click="openVpExport()" title="下载讲解文件（单文件 HTML，双击即可讲题）" x-html="icon('insert','w-4 h-4')"></button>
-                <button class="icon-btn" style="width:2rem;height:2rem" @click="printVisualPaper()" title="打印 / 存为 PDF（A4 · 教师详解版 / 学生练习版）" x-html="icon('print','w-4 h-4')"></button>
+                <button class="icon-btn" style="width:2rem;height:2rem" @click="printVisualPaper()" title="打印 / 存为 PDF（A4 · 教师详解版 / 学生练习版 / 答案解析）" x-html="icon('print','w-4 h-4')"></button>
                 <button type="button" class="vp-bar-pill" @click="toggleVpFullscreen()"
                         title="全屏讲题" aria-label="全屏讲题">
                   <span x-html="icon('expand','w-4 h-4')"></span>

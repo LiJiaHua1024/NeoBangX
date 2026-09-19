@@ -29,7 +29,7 @@
     SELF_SRC = tag ? tag.src : "";
   }
 
-  var VERSION = "vpp260919a";
+  var VERSION = "vpp260919b";
   var MM = 3.7795275591;              /* 1mm 的 CSS px（96dpi 基准） */
   var OPTS_KEY = "nbx_vp_print_opts";
   var DATA_ID = "vpp-data";
@@ -37,7 +37,10 @@
   var ROOT_ID = "vpp-root";
   var CSS_ID = "vpp-css-src";
   var FRAME_ID = "vpp-print-frame";
-  var MODE_LABEL = { teacher: "教师详解版", student: "学生练习版" };
+  /* 三个版本各自成册：教师版是「题目 + 答案」连排讲评用，学生版只有卷面（不含任何答案），
+     答案册只印答案与解析。学生版与答案册分开，老师才不会顺手把答案连同练习卷一起发给学生。 */
+  var MODE_LABEL = { teacher: "教师详解版", student: "学生练习版", answer: "答案解析" };
+  function normMode(m) { return (m === "student" || m === "answer") ? m : "teacher"; }
   var DEFAULTS = { mode: "teacher", transfers: true, pitfalls: true, pattern: true, ansmap: true, groupBreak: false, fontPt: 10.5 };
   var PT_MIN = 9, PT_MAX = 16, BASE_PT = 10.5;   /* 10.5pt = 五号，试卷正文常规 */
   /* 打印文档的字号阶梯。样式表里所有字号都走这几个变量（没有一处写死、也没用 rem），
@@ -540,7 +543,8 @@
     h += '<h1 class="vpp-mh-title">' + esc(m.title) + "</h1>";
     h += '<div class="vpp-mh-meta">' + bits.map(function (b) { return "<span>" + esc(b) + "</span>"; }).join("") + "</div>";
     /* 试卷说明只给老师看：里面是「答案为 AI 判断，建议教师核对」「已自动跳过听力」这类
-       讲评前的提醒，印到发给学生的卷面上既没必要，也会让学生怀疑答案的可靠性。 */
+       讲评前的提醒，印到发给学生的练习卷上既没必要，也会让学生怀疑答案的可靠性。
+       教师版与答案册都要印：它们都摆着答案，正是需要这条提醒的地方。 */
     if (ctx.o.mode !== "student" && has(payload.notice)) {
       h += '<div class="vpp-mh-notice"><span class="vpp-mh-nlabel">说明</span>' + fmt(payload.notice) + "</div>";
     }
@@ -650,10 +654,12 @@
     return out;
   }
 
+  /* 学生练习版：一张干净的卷子——题目、选项、作答横线，写作题只给写作指导（学生照着写），
+     不含答案、解析、易错点、考点范式、迁移训练答案与范文。
+     老师把这一册整份发给学生时，纸上不会出现任何答案。 */
   function studentItems(payload, ctx) {
     var o = ctx.o;
     var out = mastheadItems(payload, ctx);
-    /* 卷一：只有题目与作答区 */
     (payload.groups || []).forEach(function (g, gi) {
       var gh = groupTitle(g, gi);
       out.push(itemHtml("group", groupHeadHtml(g, gi, false), { header: gh, pageBreak: !!o.groupBreak && gi > 0, keepWith: mm(45), headLike: true }));
@@ -672,30 +678,42 @@
         });
       });
     });
-    /* 卷二：答案与解析合订在后，可整册撕下 */
-    out.push(itemHtml("part", '参考答案与解析<span class="vpp-part-sub">可整册撕下另存</span>',
-      { header: "参考答案与解析", pageBreak: true, keepWith: mm(26), headLike: true }));
-    if (o.ansmap) pushAll(out, ansmapItems(payload, "参考答案与解析"));
+    return out;
+  }
+
+  /* 答案解析：只印答案、解析、易错点、考点范式、迁移训练答案与范文，不印题干与选项。
+     单独成册，老师可以只发给做完题的学生，也可以自己留着核对。 */
+  function answerItems(payload, ctx) {
+    var o = ctx.o;
+    var out = mastheadItems(payload, ctx);
+    out.push(itemHtml("part", '答案解析<span class="vpp-part-sub">答案、解析与范文　与学生练习版对照使用</span>',
+      { header: MODE_LABEL.answer, keepWith: mm(30), headLike: true }));
+    if (o.ansmap) pushAll(out, ansmapItems(payload, MODE_LABEL.answer));
     (payload.groups || []).forEach(function (g, gi) {
       var qs = g.questions || [];
       if (!qs.length) return;
       var gh = groupTitle(g, gi);
       out.push(itemHtml("group", groupHeadHtml(g, gi, false), { header: gh, keepWith: mm(26), headLike: true }));
       qs.forEach(function (q) {
+        /* 先攒这题在本册里要印的所有小块，再看要不要印「第 N 题」这个题头：
+           一条都印不出来的题目整条跳过，否则纸上会出现一行光秃秃的题号。 */
+        var subs = [];
+        var rl = refLines(q.reference);
+        if (rl.length) subs.push(itemText("ref", rl, { header: gh, keepWith: mm(12), script: scriptOf(rl.map(function (x) { return x.raw; }).join(" ")) }));
+        if (o.pitfalls && (q.pitfalls || []).length) pushAll(subs, pitfallItems(q.pitfalls, gh, ctx));
+        if (o.pattern && q.pattern && (has(q.pattern.name) || (q.pattern.steps || []).length)) subs.push(patternItem(q.pattern, gh));
+        if (o.transfers && (q.transfers || []).length) pushAll(subs, transferItems(q.transfers, gh, ctx, false, true));
+        if (q.writingGuide) {
+          var sm = writingSample(q.writingGuide, gh);
+          if (sm) { sm.chainEnd = true; subs.push(sm); }
+        }
         var tag = q.qtype === "writing" ? "写作" : (q.qtype === "blank" ? "填空" : "");
+        if (!has(q.answer) && !tag && !subs.length) return;
         var h = '<span class="vpp-qref-no">第 ' + esc(str(q.no).replace(/[.．。]+$/, "")) + " 题</span>";
         if (has(q.answer)) h += ansBox(q.answer);
         else if (tag) h += '<span class="vpp-qref-tag">' + tag + "题</span>";
         out.push(itemHtml("qref", h, { header: gh, keepWith: mm(16), headLike: true }));
-        var rl = refLines(q.reference);
-        if (rl.length) out.push(itemText("ref", rl, { header: gh, keepWith: mm(12), script: scriptOf(rl.map(function (x) { return x.raw; }).join(" ")) }));
-        if (o.pitfalls && (q.pitfalls || []).length) pushAll(out, pitfallItems(q.pitfalls, gh, ctx));
-        if (o.pattern && q.pattern && (has(q.pattern.name) || (q.pattern.steps || []).length)) out.push(patternItem(q.pattern, gh));
-        if (o.transfers && (q.transfers || []).length) pushAll(out, transferItems(q.transfers, gh, ctx, false, true));
-        if (q.writingGuide) {
-          var sm = writingSample(q.writingGuide, gh);
-          if (sm) { sm.chainEnd = true; out.push(sm); }
-        }
+        pushAll(out, subs);
       });
     });
     return out;
@@ -710,7 +728,9 @@
     /* 容量与宽度全靠实测：空纸的正文区有多高，一页就能装多高。
        两个数字都不写死，样式改了也不会对不上。 */
     var ctx = { o: o, capacity: mbody.clientHeight, contentW: mbody.clientWidth, mbody: mbody };
-    var items = o.mode === "student" ? studentItems(payload, ctx) : teacherItems(payload, ctx);
+    var items = o.mode === "student" ? studentItems(payload, ctx)
+      : o.mode === "answer" ? answerItems(payload, ctx)
+        : teacherItems(payload, ctx);
     items.forEach(function (it) { it.el = makeEl(it, false); mbody.appendChild(it.el); });
     /* 全部塞进量纸后一次性读高：中间没有写操作，只触发一次布局 */
     items.forEach(function (it) { it.h = it.el.offsetHeight + marginBottom(it.el); });
@@ -729,7 +749,7 @@
   function normalizeOpts(o) {
     var out = assign({}, DEFAULTS);
     if (o) for (var k in DEFAULTS) { if (Object.prototype.hasOwnProperty.call(o, k)) out[k] = o[k]; }
-    out.mode = out.mode === "student" ? "student" : "teacher";
+    out.mode = normMode(out.mode);
     /* 字号可能来自旧版本存下的选项：非法值一律退回默认，别把整份排版拖垮 */
     out.fontPt = typeof out.fontPt === "number" && isFinite(out.fontPt)
       ? Math.min(PT_MAX, Math.max(PT_MIN, out.fontPt)) : BASE_PT;
@@ -763,9 +783,16 @@
   }
 
   /* ==================== 文档装配与资源 ==================== */
+  /* 文档标题（打印时的文件名、预览标签页）：带上学版别——三册同源，混在一个文件夹里要分得清 */
   function docTitle(payload, o) {
     var m = paperMeta(payload);
-    return m.title + (o.mode === "student" ? "（学生版）" : "");
+    var suffix = o.mode === "student" ? "（学生练习版）" : (o.mode === "answer" ? "（答案解析）" : "");
+    return m.title + suffix;
+  }
+  /* 三个版本常常先后来自同一个文件夹：文件名各自带版本名，后下的不会盖掉先下的 */
+  function fileName(payload, o) {
+    var base = str(payload.title).trim() || paperMeta(payload).title;
+    return base + "打印版（" + MODE_LABEL[o.mode] + "）";
   }
   function safeJson(v) {
     /* 内容里若出现脚本结束标签会提前闭合数据块，把 < 全部转义掉最省事。
@@ -919,8 +946,17 @@
       + "#" + DLG_ID + " .vppd-x:hover{background:var(--hover-bg,rgba(0,0,0,.06))}"
       + "#" + DLG_ID + " .vppd-body{padding:16px 18px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}"
       + "#" + DLG_ID + " .vppd-label{font-size:.72rem;color:var(--text-dim,#6f675a);margin-bottom:7px}"
-      + "#" + DLG_ID + " .vppd-seg{display:flex;gap:8px}"
-      + "#" + DLG_ID + " .vppd-seg label{flex:1;position:relative;cursor:pointer}"
+      /* 三个版本分成两个框：老师自用的一框、发给学生的一框。标签写在框内左侧而不是占一整行，
+         两个框按内容宽度收窄、并排排在一行里（宽度不够时自动折成两行）。
+         框是分组用的，不靠颜色也能看出归属；选中的那一框描边略深，一眼知道现在选的是哪一版。 */
+      + "#" + DLG_ID + " .vppd-grps{display:flex;flex-wrap:wrap;gap:8px}"
+      + "#" + DLG_ID + " .vppd-grp{display:flex;align-items:center;gap:9px;min-width:0;padding:7px 9px 7px 11px;"
+      + "border:1px solid var(--border,rgba(0,0,0,.08));border-radius:12px;transition:border-color .16s}"
+      + "#" + DLG_ID + " .vppd-grp.vppd-on{border-color:var(--border-strong,rgba(0,0,0,.22))}"
+      + "#" + DLG_ID + " .vppd-grp-cap{font-size:.72rem;line-height:1.3;color:var(--text-faint,#a29a8b);white-space:nowrap}"
+      + "#" + DLG_ID + " .vppd-grp.vppd-on .vppd-grp-cap{color:var(--text-dim,#6f675a)}"
+      + "#" + DLG_ID + " .vppd-seg{display:flex;gap:8px;min-width:0}"
+      + "#" + DLG_ID + " .vppd-seg label{position:relative;cursor:pointer}"
       + "#" + DLG_ID + " .vppd-seg input{position:absolute;opacity:0;pointer-events:none}"
       + "#" + DLG_ID + " .vppd-seg span{display:block;text-align:center;font-size:.78rem;font-weight:600;padding:9px 10px;border-radius:10px;"
       + "border:1px solid var(--border-strong,rgba(0,0,0,.14));background:transparent;transition:all .16s}"
@@ -936,6 +972,12 @@
       + "#" + DLG_ID + " .vppd-box{flex:none;position:relative;width:15px;height:15px;margin-top:1px;border-radius:4.5px;"
       + "border:1.5px solid var(--text-faint,#9a9a9a);background:transparent;transition:all .16s}"
       + "#" + DLG_ID + " .vppd-cb:hover .vppd-box{border-color:var(--accent,#b4502a)}"
+      /* 置灰（学生练习版里无内容可印的项）：只压暗，不改勾选状态——
+         切回教师版时原来的勾选要原样回来。方框边框一并锁成灰的，
+         连同下面 :checked 的橙色边框一起压住，悬停也不会亮起来。 */
+      + "#" + DLG_ID + " .vppd-cb.vppd-off{opacity:.42;cursor:default}"
+      + "#" + DLG_ID + " .vppd-cb.vppd-off .vppd-box,#" + DLG_ID + " .vppd-cb.vppd-off input:checked~.vppd-box"
+      + "{border-color:var(--text-faint,#9a9a9a)}"
       + "#" + DLG_ID + " .vppd-cb input:checked~.vppd-box{background:var(--accent,#b4502a);border-color:var(--accent,#b4502a)}"
       /* 勾用两条边框画出来：15px 方框内含 1.5px 边框，去掉边框后是 12px 内容区，
          4×7.5 的小 L 旋转 40° 后四角仍在 12px 内，顶到不了边框上。 */
@@ -997,6 +1039,16 @@
     + '<path d="M7 8V3h10v5"/><path d="M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/>'
     + '<rect x="7" y="14" width="10" height="7" rx="1"/></svg>';
 
+  /* 每个版本的说明都写清「印什么、不印什么」：老师选版时看的就是这一行，
+     说不明白就会出现「把带答案的练习卷发给全班」。 */
+  var MODE_HINT = {
+    teacher: "题目、答案与解析同页连排，另附答案速查表。适合老师讲评时自己拿一份。",
+    student: "只有题目、选项与作答区，不含任何答案与解析，可直接整份发给学生。易错点、考点范式与答案速查表只在另外两版里印。",
+    answer: "只有答案、解析、易错点与范文，不含题干原文。与「学生练习版」配套使用。"
+  };
+  /* 学生练习版中无内容可印的勾选框（在 openDialog 里按版本置灰） */
+  var STUDENT_OFF = { pitfalls: true, pattern: true, ansmap: true };
+
   function openDialog(payload, o) {
     if (!payload || !(payload.groups || []).length) { toast("暂无可打印的讲解内容", "error"); return; }
     injectDlgCss();
@@ -1009,13 +1061,22 @@
     wrap.setAttribute("aria-modal", "true");
     wrap.setAttribute("aria-label", "打印试卷全解");
     var checks = [["transfers", "迁移训练"], ["pitfalls", "易错点"], ["pattern", "考点范式"], ["ansmap", "答案速查表"]];
+    function modeOpt(v) {
+      return '<label><input type="radio" name="vppd-mode" value="' + v + '"'
+        + (cur.mode === v ? " checked" : "") + "><span>" + MODE_LABEL[v] + "</span></label>";
+    }
+    /* 一框一组：老师拿一册，学生拿两册（练习卷 + 答案册，可分开印）。
+       分组本身就是在提醒「哪些是要发出去的」。 */
+    function modeGrp(cap, inner) {
+      return '<div class="vppd-grp" data-grp><span class="vppd-grp-cap">' + cap + '</span><div class="vppd-seg">' + inner + "</div></div>";
+    }
     wrap.innerHTML = '<div class="vppd-card">'
       + '<div class="vppd-head">' + PRINTER_SVG + "<h3>打印试卷全解</h3>"
       + '<button class="vppd-x" type="button" data-act="cancel" aria-label="关闭">×</button></div>'
       + '<div class="vppd-body">'
-      + '<div><div class="vppd-label">卷面</div><div class="vppd-seg">'
-      + '<label><input type="radio" name="vppd-mode" value="teacher"' + (cur.mode === "teacher" ? " checked" : "") + "><span>教师详解版</span></label>"
-      + '<label><input type="radio" name="vppd-mode" value="student"' + (cur.mode === "student" ? " checked" : "") + "><span>学生练习版</span></label>"
+      + '<div><div class="vppd-label">卷面</div><div class="vppd-grps">'
+      + modeGrp("老师自用", modeOpt("teacher"))
+      + modeGrp("发给学生", modeOpt("student") + modeOpt("answer"))
       + "</div></div>"
       + '<p class="vppd-hint" data-role="modehint"></p>'
       + '<div><div class="vppd-label">内容</div><div class="vppd-cbs">'
@@ -1052,25 +1113,43 @@
       return Math.min(PT_MAX, Math.max(PT_MIN, Number(sizeEl && sizeEl.value) || BASE_PT));
     }
     function syncSize() { if (sizeNum) sizeNum.textContent = fmtPt(readSize()); }
-    function syncHint() {
-      modeHint.textContent = readForm().mode === "student"
-        ? "卷面只印题目与选项，答案与解析汇总在文末，可整册撕下。"
-        : "题目、答案与解析同页连排，另附答案速查表。";
+    /* 换版本时同步两件事：说明文字，以及「这一版印不印得到」的勾选框。
+       学生练习版里没有答案，易错点、考点范式、答案速查表都无从印起——一律置灰，
+       否则老师勾着「答案速查表」选学生版，会以为答案跟着印出去了。
+       置灰只锁交互，不动 checked：切回教师版时原来的勾选还在。 */
+    function syncMode() {
+      var m = readMode();
+      if (modeHint) modeHint.textContent = MODE_HINT[m];
+      /* 两个框里各有一枚单选钮：选中的那一框描边加深，选的是「自用」还是「发出去」一眼可见 */
+      wrap.querySelectorAll("[data-grp]").forEach(function (g) {
+        var on = !!g.querySelector("input:checked");
+        if (on) g.classList.add("vppd-on"); else g.classList.remove("vppd-on");
+      });
+      wrap.querySelectorAll(".vppd-cb").forEach(function (lab) {
+        var i = lab.querySelector("input[data-opt]");
+        if (!i) return;
+        var off = m === "student" && !!STUDENT_OFF[i.getAttribute("data-opt")];
+        i.disabled = off;
+        if (off) lab.classList.add("vppd-off"); else lab.classList.remove("vppd-off");
+      });
+    }
+    function readMode() {
+      var r = wrap.querySelector('input[name="vppd-mode"]:checked');
+      return normMode(r && r.value);
     }
     function readForm() {
       var o2 = assign({}, cur);
-      var r = wrap.querySelector('input[name="vppd-mode"]:checked');
-      o2.mode = r ? r.value : "teacher";
+      o2.mode = readMode();
       wrap.querySelectorAll("input[data-opt]").forEach(function (i) { o2[i.getAttribute("data-opt")] = !!i.checked; });
       o2.fontPt = readSize();
       return o2;
     }
     wrap.querySelectorAll("input").forEach(function (i) {
-      i.addEventListener("change", function () { cur = readForm(); syncHint(); });
+      i.addEventListener("change", function () { cur = readForm(); syncMode(); });
     });
     if (sizeEl) sizeEl.addEventListener("input", function () { syncSize(); cur = readForm(); });
     syncSize();
-    syncHint();
+    syncMode();
 
     function close() {
       document.removeEventListener("keydown", onKey, true);
@@ -1092,7 +1171,7 @@
       if (act === "cancel") { close(); return; }
       if (act === "download") {
         close();
-        downloadDoc(payload, o2, str(payload.title).trim() || paperMeta(payload).title + "打印版")
+        downloadDoc(payload, o2, fileName(payload, o2))
           .then(function () { toast("打印版已下载：双击打开即可打印或存为 PDF"); })
           .catch(function () { toast("生成失败，请检查网络后重试", "error"); });
         return;
