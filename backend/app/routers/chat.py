@@ -13,7 +13,12 @@ from app.config import settings
 from app.database import SessionLocal
 from app.deps import CodeContext, get_code_context, get_current_code
 from app.models import UsageCode
-from app.routers.tools import _resolve_prompt_filename, get_prompt_loader
+from app.routers.tools import (
+    CONTINUE_PROMPT_NAME,
+    _resolve_continue_prompt_filename,
+    _resolve_prompt_filename,
+    get_prompt_loader,
+)
 from app.services.free_access import (
     identity_key,
     is_free_model,
@@ -110,6 +115,32 @@ def _ensure_model_access(ctx: CodeContext, entry: dict | None) -> None:
     if ctx.ok or is_free_open(entry):
         return
     raise ctx.error()
+
+
+def _load_continue_prompt(loader: PromptLoader, tool_id: str) -> str | None:
+    """取该工具的续写指令：优先「<工具名>续写」，回退到共用的「继续生成」。
+
+    两个文件都没有（或内容为空）时返回 None，调用方必须报错而不是按普通重试放行——
+    静默降级的话，用户点了「继续生成」拿到的会是一篇从头重写的内容。
+    """
+    override = loader.get(_resolve_continue_prompt_filename(tool_id))
+    if override and override.strip():
+        return override
+    shared = loader.get(CONTINUE_PROMPT_NAME)
+    return shared if (shared and shared.strip()) else None
+
+
+def _continue_messages(prompt: str, continue_from: str, continue_prompt: str) -> list[dict]:
+    """续写请求的消息序列：原始 prompt → 上一次的残文 → 续写指令。
+
+    首条与首次请求逐字节相同，供应商侧的前缀缓存仍然命中；残文以 assistant
+    身份出现而不是拼进 prompt 文本，模型才知道那是「自己已经写出来的」。
+    """
+    return [
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": continue_from},
+        {"role": "user", "content": continue_prompt},
+    ]
 
 
 @dataclass
@@ -355,6 +386,12 @@ class ChatRequest(BaseModel):
     transfer_count: Optional[int] = Field(
         None, ge=1, le=5, description="试卷可视化全解：每道笔试题的迁移训练题量（默认 1）"
     )
+    continue_from: Optional[str] = Field(
+        None,
+        max_length=200000,
+        description="已生成但被中断的正文。传入即表示本次接着它续写：该文本作为上一条 "
+        "assistant 消息回传，末尾再追加一条续写指令（prompts/继续生成.md）",
+    )
 
 
 class MigrationAnalyzeRequest(BaseModel):
@@ -393,6 +430,9 @@ class ChatPreviewRequest(BaseModel):
     input: str = Field(..., min_length=1, max_length=50000)
     transfer_count: Optional[int] = Field(
         None, ge=1, le=5, description="试卷可视化全解：每道笔试题的迁移训练题量（默认 1）"
+    )
+    continue_from: Optional[str] = Field(
+        None, max_length=200000, description="预览续写请求时传入被中断的正文"
     )
 
 
@@ -719,10 +759,22 @@ async def preview_prompt(
             detail=f"Prompt file {prompt_filename}.md not found",
         )
 
+    messages = None
+    if req.continue_from and req.continue_from.strip():
+        continue_prompt = _load_continue_prompt(loader, req.tool_id)
+        if continue_prompt is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"续写指令文件 {CONTINUE_PROMPT_NAME}.md 未找到，无法继续生成",
+            )
+        messages = _continue_messages(prompt, req.continue_from, continue_prompt)
+
     return {
         "tool_id": req.tool_id,
         "prompt_filename": prompt_filename + ".md",
         "prompt": prompt,
+        # 续写预览：把实际会发出去的消息序列一并给出，便于核对残文与指令的拼接位置
+        "messages": messages,
     }
 
 
@@ -752,6 +804,18 @@ async def chat_stream(
             status_code=404,
             detail=f"Prompt file {prompt_filename}.md not found",
         )
+
+    # 续写：首条消息与首次请求完全一致，接着放残文，最后挂一条续写指令。
+    # 其余逻辑（额度、推理规则、停止事件、日志）与普通请求完全一致。
+    continue_messages: Optional[list[dict]] = None
+    if req.continue_from and req.continue_from.strip():
+        continue_prompt = _load_continue_prompt(loader, req.tool_id)
+        if continue_prompt is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"续写指令文件 {CONTINUE_PROMPT_NAME}.md 未找到，无法继续生成",
+            )
+        continue_messages = _continue_messages(prompt, req.continue_from, continue_prompt)
 
     # 配置读取走短会话 + 线程池：不随 SSE 流占住连接池会话，也不阻塞事件循环
     cfg = await asyncio.to_thread(_load_cfg)
@@ -867,6 +931,7 @@ async def chat_stream(
         try:
             async for item in llm.chat_stream_with_stop(
                 user_prompt=prompt,
+                messages=continue_messages,
                 model=req.model,
                 stop_event=stop_event,
                 reasoning_effort=reasoning_effort,

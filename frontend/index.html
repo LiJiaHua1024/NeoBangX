@@ -1392,6 +1392,13 @@
                       <span class="whitespace-nowrap" x-text="'生成中 ' + vpQuestionCount + ' / ' + (vpTotal || '…')"></span>
                       <button class="vp-stage-live-stop" @click="stop()" title="停止生成，已生成题目会保留">停止</button>
                     </span>
+                    <!-- 中断/失败后全屏里没有别的续写入口：普通视图那条续写条被 !vpFullscreen
+                         挡掉了，大屏讲题时想接着补完就只能先退出全屏。这里补一个 -->
+                    <button x-show="!streaming && vpHasData && !vpComplete" class="btn-primary"
+                            style="padding:.3rem .8rem;font-size:.78rem"
+                            @click="continueVisualPaper()" title="接着写完剩余的题，已生成题目不变，也不会新增记录">
+                      继续生成
+                    </button>
                     <div class="vp-stage-themes" role="group" aria-label="主题">
                       <template x-for="th in themes" :key="th.id">
                         <button class="theme-dot" :class="{ 'on': theme === th.id, 'theme-dot-sora': th.id === 'sora' }" :style="'background:' + th.dot"
@@ -1627,6 +1634,20 @@
                 </div>
               </div>
 
+              <!-- 停止提示条：用户手动停止（或打开一条上次被停下的历史）后页面上还留着正文，
+                   续写入口挂在这里。放在结果区顶部而不是末尾：生成时视线在正文尾部，
+                   要续写时这条提示正处于最顺手的位置 -->
+              <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 pt-5" x-show="canContinue && status === 'stopped'" x-cloak>
+                <div class="glass-soft rounded-2xl px-4 py-3 flex items-center gap-2 flex-wrap">
+                  <span class="text-sm font-medium">已停止生成</span>
+                  <span class="text-xs text-dim" x-text="'已保留 ' + output.length + ' 字'"></span>
+                  <button class="btn-primary ml-auto" @click="continueChat()"
+                          title="从断点接着往下写，已生成的内容不变，也不会新增历史记录">
+                    <span x-html="icon('chevrons-right','w-4 h-4')"></span>继续生成
+                  </button>
+                </div>
+              </div>
+
               <!-- 备用通道切换进度：只在后端真的切过通道时出现（单 Provider 不会触发）。
                    刻意放在「生成结果」容器之外：显隐只由 fallbackInfo 决定，
                    不与 output/streaming 的显隐条件耦合，避免将来被容器条件连坐隐藏 -->
@@ -1691,10 +1712,17 @@
                   <div class="font-semibold mb-1">这次生成没有成功</div>
                   <div x-text="errorMsg"></div>
                   <div class="mt-2 text-xs opacity-80" x-show="errorLimited">这是调用频次限制（免费模型的防滥用限额或接口限速）。等一会儿再试即可；如果经常遇到，可以改用其他模型，或让管理员调大该免费模型的限额。</div>
-                  <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && errorRetryable">输入内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
+                  <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && errorRetryable && canContinue">已生成的内容已保留：点「继续生成」接着往下写，代价最小；也可以整篇重试，或换个模型重试。</div>
+                  <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && errorRetryable && !canContinue">输入内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
                   <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && !errorRetryable">请先输入使用码（或改选免费模型）并确认额度充足，再重新执行。</div>
                   <div class="error-actions mt-3" x-show="errorRetryable && submittedInput && !streaming">
-                    <button class="btn-primary" x-show="!errorLimited" @click="retryChat()"
+                    <!-- 已经出过正文时「继续生成」才是首选动作：它不动已生成的部分，
+                         直接重试是整篇重来，会把这些内容丢掉 -->
+                    <button class="btn-primary" x-show="!errorLimited && canContinue" @click="continueChat()"
+                            :title="'从断点接着往下写，已保留的 ' + output.length + ' 字不变'">
+                      <span x-html="icon('chevrons-right','w-4 h-4')"></span>继续生成
+                    </button>
+                    <button :class="!errorLimited && canContinue ? 'btn-ghost' : 'btn-primary'" x-show="!errorLimited" @click="retryChat()"
                             :title="'用当前选中的模型（' + shortModel(selectedModel) + '）重新生成，输入内容不变'">
                       <span x-html="icon('refresh','w-4 h-4')"></span>直接重试
                     </button>

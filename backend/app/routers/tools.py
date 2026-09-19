@@ -109,6 +109,17 @@ def _resolve_prompt_filename(tool_id: str) -> str:
     return mapping.get(tool_id, "")
 
 
+# 续写指令：所有工具共用 prompts/继续生成.md；某个工具想单独定制时，
+# 放一份「<工具名>续写.md」即可覆盖，不需要改代码。
+CONTINUE_PROMPT_NAME = "继续生成"
+
+
+def _resolve_continue_prompt_filename(tool_id: str) -> str:
+    """工具专属续写指令的文件名（不含 .md）；没有映射的工具返回空串"""
+    base = _resolve_prompt_filename(tool_id)
+    return f"{base}续写" if base else ""
+
+
 class ToolGroupResponse(BaseModel):
     id: str
     name: str

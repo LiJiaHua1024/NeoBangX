@@ -199,6 +199,11 @@ const FAVORITES_LIMIT = 100;
 // 推理另有 max-height + 内部滚动双保险，盒子本身高度恒定。
 const REASONING_LIMIT = 3000;
 const CARD_REASONING_LIMIT = 2000;
+/* 续写指令约定的「其实已经写完」控制标记（见 prompts/继续生成.md）：模型只回这一行时，
+   前端把它剥掉、保持记录原状态，并告诉用户内容已经完整——既不把标记拼进成品文档，
+   也不误标成已完成。识别刻意放宽（大小写、@ 数量、空格/下划线/连字符、裸词都要认），
+   实测模型对定界符的写法会漂移（试卷工具的 @@TAG@@ 就吃过这个亏），严格匹配必漏。 */
+const CONTINUE_DONE_SRC = "[＠@]*\\s*CONTINUE[\\s_-]*DONE\\s*[＠@]*";
 
 /* ---------------- 试卷可视化全解：@@TAG@@ 标签识别（宽松版） ----------------
    契约要求标签独占一行且 @@TAG@@ 双向闭合，但实测模型会漂移：@@@PITFALLS::（多打一个 @、
@@ -1691,6 +1696,11 @@ function nbx() {
     // 换模型弹窗仍应禁用真正失败的那个，而不是新的当前模型
     failedModel: "",
     retryModelOpen: false,
+    // 屏幕上这份结果对应的历史记录 id（试卷工具另有 visualPaper.historyId）：
+    // 续写与重试都写回这条记录而不是新建，同一份输入在历史里只留一条
+    activeHistoryId: null,
+    // 本次开流前 output 的长度：收尾时判断这一轮续写到底有没有产出新内容
+    _streamBaselineLen: 0,
     // 备用通道切换进度：后端发 fallback 事件时才有值（单 Provider 不会触发）。
     // 只含「第几个 / 共几个 / 为什么切」，不含 Provider 名称，
     // 让用户在长等待里知道自己在等第几个通道，而不是对着空界面干等。
@@ -2516,6 +2526,11 @@ function nbx() {
        「继续生成」，不再挂一张和它重复的错误卡。 */
     get vpFailedMidStream() {
       return !!this.errorMsg && !this.streaming && !!this.output.trim();
+    },
+    /* 这份卷子对应的历史记录 id：续写/重试都写回这一条。resetVisualPaper 会把它连同
+       卷子快照一起清掉，所以调用方必须在 reset 之前取走 */
+    get vpHistoryId() {
+      return (this.visualPaper && this.visualPaper.historyId) || null;
     },
     // 是否处于第一/最后一题（考虑跨组空组），供全屏角落按钮禁用
     get vpIsFirstQuestion() {
@@ -3608,6 +3623,8 @@ function nbx() {
       this.outputFoldEligible = false;  // 切工具后展示的是新内容，清掉历史折叠态
       this.errorMsg = "";
       this.failedModel = "";
+      // 换工具即与上一条记录脱钩：续写/重试不能再写回别的工具的记录
+      this.activeHistoryId = null;
       this.status = "idle";
       this.maskOn = false;
       this.resetReasoning();
@@ -3643,6 +3660,7 @@ function nbx() {
       }
       this.currentTool = null;
       this.leftOpen = false;
+      this.activeHistoryId = null;
       this.resetReasoning();
       this.scheduleMascotCheck(80);
     },
@@ -4801,9 +4819,10 @@ function nbx() {
     },
 
     /* ============ 流式生成（SSE） ============ */
-    /* 返回值：true = 已发起生成请求；false = 守卫阶段提前返回（未发起） */
-    async run() {
-      if (!this.ensureCanRun("当前模型需要输入使用码后才能使用")) return;
+    /* 返回值：true = 已发起生成请求；false = 守卫阶段提前返回（未发起）。
+       opts.updateId 非空 = 本轮结果写回该历史记录（「直接重试」用），不新建 */
+    async run(opts = {}) {
+      if (!this.ensureCanRun("当前模型需要输入使用码后才能使用")) return false;
       if (this.isMigrationTool) {
         await this.analyzeMigration();
         return;
@@ -4838,30 +4857,13 @@ function nbx() {
         if (this.streaming) return false;
       }
 
-      this.retreatMascot();
       this.output = "";
       this.rendered = "";
       this.outputFoldEligible = false;  // 新生成的内容不做折叠
       this.errorMsg = "";
-      this.fallbackInfo = null;
       // 生成中状态条的导出/复制入口会隐藏，先把可能开着的导出面板收掉，
       // 否则流结束后它会带着旧定位重新弹出来
       this.closeExportMenu();
-      this.streaming = true;
-      this.thinking = true;
-      this.thinkingSec = 0;
-      this.resetReasoning();
-      const seq = ++this._runSeq;
-      this.status = "connecting";
-      this._nearBottom = true;
-      // request_id 带随机熵：服务端按其校验停止请求属主，可预测的毫秒时间戳会被枚举滥用
-      this.requestId = `${this.currentTool.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      this._abortCtrl = new AbortController();
-      this.startTimer();
-      this.startThinkTimer();
-      // 发起时快照模型：请求 body 用的是此刻的 selectedModel，失败归因以它为准，
-      // 避免流式期间用户切换右上角模型导致记录错位
-      const modelUsed = this.selectedModel;
 
       this.submittedInput = text;
       this.submittedFileName = this.attachedFile ? this.attachedFile.name : "";
@@ -4870,11 +4872,51 @@ function nbx() {
       this.attachedFile = null;
       this.inputMode = "text";
 
+      return this._runStream({ inputText: text, updateId: opts.updateId || null });
+    },
+
+    /* 流式记账：计时器 / 代次 / requestId / 中止控制 / 正文累积 / 收尾调度。
+       新一轮（run）、继续生成、重试都从这里开跑，通用工具与试卷可视化只在
+       onToken（怎么渲染）与 finalize（怎么写历史）上不同。
+       - updateId：本轮结果写回的既有历史记录，为空则收尾时新建
+       - continueFrom：非空表示本次是续写；残文回传后端当上一条 assistant 消息，
+         output 不清空、新 token 往后追加，收尾时按有没有新增内容决定状态
+       - nearBottom：是否把外层结果容器拉到底。解卷的滚动由左右分栏自己管，
+         不参与外层自动滚动 */
+    async _runStream({ toolId, inputText, updateId = null, continueFrom = null, transferCount, onToken, finalize, nearBottom = true }) {
+      // 通用路径（新一轮/继续生成/重试）都跑当前工具，只有解卷会显式传 "13"；
+      // 这里统一兜底，避免某个入口漏传导致请求的 tool_id 为空
+      const tid = toolId || (this.currentTool && this.currentTool.id) || "";
+      this.retreatMascot();
+      this.activeHistoryId = updateId;
+      this._streamBaselineLen = continueFrom ? this.output.length : 0;
+      this.fallbackInfo = null;
+      this.streaming = true;
+      this.thinking = true;
+      this.thinkingSec = 0;
+      this.resetReasoning();
+      const seq = ++this._runSeq;
+      this.status = "connecting";
+      if (nearBottom) this._nearBottom = true;
+      // request_id 带随机熵：服务端按其校验停止请求属主，可预测的毫秒时间戳会被枚举滥用
+      this.requestId = `${tid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      this._abortCtrl = new AbortController();
+      this.startTimer();
+      this.startThinkTimer();
+      // 发起时快照模型：请求 body 用的是此刻的 selectedModel，失败归因以它为准，
+      // 避免流式期间用户切换右上角模型导致记录错位
+      const modelUsed = this.selectedModel;
+      const afterToken = onToken || (() => this.scheduleRender());
+      const finish = finalize || ((state, errMsg, ctx) =>
+        this.finalize(state, errMsg, ctx.seq, { updateId: ctx.updateId, continueFrom: ctx.continueFrom }));
+
       try {
         const { state } = await this._streamChat({
-          toolId: this.currentTool.id,
-          input: text,
+          toolId: tid,
+          input: inputText,
           requestId: this.requestId,
+          transferCount,
+          continueFrom,
           onReasoning: (text) => { if (seq === this._runSeq) this.appendReasoning(text); },
           onFallback: (info) => { if (seq === this._runSeq) this.updateFallback(info); },
           onToken: (text) => {
@@ -4885,28 +4927,28 @@ function nbx() {
             this.status = "streaming";
             this.output += text;
             this._outputDirty = true;
-            this.scheduleRender();
+            afterToken(text);
           },
         });
-        this.finalize(state === "stopped" ? "stopped" : "done", undefined, seq);
+        finish(state === "stopped" ? "stopped" : "done", undefined, { updateId, continueFrom, seq });
       } catch (e) {
         // 已被「切换工具/新建题目」作废：旧流收尾交给新流程，不再回写状态
         if (seq !== this._runSeq) return true;
         if (e && e.name === "AbortError") {
-          this.finalize("stopped", undefined, seq);
+          finish("stopped", undefined, { updateId, continueFrom, seq });
         } else {
           // 登录/额度类错误模型根本没执行，不标记；后端 error 事件回传的实际模型优先，快照兜底
           if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
           this.errorLimited = !!(e && e.limited);
-          this.finalize("error", describeError(e, "生成失败，请稍后重试"), seq);
+          finish("error", describeError(e, "生成失败，请稍后重试"), { updateId, continueFrom, seq });
         }
       }
       return true;
     },
 
     /* 通用 SSE 流式调用：返回 { state: "done" | "stopped" }，出错时抛出 Error */
-    async _streamChat({ toolId, input, requestId, transferCount, onToken, onReasoning, onFallback }) {
+    async _streamChat({ toolId, input, requestId, transferCount, continueFrom, onToken, onReasoning, onFallback }) {
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: {
@@ -4919,6 +4961,8 @@ function nbx() {
           model: this.selectedModel || undefined,
           request_id: requestId,
           transfer_count: transferCount || undefined,
+          // 续写：残文回传后端当上一条 assistant 消息，后端在末尾追加续写指令
+          continue_from: continueFrom || undefined,
         }),
         signal: this._abortCtrl.signal,
       });
@@ -5071,7 +5115,29 @@ function nbx() {
       this.notifyStop(requestId);
     },
 
-    /* ============ 失败恢复：错误卡上的重试 / 换模型 / 编辑输入 ============ */
+    /* ============ 失败恢复：错误卡上的继续生成 / 重试 / 换模型 / 编辑输入 ============ */
+    /* 页面上是否留着「还能接着写」的正文——续写入口（错误卡按钮、停止提示条）都以此为准 */
+    get canContinue() {
+      return !this.streaming && !!this.output.trim() && !!this.submittedInput;
+    },
+
+    /* 继续生成：接着已生成的部分往下写，不是整篇重来。
+       残文回传给后端当上一条 assistant 消息，新 token 追加在 output 后面；
+       收尾写回 activeHistoryId 那条记录，历史里不会多出一条。 */
+    async continueChat() {
+      if (this.streaming) return;
+      if (!this.submittedInput || !this.output.trim()) {
+        this.toast("没有可续写的内容", "warn");
+        return;
+      }
+      if (!this.ensureCanRun("当前模型需要输入使用码后才能续写")) return;
+      await this._runStream({
+        inputText: this.submittedInput,
+        updateId: this.activeHistoryId,
+        continueFrom: this.output,
+      });
+    },
+
     async retryChat() {
       if (this.streaming) return;
       if (!this.submittedInput) {
@@ -5082,7 +5148,8 @@ function nbx() {
       // run() 返回 false = 守卫阶段提前返回、请求根本没发出（如提示词确认被取消），
       // 此时把内容放回可见的输入框；只要请求真的发起了，无论成败都保持折叠——
       // 失败走错误卡，与首次失败的表现一致。
-      const started = (await this.run()) !== false;
+      // 带上 activeHistoryId：整篇重来也写回原记录，同一份输入在历史里只留一条
+      const started = (await this.run({ updateId: this.activeHistoryId })) !== false;
       if (!started) {
         this.inputCollapsed = false;
         this.$nextTick(() => {
@@ -5100,12 +5167,15 @@ function nbx() {
         return;
       }
       const text = this.submittedInput;
+      // resetVisualPaper 会清掉卷子快照（连同 historyId），先取出来：
+      // 整卷重来也是覆盖原记录，不新增——中断卡上承诺的正是这条
+      const keepId = this.vpHistoryId;
       this.resetVisualPaper();
       this.output = "";
       this.rendered = "";
       this.errorMsg = "";
       this._nearBottom = true;
-      await this._runVisualStream(text, null);
+      await this._runVisualStream(text, keepId);
     },
 
     chooseModelAndRetry(modelId) {
@@ -5138,7 +5208,9 @@ function nbx() {
       if (fileName) this.toast(`文件「${fileName}」的内容已转回文本，可直接编辑后重新执行`);
     },
 
-    finalize(state, errMsg, seq) {
+    /* 收尾。opts.updateId 非空 = 本轮是续写/重试，结果写回该历史记录而不是新建；
+       opts.continueFrom 非空 = 本轮是续写，还要处理「其实没有新增内容」的情形。 */
+    finalize(state, errMsg, seq, opts = {}) {
       // 代次不符 = 这次流已被切换工具/新建题目作废，收尾交给新流程
       if (seq !== undefined && seq !== this._runSeq) return;
       this.streaming = false;
@@ -5152,23 +5224,89 @@ function nbx() {
         this.reasoningDone = true;
         this.reasoningOpen = false;
       }
+      const updateId = opts.updateId || null;
+      const origin = updateId ? this.history.find(h => h.id === updateId) : null;
+      // 续写一个字都没新增（模型只回了「已完整」的哨兵，或用户刚开跑就停下）：
+      // 剥掉哨兵、保持记录原样——不能因此把失败/中断的记录标成已完成，
+      // 那句交代话也不该拼进成品文档。报错不在此列：接口 429/500 时一个字都没有，
+      // 但那是真失败，必须照常走下面的错误卡。
+      if (state !== "error" && opts.continueFrom && !this._continueProducedNew()) {
+        const saidDone = this._stripContinueSentinel();
+        if (state === "stopped") this.toast("已停止生成", "warn");
+        else if (saidDone) this.toast("已生成的内容已经完整，没有需要续写的部分", "ok");
+        else this.toast("这次没有新增内容，可稍后重试", "warn");
+        // 状态回到本轮之前的样子：错误还在的错误着，中断的仍可继续
+        this.status = this.errorMsg ? "error" : (origin && origin.partial ? "stopped" : "done");
+        this.doRender();
+        return;
+      }
       this.doRender();
       if (state === "error") {
         this.status = "error";
         this.errorMsg = errMsg || "生成失败";
         this.toast("生成失败：" + this.errorMsg, "error");
-        // 出错同样入历史：已生成的部分内容与用户输入都要留得住
-        this.pushFailedHistory(this.errorMsg);
+        // 出错同样入历史：已生成的部分内容与用户输入都要留得住。
+        // 续写/重试失败写回原记录，且本轮没产出就保留原正文，别越重试越少
+        if (origin) {
+          if (this.output.trim()) origin.output = this.output;
+          origin.error = String(this.errorMsg).slice(0, 300);
+          origin.partial = false;
+          origin.model = this.failedModel || this.selectedModel;
+          this._persistHistoryItem(origin);
+          this.activeHistoryId = origin.id;
+        } else {
+          const created = this.pushFailedHistory(this.errorMsg);
+          this.activeHistoryId = created ? created.id : null;
+        }
       } else {
         this.failedModel = "";
         this.errorLimited = false;
         this.status = state;
+        // 续写/重试成功后必须撤掉错误卡：这条路不再经过 run() 的 errorMsg 复位，
+        // 否则上一次的失败提示会一直挂在一份已经写完的内容上
+        this.errorMsg = "";
         if (this.output.trim()) {
-          const item = this.pushHistory(state === "stopped");
-          this.generateTitle(item);
+          if (origin) {
+            // 续写/重试回到原记录：状态随最后一次结果刷新——成功即清掉失败标记，
+            // 用户停止则落回「已停止」，续写入口继续留着
+            origin.output = this.output;
+            origin.partial = state === "stopped";
+            origin.error = "";
+            origin.model = this.selectedModel;
+            this._persistHistoryItem(origin);
+            this.activeHistoryId = origin.id;
+            // 失败记录从来没生成过标题，续写成功后补一条，否则列表里永远只有输入摘要
+            if (!origin.title) this.generateTitle(origin);
+          } else {
+            const item = this.pushHistory(state === "stopped");
+            this.activeHistoryId = item ? item.id : null;
+            this.generateTitle(item);
+          }
         }
         if (state === "stopped") this.toast("已停止生成", "warn");
       }
+    },
+
+    /* 这一轮续写有没有产出新内容：只认「零新增」和「仅回了完成标记」。
+       用「有没有字母/数字/表意文字」而不是「去掉标点后还剩什么」来判定：
+       模型常把标记套在代码围栏或括号里，剥离后残留的 ``` 与（）不该算成续写了正文，
+       而在标点集合上做减法永远列不全。 */
+    _continueProducedNew() {
+      return /[0-9A-Za-z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(this._continueNewText());
+    },
+    /* 剥掉续写指令约定的完成标记，返回是否真的剥到了 */
+    _stripContinueSentinel() {
+      const added = this.output.slice(this._streamBaselineLen);
+      const cleaned = this._continueNewText();
+      if (cleaned === added) return false;
+      this.output = this.output.slice(0, this._streamBaselineLen) + cleaned;
+      this._outputDirty = true;
+      return true;
+    },
+    // 本轮新增的正文，去掉完成标记本身
+    _continueNewText() {
+      return this.output.slice(this._streamBaselineLen)
+        .replace(new RegExp(CONTINUE_DONE_SRC, "gi"), "");
     },
 
     /* ============ 试卷可视化全解 流式 ============ */
@@ -5208,63 +5346,31 @@ function nbx() {
     },
     // 可视化流式共享入口：updateId 非空时在原历史记录上追加更新，不新增记录
     async _runVisualStream(inputText, updateId) {
-      this.retreatMascot();
       // 续写/重试也走这里（不经 resetVisualPaper）：开跑就收浮层，
       // 否则输入坞一收起，浮层会孤零零留在半空中
       this.closeVpSettings();
-      this.streaming = true;
-      this.thinking = true;
-      this.thinkingSec = 0;
-      this.resetReasoning();
       // 解卷的正文一律走结构化视图，不套用「从历史打开」的长文折叠
       this.outputFoldEligible = false;
-      const seq = ++this._runSeq;
-      this.status = "connecting";
-      this.fallbackInfo = null;
-      this.requestId = `13_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      this._abortCtrl = new AbortController();
-      this.startTimer();
-      this.startThinkTimer();
-      // 与 run() 相同：发起时快照模型，失败归因以它为准
-      const modelUsed = this.selectedModel;
       // 迁移题量随记录一起存：关掉页面再从历史续写时题量不会掉回默认值；
       // 已经锁定过的卷子一律沿用锁定值，避免续写中途改设置导致前后不一致 + 缓存全失效
       if (!this.visualPaper) this.visualPaper = this.newVisualPaperState();
       const transferCount = this.vpLockedTransferCount;
       this.visualPaper.transferCount = transferCount;
-      try {
-        const { state } = await this._streamChat({
-          toolId: "13",
-          input: inputText,
-          requestId: this.requestId,
-          transferCount: transferCount,
-          onReasoning: (text) => { if (seq === this._runSeq) this.appendReasoning(text); },
-          onFallback: (info) => { if (seq === this._runSeq) this.updateFallback(info); },
-          onToken: (tok) => {
-            // 作废后可能还有已排队未处理的 chunk，别再写进已被清空的输出
-            if (seq !== this._runSeq) return;
-            if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
-            this.finishReasoningOnToken();
-            this.status = "streaming";
-            this.output += tok;
-            if (this.visualPaper) this.visualPaper.rawJson = this.output;
-            this._outputDirty = true;
-            this.vpScheduleRender();
-          },
-        });
-        this.finalizeVisualPaper(state === "stopped" ? "stopped" : "done", "", updateId ? { updateId } : {}, seq);
-      } catch (e) {
-        // 已被「切换工具/新建题目」作废：旧流收尾交给新流程，不再回写状态
-        if (seq !== this._runSeq) return;
-        if (e && e.name === "AbortError") {
-          this.finalizeVisualPaper("stopped", "", updateId ? { updateId } : {}, seq);
-        } else {
-          if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
-          this.errorRetryable = !(e && e.authIssue);
-          this.errorLimited = !!(e && e.limited);
-          this.finalizeVisualPaper("error", describeError(e, "生成失败，请稍后重试"), {}, seq);
-        }
-      }
+      // 解卷的续写指令由前端按解析结构拼（见 vpContinueBrief）：走简报而不是回传正文，
+      // 所以这里不传 continueFrom，后端对该工具的路径与从前完全一致
+      return this._runStream({
+        toolId: "13",
+        inputText,
+        updateId,
+        transferCount,
+        nearBottom: false,
+        onToken: () => {
+          if (this.visualPaper) this.visualPaper.rawJson = this.output;
+          this.vpScheduleRender();
+        },
+        finalize: (state, errMsg, ctx) =>
+          this.finalizeVisualPaper(state, errMsg, ctx.updateId ? { updateId: ctx.updateId } : {}, ctx.seq),
+      });
     },
     finalizeVisualPaper(state, errMsg, opts = {}, seq) {
       // 代次不符 = 这次流已被切换工具/新建题目作废，收尾交给新流程
@@ -5306,6 +5412,9 @@ function nbx() {
           origin.model = this.failedModel || this.selectedModel;
           origin.createdAt = Date.now();
           this._persistHistoryItem(origin);
+          // 重试走的是 resetVisualPaper 之后的新快照，historyId 已经被清掉，
+          // 这里必须把指针接回原记录，否则下一次「继续生成」又会新建一条
+          if (this.visualPaper) this.visualPaper.historyId = origin.id;
         } else {
           const created = this.pushFailedHistory(this.errorMsg, hasPaper ? { visualPaper: JSON.parse(JSON.stringify(this.visualPaper)) } : {});
           if (created && this.visualPaper) this.visualPaper.historyId = created.id;
@@ -5314,21 +5423,32 @@ function nbx() {
         this.failedModel = "";
         this.errorLimited = false;
         this.status = state;
+        // 续写/重试成功后撤掉错误提示：这条路不经过 runVisualPaper 的复位，留着会让页面上
+        // 一直挂着上次的失败原因，而且 vpFailedMidStream 恒为真——解析异常卡与 Markdown
+        // 回退视图会被它一直压住，明明这次解析成功了也看不到
+        this.errorMsg = "";
         if (this.output.trim()) {
           const updateId = opts.updateId || null;
           let item = updateId ? this.history.find(h => h.id === updateId) : null;
+          // 「未确认写完」也按 partial 记：@@TOTAL@@ 被截断、模型自己少写题时，
+          // 记录若标成已完成，重开就既没有「已停止」标记也没有续写入口了
+          const unfinished = state === "stopped" || !this.vpComplete;
           if (item) {
             // 续写/重跑：在原记录上追加更新，不新增记录；这次成功了就不再是失败记录
             item.output = this.output;
-            item.partial = (state === "stopped");
+            item.partial = unfinished;
             item.error = "";
             item.model = this.selectedModel;
             if (this.visualPaper && (this.visualPaper.groups?.length || this.visualPaper.total)) {
               item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
             }
             this._persistHistoryItem(item);
+            // 同错误分支：重试/续写后要把卷子的记录指针接回这一条
+            if (this.visualPaper) this.visualPaper.historyId = item.id;
+            // 失败记录从来没生成过标题，续写成功后补一条
+            if (!item.title) this.generateTitle(item);
           } else {
-            item = this.pushHistory(state === "stopped");
+            item = this.pushHistory(unfinished);
             // 为可视化历史附加结构化数据，便于回放（0 完整题也保存 total/paper，中断可续）
             if (this.visualPaper && (this.visualPaper.groups?.length || this.visualPaper.total || (this.visualPaper.paper && this.visualPaper.paper.title))) {
               item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
@@ -5415,7 +5535,7 @@ function nbx() {
         this.toast("修改已保存，继续生成剩余题目");
       }
       if (!this.ensureCanRun("当前模型需要输入使用码后才能续写")) return;
-      const keepId = this.visualPaper.historyId || null;
+      const keepId = this.vpHistoryId;
       // 连总数都没解析出来 → 整卷重跑，原记录上覆盖，不新增记录
       if ((this.visualPaper.total || 0) <= 0 && this.vpQuestionCount === 0) {
         const text = this.submittedInput;
@@ -6948,13 +7068,19 @@ function nbx() {
       this.attachedFile = null;
       this.inputMode = "text";
       this.output = item.output;
-      // 失败记录：把错误原因一并还原，错误卡与「直接重试 / 换个模型重试 / 编辑输入」照常可用
+      // 这条记录就是屏幕上这份结果的归属：续写/重试都写回它
+      this.activeHistoryId = item.id;
+      // 失败记录：把错误原因一并还原，错误卡与「继续生成 / 直接重试 / 换个模型重试 / 编辑输入」照常可用
       if (item.error) {
         this.errorMsg = item.error;
         this.status = "error";
         this.failedModel = item.model || "";
         this.errorRetryable = true;
         this.errorLimited = false;
+      } else if (item.partial) {
+        // 上次是被停下的（不是写完的）：状态还原成「已停止」，页面上才会给出续写入口
+        this.errorMsg = "";
+        this.status = "stopped";
       } else {
         this.errorMsg = "";
         this.status = "history";
@@ -7162,6 +7288,8 @@ function nbx() {
       this.rendered = "";
       this.outputFoldEligible = false;
       this.errorMsg = "";
+      // 新题目 = 新记录：不让续写/重试写回上一条
+      this.activeHistoryId = null;
       this.status = "idle";
       this.resetReasoning();
       this.inputMode = "text";
@@ -7175,6 +7303,8 @@ function nbx() {
     },
     removeHistory(id) {
       this.history = this.history.filter((h) => h.id !== id);
+      // 删掉的正是屏幕上这条结果对应的记录：续写/重试改为收尾时新建，别再指向已删的 id
+      if (this.activeHistoryId === id) this.activeHistoryId = null;
       lsRemove(HISTORY_BODY_PREFIX + id);
       // 记墓碑：否则对端（另一条线路）的旧副本会在下次合并时把这条带回来
       this._addTombstones("history", [id]);

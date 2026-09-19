@@ -312,6 +312,7 @@ class LLMService:
         thinking_budget: Optional[int] = None,
         usage_out: Optional[dict] = None,
         response_format: Optional[dict] = None,
+        messages: Optional[list[dict]] = None,
     ) -> AsyncGenerator[str | tuple[str, str], None]:
         """支持中止的流式调用
 
@@ -319,8 +320,9 @@ class LLMService:
         传入 usage_out 时，流末尾的 usage 分块（空 choices）会被提取而非丢弃。
         推理过程以 ``("reasoning", text)`` 元组透出，正文仍为 plain str；
         推理不计入 streamed_parts（不参与用量估算与日志 output）。
+        传入 messages 时直接使用该消息序列（续写等多轮场景），忽略 user_prompt/system_prompt。
         """
-        messages = self._get_messages(system_prompt, user_prompt)
+        messages = messages or self._get_messages(system_prompt, user_prompt)
         kwargs = self._build_kwargs(
             model, messages, api_key, base_url, max_tokens, stream=True,
             reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,

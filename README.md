@@ -62,7 +62,7 @@ NeoBangX —— 面向中学英语教师的 AI 辅助教学平台。
 │   └── .env.example
 ├── frontend/                    # 主站前端（Alpine.js + Tailwind v4，纯静态）
 ├── admin-frontend/              # 管理后台前端
-├── prompts/                     # 31 个工具 Prompt 文件
+├── prompts/                     # 31 个工具 Prompt 文件 + 共用的续写指令
 ├── Dockerfile
 ├── docker-compose.yml
 ├── supervisord.conf             # Docker 内双进程管理
@@ -247,7 +247,7 @@ NBXU-3XXX-XXXX-XXXX
 - `GET /api/tools/` — 工具元数据 + 模型列表
 - `POST /api/chat/migration/analyze` — 非流式错因分析（不扣费）
 - `POST /api/chat/migration/quota` — 最终生成额度预检查（不扣费）
-- `POST /api/chat/stream` — 流式调用（需 Authorization）
+- `POST /api/chat/stream` — 流式调用（需 Authorization；`continue_from` 传已生成正文即为续写）
 - `POST /api/chat/stop` — 中止生成
 - `POST /api/chat/title` — 生成历史标题
 - `GET /api/admin/stats` — 管理后台统计
@@ -338,6 +338,11 @@ https、要么都 http（内网 IP 测试的情形）。镜像不可用时会静
 
 以下 **14 个工具** 的 Prompt 需要后续人工补全或打磨。其中 9 个为后端生成的简单初版，5 个为基于原始指令的部分覆盖版本。
 
+此外 `prompts/` 下还有两类非工具 Prompt（不属于上面的补全清单）：
+
+- `继续生成.md` — 所有工具共用的续写指令：生成中断后点「继续生成」时，它作为最后一条 user 消息发出（见 `docs/API_CONTRACT.md` 8.1）。改它即时影响全部工具的续写表现。
+- `智能错题迁移错因分析More.md` — 智能错题迁移「More」再分析的专用指令。
+
 ### 9 个完全无原始 Prompt 的工具
 
 | 工具 ID | 工具名称 | 当前 Prompt 状态 | 应实现的功能描述 | Prompt 文件路径 |
@@ -369,7 +374,7 @@ https、要么都 http（内网 IP 测试的情形）。镜像不可用时会静
 1. **安全**：生产环境务必修改 `JWT_SECRET`；管理后台 8001 仅内网访问，不映射到公网。
 2. **密钥**：妥善保管 `backend/.env` 中的 API Key，不要提交到 Git。该文件会被构建进 Docker 镜像，请注意镜像的访问权限。
 3. **使用码**：管理后台零登录、可直接生成使用码；首次启动若库中无码，会自动创建一把无限额度使用码并写入数据目录的 `bootstrap_code.txt`。
-4. **Prompt**：当前 Prompt 文件为占位版本，后续需人工补全 14 个待补工具。
+4. **Prompt**：当前 Prompt 文件为占位版本，后续需人工补全 14 个待补工具。想给某个工具单独定制续写行为时，在 `prompts/` 下加一份 `<工具名>续写.md` 即可覆盖共用的 `继续生成.md`（无需改代码，重启后生效——Prompt 只在进程启动时加载一次）。
 5. **历史/收藏**：清理浏览器数据会丢失历史记录与收藏。
 
 ---
