@@ -29,3 +29,6 @@ opencode.json
 
 .tmp-shots/
 .zcode/
+# ZCode 客户端按本文件自动同步生成的本地忽略文件：内容随 .gitignore 变化，
+# 提交进来只会带来无意义的 diff（与 .zcode/ 同理，属工具产物不入库）
+.zcodeignore
