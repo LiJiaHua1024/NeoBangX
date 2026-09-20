@@ -72,6 +72,7 @@ const ICON_PATHS = {
   "paperclip": '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
   "file-text": '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2Z"/><path d="M14 2v6h6"/><path d="M10 13h4M10 17h4M8 9h1"/>',
   "key": '<circle cx="7.5" cy="15.5" r="2.5"/><path d="m11 12 4-4"/><path d="m13 10 2.5 2.5"/><path d="M15 8h2v2"/>',
+  "settings": '<circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>',
   "shield": '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
   "alert": '<circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/>',
   "download": '<path d="M12 3.5V15M7.5 10.5 12 15l4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
@@ -1811,6 +1812,13 @@ function nbx() {
     codeActivating: false,
     codeModal: false,
 
+    /* --- 设置面板（左下角齿轮入口，居中 3D 卡片） --- */
+    settingsOpen: false,
+    fxOn: true,
+    mascotHidden: false,
+    finePointer: matchMedia("(pointer: fine)").matches,
+    _tilt: null,
+
     /* --- 输入模式 --- */
     inputMode: "text",
     attachedFile: null,
@@ -2793,9 +2801,9 @@ function nbx() {
       this.vpTopHidden = false;
       this.vpBottomHidden = false;
       this._vpStopChromeTimer();
-      // 恢复背景渲染（未处于暂停态时为幂等空操作）
+      // 恢复背景渲染（未处于暂停态时为幂等空操作；点击特效若被用户在设置里关掉则不唤醒）
       if (this._bg) this._bg.resume();
-      if (window.NbxClickFx) window.NbxClickFx.resume();
+      if (window.NbxClickFx && this.fxOn) window.NbxClickFx.resume();
       if (this._vpBoundHandler) { document.removeEventListener("keydown", this._vpBoundHandler); this._vpBoundHandler = null; }
       if (this._vpActivityHandler) {
         ["pointermove", "pointerdown", "touchstart"].forEach((t) =>
@@ -2896,6 +2904,7 @@ function nbx() {
       );
     },
     get mascotCanPeek() {
+      if (this.mascotHidden) return false;
       if (this.mascotIsBusy) return false;
       if (!this.currentTool) return true;
       if (this.isMigrationTool) {
@@ -3261,6 +3270,9 @@ function nbx() {
       this.rightCollapsed = !!ui.rightCollapsed;
       this.rightTab = ui.rightTab === "fav" ? "fav" : "history";
       this.vpChromePinned = !!ui.vpChromePinned;
+      this.mascotHidden = !!ui.mascotHidden;
+      // 点击特效的用户开关由 click-fx.js 自己落盘（nbx_fx_off），这里只读不写
+      try { this.fxOn = localStorage.getItem("nbx_fx_off") !== "1" && !!window.NbxClickFx; } catch { this.fxOn = !!window.NbxClickFx; }
 
       // 全屏讲解：用户在浏览器层按 Esc 退出全屏时，同步关闭讲解模式
       document.addEventListener("fullscreenchange", () => {
@@ -3511,6 +3523,93 @@ function nbx() {
       this.codeModal = false;
       this.codeError = "";
       this.codeHint = "";
+    },
+
+    /* ============ 设置面板 ============ */
+    openSettings() {
+      this.settingsOpen = true;
+      this.$nextTick(() => this.settingsTiltStart());
+    },
+    closeSettings() {
+      this.settingsOpen = false;
+      this.settingsTiltStop();
+    },
+    applyFxSetting() {
+      const api = window.NbxClickFx;
+      if (!api) { this.fxOn = !this.fxOn; return; }
+      if (this.fxOn) api.enable(); else api.disable();
+    },
+    applyMascotSetting() {
+      if (this.mascotHidden) this.retreatMascot(); else this.reconcileMascot();
+      this.persistUI();
+    },
+
+    /* ---- 3D 卡片鼠标跟随（仅桌面）：鼠标那一侧的卡边往后退，像被鼠标推着 ----
+       遮罩挂 mousemove 收集目标角度，rAF 里 lerp 逼近，停稳即自停，不留常驻循环。
+       推力按离卡片的距离衰减：贴近才推得动，远了松手回正，不全屏跟着歪。 */
+    get settingsTiltEnabled() {
+      return this.finePointer && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    },
+    settingsTiltStart() {
+      this.settingsTiltStop();
+      if (!this.settingsOpen || !this.settingsTiltEnabled) return;
+      this._tilt = { rx: 0, ry: 0, tx: 0, ty: 0, sx: 50, sy: -20, raf: 0 };
+      const card = this.$refs.settingsCard;
+      if (card) card.classList.add("tilt-live");
+    },
+    settingsTiltStop() {
+      if (this._tilt && this._tilt.raf) cancelAnimationFrame(this._tilt.raf);
+      this._tilt = null;
+      const card = this.$refs.settingsCard;
+      if (card) { card.classList.remove("tilt-live"); card.style.transform = ""; }
+    },
+    settingsTiltMove(e) {
+      const t = this._tilt;
+      if (!t) return;
+      const pop = this.$refs.settingsPop, card = this.$refs.settingsCard;
+      if (!pop || !card) return;
+      const r = pop.getBoundingClientRect();
+      const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+      const hx = card.offsetWidth / 2 || 1, hy = card.offsetHeight / 2 || 1;
+      // 距离衰减：卡片「半径」的 1.1 倍内全推力，再往外线性松手，2.6 倍处归零
+      const reach = Math.hypot(hx, hy);
+      const dist = Math.hypot(dx, dy);
+      const k = dist <= reach * 1.1 ? 1 : Math.max(0, 1 - (dist - reach * 1.1) / (reach * 1.5));
+      card.classList.toggle("tilt-live", k > 0.05);
+      const MAX = 4;
+      const nx = Math.max(-1.15, Math.min(1.15, dx / hx));
+      const ny = Math.max(-1.15, Math.min(1.15, dy / hy));
+      t.ty = nx * MAX * k;   // rotateY：鼠标在左/右，左/右边后退
+      t.tx = -ny * MAX * k;  // rotateX：鼠标在上/下，上/下边后退
+      t.sx = ((e.clientX - r.left) / r.width) * 100;
+      t.sy = ((e.clientY - r.top) / r.height) * 100;
+      if (!t.raf) t.raf = requestAnimationFrame(() => this._settingsTiltStep());
+    },
+    _settingsTiltStep() {
+      const t = this._tilt;
+      if (!t) return;
+      t.raf = 0;
+      t.rx += (t.tx - t.rx) * 0.12;
+      t.ry += (t.ty - t.ry) * 0.12;
+      const card = this.$refs.settingsCard;
+      if (card) {
+        card.style.transform = `rotateX(${t.rx.toFixed(2)}deg) rotateY(${t.ry.toFixed(2)}deg)`;
+        card.style.setProperty("--sx", `${t.sx.toFixed(1)}%`);
+        card.style.setProperty("--sy", `${t.sy.toFixed(1)}%`);
+      }
+      if (Math.abs(t.tx - t.rx) > 0.02 || Math.abs(t.ty - t.ry) > 0.02) {
+        t.raf = requestAnimationFrame(() => this._settingsTiltStep());
+      }
+    },
+    /* 指针离开窗口：卡片缓缓回正，而不是停在歪着的姿态 */
+    settingsTiltRelax() {
+      const t = this._tilt;
+      if (!t) return;
+      t.tx = 0;
+      t.ty = 0;
+      const card = this.$refs.settingsCard;
+      if (card) card.classList.remove("tilt-live");
+      if (!t.raf) t.raf = requestAnimationFrame(() => this._settingsTiltStep());
     },
     /* ============ 免费模型 ============ */
     /* 指定（默认当前选中）模型是否免费：调用不消耗次数 */
@@ -3814,6 +3913,7 @@ function nbx() {
         rightCollapsed: this.rightCollapsed,
         rightTab: this.rightTab,
         vpChromePinned: this.vpChromePinned,
+        mascotHidden: this.mascotHidden,
       });
     },
     setRightTab(tab) {

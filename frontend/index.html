@@ -141,6 +141,8 @@
         </div>
         <button class="icon-btn ml-auto" style="width:1.75rem;height:1.75rem" @click="openCodeModal()" title="输入使用码"
                 x-html="icon('key','w-4 h-4')"></button>
+        <button class="icon-btn" style="width:1.75rem;height:1.75rem" @click="openSettings()" title="设置"
+                aria-label="打开设置面板" x-html="icon('settings','w-4 h-4')"></button>
       </div>
     </aside>
 
@@ -2263,6 +2265,44 @@
               </div>
             </div>
           </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 设置面板（居中 3D 卡片：桌面端随鼠标方向后仰） ==================== -->
+    <div x-show="settingsOpen" class="modal-mask" x-transition.opacity
+         @click.self="closeSettings()" @keydown.escape.window="closeSettings()"
+         @mousemove="settingsTiltMove($event)" @mouseleave.document="settingsTiltRelax()">
+      <div class="settings-pop pop-in" x-ref="settingsPop" @click.stop>
+        <div class="modal-card modal-sm settings-card" x-ref="settingsCard" role="dialog" aria-modal="true" aria-label="设置">
+          <div class="settings-skin glass-deep" aria-hidden="true"></div>
+          <div class="settings-head flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
+            <span class="text-dim" x-html="icon('settings','w-4 h-4')"></span>
+            <h3 class="font-bold text-sm">设置</h3>
+            <button class="icon-btn ml-auto" @click="closeSettings()" title="关闭" x-html="icon('x','w-4 h-4')"></button>
+          </div>
+          <div class="settings-body p-2.5 overflow-y-auto scroll-thin">
+            <label class="settings-row">
+              <span class="settings-copy">
+                <span class="settings-title">点击特效</span>
+                <span class="settings-desc">在点击处绽开一圈涟漪碎光</span>
+              </span>
+              <span class="switch">
+                <input type="checkbox" x-model="fxOn" @change="applyFxSetting()">
+                <span class="switch-slider"></span>
+              </span>
+            </label>
+            <label class="settings-row">
+              <span class="settings-copy">
+                <span class="settings-title">隐藏布偶</span>
+                <span class="settings-desc">空闲时也不再让兔子从角落探出头来</span>
+              </span>
+              <span class="switch">
+                <input type="checkbox" x-model="mascotHidden" @change="applyMascotSetting()">
+                <span class="switch-slider"></span>
+              </span>
+            </label>
+          </div>
         </div>
       </div>
     </div>

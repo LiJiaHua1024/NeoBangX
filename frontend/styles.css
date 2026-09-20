@@ -2569,6 +2569,93 @@ mark, .vp-hl {
   .modal-card .icon-btn { width: 2.75rem; height: 2.75rem; }
 }
 
+/* ============================================================
+   设置面板：居中 3D 卡片
+   pop 外层承担入场动画与 perspective；卡片本体只挂 rotateX/Y。
+   玻璃皮肤单独一层——backdrop-filter 会强制 3D 扁平化，不能和
+   preserve-3d 同层；head / body 各抬一个 translateZ 做纵深分层，
+   倾斜时的视差就是「层级关系」的来源。
+   ============================================================ */
+.settings-pop {
+  width: 100%;
+  max-width: 26rem;
+  perspective: 1100px;
+}
+.settings-card {
+  position: relative;
+  overflow: visible; /* preserve-3d 会被 overflow:hidden 作废 */
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+.settings-skin {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  transform: translateZ(0);
+}
+.settings-head { transform: translateZ(26px); }
+.settings-body { transform: translateZ(14px); }
+/* 鼠标位置的高光：浮在卡面最上层的一层反光，只在跟随期间点亮 */
+.settings-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(340px circle at var(--sx, 50%) var(--sy, -20%),
+    color-mix(in srgb, var(--glass-spec) 16%, transparent), transparent 62%);
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  transform: translateZ(40px);
+}
+.settings-card.tilt-live::after { opacity: 1; }
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.8rem;
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+.settings-row:hover { background: var(--hover-bg); }
+.settings-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.settings-title { font-size: 0.86rem; font-weight: 650; color: var(--text); }
+.settings-desc { font-size: 0.72rem; color: var(--text-faint); }
+
+/* 开关：移植自管理后台 .switch，换主站主题变量 */
+.switch { position: relative; display: inline-block; width: 2.6rem; height: 1.5rem; flex: none; cursor: pointer; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.switch-slider {
+  position: absolute; inset: 0; border-radius: 999px;
+  background: var(--hover-bg);
+  border: 1px solid var(--border-strong);
+  transition: background 0.22s ease, border-color 0.22s ease;
+  pointer-events: none;
+}
+.switch-slider::after {
+  content: ""; position: absolute; top: 50%; left: 0.15rem;
+  width: 1.1rem; height: 1.1rem; border-radius: 50%;
+  transform: translateY(-50%);
+  background: var(--panel-strong);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  transition: transform 0.26s var(--ease-spring), background 0.2s ease;
+}
+.switch input:checked + .switch-slider {
+  background: color-mix(in srgb, var(--accent) 80%, transparent);
+  border-color: transparent;
+}
+.switch input:checked + .switch-slider::after { transform: translate(1.1rem, -50%); background: #fff; }
+.switch input:focus-visible + .switch-slider { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* 移动端：设置卡落回底部抽屉惯例，且不做 3D 跟随（触摸没有「鼠标方向」） */
+@media (max-width: 640px) {
+  .settings-pop { max-width: none; perspective: none; }
+  .settings-card { transform-style: flat; }
+  .settings-head, .settings-body { transform: none; }
+}
+
 .toast {
   display: flex;
   align-items: center;
