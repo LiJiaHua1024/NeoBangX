@@ -441,6 +441,61 @@ html[data-theme="sora"] .mascot-peeking {
 }
 
 /* ============================================================
+   点击特效的性能自适应询问卡（由 click-fx.js 创建，两端逐字相同）
+   刻意的非模态：无遮罩、不锁滚动、不抢焦点，只截获卡片自身的点击；
+   无论点哪个按钮还是等它自动超时，页面都照常可用。
+   ============================================================ */
+#fx-notice {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 75; /* 高于 Toast(70) 与抽屉遮罩(45)，低于弹窗遮罩(80) */
+  width: min(21rem, calc(100vw - 2rem));
+  padding: 1rem 1.15rem;
+  /* .glass 只给背景/边框/模糊/阴影，不含圆角（项目里卡片的圆角由 rounded-* 补），
+     这里按 .modal-card 的对话框圆角语言写死，避免露出方角 */
+  border-radius: 1.3rem;
+  pointer-events: auto;
+  animation: fx-notice-in 0.32s var(--ease-spring) both;
+}
+#fx-notice .fx-notice-msg {
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+#fx-notice .fx-notice-acts {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+#fx-notice .fx-notice-acts .btn-primary,
+#fx-notice .fx-notice-acts .btn-ghost {
+  padding: 0.45rem 0.9rem;
+  font-size: 0.8125rem;
+}
+@keyframes fx-notice-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@media (max-width: 640px) {
+  #fx-notice {
+    left: 0.75rem;
+    right: 0.75rem;
+    bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+    width: auto;
+  }
+  /* 触屏触控目标提到 44px（与项目既有约定一致） */
+  #fx-notice .fx-notice-acts .btn-primary,
+  #fx-notice .fx-notice-acts .btn-ghost {
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #fx-notice { animation: none; }
+}
+
+/* ============================================================
    液态玻璃表面 —— 近透明本体 + 顶部高光 + 折射光晕，不叠白
    ============================================================ */
 .glass {

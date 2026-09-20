@@ -9,7 +9,7 @@
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=dlg260919h">
+  <link rel="stylesheet" href="/static/styles.css?v=fx260920b">
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -37,13 +37,15 @@
   <script defer src="/static/nbx-mirror.js?v=mirror3"></script>
   <script defer src="/static/nbx-mirror-store.js?v=mirror3"></script>
   <script defer src="/static/nbx-mirror-peer.js?v=mirror3"></script>
-  <script defer src="/static/script.js?v=dlg260919h"></script>
+  <script defer src="/static/script.js?v=fx260920a"></script>
   <script defer src="/static/vp-print.js?v=export3mode1"></script>
+  <!-- 点击特效接入层（懒加载 vendor/ba-click-fx，不抢首屏） -->
+  <script defer src="/static/click-fx.js?v=fx260920f"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
 </head>
 
 <body>
-  <!-- 动态光影背景（粒子 + 鼠标光晕 + 工具选择光脉冲） -->
+  <!-- 动态光影背景（粒子 + 鼠标光晕 + 工具选择光晕引导；点击涟漪/碎片由 click-fx.js 播放） -->
   <canvas id="bgfx" aria-hidden="true"></canvas>
 
   <!-- Alpine v3 会自动调用 x-data 对象中的 init()，不要再写 x-init="init()"（会执行两次） -->

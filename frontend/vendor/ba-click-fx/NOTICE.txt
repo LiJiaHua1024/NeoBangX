@@ -1,0 +1,26 @@
+# vendor 说明
+
+`ba-click-fx.js` 为 ba-click-fx 的 ESM 构建（MIT 协议，可商用），
+来源：https://cdn.jsdelivr.net/npm/ba-click-fx@1.3.3/dist/ba-click-fx.js
+项目主页：https://github.com/CialloKing/ba-click-fx
+拉取日期：2026-09-20（635,987 字节，md5 800dd880a9928a219b1cd9197936400b）。
+
+该文件是**单文件自包含**的 ESM 产物：内部不 import 任何东西，也不依赖同包的
+`worker.js`（那个文件与本文件逐字节相同，只有把特效放进 DedicatedWorker +
+OffscreenCanvas 运行时才需要，本项目不用）。因此升级只需重新下载覆盖本文件。
+
+自托管原因：学校/内网环境可能屏蔽 jsDelivr 等公共 CDN；且本项目 Docker 部署要求
+导出与运行时都不依赖公网。加载失败时 `click-fx.js` 静默降级、绝不阻塞业务。
+
+升级方式：重新下载上述地址覆盖本文件，并把 `click-fx.js` 里的 `LIB_VERSION`
+与 `?v=fxlib...` 版本号一起改掉（两端 `frontend/` 与 `admin-frontend/` 各一份，
+必须同时替换）。
+
+## 许可证
+
+- 本库：MIT，Copyright (c) 2026 CialloKing —— 原文见同目录 `LICENSE`。
+- 上游声明的第三方署名：**BASpark**（`DoomVoss/BASpark`）与
+  **BA-Spark-Cursor**（`VanillaNahida/BA-Spark-Cursor`），二者同为 MIT，
+  Copyright (c) 2026 Doom —— 原文见同目录 `THIRD_PARTY_NOTICES.md`。
+
+两个许可证文件与库文件放在一起随分发保留，满足 MIT 的「保留版权与许可声明」要求。

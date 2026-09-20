@@ -467,22 +467,12 @@ function createBackground(canvas) {
   return {
     /* 数据刷新等重排突发期间由调用方暂停渲染，把合成器让给主线程 */
     suspend, resume,
+    /* 点击反馈（涟漪 + 粒子）已交由 ba-click-fx 播放：见 click-fx.js 与
+       vendor/ba-click-fx/。这里只保留光晕跟随，使程序化调用仍能把光晕引过去。
+       pulses/sparks 数组与 frame() 里渲染它们的代码保留不动——空数组时循环零开销，
+       将来要恢复原地涟漪把推入代码加回来即可。 */
     attract(x, y) {
       halo.tx = x; halo.ty = y;
-      pulses.push({ x, y, r: 6, a: 0.7 });
-      if (pulses.length > 6) pulses.shift();
-      for (let i = 0; i < 16; i++) {
-        const a = (i / 16) * Math.PI * 2 + Math.random() * 0.5;
-        const sp = 1.4 + Math.random() * 2.6;
-        sparks.push({
-          x, y,
-          vx: Math.cos(a) * sp,
-          vy: Math.sin(a) * sp - 0.4,
-          r: 0.9 + Math.random() * 1.3,
-          life: 0.7 + Math.random() * 0.45,
-        });
-      }
-      if (sparks.length > 90) sparks.splice(0, sparks.length - 90);
     },
     themeChanged() { tgt = readTheme(); if (reduced) frame(true); },
   };
@@ -852,7 +842,8 @@ function adminApp() {
         if (!document.hidden) this.updateSkyPeriod();
       });
 
-      // 动态光影背景 + 主要操作（侧栏导航 / 主按钮）的点击涟漪
+      // 动态光影背景 + 主要操作（侧栏导航 / 主按钮）的光晕引导
+      // 注：点击的涟漪/粒子反馈已交由 ba-click-fx 播放（见 click-fx.js），这里只引光晕
       this._bg = createBackground(document.getElementById("bgfx"));
       document.addEventListener("click", (e) => {
         const el = e.target.closest(".nav-item, .btn-primary");
@@ -860,6 +851,12 @@ function adminApp() {
           const r = el.getBoundingClientRect();
           this._bg.attract(r.left + r.width * 0.5, r.top + r.height * 0.5);
         }
+      });
+
+      // 点击特效的性能自适应提示（click-fx.js 无法直接触达 Alpine，故走自定义事件）
+      window.addEventListener("nbx:fx-notice", (e) => {
+        const d = e && e.detail;
+        if (d && d.msg) this.toast(d.msg, d.type || "warn");
       });
 
       try {

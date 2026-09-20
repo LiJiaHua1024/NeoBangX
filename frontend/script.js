@@ -824,22 +824,12 @@ function createBackground(canvas) {
   return {
     /* 全屏讲解等遮没场景：canvas 被不透明面板完全盖住时暂停渲染 */
     suspend, resume,
+    /* 点击反馈（涟漪 + 粒子）已交由 ba-click-fx 播放：见 click-fx.js 与
+       vendor/ba-click-fx/。这里只保留光晕跟随，使程序化调用（初始默认工具、
+       dev 预览）仍能把光晕引过去。pulses/sparks 数组与 frame() 里渲染它们的
+       代码保留不动——空数组时循环零开销，将来要恢复原地涟漪把推入代码加回来即可。 */
     attract(x, y) {
       halo.tx = x; halo.ty = y;
-      pulses.push({ x, y, r: 6, a: 0.7 });
-      if (pulses.length > 6) pulses.shift();
-      for (let i = 0; i < 16; i++) {
-        const a = (i / 16) * Math.PI * 2 + Math.random() * 0.5;
-        const sp = 1.4 + Math.random() * 2.6;
-        sparks.push({
-          x, y,
-          vx: Math.cos(a) * sp,
-          vy: Math.sin(a) * sp - 0.4,
-          r: 0.9 + Math.random() * 1.3,
-          life: 0.7 + Math.random() * 0.45,
-        });
-      }
-      if (sparks.length > 90) sparks.splice(0, sparks.length - 90);
     },
     themeChanged() { tgt = readTheme(); if (reduced) frame(true); },
   };
@@ -2732,6 +2722,8 @@ function nbx() {
       // 全屏讲解舞台用不透明背景盖住整个视口，bgfx 完全不可见：暂停其渲染，
       // 把整帧预算让给讲解页面（退出时 resume，视觉零变化）
       if (this._bg) this._bg.suspend();
+      // 点击特效同理：讲题时点击/移动频繁，光环碎片会干扰讲台，整段停用（退出时 resume）
+      if (window.NbxClickFx) window.NbxClickFx.pause();
       // 防御：若页面曾被程序化滚动（如 scrollIntoView），进入全屏前归位
       document.documentElement.scrollTop = 0;
       document.body.scrollTop = 0;
@@ -2781,6 +2773,7 @@ function nbx() {
       this._vpStopChromeTimer();
       // 恢复背景渲染（未处于暂停态时为幂等空操作）
       if (this._bg) this._bg.resume();
+      if (window.NbxClickFx) window.NbxClickFx.resume();
       if (this._vpBoundHandler) { document.removeEventListener("keydown", this._vpBoundHandler); this._vpBoundHandler = null; }
       if (this._vpActivityHandler) {
         ["pointermove", "pointerdown", "touchstart"].forEach((t) =>
@@ -3214,6 +3207,12 @@ function nbx() {
             : "本机存储空间不足，新内容可能未被保存",
           "warn"
         );
+      });
+
+      // 点击特效的性能自适应提示（click-fx.js 无法直接触达 Alpine，故走自定义事件）
+      window.addEventListener("nbx:fx-notice", (e) => {
+        const d = e && e.detail;
+        if (d && d.msg) this.toast(d.msg, d.type || "warn");
       });
 
       // 悠空 · 两时段天空：每分钟校准一次，回到前台时立即校准

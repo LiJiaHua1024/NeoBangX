@@ -1,5 +1,7 @@
 # vendor 说明
 
+> 本目录下的子目录各带自己的 NOTICE：点击特效库见 `ba-click-fx/NOTICE.txt`。
+
 `thumbmark.umd.js` 为 ThumbmarkJS 浏览器指纹库的 UMD 构建（MIT 协议，可商用），
 来源：https://cdn.jsdelivr.net/npm/@thumbmarkjs/thumbmarkjs/dist/thumbmark.umd.js
 拉取日期：2026-09-04（约 30KB）。
