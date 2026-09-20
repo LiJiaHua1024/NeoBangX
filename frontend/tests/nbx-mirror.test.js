@@ -46,6 +46,124 @@ test("sanitizeIndex 拒绝无 id，裁剪超长字段，透传未知标量、丢
   assert.strictEqual(idx.futureArr, undefined, "未知数组应丢弃");
 });
 
+/* ---------------- 回答版本（重新生成保留旧结果） ---------------- */
+
+/* 这两条钉的是「新增字段不改变老数据的摘要」。摘要是对 buildEnvelope 的输出序列算的，
+   一旦给老形状的条目补上默认字段（如 verCount: 1），用户手里已有的备份文件重算摘要
+   就会变，全部被判定为「校验和不匹配」而拒收——prefs 当年踩过同一个坑。 */
+test("sanitizeIndex：老数据（无 verCount）的字段与顺序逐字节不变", () => {
+  assert.deepStrictEqual(
+    Object.keys(M.sanitizeIndex({ id: "h1", createdAt: 1 })),
+    ["v", "id", "toolId", "toolName", "icon", "title", "error", "partial",
+      "createdAt", "model", "inputHead", "hasMigration", "hasPaper", "updatedAt"]
+  );
+  assert.deepStrictEqual(
+    Object.keys(M.sanitizeBody({ input: "i", output: "o", fileName: "" })),
+    ["input", "output", "fileName"]
+  );
+});
+
+test("sanitizeIndex：verCount 有则透传（位置固定在 hasPaper 与 updatedAt 之间）", () => {
+  const idx = M.sanitizeIndex({ id: "h1", createdAt: 1, verCount: 3 });
+  assert.strictEqual(idx.verCount, 3);
+  assert.deepStrictEqual(Object.keys(idx).slice(-2), ["verCount", "updatedAt"]);
+  assert.strictEqual(M.sanitizeIndex({ id: "h1", verCount: "x" }).verCount, 1, "非法值退化为 1");
+});
+
+test("sanitizeBody：versions 逐项归一，键序固定，activeVersionId 一起走", () => {
+  const body = M.sanitizeBody({
+    input: "i", output: "o2", fileName: "",
+    versions: [
+      { id: "v1", output: "o1", model: "m1", at: 10, partial: false, error: "", extra: "丢弃" },
+      { id: "v2", output: "o2", model: "m2", at: 20, partial: true },
+    ],
+    activeVersionId: "v2",
+  });
+  assert.deepStrictEqual(Object.keys(body), ["input", "output", "fileName", "versions", "activeVersionId"]);
+  assert.deepStrictEqual(body.versions[0], { id: "v1", output: "o1", model: "m1", at: 10, partial: false, error: "" });
+  assert.deepStrictEqual(Object.keys(body.versions[0]), ["id", "output", "model", "at", "partial", "error"]);
+  assert.strictEqual(body.activeVersionId, "v2");
+});
+
+test("sanitizeBody：versions 畸形时整块丢弃，但正文本身照常搬运", () => {
+  const cases = [
+    { name: "不是数组", versions: { a: 1 }, activeVersionId: "v1" },
+    { name: "只有一版", versions: [{ id: "v1", output: "o" }], activeVersionId: "v1" },
+    { name: "条目缺 id", versions: [{ output: "a" }, { id: "v2", output: "b" }], activeVersionId: "v2" },
+    { name: "条目正文为空", versions: [{ id: "v1", output: "" }, { id: "v2", output: "b" }], activeVersionId: "v2" },
+    { name: "活动版本不在列表里", versions: [{ id: "v1", output: "a" }, { id: "v2", output: "b" }], activeVersionId: "v9" },
+    { name: "缺 activeVersionId", versions: [{ id: "v1", output: "a" }, { id: "v2", output: "b" }] },
+    {
+      name: "超过条数上限",
+      versions: Array.from({ length: M.VERSION_LIMIT + 1 }, (_, i) => ({ id: "v" + i, output: "x" })),
+      activeVersionId: "v0",
+    },
+  ];
+  for (const c of cases) {
+    const body = M.sanitizeBody({ input: "i", output: "正文", fileName: "", versions: c.versions, activeVersionId: c.activeVersionId });
+    assert.strictEqual(body.versions, undefined, c.name + "：versions 应整块丢弃");
+    assert.strictEqual(body.activeVersionId, undefined, c.name + "：activeVersionId 不该单独留下");
+    assert.strictEqual(body.output, "正文", c.name + "：正文必须保留");
+  }
+});
+
+test("sanitizeBody：versions 归一幂等（摘要三处计算必须一致）", () => {
+  const raw = {
+    input: "i", output: "o2", fileName: "",
+    versions: [{ id: "v1", output: "o1", model: "m", at: 1 }, { id: "v2", output: "o2", model: "m", at: 2 }],
+    activeVersionId: "v2",
+  };
+  const once = M.sanitizeBody(raw);
+  assert.deepStrictEqual(M.sanitizeBody(once), once);
+});
+
+test("buildEnvelope / validateEnvelope：带版本的文件能往返校验，缺版本的老文件同样有效", () => {
+  const withVersions = {
+    v: 1, exportedAt: 1000, source: "www",
+    history: [{
+      index: { id: "h1", createdAt: 10, verCount: 2 },
+      body: {
+        input: "i", output: "o2", fileName: "",
+        versions: [{ id: "v1", output: "o1", model: "m1", at: 1 }, { id: "v2", output: "o2", model: "m2", at: 2 }],
+        activeVersionId: "v2",
+      },
+    }],
+    favorites: [], tombstones: { history: [], favorites: [] },
+  };
+  const env = M.buildEnvelope(withVersions);
+  assert.strictEqual(env.history[0].body.versions.length, 2);
+  assert.strictEqual(env.history[0].index.verCount, 2);
+  const file = JSON.stringify(Object.assign({}, env, { sha256: M.sha256Hex(M.serializeEnvelope(env)) }));
+  const res = M.validateEnvelope(file);
+  assert.strictEqual(res.ok, true, res.reason);
+  assert.strictEqual(res.envelope.history[0].body.versions.length, 2, "导入后版本数组必须还在");
+
+  // 老文件（没有版本字段）不能被新增字段带歪
+  const legacyEnv = M.buildEnvelope({ v: 1, history: [entry("a", 10)], favorites: [], tombstones: {} });
+  const legacyText = JSON.stringify(Object.assign({}, legacyEnv, { sha256: M.sha256Hex(M.serializeEnvelope(legacyEnv)) }));
+  assert.strictEqual(M.validateEnvelope(legacyText).ok, true, "版本化之前导出的文件必须仍可导入");
+});
+
+test("mergeRemote：版本数组随正文一起换（整条 LWW）", () => {
+  const older = entry("a", 100);
+  older.index.verCount = 2;
+  older.body.versions = [{ id: "v1", output: "旧一版" }, { id: "v2", output: "旧二版" }];
+  older.body.activeVersionId = "v2";
+  const newer = entry("a", 200);
+  newer.index.verCount = 3;
+  newer.body.versions = [{ id: "v1", output: "旧一版" }, { id: "v2", output: "旧二版" }, { id: "v3", output: "新一版" }];
+  newer.body.activeVersionId = "v3";
+  const out = M.mergeRemote(
+    { history: [older], favorites: [] },
+    { history: [newer], favorites: [] }
+  );
+  assert.strictEqual(out.history.length, 1);
+  assert.strictEqual(out.history[0].index.verCount, 3);
+  assert.strictEqual(out.history[0].body.versions.length, 3);
+  assert.strictEqual(out.history[0].body.activeVersionId, "v3");
+});
+
+
 test("buildEnvelope 产出带版本号的 envelope，缺正文时补空正文", () => {
   const env = M.buildEnvelope({
     source: "a.example.com",

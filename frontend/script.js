@@ -949,7 +949,17 @@ function historyIndexOf(item) {
     inputHead: item.input !== undefined ? historyHead(item.input) : (item.inputHead || ""),
     hasMigration: !!item.migration || !!item.hasMigration,
     hasPaper: !!item.visualPaper || !!item.hasPaper,
+    // 回答版本数（列表角标）。正文已水合时按 versions 现算；只有索引的条目沿用
+    // 索引里已有的值——直接算会把「2 版」抹成 1 版（标题更新等路径只写索引）。
+    verCount: historyVerCountOf(item),
   };
+}
+/* 版本数：无 versions 字段 = 单版本记录（存量数据一律如此）。
+   注意别在这里给「未水合」的条目下 1 的定论，理由见上面的赋值注释。 */
+function historyVerCountOf(item) {
+  if (item.versions && item.versions.length) return item.versions.length;
+  if (!item._bodyLoaded) return item.verCount || 1;
+  return 1;
 }
 function historyBodyOf(item) {
   const body = {
@@ -959,6 +969,13 @@ function historyBodyOf(item) {
   };
   if (item.migration) body.migration = item.migration;
   if (item.visualPaper) body.visualPaper = item.visualPaper;
+  // 回答版本（重新生成保留的历次结果，见 nbx-versions.js）。
+  // item.output/model/partial/error 始终是活动版本的投影，这里只多带一份历史版本。
+  // 只有一版时不写：单版本记录与版本化之前的数据形状完全一致，镜像摘要也不受影响。
+  if (item.versions && item.versions.length > 1) {
+    body.versions = item.versions;
+    body.activeVersionId = item.activeVersionId || "";
+  }
   return body;
 }
 /* 旧格式判定：整份数组里的条目带正文（input/output）而非索引摘要 */
@@ -1686,11 +1703,16 @@ function nbx() {
     // 换模型弹窗仍应禁用真正失败的那个，而不是新的当前模型
     failedModel: "",
     retryModelOpen: false,
+    // 模型弹窗的用途：retry = 失败后换个模型重试，regen = 重新生成（整篇重来、旧结果保留）
+    retryModelMode: "retry",
     // 屏幕上这份结果对应的历史记录 id（试卷工具另有 visualPaper.historyId）：
     // 续写与重试都写回这条记录而不是新建，同一份输入在历史里只留一条
     activeHistoryId: null,
     // 本次开流前 output 的长度：收尾时判断这一轮续写到底有没有产出新内容
     _streamBaselineLen: 0,
+    // 重新生成开流前的正文快照：新版本一个字都没产出时用它把屏幕恢复成旧结果
+    // （记录本身没被动过，见 finalize）。只在这一种情形下有意义，用完即清。
+    _regenPrevOutput: "",
     // 备用通道切换进度：后端发 fallback 事件时才有值（单 Provider 不会触发）。
     // 只含「第几个 / 共几个 / 为什么切」，不含 Provider 名称，
     // 让用户在长等待里知道自己在等第几个通道，而不是对着空界面干等。
@@ -4871,18 +4893,24 @@ function nbx() {
       this.attachedFile = null;
       this.inputMode = "text";
 
-      return this._runStream({ inputText: text, updateId: opts.updateId || null });
+      return this._runStream({
+        inputText: text,
+        updateId: opts.updateId || null,
+        newVersion: !!opts.newVersion,
+      });
     },
 
     /* 流式记账：计时器 / 代次 / requestId / 中止控制 / 正文累积 / 收尾调度。
-       新一轮（run）、继续生成、重试都从这里开跑，通用工具与试卷可视化只在
+       新一轮（run）、继续生成、重试、重新生成都从这里开跑，通用工具与试卷可视化只在
        onToken（怎么渲染）与 finalize（怎么写历史）上不同。
        - updateId：本轮结果写回的既有历史记录，为空则收尾时新建
        - continueFrom：非空表示本次是续写；残文回传后端当上一条 assistant 消息，
          output 不清空、新 token 往后追加，收尾时按有没有新增内容决定状态
+       - newVersion：非空表示本轮是「整篇重来」，结果作为该记录的新版本追加（旧版保留），
+         而不是覆盖当前那一版
        - nearBottom：是否把外层结果容器拉到底。解卷的滚动由左右分栏自己管，
          不参与外层自动滚动 */
-    async _runStream({ toolId, inputText, updateId = null, continueFrom = null, transferCount, onToken, finalize, nearBottom = true }) {
+    async _runStream({ toolId, inputText, updateId = null, continueFrom = null, newVersion = false, transferCount, onToken, finalize, nearBottom = true }) {
       // 通用路径（新一轮/继续生成/重试）都跑当前工具，只有解卷会显式传 "13"；
       // 这里统一兜底，避免某个入口漏传导致请求的 tool_id 为空
       const tid = toolId || (this.currentTool && this.currentTool.id) || "";
@@ -4906,8 +4934,16 @@ function nbx() {
       // 避免流式期间用户切换右上角模型导致记录错位
       const modelUsed = this.selectedModel;
       const afterToken = onToken || (() => this.scheduleRender());
+      // modelUsed 一路带到收尾：请求 body 用的是它，记录里的「哪一版由谁生成」也必须用它。
+      // 拿收尾时刻的 selectedModel 会记错——流式期间用户可以在右上角切模型。
+      const ctx0 = { updateId, continueFrom, newVersion, modelUsed };
       const finish = finalize || ((state, errMsg, ctx) =>
-        this.finalize(state, errMsg, ctx.seq, { updateId: ctx.updateId, continueFrom: ctx.continueFrom }));
+        this.finalize(state, errMsg, ctx.seq, {
+          updateId: ctx.updateId,
+          continueFrom: ctx.continueFrom,
+          newVersion: ctx.newVersion,
+          modelUsed: ctx.modelUsed,
+        }));
 
       try {
         const { state } = await this._streamChat({
@@ -4929,18 +4965,18 @@ function nbx() {
             afterToken(text);
           },
         });
-        finish(state === "stopped" ? "stopped" : "done", undefined, { updateId, continueFrom, seq });
+        finish(state === "stopped" ? "stopped" : "done", undefined, { ...ctx0, seq });
       } catch (e) {
         // 已被「切换工具/新建题目」作废：旧流收尾交给新流程，不再回写状态
         if (seq !== this._runSeq) return true;
         if (e && e.name === "AbortError") {
-          finish("stopped", undefined, { updateId, continueFrom, seq });
+          finish("stopped", undefined, { ...ctx0, seq });
         } else {
           // 登录/额度类错误模型根本没执行，不标记；后端 error 事件回传的实际模型优先，快照兜底
           if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
           this.errorLimited = !!(e && e.limited);
-          finish("error", describeError(e, "生成失败，请稍后重试"), { updateId, continueFrom, seq });
+          finish("error", describeError(e, "生成失败，请稍后重试"), { ...ctx0, seq });
         }
       }
       return true;
@@ -5137,19 +5173,38 @@ function nbx() {
       });
     },
 
-    async retryChat() {
+    /* 整篇重来（重新生成 / 直接重试 / 换个模型重试都走这里）：
+       结果作为 activeHistoryId 那条记录的新版本追加，旧结果不退场——底部切换器
+       可在新旧版本间来回看。modelId 非空表示先用该模型（会切换当前模型，
+       与错误卡的「换个模型重试」同一行为）。
+       opts.allowEmpty：允许在没有正文时依然重来（错误卡上的「直接重试」要能
+       重试一条一个字都没产出的失败记录，那是既有能力，不能因新按钮而丢）。 */
+    async regenerate(modelId = "", opts = {}) {
       if (this.streaming) return;
+      // 版本化只覆盖通用工具面板：试卷全解、错因迁移、超标词各有自己的历史结构与入口，
+      // 万一将来被误接到这里，宁可什么都不做——run() 会按工具分派到那些路径上，
+      // 那等于悄悄做了另一件事（比如新建一条记录），比不响应更糟
+      if (this.isMigrationTool || this.isVocabTool || this.isVisualPaperTool) return;
       if (!this.submittedInput) {
-        this.toast("没有可重试的输入内容", "warn");
+        this.toast("没有可重新生成的输入内容", "warn");
         return;
       }
+      if (!opts.allowEmpty && !this.output.trim()) {
+        this.toast("没有可重新生成的内容", "warn");
+        return;
+      }
+      if (!this.ensureCanRun("当前模型需要输入使用码后才能重新生成")) return;
+      if (modelId && modelId !== this.selectedModel) this.chooseModel(modelId);
+      this.retryModelOpen = false;
       this.input = this.submittedInput;
+      // 开流前记下屏幕上的正文：新版本零产出时用它恢复（见 finalize）
+      this._regenPrevOutput = this.output;
       // run() 返回 false = 守卫阶段提前返回、请求根本没发出（如提示词确认被取消），
       // 此时把内容放回可见的输入框；只要请求真的发起了，无论成败都保持折叠——
       // 失败走错误卡，与首次失败的表现一致。
-      // 带上 activeHistoryId：整篇重来也写回原记录，同一份输入在历史里只留一条
-      const started = (await this.run({ updateId: this.activeHistoryId })) !== false;
+      const started = (await this.run({ updateId: this.activeHistoryId, newVersion: true })) !== false;
       if (!started) {
+        this._regenPrevOutput = "";
         this.inputCollapsed = false;
         this.$nextTick(() => {
           this.autoGrow();
@@ -5157,6 +5212,12 @@ function nbx() {
           if (el) el.focus();
         });
       }
+    },
+
+    /* 失败卡上的「直接重试」：整篇重来，但允许零正文（否则一条彻底失败的记录
+       就没法再试了）。 */
+    async retryChat() {
+      await this.regenerate("", { allowEmpty: true });
     },
 
     async retryVisualPaper() {
@@ -5187,6 +5248,91 @@ function nbx() {
       }
     },
 
+    /* 模型弹窗的两个用途共用一套列表：retry = 失败后换个模型重试（禁掉刚才失败的那个），
+       regen = 重新生成（不禁任何模型，用同一个模型再跑一遍是完全正当的用法）。 */
+    openModelPicker(mode) {
+      if (this.streaming) return;
+      this.retryModelMode = mode === "regen" ? "regen" : "retry";
+      this.retryModelOpen = true;
+    },
+    pickModelFromDialog(modelId) {
+      this.retryModelOpen = false;
+      if (this.retryModelMode === "regen") this.regenerate(modelId);
+      else this.chooseModelAndRetry(modelId);
+    },
+    /* 弹窗里的主按钮：用当前模型重新生成（不换模型，只整篇重来） */
+    regenerateWithCurrentModel() {
+      this.retryModelOpen = false;
+      this.regenerate();
+    },
+
+    /* ============ 回答版本（重新生成保留的历次结果） ============ */
+    /* 版本状态只读自当前活动记录的 versions。模板里只能走这些 getter：
+       它们调 NbxVersions 的只读接口，会写容器的 ensure/append 一律只在事件与
+       收尾里调用——在 getter 里写响应式字段会触发重渲染循环。 */
+    get versionCount() {
+      return NbxVersions.count(this._verItem());
+    },
+    get versionIndex() {
+      return NbxVersions.activeIndex(this._verItem());
+    },
+    get currentVersionModel() {
+      const v = NbxVersions.active(this._verItem());
+      return (v && v.model) || "";
+    },
+    get versionTip() {
+      if (this.versionCount <= 1) return "";
+      return "第 " + (this.versionIndex + 1) + "/" + this.versionCount + " 版"
+        + (this.currentVersionModel ? " · 由 " + this.shortModel(this.currentVersionModel) + " 生成" : "");
+    },
+    /* 屏幕上这份结果对应的记录。列表里持有的是索引项，正文按需水合——
+       版本数组在正文里，没水合就看不到版本（此时切换器不显示，不会有错的表现）。 */
+    _verItem() {
+      if (!this.activeHistoryId) return null;
+      return this.history.find((h) => h.id === this.activeHistoryId) || null;
+    },
+    /* 切换版本：‹ 上一版 / › 下一版。越界与生成中都不动（返回空）。
+       切换本身是一次真实改动（要跨线路同步），落盘走 _persistHistoryItem 刷 updatedAt。 */
+    switchVersion(delta) {
+      if (this.streaming) return null;
+      const item = this._verItem();
+      if (!item) return null;
+      this._hydrateHistory(item);
+      const v = NbxVersions.switchTo(item, delta);
+      if (!v) return null;
+      this._persistHistoryItem(item);
+      this._showVersion(item, v);
+      return v;
+    },
+    /* 把屏幕上的一切（正文、错误卡、续写入口、失败归因）都换成该版本的状态。
+       状态映射与 openHistory 完全一致：失败→错误卡、被停→留续写入口、其余→查看态。
+       换版本不动 selectedModel（那是「下一次用哪个模型」，与「这版是谁生成的」无关），
+       所以只在模型不同时提示一句，免得用户以为模型被换掉了。 */
+    _showVersion(item, v) {
+      this.output = item.output;
+      this.errorMsg = item.error || "";
+      this.status = item.error ? "error" : (item.partial ? "stopped" : "history");
+      this.failedModel = item.error ? (item.model || "") : "";
+      this.errorRetryable = true;
+      this.errorLimited = false;
+      this.resetReasoning();
+      // 与 openHistory 同一套：切回来的长文先折叠，首屏不必等全文解析
+      this.outputFoldEligible = true;
+      this._outputDirty = true;
+      this.doRender();
+      // 在新内容落地之后再把视口拉回顶部（同步设置会按旧高度被浏览器钳制）
+      this.$nextTick(() => {
+        const el = this.$refs.resultScroll;
+        if (el) el.scrollTop = 0;
+      });
+      // 只在「这一版不是当前模型生成的」时才出声：切换本身有正文与计数器的变化，
+      // 每点一下都弹一条提示反而吵；模型不同才是需要提醒的信息（用户容易以为
+      // 选中的模型被换掉了）
+      if (v.model && v.model !== this.selectedModel) {
+        this.toast("已切到第 " + (this.versionIndex + 1) + " 版（由 " + this.shortModel(v.model) + " 生成）");
+      }
+    },
+
     editSubmittedInput() {
       if (this.streaming) return;
       const fileName = this.submittedFileName;
@@ -5207,8 +5353,10 @@ function nbx() {
       if (fileName) this.toast(`文件「${fileName}」的内容已转回文本，可直接编辑后重新执行`);
     },
 
-    /* 收尾。opts.updateId 非空 = 本轮是续写/重试，结果写回该历史记录而不是新建；
-       opts.continueFrom 非空 = 本轮是续写，还要处理「其实没有新增内容」的情形。 */
+    /* 收尾。opts.updateId 非空 = 本轮是续写/重试/重新生成，结果写回该历史记录而不是新建；
+       opts.continueFrom 非空 = 本轮是续写，还要处理「其实没有新增内容」的情形；
+       opts.newVersion 为真 = 本轮是整篇重来，结果作为新版本追加，旧版本留在切换器里；
+       opts.modelUsed = 本轮请求发起时的模型快照，记录「这一版由谁生成」只能用它。 */
     finalize(state, errMsg, seq, opts = {}) {
       // 代次不符 = 这次流已被切换工具/新建题目作废，收尾交给新流程
       if (seq !== undefined && seq !== this._runSeq) return;
@@ -5225,6 +5373,20 @@ function nbx() {
       }
       const updateId = opts.updateId || null;
       const origin = updateId ? this.history.find(h => h.id === updateId) : null;
+      // 镜像重读会把列表整份换成索引项：不先把正文读回来，下面往版本容器里追加时
+      // 会把「没有旧正文」当成事实，把已有版本连同正文一起丢掉。
+      if (origin) this._hydrateHistory(origin);
+      const modelUsed = opts.modelUsed || this.selectedModel;
+      // 本轮到底有没有产出。新版本模式下要用它区分「失败但留下了半成品」与
+      // 「一个字都没写出来」，后者绝不能动记录里已有的版本
+      const producedNew = !!this.output.trim();
+      // 新版本整篇重来却一个字都没产出（开流即失败 / 刚开跑就被停）：屏幕上恢复
+      // 旧结果——一次失败的重新生成不能把用户已经看到的内容清空。记录本身没被动过
+      // （新版本只在有产出时才写入），恢复的就是它。
+      if (opts.newVersion && !producedNew) {
+        this.output = this._regenPrevOutput || "";
+        this._outputDirty = true;
+      }
       // 续写一个字都没新增（模型只回了「已完整」的哨兵，或用户刚开跑就停下）：
       // 剥掉哨兵、保持记录原样——不能因此把失败/中断的记录标成已完成，
       // 那句交代话也不该拼进成品文档。报错不在此列：接口 429/500 时一个字都没有，
@@ -5247,11 +5409,29 @@ function nbx() {
         // 出错同样入历史：已生成的部分内容与用户输入都要留得住。
         // 续写/重试失败写回原记录，且本轮没产出就保留原正文，别越重试越少
         if (origin) {
-          if (this.output.trim()) origin.output = this.output;
-          origin.error = String(this.errorMsg).slice(0, 300);
-          origin.partial = false;
-          origin.model = this.failedModel || this.selectedModel;
-          this._persistHistoryItem(origin);
+          if (opts.newVersion) {
+            // 整篇重来失败：有残文就当一版留下（切回去还能看见），旧版本原样不动；
+            // 一个字都没产出则完全不碰记录——旧结果是好的，不能因为一次失败的尝试
+            // 就把它标成「生成失败」，更不该凭空刷 updatedAt 去赢线路合并
+            if (producedNew) {
+              NbxVersions.append(origin, {
+                output: this.output,
+                model: this.failedModel || modelUsed,
+                partial: false,
+                // 与下面非版本化路径同一个截断口径：记录里的失败原因是给列表角标与
+                // 重开时的错误卡看的，完整原因在屏幕上的错误卡里
+                error: String(this.errorMsg).slice(0, 300),
+              });
+              this._persistHistoryItem(origin);
+            }
+          } else {
+            if (producedNew) origin.output = this.output;
+            origin.error = String(this.errorMsg).slice(0, 300);
+            origin.partial = false;
+            origin.model = this.failedModel || modelUsed;
+            NbxVersions.syncActive(origin);
+            this._persistHistoryItem(origin);
+          }
           this.activeHistoryId = origin.id;
         } else {
           const created = this.pushFailedHistory(this.errorMsg);
@@ -5264,14 +5444,25 @@ function nbx() {
         // 续写/重试成功后必须撤掉错误卡：这条路不再经过 run() 的 errorMsg 复位，
         // 否则上一次的失败提示会一直挂在一份已经写完的内容上
         this.errorMsg = "";
-        if (this.output.trim()) {
+        if (producedNew) {
           if (origin) {
-            // 续写/重试回到原记录：状态随最后一次结果刷新——成功即清掉失败标记，
-            // 用户停止则落回「已停止」，续写入口继续留着
-            origin.output = this.output;
-            origin.partial = state === "stopped";
-            origin.error = "";
-            origin.model = this.selectedModel;
+            if (opts.newVersion) {
+              // 整篇重来成功：追加为新版本并激活它，旧结果留在切换器里
+              NbxVersions.append(origin, {
+                output: this.output,
+                model: modelUsed,
+                partial: state === "stopped",
+                error: "",
+              });
+            } else {
+              // 续写/重试回到原记录的活动版本：状态随最后一次结果刷新——成功即清掉
+              // 失败标记，用户停止则落回「已停止」，续写入口继续留着
+              origin.output = this.output;
+              origin.partial = state === "stopped";
+              origin.error = "";
+              origin.model = modelUsed;
+              NbxVersions.syncActive(origin);
+            }
             this._persistHistoryItem(origin);
             this.activeHistoryId = origin.id;
             // 失败记录从来没生成过标题，续写成功后补一条，否则列表里永远只有输入摘要
@@ -5284,6 +5475,8 @@ function nbx() {
         }
         if (state === "stopped") this.toast("已停止生成", "warn");
       }
+      // 旧结果快照用完即弃：它只在「新版本整篇重来且零产出」这一刻有意义
+      this._regenPrevOutput = "";
     },
 
     /* 这一轮续写有没有产出新内容：只认「零新增」和「仅回了完成标记」。
@@ -6970,6 +7163,9 @@ function nbx() {
         // 这次重试一个字都没产出时保留上一条已生成的内容，别把内容越重试越少
         if (!String(args.output || "").trim() && prev.output) args.output = prev.output;
         Object.assign(prev, args);
+        // 合并进来的正是「活动版本」的字段：有条目容器时同步回填，否则下次切换版本
+        // 会把这次合并的内容覆盖回旧正文
+        NbxVersions.syncActive(prev);
         this._persistHistoryItem(prev);
         return prev;
       }
@@ -7531,6 +7727,9 @@ function nbx() {
       // 索引整体重写：复用既有的「配额不足 → 淘汰最旧 → 重试」路径
       this.history = merged.history.map((e) => e.index);
       this._persistHistoryIndex();
+      // 与镜像重读同理：屏幕上这条记录要把正文读回来，否则版本切换器会凭空消失
+      const curActive = this.history.find((h) => h && h.id === this.activeHistoryId);
+      if (curActive) this._hydrateHistory(curActive);
 
       const favPayload = JSON.stringify(merged.favorites);
       let curFav = "";
@@ -7767,6 +7966,10 @@ function nbx() {
         this._mirrorReloadPending = false;
         this.history = lsGet(LS.history, []);
         this.favorites = lsGet(LS.favorites, []);
+        // 重读后列表只剩索引项，屏幕上那条记录得把正文读回来：版本数组在正文里，
+        // 不水合就会出现「结果还在、切换器却消失」。此处必为空闲（上面刚判过 isBusy）。
+        const cur = this.history.find((h) => h && h.id === this.activeHistoryId);
+        if (cur) this._hydrateHistory(cur);
       }, 400);
     },
     /* 本机发生变更：登记进待同步队列并安排一次推送。

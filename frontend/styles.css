@@ -759,6 +759,46 @@ html[data-theme="sora"] .mascot-peeking {
 }
 
 /* ============================================================
+   回答版本切换器（重新生成保留的历次结果）
+   放在底部状态条里，与复制/导出同排：常驻可见，长文不必滚到底才能切换。
+   到头的箭头置灰（disabled），计数用等宽数字，切换时宽度不跳动。 */
+.ver-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  flex: none;
+  padding: 0 0.15rem;
+  border-radius: 0.6rem;
+  background: var(--hover-bg);
+  border: 1px solid var(--border);
+}
+.ver-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: none;
+  border-radius: 0.45rem;
+  color: var(--text-dim);
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.ver-arrow:hover:not(:disabled) {
+  /* 容器底色已是 --hover-bg，箭头再来一层同样的半透明几乎看不出变化，
+     所以这里用文字色的淡底，明暗主题下都清晰可见 */
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--text);
+}
+/* 到头了：保持可见但不响应，用户一眼看出「这边没有更多了」 */
+.ver-arrow:disabled { color: var(--text-faint); opacity: 0.45; cursor: default; }
+.ver-count {
+  min-width: 2.1rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+/* ============================================================
    左侧工具栏
    ============================================================ */
 .logo-tile {

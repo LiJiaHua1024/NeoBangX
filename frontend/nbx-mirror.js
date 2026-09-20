@@ -41,6 +41,12 @@
   // 整个 envelope 的体积上限，防超大文件把内存/存储打爆
   var MAX_ENVELOPE_BYTES = 64 * 1024 * 1024;
 
+  // 回答版本数组（versions）的上限，与 nbx-versions.js 的 LIMIT / TOTAL_CHARS 同口径。
+  // 这里刻意宽一档：镜像层永远不该比应用层删得更狠，否则一份应用允许的记录会在
+  // 跨线路时被削掉一版。两处需同步修改。
+  var VERSION_LIMIT = 8;
+  var VERSION_TOTAL_CHARS = 1200 * 1000;
+
   // 字段长度上限：只约束有明确语义的短字段，正文类字段由体积上限兜
   var MAX_FIELD = {
     title: 512,
@@ -240,11 +246,16 @@
       inputHead: str(raw.inputHead, MAX_FIELD.inputHead),
       hasMigration: !!raw.hasMigration,
       hasPaper: !!raw.hasPaper,
-      updatedAt: updatedAtOf(raw),
     };
+    // 版本数（列表角标用）只在输入里有时才输出：老数据的摘要必须逐字节保持不变，
+    // 否则用户手里已有的备份文件会因为「重算摘要多出一个默认字段」被判为损坏而拒收。
+    // 与 buildEnvelope 里 prefs 只在非空时输出的道理完全一样。
+    if (raw.verCount !== null && raw.verCount !== undefined) out.verCount = num(raw.verCount, 1);
+    out.updatedAt = updatedAtOf(raw);
     var known = {
       v: 1, id: 1, toolId: 1, toolName: 1, icon: 1, title: 1, error: 1, partial: 1,
       createdAt: 1, model: 1, inputHead: 1, hasMigration: 1, hasPaper: 1, updatedAt: 1,
+      verCount: 1,
       _bodyLoaded: 1,
     };
     var keys = Object.keys(raw);
@@ -259,7 +270,60 @@
     return out;
   }
 
-  /* 正文：input / output / fileName 三件套 + 可选快照。 */
+  /* 回答版本数组：重新生成时保留的历次结果（见 nbx-versions.js）。
+     逐项白名单 + 截断；只要有一项认不出，或活动版本不在列表里，就整块丢弃——
+     一份缺了活动版本的列表会让应用切不回它该显示的那一版，而退回单版本记录
+     （output 是活动版本的投影，仍在）总好过带一份自相矛盾的数据过河。
+     裁剪必须**幂等且确定**：buildEnvelope / validateEnvelope / 接收端 applyOps
+     三处都要按它算摘要，同样的输入必须得到同样的输出。 */
+  function sanitizeVersions(raw, activeId) {
+    if (!Array.isArray(raw)) return null;
+    var list = [];
+    for (var i = 0; i < raw.length; i += 1) {
+      var v = raw[i];
+      if (!isPlainObject(v) || !validId(v.id)) return null;
+      var id = str(v.id, MAX_FIELD.id);
+      var output = str(v.output, MAX_ITEM_BYTES);
+      if (!id || !output) return null;
+      // 键序固定（与 nbx-versions.js 的 makeEntry 一致）：往返一次摘要才不会漂
+      list.push({
+        id: id,
+        output: output,
+        model: str(v.model, MAX_FIELD.model),
+        at: num(v.at, 0),
+        partial: !!v.partial,
+        error: str(v.error, MAX_FIELD.error),
+      });
+    }
+    if (list.length < 2 || list.length > VERSION_LIMIT) return null;
+    var act = str(activeId, MAX_FIELD.id);
+    if (!act) return null;
+    var hit = false;
+    for (var j = 0; j < list.length; j += 1) {
+      if (list[j].id === act) hit = true;
+    }
+    if (!hit) return null;
+    // 超字数上限时从最旧的非活动版本开始裁，活动版本永不裁掉（与业务侧同一规则）
+    while (list.length > 1 && versionChars(list) > VERSION_TOTAL_CHARS) {
+      var cut = -1;
+      for (var m = 0; m < list.length; m += 1) {
+        if (list[m].id !== act) { cut = m; break; }
+      }
+      if (cut < 0) break;
+      list.splice(cut, 1);
+    }
+    return list;
+  }
+
+  function versionChars(list) {
+    var n = 0;
+    for (var i = 0; i < list.length; i += 1) n += str(list[i].output, MAX_ITEM_BYTES).length;
+    return n;
+  }
+
+  /* 正文：input / output / fileName 三件套 + 可选快照 + 可选回答版本。
+     新增字段一律**追加在已有键之后**且只在输入里有时才输出：老信封（没有它们）
+     重算出来的摘要必须与当年导出时逐字节一致，否则旧备份会被判为损坏。 */
   function sanitizeBody(raw) {
     if (!isPlainObject(raw)) return null;
     var out = {
@@ -271,6 +335,11 @@
     if (mig) out.migration = mig;
     var paper = cloneOpaque(raw.visualPaper);
     if (paper) out.visualPaper = paper;
+    var vers = sanitizeVersions(raw.versions, raw.activeVersionId);
+    if (vers) {
+      out.versions = vers;
+      out.activeVersionId = str(raw.activeVersionId, MAX_FIELD.id);
+    }
     return out;
   }
 
@@ -706,6 +775,8 @@
     DEFAULT_LIMITS: DEFAULT_LIMITS,
     MAX_ITEM_BYTES: MAX_ITEM_BYTES,
     MAX_ENVELOPE_BYTES: MAX_ENVELOPE_BYTES,
+    VERSION_LIMIT: VERSION_LIMIT,
+    VERSION_TOTAL_CHARS: VERSION_TOTAL_CHARS,
     utf8Bytes: utf8Bytes,
     utf8BytesArray: utf8BytesArray,
     sha256Hex: sha256Hex,
