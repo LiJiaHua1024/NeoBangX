@@ -1128,6 +1128,20 @@ html[data-theme="sora"] .mascot-peeking {
   background: color-mix(in srgb, #10b981 15%, transparent);
   border: 1px solid color-mix(in srgb, #10b981 38%, transparent);
 }
+/* 免码模型：蓝色系，与绿色「免费」区分（免码必然免费，双标签并列） */
+.ms-nocode {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.16rem 0.36rem;
+  border-radius: 999px;
+  color: #60a5fa;
+  background: color-mix(in srgb, #3b82f6 15%, transparent);
+  border: 1px solid color-mix(in srgb, #3b82f6 38%, transparent);
+}
 .ms-item .ms-ring {
   position: relative;
   width: 28px;

@@ -3074,7 +3074,7 @@ function nbx() {
         });
         if (!res.ok) {
           if (res.status === 401) {
-            const msg = "请先输入使用码，或改用带「免费」标签的模型";
+            const msg = "请先输入使用码，或改用带「免码」标签的模型";
             this.handleAuthFailure(msg);
             throw new Error(msg);
           }
@@ -3519,10 +3519,16 @@ function nbx() {
       const m = this.models.find((x) => x.id === target);
       return !!(m && m.is_free);
     },
-    /* 当前模型是否允许无码调用（免费 + 无码可用） */
+    /* 指定（默认当前选中）模型是否免码可用：无需使用码即可调用。
+       后端下发的 free_no_code 已含 is_free 与门，免码模型必然免费 */
+    isNoCodeModel(id) {
+      const target = id || this.selectedModel;
+      const m = this.models.find((x) => x.id === target);
+      return !!(m && m.free_no_code);
+    },
+    /* 当前模型是否允许无码调用 */
     get modelNoCodeAllowed() {
-      const m = this.models.find((x) => x.id === this.selectedModel);
-      return !!(m && m.is_free && m.free_no_code);
+      return this.isNoCodeModel();
     },
     /* 是否存在可无码试用的免费模型（决定首页文案与默认模型） */
     get hasFreeTrial() {
@@ -3534,15 +3540,16 @@ function nbx() {
       if (this.isFreeModel()) return false;
       return true;
     },
-    /* 不扣次数时的提示文案（免费模型 / 需使用码），扣次数时为空串 */
+    /* 不扣次数时的提示文案（免费 / 免码模型 / 需使用码），扣次数时为空串 */
     get chargeNote() {
       if (this.willConsumeQuota) return "";
-      if (this.isFreeModel()) {
-        return this.isAuthenticated
-          ? "免费模型，限额内不消耗次数；超出后按次消耗次数"
-          : "免费模型，无需使用码，本次生成不消耗额度";
+      // 未登录时只有免码模型能执行，免费但需码的模型同样要输码
+      if (!this.isAuthenticated) {
+        return this.modelNoCodeAllowed
+          ? "免码模型，无需使用码，本次生成不消耗额度"
+          : "当前模型需要输入使用码，或改选带「免码」标签的模型";
       }
-      if (!this.isAuthenticated) return "当前模型需要输入使用码，或改选带「免费」标签的模型";
+      if (this.isFreeModel()) return "免费模型，限额内不消耗次数；超出后按次消耗次数";
       return "";
     },
     /* 401/403 统一处理：已登录视为本机凭证失效/额度耗尽，清掉本地登录态
@@ -3558,7 +3565,7 @@ function nbx() {
     ensureCanRun(message) {
       if (this.isAuthenticated || this.modelNoCodeAllowed) return true;
       const parts = [message || "请先输入使用码"];
-      if (this.hasFreeTrial) parts.push("也可在模型列表切换带「免费」标签的模型直接试用");
+      if (this.hasFreeTrial) parts.push("也可在模型列表切换带「免码」标签的模型直接试用");
       this.openCodeModal(parts.join("；"));
       return false;
     },

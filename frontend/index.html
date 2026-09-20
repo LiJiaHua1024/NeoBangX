@@ -183,7 +183,7 @@
 
             <p class="fade-up mt-5 max-w-xl text-dim leading-relaxed" style="font-size:1.02rem;animation-delay:.15s">
               31 个中学英语教学 AI 工具。<br>
-              <span x-show="hasFreeTrial">带「免费」标签的模型无需使用码即可试用，其他工具输入使用码开始。</span>
+              <span x-show="hasFreeTrial">带「免费」标签的模型不消耗使用码次数，带「免码」标签的模型无需使用码即可试用；其他工具输入使用码开始。</span>
               <span x-show="!hasFreeTrial">输入使用码即可开始，额度用完自动锁定。</span>
             </p>
 
@@ -213,7 +213,7 @@
                       <span x-html="icon('book-open','w-4 h-4')"></span>先逛逛 31 个工具
                     </button>
                     <p class="text-[11px] text-faint leading-relaxed">
-                      无需使用码即可浏览全部工具<span x-show="hasFreeTrial">；带「免费」标签的模型可直接试用</span>。
+                      无需使用码即可浏览全部工具<span x-show="hasFreeTrial">；带「免码」标签的模型可直接试用</span>。
                     </p>
                     <p class="text-[11px] text-faint leading-relaxed">为识别使用码共享，本工具会采集匿名浏览器指纹，不含个人身份信息。</p>
                   </div>
@@ -244,7 +244,7 @@
                 <div class="font-semibold text-sm flex items-center gap-1.5">
                   <span x-html="icon('key','w-4 h-4')"></span>输入使用码
                 </div>
-                <p class="text-xs text-dim mt-1.5 leading-relaxed">在首页或左下角输入使用码，验证后自动保存在本机<span x-show="hasFreeTrial">；带「免费」标签的模型可直接试用</span>。</p>
+                <p class="text-xs text-dim mt-1.5 leading-relaxed">在首页或左下角输入使用码，验证后自动保存在本机<span x-show="hasFreeTrial">；带「免码」标签的模型可直接试用</span>。</p>
               </div>
               <div class="glass-soft rounded-2xl p-5">
                 <div class="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm mb-3"
@@ -327,6 +327,7 @@
                             <div class="ms-item-title">
                               <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
                               <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                              <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                             </div>
                             <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                           </div>
@@ -600,6 +601,7 @@
                             <div class="ms-item-title">
                               <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
                               <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                              <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                             </div>
                             <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                           </div>
@@ -790,6 +792,7 @@
                             <div class="ms-item-title">
                               <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
                               <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                              <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                             </div>
                             <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                           </div>
@@ -1574,6 +1577,7 @@
                             <div class="ms-item-title">
                               <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
                               <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                              <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                             </div>
                             <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                           </div>
@@ -2193,6 +2197,7 @@
                   <div class="ms-item-title">
                     <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
                     <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                    <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                   </div>
                   <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
                   <div class="ms-item-sub ms-item-failed" x-show="retryModelMode !== 'regen' && m.id === failedModel">刚才失败</div>
