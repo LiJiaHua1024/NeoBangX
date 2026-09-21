@@ -58,6 +58,8 @@ NeoBangX —— 面向中学英语教师的 AI 辅助教学平台。
 │   │       ├── usage_code.py    # 使用码生成/校验/扣次
 │   │       └── runtime_config.py# 运行时配置管理
 │   ├── data/                    # SQLite 数据目录（运行时创建）
+│   ├── mock_backend/            # 测试用假后端（不进镜像，见 4.6）
+│   ├── tests/
 │   ├── pyproject.toml
 │   └── .env.example
 ├── frontend/                    # 主站前端（Alpine.js + Tailwind v4，纯静态）
@@ -117,6 +119,29 @@ uv run uvicorn app.admin_main:app --host 0.0.0.0 --port 8001 --reload
 首次启动时，如果数据库中没有任何使用码，后端会自动创建一把 **无限额度的使用码（NBXU-...）**，并写入数据目录下的 `bootstrap_code.txt`（不打印到日志）。请取出并妥善保存。
 
 管理后台本身零登录（仅内网访问），不需要使用码即可进入并生成更多使用码。旧版本遗留的 `bootstrap_admin.txt` 已失效，可手动删除；其中的 NBXA 码仍可作为无限额度使用码继续使用。
+
+### 4.6 用假后端测前端（不烧钱）
+
+改前端要在浏览器里验证时，不必启动真实后端、也不必配 API Key。假后端会托管前端并打桩全部主站 API，LLM 输出由本地场景引擎按需演出——包括"生成到一半中断"这种真实链路里很难构造的情况。
+
+```bash
+cd backend
+uv run python -m mock_backend.main          # http://127.0.0.1:8000/ 就是完整可点的前端
+```
+
+在输入框首行写一行指令即可指定这次请求演什么，例如：
+
+```text
+#mock mid-error at=30     # 出 30 个 token 后报错 → 错误卡
+#mock mid-truncate at=30  # 直接断流 → 「生成中断，内容可能不完整」
+#mock cancel              # 慢速流，留出点「停止」的窗口
+#mock paper               # 合法试卷样本，用于测解卷/打印/导出
+```
+
+控制台（切场景、看前端实际发出的请求、改额度）在 `http://127.0.0.1:8000/__mock__/`。它还能充当 OpenAI 兼容的假 LLM 上游，把真实后端的 provider 指过来，零成本测多通道 fallback 与计费链路。
+
+- 给人看的完整说明：[backend/mock_backend/README.md](backend/mock_backend/README.md)（场景清单、控制台、镜像双线路、浏览器验收清单、已知差异）
+- **给自动化测试的 Agent 抄的操作闭环**：[docs/MOCK_BACKEND_TESTING.md](docs/MOCK_BACKEND_TESTING.md)（起服务 → 设场景 → 驱动页面 → 断言 → 复位，含常用配方）
 
 ---
 
