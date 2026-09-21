@@ -586,6 +586,7 @@ function adminApp() {
     mirror: null,
     savingConfig: false,
     choresModelMenuOpen: false,
+    ocrModelMenuOpen: false,
     // 工具推理规则（工具注册表来自 GET /api/admin/tools，与用户端分组一致）
     adminToolGroups: [],
     adminToolsLoaded: false,
@@ -667,7 +668,7 @@ function adminApp() {
     modelModalIndex: null,
     modelForm: {
       id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null,
-      chores_only: false, enabled: true,
+      user_usable: true, ocr_usable: false, chores_usable: true, enabled: true,
       is_free: false, free_no_code: false,
       free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
     },
@@ -795,11 +796,49 @@ function adminApp() {
       if (m) return m.name || m.id;
       return this.configForm.chores_model;
     },
+    get ocrModelLabel() {
+      if (!this.configForm.ocr_model) return `跟随默认（${this.defaultModelLabel}）`;
+      const m = this.configForm.models.find((x) => x.id === this.configForm.ocr_model);
+      if (m) return m.name || m.id;
+      return this.configForm.ocr_model;
+    },
+    /* 用途选择器只列勾了对应能力且未禁用的模型：从源头不给选，省得选了再被后端拦下 */
+    get choresSelectableModels() {
+      return this.configForm.models.filter(
+        (m) => m.enabled !== false && m.chores_usable !== false
+      );
+    },
+    get ocrSelectableModels() {
+      return this.configForm.models.filter(
+        (m) => m.enabled !== false && !!m.ocr_usable
+      );
+    },
+    /* 「跟随默认」这一项的前提是默认模型自己开了对应能力：
+       默认模型干不了这件事时跟随它，等于配了个干不了的模型 */
+    get defaultModelEntry() {
+      return this.configForm.models.find((m) => m.id === this.configForm.default_model) || null;
+    },
+    get canFollowDefaultForChores() {
+      const m = this.defaultModelEntry;
+      return !!m && m.enabled !== false && m.chores_usable !== false;
+    },
+    get canFollowDefaultForOcr() {
+      const m = this.defaultModelEntry;
+      return !!m && m.enabled !== false && !!m.ocr_usable;
+    },
+    /* 模型表格里的用途徽章：只列出勾上的项，禁用模型由红色徽章单独表达 */
+    modelCapabilityTags(m) {
+      const tags = [];
+      if (m.user_usable !== false) tags.push("用户");
+      if (m.ocr_usable) tags.push("OCR");
+      if (m.chores_usable !== false) tags.push("Chores");
+      return tags;
+    },
     get defaultModelMissing() {
       return (
         !!this.configForm.default_model &&
         this.configForm.models.length > 0 &&
-        !this.configForm.models.some((m) => m.id === this.configForm.default_model && !m.chores_only && m.enabled !== false)
+        !this.configForm.models.some((m) => m.id === this.configForm.default_model && m.user_usable !== false && m.enabled !== false)
       );
     },
     get providersById() {
@@ -2184,6 +2223,22 @@ function adminApp() {
       try {
         const data = await this.api("/api/admin/config");
         const cfg = data.config || {};
+        // 能力位：老数据只有 chores_only 时按老语义回填（与后端 parse_capabilities 一致）
+        const capsOf = (m) => {
+          const hasCaps = m.user_usable != null || m.ocr_usable != null || m.chores_usable != null;
+          if (hasCaps) {
+            return {
+              user_usable: m.user_usable !== false,
+              ocr_usable: !!m.ocr_usable,
+              chores_usable: m.chores_usable !== false,
+            };
+          }
+          return {
+            user_usable: !m.chores_only,
+            ocr_usable: false,
+            chores_usable: true,
+          };
+        };
         this.configForm = {
           default_model: cfg.default_model || "",
           models: Array.isArray(cfg.models)
@@ -2194,7 +2249,7 @@ function adminApp() {
                 score: m.score ?? null,
                 reasoning_effort: m.reasoning_effort || null,
                 thinking_budget: m.thinking_budget || null,
-                chores_only: !!m.chores_only,
+                ...capsOf(m),
                 enabled: m.enabled !== false,
                 is_free: !!m.is_free,
                 free_no_code: !!m.is_free && !!m.free_no_code,
@@ -2208,6 +2263,8 @@ function adminApp() {
               }))
             : [],
           chores_model: cfg.chores_model || "",
+          ocr_model: cfg.ocr_model || "",
+          ocr_max_tokens: Number(cfg.ocr_max_tokens) || 8192,
           max_tokens: Number(cfg.max_tokens) || 4096,
           timeout: Number(cfg.timeout) || 120,
           first_token_timeout: Number(cfg.first_token_timeout) || 30,
@@ -2287,7 +2344,7 @@ function adminApp() {
       this.modelModalIndex = null;
       this.modelForm = {
         id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null,
-        chores_only: false, enabled: true,
+        user_usable: true, ocr_usable: false, chores_usable: true, enabled: true,
         is_free: false, free_no_code: false,
         free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
       };
@@ -2307,7 +2364,9 @@ function adminApp() {
         score: m.score ?? null,
         mode: m.thinking_budget ? "budget" : m.reasoning_effort || "default",
         thinking_budget: m.thinking_budget || null,
-        chores_only: !!m.chores_only,
+        user_usable: m.user_usable !== false,
+        ocr_usable: !!m.ocr_usable,
+        chores_usable: m.chores_usable !== false,
         enabled: m.enabled !== false,
         is_free: !!m.is_free,
         free_no_code: !!m.is_free && !!m.free_no_code,
@@ -2367,8 +2426,15 @@ function adminApp() {
         this.toast("推荐评分需为 0 到 10 之间的数字，留空则不展示", "error");
         return;
       }
-      const chordsOnly = !!this.modelForm.chores_only;
       const enabled = this.modelForm.enabled !== false;
+      // 三项用途：未禁用的模型至少要勾一项，否则它在任何入口都到不了
+      const userUsable = !!this.modelForm.user_usable;
+      const ocrUsable = !!this.modelForm.ocr_usable;
+      const choresUsable = !!this.modelForm.chores_usable;
+      if (enabled && !userUsable && !ocrUsable && !choresUsable) {
+        this.toast("请至少勾选一项用途（用户可用 / 用于 OCR / 用于 Chores），或把该模型禁用", "error");
+        return;
+      }
       const isFree = !!this.modelForm.is_free;
       // 无码可用只在免费模型下有意义；限额未填/0/-1 一律归零（= 不限制）
       const freeNoCode = isFree && !!this.modelForm.free_no_code;
@@ -2379,8 +2445,8 @@ function adminApp() {
       }
       const editingOldId = this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
       const targetId = id;
-      if (chordsOnly && targetId && this.configForm.default_model === targetId) {
-        this.toast("默认模型不可设为仅 Chores，请先切换默认模型", "error");
+      if (!userUsable && targetId && this.configForm.default_model === targetId) {
+        this.toast("默认模型必须勾选「用户可用」，请先切换默认模型", "error");
         return;
       }
       if (!enabled && targetId && this.configForm.default_model === targetId) {
@@ -2391,6 +2457,18 @@ function adminApp() {
         this.toast("该模型正被用作 Chores 模型，请先切换 Chores 模型再禁用", "error");
         return;
       }
+      if (!enabled && targetId && this.configForm.ocr_model === targetId) {
+        this.toast("该模型正被用作 OCR 模型，请先切换 OCR 模型再禁用", "error");
+        return;
+      }
+      if (!choresUsable && targetId && this.configForm.chores_model === targetId) {
+        this.toast("该模型正被用作 Chores 模型，请先切换 Chores 模型，或为它勾上「用于 Chores」", "error");
+        return;
+      }
+      if (!ocrUsable && targetId && this.configForm.ocr_model === targetId) {
+        this.toast("该模型正被用作 OCR 模型，请先切换 OCR 模型，或为它勾上「用于 OCR」", "error");
+        return;
+      }
       const entry = {
         id,
         name: (this.modelForm.name || "").trim(),
@@ -2398,7 +2476,9 @@ function adminApp() {
         score: this.modelForm.score,
         reasoning_effort: mode !== "default" && mode !== "budget" ? mode : null,
         thinking_budget: mode === "budget" ? parseInt(this.modelForm.thinking_budget, 10) : null,
-        chores_only: chordsOnly,
+        user_usable: userUsable,
+        ocr_usable: ocrUsable,
+        chores_usable: choresUsable,
         enabled,
         is_free: isFree,
         free_no_code: freeNoCode,
@@ -2416,8 +2496,11 @@ function adminApp() {
         if (oldId && this.configForm.chores_model === oldId) {
           this.configForm.chores_model = id;
         }
+        if (oldId && this.configForm.ocr_model === oldId) {
+          this.configForm.ocr_model = id;
+        }
       }
-      if (!this.configForm.default_model && !chordsOnly && enabled) this.configForm.default_model = id;
+      if (!this.configForm.default_model && userUsable && enabled) this.configForm.default_model = id;
       this.modelModalOpen = false;
       // 自动保存，无需用户再点保存配置即可绑定 Provider
       try {
@@ -2439,11 +2522,14 @@ function adminApp() {
       if (!ok) return;
       this.configForm.models.splice(i, 1);
       if (this.configForm.default_model === m.id) {
-        const next = this.configForm.models.find(x => !x.chores_only && x.enabled !== false) || this.configForm.models[0];
+        const next = this.configForm.models.find(x => x.user_usable !== false && x.enabled !== false) || this.configForm.models[0];
         this.configForm.default_model = next?.id || "";
       }
       if (this.configForm.chores_model === m.id) {
         this.configForm.chores_model = "";
+      }
+      if (this.configForm.ocr_model === m.id) {
+        this.configForm.ocr_model = "";
       }
     },
 
@@ -2588,8 +2674,8 @@ function adminApp() {
 
     setDefaultModel(id) {
       const m = this.configForm.models.find(x => x.id === id);
-      if (m && m.chores_only) {
-        this.toast("仅 Chores 模型不可设为默认", "error");
+      if (m && m.user_usable === false) {
+        this.toast("未勾选「用户可用」的模型不可设为默认，请先勾上该项", "error");
         return;
       }
       if (m && m.enabled === false) {
@@ -2632,13 +2718,19 @@ function adminApp() {
         return;
       }
       const defaultHit = this.configForm.models.find(m => m.id === this.configForm.default_model);
-      if (defaultHit && defaultHit.chores_only) {
-        this.toast("默认模型不可为仅 Chores 模型", "error");
+      if (defaultHit && defaultHit.user_usable === false) {
+        this.toast("默认模型必须勾选「用户可用」", "error");
         return;
       }
       if (defaultHit && defaultHit.enabled === false) {
         this.toast("默认模型已禁用，请先切换默认模型再保存", "error");
         return;
+      }
+      for (const m of this.configForm.models) {
+        if (m.enabled !== false && !m.user_usable && !m.ocr_usable && !m.chores_usable) {
+          this.toast(`模型「${m.name || m.id}」没有勾选任何用途，请至少勾一项或把它禁用`, "error");
+          return;
+        }
       }
       if (this.configForm.chores_model) {
         const cm = this.configForm.models.find(m => m.id === this.configForm.chores_model);
@@ -2648,6 +2740,25 @@ function adminApp() {
         }
         if (cm.enabled === false) {
           this.toast("Chores 模型已禁用，请先切换 Chores 模型再保存", "error");
+          return;
+        }
+        if (!cm.chores_usable) {
+          this.toast("Chores 模型未勾选「用于 Chores」，请先切换或补上该项", "error");
+          return;
+        }
+      }
+      if (this.configForm.ocr_model) {
+        const om = this.configForm.models.find(m => m.id === this.configForm.ocr_model);
+        if (!om) {
+          this.toast("OCR 模型不存在于模型列表", "error");
+          return;
+        }
+        if (om.enabled === false) {
+          this.toast("OCR 模型已禁用，请先切换 OCR 模型再保存", "error");
+          return;
+        }
+        if (!om.ocr_usable) {
+          this.toast("OCR 模型未勾选「用于 OCR」，请先切换或补上该项", "error");
           return;
         }
       }
@@ -2670,6 +2781,8 @@ function adminApp() {
         const body = {
           default_model: this.configForm.default_model,
           chores_model: this.configForm.chores_model || "",
+          ocr_model: this.configForm.ocr_model || "",
+          ocr_max_tokens: Math.max(256, Math.min(32768, Math.floor(Number(this.configForm.ocr_max_tokens) || 8192))),
           max_tokens: this.configForm.max_tokens,
           timeout: this.configForm.timeout,
           first_token_timeout: this.configForm.first_token_timeout,
@@ -2693,7 +2806,9 @@ function adminApp() {
             score: m.score ?? null,
             reasoning_effort: m.reasoning_effort || null,
             thinking_budget: m.thinking_budget || null,
-            chores_only: !!m.chores_only,
+            user_usable: m.user_usable !== false,
+            ocr_usable: !!m.ocr_usable,
+            chores_usable: m.chores_usable !== false,
             enabled: m.enabled !== false,
             is_free: !!m.is_free,
             free_no_code: !!m.is_free && !!m.free_no_code,

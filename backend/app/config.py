@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     chores_base_url: str = ""
     chores_api_key: str = ""
 
+    # OCR（识别图片文字）：需带视觉能力的模型，留空跟随默认模型
+    ocr_model: str = ""
+    # OCR 单次输出上限：整卷转录远长于普通工具，多图一次送入时更吃输出预算
+    ocr_max_tokens: int = 8192
+
     # LLM 调用参数
     max_tokens: int = 4096
     timeout: int = 120

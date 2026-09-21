@@ -989,7 +989,10 @@
                     <span class="badge badge-free ml-1.5" x-show="m.is_free"
                           :title="m.free_no_code ? '免费模型：不消耗次数，且无码/次数用尽也可用' : '免费模型：不消耗次数'"
                           x-text="m.is_free && m.free_no_code ? '免费 · 无码可用' : '免费'"></span>
-                    <span class="badge badge-user ml-1.5" x-show="m.chores_only">仅 Chores</span>
+                    <template x-for="tag in modelCapabilityTags(m)" :key="'cap-' + m.id + '-' + tag">
+                      <span class="badge badge-cap ml-1.5" x-text="tag"
+                            title="该模型的用途勾选：用户 = 用户端可选，OCR = 识别图片文字，Chores = 轻量任务"></span>
+                    </template>
                     <span class="badge ml-1.5" x-show="m.enabled === false" style="color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 40%, transparent);background:color-mix(in srgb, var(--danger) 12%, transparent)">已禁用</span>
                     <div class="mono dim" style="font-size:0.7rem; margin-top:2px;" x-text="m.id"></div>
                   </td>
@@ -1033,7 +1036,7 @@
                   </td>
                   <td data-label="思考控制"><span class="badge badge-user" x-text="thinkingLabel(m)"></span></td>
                   <td class="actions" data-label="操作" data-span="full">
-                    <button class="link-btn" x-show="m.id !== configForm.default_model && !m.chores_only && m.enabled !== false" @click="setDefaultModel(m.id)">设为默认</button>
+                    <button class="link-btn" x-show="m.id !== configForm.default_model && m.user_usable !== false && m.enabled !== false" @click="setDefaultModel(m.id)">设为默认</button>
                     <button class="link-btn" @click="toggleModelEnabled(i)" x-text="m.enabled === false ? '启用' : '禁用'"></button>
                     <button class="link-btn" @click="openEditModel(i)">编辑</button>
                     <button class="link-btn" @click="openModelProviders(m.id)">绑定</button>
@@ -1175,7 +1178,7 @@
             <label class="field">
               <span>模型列表最大显示数</span>
               <input type="number" x-model.number="configForm.max_visible_models" min="0" max="50">
-              <span class="field-hint">用户端模型下拉默认显示的数量，超出折叠为「展开全部」，0 = 不折叠；只统计可见模型，已禁用与仅 Chores 模型不计入</span>
+              <span class="field-hint">用户端模型下拉默认显示的数量，超出折叠为「展开全部」，0 = 不折叠；只统计勾选了「用户可用」且未禁用的模型</span>
             </label>
             <label class="field field--full">
               <span>Chores 模型</span>
@@ -1185,18 +1188,55 @@
                   <span class="chev">▼</span>
                 </button>
                 <div class="custom-select-menu" x-show="choresModelMenuOpen" x-cloak>
-                  <button class="custom-select-item" :class="{ on: !configForm.chores_model }" @click="configForm.chores_model = ''; choresModelMenuOpen = false" x-text="`跟随默认（${defaultModelLabel}）`"></button>
-                  <template x-for="m in configForm.models" :key="'chores-'+m.id">
-                    <button class="custom-select-item" :class="{ on: configForm.chores_model === m.id }" :disabled="m.enabled === false" :title="m.enabled === false ? '已禁用，不可选' : ''" @click="configForm.chores_model = m.id; choresModelMenuOpen = false" style="justify-content: flex-start; gap: 0.5rem;">
+                  <button class="custom-select-item" x-show="canFollowDefaultForChores" :class="{ on: !configForm.chores_model }" @click="configForm.chores_model = ''; choresModelMenuOpen = false" x-text="`跟随默认（${defaultModelLabel}）`"></button>
+                  <template x-for="m in choresSelectableModels" :key="'chores-'+m.id">
+                    <button class="custom-select-item" :class="{ on: configForm.chores_model === m.id }" @click="configForm.chores_model = m.id; choresModelMenuOpen = false" style="justify-content: flex-start; gap: 0.5rem;">
                       <span x-text="m.name || m.id"></span>
-                      <span class="badge badge-user" x-show="m.chores_only">仅 Chores</span>
-                      <span class="badge" x-show="m.enabled === false" style="color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 40%, transparent)">已禁用</span>
                     </button>
                   </template>
-                  <div class="custom-select-item" x-show="!configForm.models.length" style="cursor:default; justify-content: flex-start;">请先在上方添加模型</div>
+                  <div class="custom-select-item" x-show="!choresSelectableModels.length" style="cursor:default; justify-content: flex-start;">还没有勾选「用于 Chores」的模型：先在上方编辑模型并勾上该项</div>
                 </div>
               </div>
               <span class="field-hint">标题生成等轻量任务所用模型；留空则跟随默认模型</span>
+              <!-- 留空跟随默认的前提是默认模型开了对应能力；不满足时说清怎么修，而不是静默失败 -->
+              <span class="field-hint" style="color:var(--danger)" x-show="!configForm.chores_model && !canFollowDefaultForChores">
+                默认模型未勾选「用于 Chores」：留空无法生效，请在上方为它勾上该项，或在这里指定一个模型。
+              </span>
+              <span class="field-hint" style="color:var(--danger)"
+                    x-show="configForm.chores_model && !choresSelectableModels.some(m => m.id === configForm.chores_model)">
+                当前 Chores 模型未勾选「用于 Chores」或已被禁用：请切换模型，或为它补上该项。
+              </span>
+            </label>
+            <label class="field field--full">
+              <span>OCR 模型</span>
+              <div class="custom-select" @click.outside="ocrModelMenuOpen = false" style="max-width: 360px;">
+                <button class="custom-select-trigger" :class="{ open: ocrModelMenuOpen }" @click="ocrModelMenuOpen = !ocrModelMenuOpen">
+                  <span class="truncate" x-text="ocrModelLabel"></span>
+                  <span class="chev">▼</span>
+                </button>
+                <div class="custom-select-menu" x-show="ocrModelMenuOpen" x-cloak>
+                  <button class="custom-select-item" x-show="canFollowDefaultForOcr" :class="{ on: !configForm.ocr_model }" @click="configForm.ocr_model = ''; ocrModelMenuOpen = false" x-text="`跟随默认（${defaultModelLabel}）`"></button>
+                  <template x-for="m in ocrSelectableModels" :key="'ocr-'+m.id">
+                    <button class="custom-select-item" :class="{ on: configForm.ocr_model === m.id }" @click="configForm.ocr_model = m.id; ocrModelMenuOpen = false" style="justify-content: flex-start; gap: 0.5rem;">
+                      <span x-text="m.name || m.id"></span>
+                    </button>
+                  </template>
+                  <div class="custom-select-item" x-show="!ocrSelectableModels.length" style="cursor:default; justify-content: flex-start;">还没有勾选「用于 OCR」的模型：先在上方编辑模型并勾上该项</div>
+                </div>
+              </div>
+              <span class="field-hint">「识别图片文字」所用的视觉模型；留空跟随默认模型（此时默认模型需勾选「用于 OCR」），默认模型不支持图片输入时必须在这里指定一个多模态模型</span>
+              <span class="field-hint" style="color:var(--danger)" x-show="!configForm.ocr_model && !canFollowDefaultForOcr">
+                默认模型未勾选「用于 OCR」：留空时识别无法进行，请在上方为它勾上该项，或在这里指定一个视觉模型。
+              </span>
+              <span class="field-hint" style="color:var(--danger)"
+                    x-show="configForm.ocr_model && !ocrSelectableModels.some(m => m.id === configForm.ocr_model)">
+                当前 OCR 模型未勾选「用于 OCR」或已被禁用：请切换模型，或为它补上该项。
+              </span>
+            </label>
+            <label class="field">
+              <span>OCR 最大输出 Tokens</span>
+              <input type="number" x-model.number="configForm.ocr_max_tokens" min="256" max="32768">
+              <span class="field-hint">整卷转录的输出上限，默认 8192；一次识别多张图时更吃这个预算</span>
             </label>
           </div>
           <div class="form-actions" style="margin-top:1rem; border-top:1px solid var(--border); padding-top:1rem">
@@ -1512,27 +1552,37 @@
             <textarea x-model="modelForm.description" rows="2" maxlength="200" placeholder="用户端模型列表展示的描述，替代模型 ID 显示，如：速度快、性价比高，适合日常使用"></textarea>
           </label>
           <label class="field mb-3">
-            <span>可见性</span>
-            <div class="switch-row" style="align-items:center">
-              <label class="switch">
-                <input type="checkbox" x-model="modelForm.chores_only">
-                <span class="switch-slider"></span>
-              </label>
-              <span class="dim" x-text="modelForm.chores_only ? '仅用于 Chores' : '用户可选'"></span>
-            </div>
-            <span class="field-hint">勾选后该模型仅用于 Chores</span>
-          </label>
-          <label class="field mb-3">
-            <span>启用状态</span>
+            <span>禁用模型</span>
             <div class="switch-row" style="align-items:center">
               <label class="switch">
                 <input type="checkbox" x-model="modelForm.enabled">
                 <span class="switch-slider"></span>
               </label>
-              <span class="dim" x-text="modelForm.enabled !== false ? '已启用' : '已禁用（用户端与 Chores 均不可用）'"></span>
+              <span class="dim" x-text="modelForm.enabled !== false ? '启用中' : '已禁用：用户端、OCR、Chores 全不可用'"></span>
             </div>
-            <span class="field-hint">禁用后该模型不在用户端展示，Chores 也不可选；区别于“仅用于 Chores”</span>
+            <span class="field-hint">禁用是用途勾选的上一级开关；禁用后下方三项不再生效</span>
           </label>
+          <div class="field mb-3" x-show="modelForm.enabled !== false" x-cloak>
+            <span>用途（至少勾选一项）</span>
+            <div class="rule-tool-options" :class="{ 'cap-missing': !modelForm.user_usable && !modelForm.ocr_usable && !modelForm.chores_usable }">
+              <label class="rule-tool-option" :class="{ on: modelForm.user_usable }"
+                     title="出现在 8000 用户端的模型列表里，用户可以直接选它">
+                <input type="checkbox" x-model="modelForm.user_usable">
+                <span>用户可用</span>
+              </label>
+              <label class="rule-tool-option" :class="{ on: modelForm.ocr_usable }"
+                     title="可作为「识别图片文字」的识别模型：必须是带视觉能力的多模态模型">
+                <input type="checkbox" x-model="modelForm.ocr_usable">
+                <span>用于 OCR</span>
+              </label>
+              <label class="rule-tool-option" :class="{ on: modelForm.chores_usable }"
+                     title="可作为标题生成等轻量任务的 Chores 模型">
+                <input type="checkbox" x-model="modelForm.chores_usable">
+                <span>用于 Chores</span>
+              </label>
+            </div>
+            <span class="field-hint">只有勾选了「用户可用」的模型会出现在用户端模型列表里</span>
+          </div>
           <label class="field mb-3">
             <span>免费模型</span>
             <div class="switch-row" style="align-items:center">

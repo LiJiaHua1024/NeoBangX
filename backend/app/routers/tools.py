@@ -68,7 +68,30 @@ PROPOSITION_TOOLS = [
 
 REFERENCE_TOOLS = [
     {"id": "25", "name": "自由对话", "icon": "chat", "description": "通用 LLM 对话，提示词调试用"},
+    {
+        "id": "32",
+        "name": "识别图片文字",
+        "icon": "scan-text",
+        "description": "图片转文字（试卷、手写作文）",
+    },
 ]
+
+# 图片 OCR：一条工具、两种识别模式，各自对应一份提示词文件
+OCR_TOOL_ID = "32"
+OCR_TOOL_NAME = "识别图片文字"
+OCR_MODES = ("printed", "handwritten")
+DEFAULT_OCR_MODE = "printed"
+OCR_MODE_PROMPTS = {
+    "printed": "识别图片文字-印刷试卷",
+    "handwritten": "识别图片文字-手写作文",
+}
+# 单次识别可送进的图片张数上限（前端按 8 张提示，后端硬上限留出余量）
+OCR_MAX_IMAGES = 12
+
+
+def resolve_ocr_prompt_filename(mode: str) -> str:
+    """OCR 模式 → 提示词文件名；未知模式回落到默认模式。"""
+    return OCR_MODE_PROMPTS.get(mode, OCR_MODE_PROMPTS[DEFAULT_OCR_MODE])
 
 
 def _resolve_prompt_filename(tool_id: str) -> str:
@@ -104,6 +127,7 @@ def _resolve_prompt_filename(tool_id: str) -> str:
         "23": "英语试题 Bug 侦察",
         "24": "超标词替换",
         "25": "自由对话",
+        "32": OCR_MODE_PROMPTS[DEFAULT_OCR_MODE],
         MIGRATION_TOOL_ID: MIGRATION_TOOL_NAME,
     }
     return mapping.get(tool_id, "")
@@ -185,18 +209,18 @@ async def list_tools(
 
     llm_cfg = resolve_llm_settings(db)
     available = llm_cfg.get("available_model_ids")
-    # 若没有可用集合（旧库未迁移或无 Provider），则回退为启用且非仅 Chores 模型；
-    # 禁用模型任何情况下都不回退暴露（区别于仅 Chores 仅隐藏用户端）。
+    # 若没有可用集合（旧库未迁移或无 Provider），则回退为启用且勾选「用户可用」的模型；
+    # 禁用模型任何情况下都不回退暴露（区别于未勾「用户可用」，后者只是不给用户端展示）。
     def _user_visible(models):
-        return [m for m in models if m.get("enabled", True) and not m.get("chores_only")]
+        return [m for m in models if m.get("enabled", True) and m.get("user_usable", True)]
 
     if available:
         filtered_models = [m for m in llm_cfg["models"] if m["id"] in available]
-        # 若过滤后为空（配置异常，模型均未绑定），回退为启用且非仅 Chores 模型以免前端无模型可选
+        # 若过滤后为空（配置异常，模型均未绑定），回退为启用且用户可用的模型以免前端无模型可选
         if not filtered_models:
             filtered_models = _user_visible(llm_cfg["models"])
     else:
-        # available 为空：可能是未迁移或全部未绑定/禁用，回退同样不含禁用与仅 Chores
+        # available 为空：可能是未迁移或全部未绑定/禁用，回退同样不含禁用与用户不可用
         fallback = _user_visible(llm_cfg["models"])
         filtered_models = fallback if fallback else []
     return {
@@ -224,8 +248,7 @@ async def list_models(db: Annotated[Session, Depends(get_db)]):
     llm_cfg = resolve_llm_settings(db)
     available = llm_cfg.get("available_model_ids")
     def _user_visible(models):
-        return [m for m in models if m.get("enabled", True) and not m.get("chores_only")]
-
+        return [m for m in models if m.get("enabled", True) and m.get("user_usable", True)]
     if available:
         filtered_models = [m for m in llm_cfg["models"] if m["id"] in available]
         if not filtered_models:

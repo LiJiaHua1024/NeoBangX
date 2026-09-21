@@ -4,14 +4,14 @@ import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import SessionLocal, bootstrap_lock, init_db
 from app.middleware import StaticCacheMiddleware
-from app.routers import auth, chat, parse, tools
+from app.routers import auth, chat, ocr, parse, tools
 from app.services.request_log import (
     STATUS_ERROR,
     current_retention_days,
@@ -121,6 +121,7 @@ app.include_router(tools.router)
 app.include_router(chat.router)
 app.include_router(auth.router)
 app.include_router(parse.router)
+app.include_router(ocr.router)
 
 
 def _unhandled_usage_log_kwargs(request: Request, exc: Exception) -> dict | None:
@@ -197,7 +198,7 @@ async def get_config():
     available = llm_cfg.get("available_model_ids")
     # 禁用模型任何情况下都不回退暴露
     def _user_visible(models):
-        return [m for m in models if m.get("enabled", True) and not m.get("chores_only")]
+        return [m for m in models if m.get("enabled", True) and m.get("user_usable", True)]
 
     if available:
         models = [m for m in llm_cfg["models"] if m["id"] in available]
@@ -243,3 +244,12 @@ async def root():
         "message": "NeoBangX backend is running. Visit /docs for API documentation.",
         "version": "1.2.0",
     }
+
+
+@app.get(ocr.MOBILE_PAGE_PATH)
+async def mobile_upload_page():
+    """手机扫码后的拍照上传页：免登录，token 即凭证，短地址便于手输兜底。"""
+    page_path = static_path / "mobile-upload.html"
+    if page_path.exists():
+        return FileResponse(page_path)
+    raise HTTPException(status_code=404, detail="手机上传页尚未部署")

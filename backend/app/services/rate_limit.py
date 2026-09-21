@@ -21,6 +21,12 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "vocab": (60, 60),
     # PDF 云端解析（MinerU）按次计费，匿名调用额外设一道闸
     "parse": (10, 300),
+    # 图片识别：视觉模型按图计费且一次可送多张，虽然对用户不计费，仍要挡刷
+    "ocr": (10, 60),
+    # 扫码配对：建会话与手机上传都按主体限速，避免 token 被反复试探。
+    # 手机端没有使用码，只能按 IP 归口，而学校/机构常常整栋楼一个出口 IP，
+    # 所以这里留得宽一些（一张一张拍的正常使用远够），挡的是脚本式刷上传。
+    "ocr_pair": (60, 300),
 }
 
 _buckets: dict[tuple[str, str], deque] = defaultdict(deque)

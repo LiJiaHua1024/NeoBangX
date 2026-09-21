@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>NeoBangX · Bang助教学，大有可AI</title>
-  <meta name="description" content="NeoBangX：31 个中学英语教学 AI 工具，输入使用码即可开始。">
+  <meta name="description" content="NeoBangX：32 个中学英语教学 AI 工具，输入使用码即可开始。">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23e9a15b'/%3E%3Cstop offset='1' stop-color='%23cf7038'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=fx260920c">
+  <link rel="stylesheet" href="/static/styles.css?v=ocr260921a">
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -34,12 +34,14 @@
   <script defer src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.15.12/dist/cdn.min.js"></script>
   <script defer src="/static/vendor/thumbmark.umd.js"></script>
+  <!-- 二维码生成（扫码拍照）：未加载成功时配对弹窗退化为「复制网址」，功能不中断 -->
+  <script defer src="/static/vendor/qrcode-generator-1.4.4.js"></script>
   <script defer src="/static/nbx-mirror.js?v=mirror4"></script>
   <script defer src="/static/nbx-mirror-store.js?v=mirror4"></script>
   <script defer src="/static/nbx-mirror-peer.js?v=mirror4"></script>
   <!-- 回答版本容器（重新生成保留旧结果）：纯函数层，必须先于 script.js 加载 -->
   <script defer src="/static/nbx-versions.js?v=ver1"></script>
-  <script defer src="/static/script.js?v=fx260920b"></script>
+  <script defer src="/static/script.js?v=ocr260921a"></script>
   <script defer src="/static/vp-print.js?v=export3mode1"></script>
   <!-- 点击特效接入层（懒加载 vendor/ba-click-fx，不抢首屏） -->
   <script defer src="/static/click-fx.js?v=fx260920g"></script>
@@ -184,7 +186,7 @@
             </h1>
 
             <p class="fade-up mt-5 max-w-xl text-dim leading-relaxed" style="font-size:1.02rem;animation-delay:.15s">
-              31 个中学英语教学 AI 工具。<br>
+              <span x-text="toolCountLabel"></span>中学英语教学 AI 工具。<br>
               <span x-show="hasFreeTrial">带「免费」标签的模型不消耗使用码次数，带「免码」标签的模型无需使用码即可试用；其他工具输入使用码开始。</span>
               <span x-show="!hasFreeTrial">输入使用码即可开始，额度用完自动锁定。</span>
             </p>
@@ -212,7 +214,7 @@
                       <span x-text="codeActivating ? '验证中…' : '验证并开始'"></span>
                     </button>
                     <button class="btn-ghost w-full justify-center" @click="startFirst()">
-                      <span x-html="icon('book-open','w-4 h-4')"></span>先逛逛 31 个工具
+                      <span x-html="icon('book-open','w-4 h-4')"></span><span x-text="'先逛逛 ' + toolCountLabel + '工具'"></span>
                     </button>
                     <p class="text-[11px] text-faint leading-relaxed">
                       无需使用码即可浏览全部工具<span x-show="hasFreeTrial">；带「免码」标签的模型可直接试用</span>。
@@ -254,7 +256,7 @@
                 <div class="font-semibold text-sm flex items-center gap-1.5">
                   <span x-html="icon('book-open','w-4 h-4')"></span>选工具 · 输入
                 </div>
-                 <p class="text-xs text-dim mt-1.5 leading-relaxed">左侧 31 个工具；粘贴语篇、作文、试卷或上传文件。</p>
+                 <p class="text-xs text-dim mt-1.5 leading-relaxed"><span x-text="'左侧 ' + toolCountLabel + '工具；粘贴语篇、作文、试卷或上传文件。'"></span></p>
               </div>
               <div class="glass-soft rounded-2xl p-5">
                 <div class="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm mb-3"
@@ -270,7 +272,7 @@
             <div class="fade-up flex flex-wrap items-center justify-center gap-2 mt-8" style="animation-delay:.38s">
               <span class="chip neutral">使用码登录</span>
               <span class="chip neutral">按次计费</span>
-               <span class="chip neutral">31 个教学工具</span>
+               <span class="chip neutral" x-text="toolCountLabel + '教学工具'"></span>
               <span class="chip neutral">流式秒回</span>
               <span class="chip neutral">历史存本机</span>
             </div>
@@ -1508,11 +1510,11 @@
                     <textarea x-show="inputMode === 'text'" x-ref="inputEl" x-model="input" @input="autoGrow()" @keydown.enter.ctrl="run()" placeholder="粘贴试卷文本或上传 Word（自动跳过听力部分），我将为每一道笔试题提供参考答案、易错点、考点范式与迁移训练…"
                               rows="4" style="min-height:4.2rem;max-height:min(16rem,32vh);overflow-y:auto"></textarea>
                     <div class="flex items-center gap-2 mt-2 flex-wrap">
-                      <label class="btn-ghost" style="padding:.45rem .8rem;font-size:.82rem;cursor:pointer">
-                        <span x-html="icon('paperclip','w-4 h-4')"></span>上传 Word
-                        <input type="file" accept=".docx,.doc,.txt,.md,.pdf" style="display:none" @change="handleFileSelect($event)">
-                      </label>
-                      <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf，自动跳过听力</span>
+                      <button type="button" class="btn-ghost" style="padding:.45rem .8rem;font-size:.82rem"
+                              @click="openUploadDialog()" title="上传文件，或用手机拍一张">
+                        <span x-html="icon('paperclip','w-4 h-4')"></span>上传
+                      </button>
+                      <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf 与图片，自动跳过听力</span>
                       <span class="ml-auto flex items-center gap-2">
                         <!-- 解析设置：整块胶囊是一个按钮（图标/文字/徽标/箭头都在按钮内），
                              点任意位置都能开浮层；浮层本体在坞外，见文件末尾 .vp-cfg-menu -->
@@ -1538,8 +1540,167 @@
           </div>
         </template>
 
+        <!-- ========== 识别图片文字（图片 OCR） ========== -->
+        <!-- 面板主体与「其他工具上传流程」里的阻塞弹窗是同一套状态（ocr* 键）与同一份布局，
+             两边刻意各留一份标记：本页无构建步骤、没有可复用的局部模板，改布局时两处一起改。 -->
+        <template x-if="currentTool && isOcrTool">
+          <div class="flex-1 min-h-0 flex flex-col">
+            <!-- 工具头部：名称 + 识别模式 -->
+            <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
+              <!-- 窄档：顶栏已移除，工具列表入口放在头部行首（左上角）；宽屏两侧栏并排，不需要 -->
+              <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                      @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
+                      x-html="icon('menu','w-5 h-5')"></button>
+              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
+                    style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
+                    x-html="icon(currentTool.icon,'w-5 h-5')"></span>
+              <div class="min-w-0">
+                <h2 class="font-bold leading-tight truncate" style="font-size:.98rem" x-text="currentTool.name"></h2>
+                <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
+              </div>
+            </div>
+
+            <!-- 空状态：图片入口占满结果区，不做成角落里的小按钮 -->
+            <div x-show="!ocrHasImage" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
+              <div class="ocr-empty" @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false"
+                   @drop.prevent="handleFileDrop($event)" :class="{ 'drag-over': dragOver }">
+                <div class="ocr-empty-card glass-soft">
+                  <span class="ocr-empty-ico" x-html="icon('scan-text','w-8 h-8')"></span>
+                  <h3>上传或拍摄图片</h3>
+                  <p>转成可编辑的文字，可一次选择多张。</p>
+                  <button type="button" class="btn-primary" @click="openUploadDialog()">
+                    <span x-html="icon('upload','w-4 h-4')"></span>上传 / 拍照
+                  </button>
+                  <p class="ocr-empty-hint">也可以把图片拖到这里</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- 有图：≥lg 左右分栏，小屏自动变「图上文下」 -->
+            <div x-show="ocrHasImage" x-cloak class="ocr-split mascot-keepout flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+              <div class="ocr-side" :class="{ 'is-collapsed': ocrMediaCollapsed }">
+                <div class="ocr-side-head">
+                  <button type="button" class="icon-btn" style="width:2rem;height:2rem" @click="toggleOcrMedia()"
+                          :title="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
+                          :aria-label="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
+                          x-html="icon(ocrMediaCollapsed ? 'chevrons-right' : 'chevrons-left','w-4 h-4')"></button>
+                  <span class="text-xs text-dim truncate" x-text="ocrBatchLabel + ' · 点击图片可放大'"></span>
+                  <button type="button" class="icon-btn ml-auto" style="width:2rem;height:2rem" @click="openUploadDialog({ imagesOnly: true })"
+                          title="添加图片，与已有的图片一起识别"
+                          x-html="icon('plus','w-4 h-4')"></button>
+                </div>
+                <div class="ocr-side-body" x-show="!ocrMediaCollapsed">
+                  <template x-if="ocrCurrentImage">
+                    <img class="ocr-photo" :src="ocrCurrentImage.dataUrl || ocrCurrentImage.url"
+                         :alt="ocrCurrentImage.name" @click="ocrViewerOpen = true" title="点击放大查看">
+                  </template>
+                </div>
+                <div class="ocr-thumbs" x-show="!ocrMediaCollapsed && ocrImages.length > 1">
+                  <template x-for="(img, i) in ocrImages" :key="img.id">
+                    <button type="button" class="ocr-thumb" :class="{ on: i === ocrIndex }" @click="selectOcrImage(i)" :title="img.name">
+                      <img :src="img.dataUrl || img.url" :alt="img.name">
+                      <span class="ocr-thumb-del" @click.stop="removeOcrImage(i)" title="移除这张">×</span>
+                    </button>
+                  </template>
+                </div>
+                <!-- 批次筛选：顺序就是转录顺序（多页试卷按页拼），所以前移/后移是实义操作 -->
+                <div class="ocr-side-foot" x-show="!ocrMediaCollapsed && ocrImages.length">
+                  <span class="text-[11px] text-faint" x-text="'第 ' + (ocrIndex + 1) + ' / ' + ocrImages.length + ' 张'"></span>
+                  <span class="ml-auto flex items-center gap-1">
+                    <button type="button" class="icon-btn" style="width:1.9rem;height:1.9rem"
+                            @click="moveOcrImage(ocrIndex, -1)" :disabled="ocrIndex <= 0"
+                            title="前移一位（顺序即转录顺序）" x-html="icon('chevron-left','w-4 h-4')"></button>
+                    <button type="button" class="icon-btn" style="width:1.9rem;height:1.9rem"
+                            @click="moveOcrImage(ocrIndex, 1)" :disabled="ocrIndex >= ocrImages.length - 1"
+                            title="后移一位" x-html="icon('chevron-right','w-4 h-4')"></button>
+                    <button type="button" class="icon-btn danger" style="width:1.9rem;height:1.9rem"
+                            @click="removeOcrImage(ocrIndex)" title="移除这张"
+                            x-html="icon('trash','w-4 h-4')"></button>
+                  </span>
+                </div>
+              </div>
+
+              <div class="ocr-main">
+                <div class="ocr-main-head">
+                  <span class="ocr-type-chip" x-text="ocrTypeLabel"></span>
+                  <span class="text-xs text-dim truncate hidden sm:inline" x-text="ocrModeHint"></span>
+                  <span class="ml-auto flex items-center gap-1.5 shrink-0">
+                    <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
+                            x-show="ocrHasImage && !ocrStreaming && !ocrNeedsStart && ocrModeSelectable" @click="enterOcrStartStep()"
+                            title="回到类型选择（不会立刻重新识别）">
+                      <span x-html="icon('replace','w-3.5 h-3.5')"></span>换类型
+                    </button>
+                    <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
+                            x-show="ocrText && !ocrStreaming && !ocrNeedsStart" @click="ocrStart()"
+                            title="用当前类型重新识别这批图片">
+                      <span x-html="icon('refresh','w-3.5 h-3.5')"></span>重新识别
+                    </button>
+                    <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
+                            x-show="ocrText && !ocrStreaming" @click="copyOcrText()">
+                      <span x-html="icon('copy','w-3.5 h-3.5')"></span>复制
+                    </button>
+                    <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
+                            x-show="ocrStreaming" @click="ocrCancel()">
+                      <span x-html="icon('stop','w-3.5 h-3.5')"></span>取消
+                    </button>
+                  </span>
+                </div>
+                <div class="ocr-body scroll-thin">
+                  <!-- 类型由工具决定，这一步只是确认类型 + 开始识别：不替用户按下开始 -->
+                  <div class="ocr-type" x-show="ocrNeedsStart" x-cloak>
+                    <p class="ocr-type-title" x-text="ocrModeSelectable ? '选择识别类型' : '识别类型'"></p>
+                    <p class="ocr-type-sub" x-show="ocrModeSelectable">两类素材的转录规则不同。</p>
+                    <p class="ocr-type-live" x-show="pairLive">手机仍在传输：已收到 <span x-text="pairCount"></span> 张。开始识别后新上传的照片不计入本批。</p>
+                    <!-- 类型绑在工具上的地方只剩当前这一张卡：它是说明，不是可选项，所以不可点 -->
+                    <div class="upl-opts">
+                      <template x-for="opt in ocrModeOptions" :key="opt.mode">
+                        <button type="button" class="upl-opt" :class="{ on: opt.on }" :disabled="!ocrModeSelectable"
+                                @click="chooseOcrMode(opt.mode)">
+                          <span class="upl-opt-ico" x-html="icon(opt.icon,'w-5 h-5')"></span>
+                          <span class="upl-opt-text">
+                            <b x-text="opt.label"></b>
+                            <i x-text="opt.rule"></i>
+                          </span>
+                        </button>
+                      </template>
+                    </div>
+                    <button type="button" class="btn-primary ocr-type-go" @click="ocrStart()">
+                      <span x-html="icon('send','w-4 h-4')"></span>开始识别
+                    </button>
+                    <p class="ocr-type-note" x-show="!!ocrText">
+                      将按当前类型重新转录全部 <span x-text="ocrImages.length"></span> 张图片，覆盖现有结果。
+                    </p>
+                  </div>
+
+                  <div x-show="ocrStreaming && !ocrText" class="thinking-block fade-in">
+                    <div class="thinking-orb-wrap"><div class="thinking-orb"><div class="thinking-orb-inner"></div></div></div>
+                    <div class="thinking-label">
+                      <span class="thinking-dots"><span></span><span></span><span></span></span>
+                      <span class="thinking-text">正在识别图片文字</span>
+                      <span class="thinking-time" x-text="ocrElapsedText"></span>
+                    </div>
+                  </div>
+                  <div class="md ocr-text" x-show="!!ocrText && !ocrNeedsStart" x-html="ocrRendered"></div>
+                  <span class="tw-cursor" x-show="ocrStreaming && !!ocrText"></span>
+                  <div class="ocr-note ocr-note-warn" x-show="ocrTruncated && !ocrStreaming && !ocrNeedsStart">
+                    结果可能不完整：输出达到上限。可减少一次识别的张数，或请管理员调大后台的「OCR 最大输出 Tokens」。
+                  </div>
+                  <div class="error-card" x-show="ocrStage === 'error'">
+                    <div class="font-semibold mb-1">这次识别没有成功</div>
+                    <div x-text="ocrError"></div>
+                    <div class="error-actions mt-3">
+                      <button type="button" class="btn-primary" @click="ocrRetry()">重试</button>
+                      <button type="button" class="btn-ghost" @click="openUploadDialog()">换一张图片</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <!-- ========== 普通工具操作页 ========== -->
-        <template x-if="currentTool && !isMigrationTool && !isVocabTool && !isVisualPaperTool">
+        <template x-if="currentTool && !isMigrationTool && !isVocabTool && !isVisualPaperTool && !isOcrTool">
           <div class="flex-1 min-h-0 flex flex-col">
 
             <!-- 工具头部 -->
@@ -1869,13 +2030,11 @@
 
                     <!-- 工具栏 -->
                     <div class="flex items-center gap-1.5 mt-1">
-                      <button class="icon-btn" @click="$refs.fileInput.click()"
-                              :title="inputMode === 'file' ? '重新选择文件' : '上传文件（将替换当前文字）'"
-                              x-html="icon('paperclip','w-[18px] h-[18px]')"></button>
-                      <input type="file" x-ref="fileInput" class="hidden"
-                             accept=".txt,.md,.markdown,.docx,.doc,.pdf"
-                             @change="handleFileSelect($event)">
-                      <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf</span>
+                      <button type="button" class="btn-ghost" style="padding:.4rem .75rem;font-size:.8rem"
+                              @click="openUploadDialog()" title="上传文件，或用手机拍一张">
+                        <span x-html="icon('paperclip','w-4 h-4')"></span>上传
+                      </button>
+                      <span class="text-xs text-faint hidden sm:inline" x-text="uploadHintText" :title="uploadHintTitle">支持 .docx / .doc / .txt / .md / .pdf 与图片</span>
                       <button class="icon-btn" x-show="inputMode === 'text'" @click="saveFavoriteFromInput()" title="收藏这段输入"
                               x-html="icon('bookmark-plus','w-[18px] h-[18px]')"></button>
                       <button class="icon-btn danger" x-show="input && inputMode === 'text'" @click="clearInput()" title="清空输入"
@@ -2372,6 +2531,272 @@
           <button class="btn-ghost w-full justify-center" @click="cancelPdfUpload()">取消</button>
         </div>
       </div>
+    </div>
+
+    <!-- ==================== 上传来源（已有原稿 / 拍照识别） ====================
+         三个隐藏 input 常驻在这里：编辑器里的「上传」按钮只负责打开这个弹窗，
+         具体唤起哪一个由本弹窗决定（文档、相册多选、现拍各一个） -->
+    <input type="file" x-ref="uploadFileInput" class="hidden"
+           accept=".txt,.md,.markdown,.docx,.doc,.pdf,image/*" @change="handleFileSelect($event)">
+    <input type="file" x-ref="uploadAlbumInput" class="hidden" accept="image/*" multiple @change="onOcrFilesSelect($event)">
+    <input type="file" x-ref="uploadCameraInput" class="hidden" accept="image/*" capture="environment" @change="onOcrFilesSelect($event)">
+    <div x-show="uploadOpen" class="modal-mask is-nested" :class="{ 'under-stack': ocrModalOpen }" x-transition.opacity x-cloak
+         @click.self="closeUploadDialog()" @keydown.escape.window="uploadOpen && closeUploadDialog()">
+      <div class="modal-card modal-lg glass-deep pop-in" @click.stop role="dialog" aria-modal="true" aria-labelledby="upload-dialog-title">
+        <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
+          <button type="button" class="icon-btn" x-show="uploadStep === 'photo' && uploadHasSourceStep" @click="backToSourceStep()"
+                  title="返回" x-html="icon('chevron-left','w-4 h-4')"></button>
+          <span class="text-dim" x-show="uploadStep === 'source'" x-html="icon('upload','w-4 h-4')"></span>
+          <h3 class="font-bold text-sm" id="upload-dialog-title" x-text="uploadStep === 'photo' ? '拍照识别' : '上传'"></h3>
+          <button type="button" class="icon-btn ml-auto" @click="closeUploadDialog()" title="关闭"
+                  x-html="icon('x','w-4 h-4')"></button>
+        </div>
+        <div class="px-5 py-4">
+          <p class="text-xs text-dim mb-3" x-show="uploadStep === 'source'" x-text="uploadHostLabel"></p>
+
+          <!-- 第一步：有没有现成原稿（只对别的工具；识别图片文字本身就是把照片转文字，直接进第二步） -->
+          <div class="upl-opts" x-show="uploadStep === 'source'">
+            <button type="button" class="upl-opt" @click="pickUploadFile()">
+              <span class="upl-opt-ico" x-html="icon('file-text','w-5 h-5')"></span>
+              <span class="upl-opt-text">
+                <b>已有原稿</b>
+                <i>选择文件：Word、PDF、文本或图片</i>
+              </span>
+            </button>
+            <button type="button" class="upl-opt" @click="gotoPhotoStep()">
+              <span class="upl-opt-ico" x-html="icon('camera','w-5 h-5')"></span>
+              <span class="upl-opt-text">
+                <b>没有原稿，需要拍照</b>
+                <i>拍摄纸质材料，转成可编辑文字</i>
+              </span>
+            </button>
+          </div>
+
+          <!-- 第二步：怎么拍（相机那一项只在触摸设备上出现：桌面摄像头拍纸质材料效果差，不给这个入口） -->
+          <div class="upl-opts" x-show="uploadStep === 'photo'" x-cloak>
+            <button type="button" class="upl-opt" x-show="touchPrimary" @click="pickUploadCamera()">
+              <span class="upl-opt-ico" x-html="icon('camera','w-5 h-5')"></span>
+              <span class="upl-opt-text">
+                <b>相机拍照</b>
+                <i>用摄像头拍一张</i>
+              </span>
+            </button>
+            <button type="button" class="upl-opt" @click="pickUploadAlbum()">
+              <span class="upl-opt-ico" x-html="icon('image','w-5 h-5')"></span>
+              <span class="upl-opt-text">
+                <b>从相册选择</b>
+                <i x-text="touchPrimary ? '从相册中选取，可多张' : '选择已拍好的图片，可多张'"></i>
+              </span>
+            </button>
+            <button type="button" class="upl-opt" @click="startPairing()">
+              <span class="upl-opt-ico" x-html="icon('qr','w-5 h-5')"></span>
+              <span class="upl-opt-text">
+                <b>手机扫码拍摄<span class="upl-tag">推荐</span></b>
+                <i>用手机拍摄，照片直接上传</i>
+              </span>
+            </button>
+          </div>
+
+          <p class="text-xs text-faint mt-3 flex items-center gap-1.5" x-show="uploadBusyLabel" x-cloak>
+            <span class="thinking-dots"><span></span><span></span><span></span></span><span x-text="uploadBusyLabel"></span>
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 手机扫码拍摄：只在「配对」这段时间出现 ====================
+         照片一开始到达这个窗口就自动收起（由 _pairConnect 的 state 分支接管）：
+         它的职责就是让手机连上，连上了就该让位给识别工作区。
+         右上角的 ✕ 只用于手机连不上、想换一次配对这类特殊情况 -->
+    <div x-show="pairOpen" class="modal-mask is-nested" :class="{ 'under-stack': ocrModalOpen }" x-transition.opacity x-cloak
+         @click.self="cancelPairing()" @keydown.escape.window="pairOpen && cancelPairing()">
+      <div class="modal-card modal-md glass-deep pop-in" @click.stop role="dialog" aria-modal="true">
+        <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
+          <span class="text-dim" x-html="icon('qr','w-4 h-4')"></span>
+          <h3 class="font-bold text-sm">手机扫码拍摄</h3>
+          <span class="ml-auto text-xs text-dim" x-text="'剩余 ' + pairCountdown"></span>
+          <button type="button" class="icon-btn" @click="cancelPairing()" title="收起（不影响已上传的照片）" x-html="icon('x','w-4 h-4')"></button>
+        </div>
+        <div class="px-5 py-4">
+          <div class="pair-qr" x-show="qrSvg(pairUrl)" x-html="qrSvg(pairUrl)"></div>
+          <p class="text-xs text-dim text-center mt-2" x-show="pairUrl">用手机扫描二维码打开拍照页</p>
+          <div class="pair-url" x-show="pairUrl">
+            <span class="truncate" x-text="pairUrl"></span>
+            <button type="button" class="btn-ghost" style="padding:.25rem .6rem;font-size:.75rem" @click="copyPairUrl()">复制</button>
+          </div>
+          <p class="pair-state" :class="{ 'is-live': pairState === 'receiving' || pairState === 'connected' }" x-text="pairStateText"></p>
+          <p class="text-xs text-faint mt-2">照片由手机直接上传，收到第一张后本窗口会自动收起。手机可以继续拍摄，识别在电脑上发起。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 图片识别（其他工具上传流程里的阻塞弹窗） ====================
+         与「识别图片文字」工具工作区共用同一套 ocr* 状态和同一份布局：
+         改布局时两处一起改（本页无构建步骤，没有可复用的局部模板） -->
+    <div x-show="ocrModalOpen" class="modal-mask" x-transition.opacity x-cloak
+         @click.self="!ocrStreaming && ocrCloseModal()" @keydown.escape.window="ocrModalOpen && ocrCloseModal()">
+      <div class="modal-card modal-ocr glass-deep pop-in" @click.stop role="dialog" aria-modal="true" aria-labelledby="ocr-modal-title">
+        <div class="flex items-center gap-2 px-5 py-3 border-b shrink-0 flex-wrap" style="border-color:var(--border)">
+          <span class="text-dim" x-html="icon('scan-text','w-4 h-4')"></span>
+          <h3 class="font-bold text-sm" id="ocr-modal-title">识别图片文字</h3>
+          <span class="ocr-type-chip ml-auto" x-show="ocrHasImage" x-text="ocrTypeLabel"></span>
+          <button type="button" class="icon-btn" @click="ocrCloseModal()"
+                  :title="ocrStreaming ? '取消识别' : '关闭'" x-html="icon('x','w-4 h-4')"></button>
+        </div>
+
+        <!-- 没有图片（删空了、或刚换过一批）：给回一个入口，不留一块空壳子 -->
+        <div x-show="!ocrHasImage" x-cloak class="flex-1 min-h-0 overflow-y-auto scroll-thin">
+          <div class="ocr-empty">
+            <div class="ocr-empty-card glass-soft">
+              <span class="ocr-empty-ico" x-html="icon('scan-text','w-8 h-8')"></span>
+              <h3>上传或拍摄图片</h3>
+              <p>转成可编辑的文字，可一次选择多张。</p>
+              <button type="button" class="btn-primary" @click="openUploadDialog({ imagesOnly: true })">
+                <span x-html="icon('upload','w-4 h-4')"></span>上传 / 拍照
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div x-show="ocrHasImage" class="ocr-split flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+          <div class="ocr-side" :class="{ 'is-collapsed': ocrMediaCollapsed }">
+            <div class="ocr-side-head">
+              <button type="button" class="icon-btn" style="width:2rem;height:2rem" @click="toggleOcrMedia()"
+                      :title="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
+                      :aria-label="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
+                      x-html="icon(ocrMediaCollapsed ? 'chevrons-right' : 'chevrons-left','w-4 h-4')"></button>
+              <span class="text-xs text-dim truncate" x-text="ocrBatchLabel + ' · 点击图片可放大'"></span>
+              <button type="button" class="icon-btn ml-auto" style="width:2rem;height:2rem" @click="openUploadDialog({ imagesOnly: true })"
+                      title="添加图片，与已有的图片一起识别"
+                      x-html="icon('plus','w-4 h-4')"></button>
+            </div>
+            <div class="ocr-side-body" x-show="!ocrMediaCollapsed">
+              <template x-if="ocrCurrentImage">
+                <img class="ocr-photo" :src="ocrCurrentImage.dataUrl || ocrCurrentImage.url"
+                     :alt="ocrCurrentImage.name" @click="ocrViewerOpen = true" title="点击放大查看">
+              </template>
+            </div>
+            <div class="ocr-thumbs" x-show="!ocrMediaCollapsed && ocrImages.length > 1">
+              <template x-for="(img, i) in ocrImages" :key="img.id">
+                <button type="button" class="ocr-thumb" :class="{ on: i === ocrIndex }" @click="selectOcrImage(i)" :title="img.name">
+                  <img :src="img.dataUrl || img.url" :alt="img.name">
+                  <span class="ocr-thumb-del" @click.stop="removeOcrImage(i)" title="移除这张">×</span>
+                </button>
+              </template>
+            </div>
+            <!-- 批次筛选：顺序就是转录顺序（多页试卷按页拼），所以前移/后移是实义操作 -->
+            <div class="ocr-side-foot" x-show="!ocrMediaCollapsed && ocrImages.length">
+              <span class="text-[11px] text-faint" x-text="'第 ' + (ocrIndex + 1) + ' / ' + ocrImages.length + ' 张'"></span>
+              <span class="ml-auto flex items-center gap-1">
+                <button type="button" class="icon-btn" style="width:1.9rem;height:1.9rem"
+                        @click="moveOcrImage(ocrIndex, -1)" :disabled="ocrIndex <= 0"
+                        title="前移一位（顺序即转录顺序）" x-html="icon('chevron-left','w-4 h-4')"></button>
+                <button type="button" class="icon-btn" style="width:1.9rem;height:1.9rem"
+                        @click="moveOcrImage(ocrIndex, 1)" :disabled="ocrIndex >= ocrImages.length - 1"
+                        title="后移一位" x-html="icon('chevron-right','w-4 h-4')"></button>
+                <button type="button" class="icon-btn danger" style="width:1.9rem;height:1.9rem"
+                        @click="removeOcrImage(ocrIndex)" title="移除这张"
+                        x-html="icon('trash','w-4 h-4')"></button>
+              </span>
+            </div>
+          </div>
+
+          <div class="ocr-main">
+            <div class="ocr-main-head">
+              <span class="ocr-type-chip" x-text="ocrTypeLabel"></span>
+              <span class="text-xs text-dim truncate hidden sm:inline" x-text="ocrModeHint"></span>
+              <span class="ml-auto flex items-center gap-1.5 shrink-0">
+                <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
+                        x-show="ocrHasImage && !ocrStreaming && !ocrNeedsStart && ocrModeSelectable" @click="enterOcrStartStep()"
+                        title="回到类型选择（不会立刻重新识别）">
+                  <span x-html="icon('replace','w-3.5 h-3.5')"></span>换类型
+                </button>
+                <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
+                        x-show="ocrText && !ocrStreaming && !ocrNeedsStart" @click="ocrStart()"
+                        title="用当前类型重新识别这批图片">
+                  <span x-html="icon('refresh','w-3.5 h-3.5')"></span>重新识别
+                </button>
+                <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
+                        x-show="ocrText && !ocrStreaming" @click="copyOcrText()">
+                  <span x-html="icon('copy','w-3.5 h-3.5')"></span>复制
+                </button>
+                <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
+                        x-show="ocrStreaming" @click="ocrCancel()">
+                  <span x-html="icon('stop','w-3.5 h-3.5')"></span>取消
+                </button>
+              </span>
+            </div>
+            <div class="ocr-body scroll-thin">
+              <!-- 类型由工具决定，这一步只是确认类型 + 开始识别：不替用户按下开始 -->
+              <div class="ocr-type" x-show="ocrNeedsStart" x-cloak>
+                <p class="ocr-type-title" x-text="ocrModeSelectable ? '选择识别类型' : '识别类型'"></p>
+                <p class="ocr-type-sub" x-show="ocrModeSelectable">两类素材的转录规则不同。</p>
+                <p class="ocr-type-live" x-show="pairLive">手机仍在传输：已收到 <span x-text="pairCount"></span> 张。开始识别后新上传的照片不计入本批。</p>
+                <!-- 类型绑在工具上的地方只剩当前这一张卡：它是说明，不是可选项，所以不可点 -->
+                <div class="upl-opts">
+                  <template x-for="opt in ocrModeOptions" :key="opt.mode">
+                    <button type="button" class="upl-opt" :class="{ on: opt.on }" :disabled="!ocrModeSelectable"
+                            @click="chooseOcrMode(opt.mode)">
+                      <span class="upl-opt-ico" x-html="icon(opt.icon,'w-5 h-5')"></span>
+                      <span class="upl-opt-text">
+                        <b x-text="opt.label"></b>
+                        <i x-text="opt.rule"></i>
+                      </span>
+                    </button>
+                  </template>
+                </div>
+                <button type="button" class="btn-primary ocr-type-go" @click="ocrStart()">
+                  <span x-html="icon('send','w-4 h-4')"></span>开始识别
+                </button>
+                <p class="ocr-type-note" x-show="!!ocrText">
+                  将按当前类型重新转录全部 <span x-text="ocrImages.length"></span> 张图片，覆盖现有结果。
+                </p>
+              </div>
+
+              <div x-show="ocrStreaming && !ocrText" class="thinking-block fade-in">
+                <div class="thinking-orb-wrap"><div class="thinking-orb"><div class="thinking-orb-inner"></div></div></div>
+                <div class="thinking-label">
+                  <span class="thinking-dots"><span></span><span></span><span></span></span>
+                  <span class="thinking-text">正在识别图片文字</span>
+                  <span class="thinking-time" x-text="ocrElapsedText"></span>
+                </div>
+              </div>
+              <div class="md ocr-text" x-show="!!ocrText && !ocrNeedsStart" x-html="ocrRendered"></div>
+              <span class="tw-cursor" x-show="ocrStreaming && !!ocrText"></span>
+              <div class="ocr-note ocr-note-warn" x-show="ocrTruncated && !ocrStreaming && !ocrNeedsStart">
+                结果可能不完整：输出达到上限。可减少一次识别的张数，或请管理员调大后台的「OCR 最大输出 Tokens」。
+              </div>
+              <div class="error-card" x-show="ocrStage === 'error'">
+                <div class="font-semibold mb-1">这次识别没有成功</div>
+                <div x-text="ocrError"></div>
+                <div class="error-actions mt-3">
+                  <button type="button" class="btn-primary" @click="ocrRetry()">重试</button>
+                  <button type="button" class="btn-ghost" @click="ocrRepick()">换一批图片</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div x-show="ocrHasImage" class="px-5 py-3 border-t flex items-center gap-2 shrink-0" style="border-color:var(--border)">
+          <span class="text-xs text-faint hidden sm:inline" x-text="ocrBatchLabel"></span>
+          <span class="ml-auto flex items-center gap-2">
+            <button type="button" class="btn-ghost" @click="ocrRepick()" :disabled="ocrStreaming">换一批图片</button>
+            <button type="button" class="btn-primary" @click="ocrUseText()" :disabled="ocrStreaming || !ocrText">
+              <span x-html="icon('check','w-4 h-4')"></span>使用这段文字
+            </button>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 图片全屏查看（核对 [ILLEGIBLE] 之类时放大看） ==================== -->
+    <div x-show="ocrViewerOpen" class="ocr-viewer" x-transition.opacity x-cloak
+         @click="ocrViewerOpen = false" @keydown.escape.window="ocrViewerOpen = false">
+      <template x-if="ocrCurrentImage">
+        <img :src="ocrCurrentImage.dataUrl || ocrCurrentImage.url" :alt="ocrCurrentImage.name">
+      </template>
+      <button type="button" class="icon-x ocr-viewer-close" @click="ocrViewerOpen = false" title="关闭">×</button>
     </div>
 
     <!-- ==================== 通用确认弹窗（自研 UI，替代浏览器原生 confirm） ==================== -->

@@ -774,6 +774,14 @@ select option { background: var(--bg); color: var(--text); }
 .badge-user { background: var(--panel-soft); color: var(--dim); }
 /* 免费模型标记：与用户端「免费」标签同色系 */
 .badge-free { background: color-mix(in srgb, #10b981 16%, transparent); color: #34d399; }
+/* 用途能力标记（用户 / OCR / Chores）：中性色，靠在名称后一眼看清这个模型能干什么 */
+.badge-cap { background: var(--panel-soft); color: var(--dim); border: 1px solid var(--border); }
+
+/* 用途勾选组一项都没勾时的提醒态：与后端「未勾选任何用途」的拦截一致 */
+.rule-tool-options.cap-missing {
+  padding: 0.3rem; border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
 
 /* 免费模型防滥用限额：五个窗口并排，窄屏自动换行 */
 .free-limit-grid {

@@ -73,6 +73,7 @@ TOOL_GROUPS: list[dict] = [
         "collapsed": False,
         "tools": [
             {"id": "25", "name": "自由对话", "icon": "chat", "description": "通用 LLM 对话，提示词调试用", "prompt_filename": "自由对话.md"},
+            {"id": "32", "name": "识别图片文字", "icon": "scan-text", "description": "图片转文字（试卷、手写作文）", "prompt_filename": "识别图片文字-印刷试卷.md"},
         ],
     },
 ]
@@ -111,7 +112,15 @@ PROMPT_FILENAMES: dict[str, str] = {
     "27": "教考衔接文本解读", "28": "优质例句创研工坊", "29": "依托语境的词汇练习", "30": "隐性写作知识显性化",
     "31": "读后续写审题指导", "17": "阅读文本改编", "18": "阅读文本改编 2", "19": "阅读理解设问",
     "20": "阅读理解设问 2", "21": "辅助完形填空命题", "22": "试题解读分析", "23": "英语试题 Bug 侦察",
-    "24": "超标词替换", "25": "自由对话", MIGRATION_TOOL_ID: MIGRATION_TOOL_NAME,
+    "24": "超标词替换", "25": "自由对话", "32": "识别图片文字-印刷试卷",
+    MIGRATION_TOOL_ID: MIGRATION_TOOL_NAME,
+}
+
+# OCR 工具 id 与两种识别模式的提示词文件名（与 tools.py 的 OCR_MODE_PROMPTS 一致）
+OCR_TOOL_ID = "32"
+OCR_MODE_PROMPTS: dict[str, str] = {
+    "printed": "识别图片文字-印刷试卷",
+    "handwritten": "识别图片文字-手写作文",
 }
 
 # 可视化试卷工具的 tool_id（tool 13）：内容模板按它切换到 @@TAG@@ 格式

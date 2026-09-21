@@ -33,7 +33,18 @@ function makeStorage() {
 const SRC = fs.readFileSync(path.join(__dirname, "..", "script.js"), "utf8");
 
 /* 模块作用域只碰了一处浏览器 API：WIDE_MQ = window.matchMedia(...)。
-   其余 document / navigator 都在方法里，本用例不走那些路径。 */
+   组件里还有几处裸 matchMedia（finePointer、prefers-reduced-motion 判定），
+   在 Node 里没有全局 matchMedia，所以先补一个，否则装载组件就会 ReferenceError。 */
+if (typeof global.matchMedia !== "function") {
+  global.matchMedia = () => ({
+    matches: false,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+  });
+}
+
 function makeWindow() {
   const mq = {
     matches: false,

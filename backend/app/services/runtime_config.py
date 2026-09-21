@@ -17,6 +17,8 @@ CONFIG_KEYS = [
     "default_model",
     "models",
     "chores_model",
+    "ocr_model",
+    "ocr_max_tokens",
     "max_tokens",
     "timeout",
     "first_token_timeout",
@@ -59,6 +61,14 @@ FREE_LIMIT_MAX = 1_000_000
 
 # 用户端模型下拉最大显示数的取值上限（0 = 不折叠，保留全量显示）
 MAX_VISIBLE_MODELS_LIMIT = 50
+
+# 模型用途能力位：勾选列表里那三项。禁用（enabled=false）是它们的上一级开关，
+# 禁用后三项一律失效；未禁用时必须至少勾选一项。
+CAPABILITY_KEYS = ("user_usable", "ocr_usable", "chores_usable")
+# 旧的「仅 Chores」单开关写法，仅用于把老数据迁移成能力位
+LEGACY_CHORES_ONLY_KEYS = ("chores_only", "only_chores", "choresOnly")
+# OCR 最大输出 tokens 上限：整卷转录允许很长，但挡掉误填的天文数字
+OCR_MAX_TOKENS_LIMIT = 32768
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +130,32 @@ def _parse_flag(item: dict, *names: str, default: bool = False) -> bool:
             return False
         return default
     return default
+
+
+def parse_capabilities(item: dict) -> dict:
+    """解析模型的三个用途能力位，并把旧的「仅 Chores」开关迁移过来。
+
+    user_usable 用户端可选；ocr_usable 可用于图片识别；chores_usable 可用于 Chores。
+    老数据里没有任何新键时按旧行为回填：不是「仅 Chores」就能给用户用、
+    任何启用模型都能做 Chores、不默认开放 OCR。
+    """
+    if any(item.get(key) is not None for key in CAPABILITY_KEYS):
+        return {
+            "user_usable": _parse_flag(item, "user_usable", default=True),
+            "ocr_usable": _parse_flag(item, "ocr_usable", default=False),
+            "chores_usable": _parse_flag(item, "chores_usable", default=True),
+        }
+    legacy_only = _parse_flag(item, *LEGACY_CHORES_ONLY_KEYS, default=False)
+    return {
+        "user_usable": not legacy_only,
+        "ocr_usable": False,
+        "chores_usable": True,
+    }
+
+
+def has_any_capability(model: dict) -> bool:
+    """未禁用模型是否至少勾选了一项用途。"""
+    return any(bool(model.get(key)) for key in CAPABILITY_KEYS)
 
 
 def normalize_origin(raw: str) -> str | None:
@@ -262,9 +298,10 @@ def parse_models(raw: str) -> list[dict]:
     """解析模型配置。
 
     新格式：JSON 数组，每项含 id / name / description / score / reasoning_effort / thinking_budget /
-    chores_only / enabled / is_free / free_no_code / free_limits；
+    user_usable / ocr_usable / chores_usable / enabled / is_free / free_no_code / free_limits；
     旧格式：逗号分隔的模型 ID 字符串，自动升级为结构化条目。
-    enabled 缺省为 True（兼容老数据）；禁用后用户端与 Chores 均不可用。
+    enabled 缺省为 True（兼容老数据）；禁用后三项用途一律不可用。
+    三项用途能力位见 parse_capabilities（旧 chores_only 会在读取时迁移）。
     is_free = 免费模型（不扣次数、用户端展示「免费」标签）；
     free_no_code 仅在 is_free 为真时生效，表示无使用码或额度用尽时也可调用；
     free_limits 为防滥用限额，0 = 不限制。
@@ -290,13 +327,6 @@ def parse_models(raw: str) -> list[dict]:
                 continue
             effort = item.get("reasoning_effort")
             budget = item.get("thinking_budget")
-            # 仅 Chores 标记：兼容 chores_only / only_chores / choresOnly
-            chores_only_raw = item.get("chores_only")
-            if chores_only_raw is None:
-                chores_only_raw = item.get("only_chores")
-            if chores_only_raw is None:
-                chores_only_raw = item.get("choresOnly")
-            chores_only = bool(chores_only_raw) if isinstance(chores_only_raw, bool) else str(chores_only_raw).lower() in ("1", "true", "yes", "on") if chores_only_raw is not None else False
             enabled = _parse_enabled(item)
             # 免费模型：兼容 is_free / free 两种写法；未标记免费时无码开关强制归零
             is_free = _parse_flag(item, "is_free", "free")
@@ -308,7 +338,7 @@ def parse_models(raw: str) -> list[dict]:
                 "score": _clamp_score(item.get("score")),
                 "reasoning_effort": effort if effort in REASONING_EFFORTS else None,
                 "thinking_budget": int(budget) if isinstance(budget, (int, float)) and int(budget) > 0 else None,
-                "chores_only": chores_only,
+                **parse_capabilities(item),
                 "enabled": enabled,
                 "is_free": is_free,
                 "free_no_code": free_no_code,
@@ -324,7 +354,9 @@ def parse_models(raw: str) -> list[dict]:
             "score": None,
             "reasoning_effort": None,
             "thinking_budget": None,
-            "chores_only": False,
+            "user_usable": True,
+            "ocr_usable": False,
+            "chores_usable": True,
             "enabled": True,
             "is_free": False,
             "free_no_code": False,
@@ -414,6 +446,8 @@ def _env_defaults() -> dict[str, str]:
         "default_model": settings.default_model,
         "models": settings.models,
         "chores_model": settings.chores_model,
+        "ocr_model": settings.ocr_model,
+        "ocr_max_tokens": str(settings.ocr_max_tokens),
         "max_tokens": str(settings.max_tokens),
         "timeout": str(settings.timeout),
         "max_visible_models": str(settings.max_visible_models),
@@ -565,11 +599,21 @@ def resolve_llm_settings(db: Session) -> dict:
     model_list = parse_models(models_raw)
     default_model = (cfg.get("default_model") or settings.default_model).strip()
     chores_model = (cfg.get("chores_model") or "").strip() or default_model
+    # OCR 模型：留空跟随默认模型（此时要求默认模型勾选了「用于 OCR」，
+    # 见 resolve_llm_settings 返回的 ocr_model_configured 与 chat.py 的 OCR 校验）
+    ocr_model_cfg = (cfg.get("ocr_model") or settings.ocr_model).strip()
+    ocr_model = ocr_model_cfg or default_model
 
     try:
         max_tokens = int(cfg.get("max_tokens") or settings.max_tokens)
     except ValueError:
         max_tokens = settings.max_tokens
+    # OCR 输出上限单独可调：整卷转录远长于普通工具，且多图一次送入时更吃输出预算
+    try:
+        ocr_max_tokens = int(cfg.get("ocr_max_tokens") or settings.ocr_max_tokens)
+    except ValueError:
+        ocr_max_tokens = settings.ocr_max_tokens
+    ocr_max_tokens = max(256, min(OCR_MAX_TOKENS_LIMIT, ocr_max_tokens))
     try:
         timeout = int(cfg.get("timeout") or settings.timeout)
     except ValueError:
@@ -598,25 +642,34 @@ def resolve_llm_settings(db: Session) -> dict:
             "score": None,
             "reasoning_effort": None,
             "thinking_budget": None,
-            "chores_only": False,
+            "user_usable": True,
+            "ocr_usable": False,
+            "chores_usable": True,
             "enabled": True,
             "is_free": False,
             "free_no_code": False,
             "free_limits": parse_free_limits(None),
         }]
 
-    # Chores 模型若指向已禁用模型则回退到默认（默认可用才回退，否则保留原值由上层报错，
+    # Chores / OCR 模型若指向已禁用模型则回退到默认（默认可用才回退，否则保留原值由上层报错，
     # 避免静默切换掩盖误配置；管理端保存时已拦截，此处仅防脏数据）。
     by_id = {m["id"]: m for m in model_list}
-    _chores_hit = by_id.get(chores_model)
-    if _chores_hit is not None and not _chores_hit.get("enabled", True):
-        _default_hit = by_id.get(default_model)
-        if _default_hit is not None and _default_hit.get("enabled", True):
-            chores_model = default_model
-        else:
-            _fallback = next((m for m in model_list if m.get("enabled", True)), None)
-            if _fallback is not None:
-                chores_model = _fallback["id"]
+
+    def _fallback_if_disabled(model_id: str) -> str:
+        hit = by_id.get(model_id)
+        if hit is None or hit.get("enabled", True):
+            return model_id
+        default_hit = by_id.get(default_model)
+        if default_hit is not None and default_hit.get("enabled", True):
+            return default_model
+        fallback = next((m for m in model_list if m.get("enabled", True)), None)
+        return fallback["id"] if fallback is not None else model_id
+
+    chores_model = _fallback_if_disabled(chores_model)
+    ocr_model = _fallback_if_disabled(ocr_model)
+    # 「跟随默认」是否仍然成立：只有真正留着显式配置的模型才算配置过；
+    # 配的那个被禁用而回退到默认时，等于又变成跟随默认，能力校验得按默认模型算。
+    ocr_model_configured = bool(ocr_model_cfg) and ocr_model == ocr_model_cfg
 
     log_payload, log_retention_days = parse_log_settings(cfg)
 
@@ -678,22 +731,22 @@ def resolve_llm_settings(db: Session) -> dict:
             if not model_provider_details:
                 model_provider_details = {m["id"]: [{"provider_id": "prov_legacy", "provider_model_id": m["id"], "priority": 0}] for m in model_list}
 
-    # 计算可用模型（至少有一个 enabled Provider 绑定的模型，且非仅 Chores、未禁用）
+    # 计算可用模型（至少有一个 enabled Provider 绑定的模型，且对用户可见、未禁用）
     providers_by_id = {p["id"]: p for p in providers}
-    chores_only_ids = {m["id"] for m in model_list if m.get("chores_only")}
+    hidden_ids = {m["id"] for m in model_list if not m.get("user_usable", True)}
     disabled_ids = {m["id"] for m in model_list if not m.get("enabled", True)}
     available_model_ids = set()
     for mid, pids in model_provider_map.items():
-        if mid in chores_only_ids or mid in disabled_ids:
+        if mid in hidden_ids or mid in disabled_ids:
             continue
         for pid in pids:
             prov = providers_by_id.get(pid)
             if prov and prov.get("enabled"):
                 available_model_ids.add(mid)
                 break
-    # 若没有 model_provider_map 配置（新库未迁移），则视为所有启用且非仅 Chores 模型可用
+    # 若没有 model_provider_map 配置（新库未迁移），则视为所有启用且对用户可见的模型可用
     if not model_provider_map and providers:
-        available_model_ids = {m["id"] for m in model_list if not m.get("chores_only") and m.get("enabled", True)}
+        available_model_ids = {m["id"] for m in model_list if m.get("user_usable", True) and m.get("enabled", True)}
 
     mineru_mode = (cfg.get("mineru_mode") or "precision").strip() or "precision"
     if mineru_mode not in MINERU_MODES:
@@ -714,6 +767,9 @@ def resolve_llm_settings(db: Session) -> dict:
         "chores_model": chores_model,
         "chores_base_url": "",
         "chores_api_key": "",
+        "ocr_model": ocr_model,
+        "ocr_model_configured": ocr_model_configured,
+        "ocr_max_tokens": ocr_max_tokens,
         "max_tokens": max_tokens,
         "timeout": timeout,
         "first_token_timeout": first_token_timeout,

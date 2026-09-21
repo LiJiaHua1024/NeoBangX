@@ -19,13 +19,14 @@ import json
 import logging
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -54,7 +55,7 @@ class ChatBody(BaseModel):
     """与 app/routers/chat.py 的 ChatRequest 同构（字段名即契约）。"""
 
     tool_id: str = Field(..., max_length=64)
-    input: str = Field(..., min_length=1, max_length=50000)
+    input: str = Field("", max_length=50000)
     model: str | None = Field(None, max_length=128)
     request_id: str | None = Field(None, max_length=128)
     batch_id: str | None = Field(None, max_length=128)
@@ -62,6 +63,10 @@ class ChatBody(BaseModel):
     batch_index: int | None = Field(None, ge=0)
     transfer_count: int | None = Field(None, ge=1, le=5)
     continue_from: str | None = Field(None, max_length=200000)
+    images: list[str] | None = Field(None, max_length=12)
+    ocr_mode: str | None = Field(None, max_length=32)
+    pair_token: str | None = Field(None, max_length=64)
+    pair_order: list[int] | None = Field(None, max_length=12)
 
 
 class MigrationAnalyzeBody(BaseModel):
@@ -144,6 +149,14 @@ def _auth_gate(request: Request, model_id: str) -> None:
     raise HTTPException(status_code=401, detail="请先输入使用码")
 
 
+def _auth_gate_ocr(request: Request) -> None:
+    """图片识别：始终需要有效使用码（与真实后端一致）——不计次数，只限流。"""
+    if not _bearer(request):
+        raise HTTPException(status_code=401, detail="请先输入使用码")
+    if STATE.quota is not None and max(0, STATE.quota - STATE.used) <= 0:
+        raise HTTPException(status_code=403, detail="额度已用尽")
+
+
 def _note(rec: Any, **kwargs: Any) -> None:
     STATE.annotate(rec, **kwargs)
 
@@ -183,6 +196,99 @@ def create_app(
         if index_path.exists():
             return FileResponse(index_path)
         return {"message": "NeoBangX mock backend", "static_dir": str(static_dir)}
+
+    @app.get("/m/upload")
+    async def mobile_upload() -> Any:
+        """手机扫码上传页（真实后端同样由主站托管这个短地址）。"""
+        page_path = static_dir / "mobile-upload.html"
+        if page_path.exists():
+            return FileResponse(page_path)
+        raise HTTPException(status_code=404, detail="手机上传页尚未部署")
+
+    # ---- 图片识别扫码配对（最小镜像：内存会话 + 状态轮询，够把前端流程走通） ----
+    _PAIR: dict[str, dict] = {}
+
+    def _pair_or_404(token: str) -> dict:
+        session = _PAIR.get(token)
+        if session is None:
+            raise HTTPException(status_code=404, detail="配对已失效或已过期，请重新扫码")
+        return session
+
+    @app.post("/api/ocr/pair")
+    async def ocr_pair_create(request: Request) -> dict:
+        _auth_gate_ocr(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        theme = str(payload.get("theme") or "paper").strip().lower()
+        if theme not in ("paper", "celadon", "obsidian", "jade", "sora"):
+            theme = "paper"
+        sky = str(payload.get("sky") or "").strip().lower()
+        if theme != "sora" or sky not in ("day", "night"):
+            sky = ""
+        token = f"mock{int(time.time() * 1000) % 10_000_000}"
+        _PAIR[token] = {"images": [], "helloed": False, "theme": theme, "sky": sky}
+        return {
+            "token": token,
+            "path": f"/m/upload?token={token}&theme={theme}",
+            "expires_in": 900,
+            "max_images": 12,
+        }
+
+    @app.post("/api/ocr/pair/{token}/hello")
+    async def ocr_pair_hello(token: str) -> dict:
+        session = _pair_or_404(token)
+        session["helloed"] = True
+        return {
+            "ok": True,
+            "count": len(session["images"]),
+            "expires_in": 900,
+            "theme": session.get("theme", "paper"),
+            "sky": session.get("sky", ""),
+        }
+
+    @app.post("/api/ocr/pair/{token}/upload")
+    async def ocr_pair_upload(token: str, file: UploadFile = File(...)) -> dict:
+        session = _pair_or_404(token)
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="这张照片是空的，请重新拍摄")
+        session["images"].append(data)
+        return {"ok": True, "count": len(session["images"]), "max_images": 12}
+
+    @app.get("/api/ocr/pair/{token}/image")
+    async def ocr_pair_image(token: str, i: int = 0) -> Any:
+        session = _pair_or_404(token)
+        if i < 0 or i >= len(session["images"]):
+            raise HTTPException(status_code=404, detail="这张照片不存在")
+        return Response(content=session["images"][i], media_type="image/jpeg")
+
+    @app.get("/api/ocr/pair/{token}/events")
+    async def ocr_pair_events(token: str) -> Any:
+        session = _pair_or_404(token)
+
+        async def frames() -> Any:
+            # 真后端靠会话内事件推送，这里每秒重发一次状态，前端看到的时序一致
+            for _ in range(900):
+                yield sse_frame("state", json.dumps(
+                    {
+                        "state": "connected" if session["helloed"] else "waiting",
+                        "count": len(session["images"]),
+                        "expires_in": 900,
+                    },
+                    ensure_ascii=False,
+                ))
+                await asyncio.sleep(1)
+
+        return StreamingResponse(frames(), media_type="text/event-stream")
+
+    @app.delete("/api/ocr/pair/{token}")
+    async def ocr_pair_drop(token: str) -> dict:
+        _PAIR.pop(token, None)
+        return {"ok": True}
 
     # ---- 基础 ----
     @app.get("/api/health")
@@ -411,6 +517,15 @@ def create_app(
             raise HTTPException(status_code=400, detail="智能错题迁移必须通过批次请求生成")
 
         plan, warnings, stripped_input = _plan_for(request, input_text=body.input, model=body.model or "")
+
+        if body.tool_id == catalog.OCR_TOOL_ID:
+            # 图片识别：需要有效使用码 + 至少一张图片（或扫码会话），返回固定转录文本
+            _auth_gate_ocr(request)
+            if body.pair_order and not body.pair_token:
+                raise HTTPException(status_code=400, detail="图片顺序仅适用于扫码拍到的照片")
+            if not (body.images or body.pair_token):
+                raise HTTPException(status_code=400, detail="没有收到图片，请先选择或拍摄图片")
+            plan = replace(plan, content="ocr", reasoning_chars=0)
         req = body.model_dump()
         req["tool_name"] = tool["name"]
 

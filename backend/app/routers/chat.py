@@ -1,6 +1,9 @@
 import asyncio
+import base64
+import binascii
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Annotated, Callable, Literal, Optional
@@ -13,11 +16,18 @@ from app.config import settings
 from app.database import SessionLocal
 from app.deps import CodeContext, get_code_context, get_current_code
 from app.models import UsageCode
+from app.routers.ocr import normalize_image_mime, pair_image_data_urls, sniff_image_mime
 from app.routers.tools import (
     CONTINUE_PROMPT_NAME,
+    DEFAULT_OCR_MODE,
+    OCR_MAX_IMAGES,
+    OCR_MODES,
+    OCR_TOOL_ID,
+    OCR_TOOL_NAME,
     _resolve_continue_prompt_filename,
     _resolve_prompt_filename,
     get_prompt_loader,
+    resolve_ocr_prompt_filename,
 )
 from app.services.free_access import (
     identity_key,
@@ -141,6 +151,123 @@ def _continue_messages(prompt: str, continue_from: str, continue_prompt: str) ->
         {"role": "assistant", "content": continue_from},
         {"role": "user", "content": continue_prompt},
     ]
+
+
+# ---------------- 图片识别（OCR） ----------------
+
+# 单张与整批体积闸门：前端已按长边 2000 / JPEG 0.85 压过一轮，这里挡的是绕过前端直调接口
+OCR_MAX_IMAGE_BYTES = 3 * 1024 * 1024
+OCR_MAX_TOTAL_BYTES = 16 * 1024 * 1024
+_DATA_URL_RE = re.compile(r"^data:([a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+);base64,(.*)$", re.S)
+
+
+def _decode_image_data_url(raw: str) -> tuple[str, int]:
+    """校验一条图片 data URL，返回 (规范 mime, 解码后字节数)。
+
+    只解开头一小段做魔数嗅探、按 base64 长度核算体积：图片本体最终原样交给上游解码，
+    这里要保证的是「别把非图片、超大体量或外链放进请求」。
+    """
+    match = _DATA_URL_RE.match((raw or "").strip())
+    if not match:
+        raise HTTPException(
+            status_code=400, detail="图片格式不正确：只接受 data:image/…;base64 形式的图片"
+        )
+    declared = normalize_image_mime(match.group(1))
+    if declared is None:
+        raise HTTPException(status_code=400, detail="只支持 JPG / PNG / WebP 图片")
+    payload = re.sub(r"\s+", "", match.group(2))
+    if not payload:
+        raise HTTPException(status_code=400, detail="图片内容为空，请重新选择")
+    padding = len(payload) - len(payload.rstrip("="))
+    size = (len(payload) // 4) * 3 - padding
+    if size <= 0:
+        raise HTTPException(status_code=400, detail="图片内容为空，请重新选择")
+    if size > OCR_MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"单张图片超过 {OCR_MAX_IMAGE_BYTES // 1024 // 1024}MB，请换小一点的图再试",
+        )
+    try:
+        head = base64.b64decode(payload[:24] + "=" * (-len(payload[:24]) % 4))
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="图片内容无法解析，请重新选择图片") from exc
+    if sniff_image_mime(head) != declared:
+        raise HTTPException(status_code=400, detail="图片内容与声明的格式不符，请重新选择图片")
+    return declared, size
+
+
+def _resolve_ocr_images(
+    images: Optional[list[str]],
+    pair_token: Optional[str],
+    pair_order: Optional[list[int]] = None,
+) -> list[str]:
+    """确定本次识别的图片（data URL 列表）：随请求上传，或取自扫码配对会话。
+
+    扫码来源可以带 pair_order：那是电脑端排好序、并可能删过几张之后的下标序列，
+    重排与删除只改顺序、不重传字节。
+    """
+    pair = (pair_token or "").strip()
+    raws = [str(item or "") for item in (images or [])]
+    if pair and raws:
+        raise HTTPException(status_code=400, detail="图片只能来自一处：随请求上传，或走扫码配对")
+    if pair:
+        return pair_image_data_urls(pair, pair_order)
+    if pair_order:
+        raise HTTPException(status_code=400, detail="图片顺序仅适用于扫码拍到的照片")
+    if not raws:
+        raise HTTPException(status_code=400, detail="没有收到图片，请先选择或拍摄图片")
+    if len(raws) > OCR_MAX_IMAGES:
+        raise HTTPException(status_code=400, detail=f"一次最多识别 {OCR_MAX_IMAGES} 张图片")
+    total = 0
+    for raw in raws:
+        _, size = _decode_image_data_url(raw)
+        total += size
+    if total > OCR_MAX_TOTAL_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"图片总量超过 {OCR_MAX_TOTAL_BYTES // 1024 // 1024}MB，请减少张数",
+        )
+    return [raw.strip() for raw in raws]
+
+
+def _validate_ocr_model(cfg: dict, model: str) -> None:
+    """OCR 模型的可用性校验。
+
+    不能复用 _validate_model：那里的 available_model_ids 只含「用户可用」的模型，
+    而 OCR 模型恰恰可能是用户端不可见的（只勾了「用于 OCR」）。
+    """
+    entry = find_model_entry(cfg["models"], model)
+    if entry is None:
+        raise HTTPException(
+            status_code=400, detail=f"OCR 模型不存在：{model}（请在管理后台检查 OCR 模型配置）"
+        )
+    if not entry.get("enabled", True):
+        raise HTTPException(
+            status_code=400, detail=f"OCR 模型已禁用：{model}（请在管理后台检查 OCR 模型配置）"
+        )
+    # 留空即「跟随默认」，前提是默认模型勾选了「用于 OCR」：
+    # 否则等于拿一个不认图的模型去识别，只会在上游报一堆看不懂的错
+    if not cfg.get("ocr_model_configured") and not entry.get("ocr_usable", False):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"后台未配置 OCR 模型，默认模型「{model}」也未勾选「用于 OCR」："
+                "请在管理后台指定一个视觉模型，或为默认模型勾上该项"
+            ),
+        )
+    if not _get_providers_for_model_sync(cfg, model):
+        raise HTTPException(status_code=400, detail=f"OCR 模型未绑定可用 Provider：{model}")
+
+
+def _hit_output_cap(usage: dict, limit: int) -> bool:
+    """输出是否撞到上限（撞上就提示结果可能不完整，不静默交付半份转录）。"""
+    if not limit:
+        return False
+    try:
+        completion = int(usage.get("completion_tokens") or 0)
+    except (TypeError, ValueError):
+        return False
+    return completion >= limit * 0.95
 
 
 @dataclass
@@ -377,7 +504,12 @@ def _log_llm_call(
 
 class ChatRequest(BaseModel):
     tool_id: str = Field(..., max_length=64, description="工具 ID，对应 /api/tools/ 返回的工具 id")
-    input: str = Field(..., min_length=1, max_length=50000, description="用户输入文本（上限按整卷 + 解析版的粘贴体量放宽）")
+    input: str = Field(
+        "",
+        max_length=50000,
+        description="用户输入文本（上限按整卷 + 解析版的粘贴体量放宽）；OCR 工具不需要文字，"
+        "其余工具为空时在路由内报 400",
+    )
     model: Optional[str] = Field(None, max_length=128, description="模型 ID，为空则使用默认模型")
     request_id: Optional[str] = Field(None, max_length=128, description="客户端生成的请求 ID，用于停止生成")
     batch_id: Optional[str] = Field(None, max_length=128, description="智能错题迁移批次 ID")
@@ -391,6 +523,25 @@ class ChatRequest(BaseModel):
         max_length=200000,
         description="已生成但被中断的正文。传入即表示本次接着它续写：该文本作为上一条 "
         "assistant 消息回传，末尾再追加一条续写指令（prompts/继续生成.md）",
+    )
+    images: Optional[list[str]] = Field(
+        None,
+        max_length=OCR_MAX_IMAGES,
+        description="图片识别：图片 data URL 列表（data:image/jpeg;base64,...），与 pair_token 二选一",
+    )
+    ocr_mode: Optional[str] = Field(
+        None,
+        max_length=32,
+        description="图片识别模式：printed=印刷试卷 / handwritten=手写作文（前端按所在工具决定，见 API 契约 8.2）",
+    )
+    pair_token: Optional[str] = Field(
+        None, max_length=64, description="图片识别：扫码配对会话 token，图片由服务器内存直接读取"
+    )
+    pair_order: Optional[list[int]] = Field(
+        None,
+        max_length=OCR_MAX_IMAGES,
+        description="图片识别：扫码照片按哪个顺序送进模型（会话内下标序列）。"
+        "电脑端排序、删除后只传这个序列，不重传图片字节",
     )
 
 
@@ -791,8 +942,24 @@ async def chat_stream(
     无码或码不可用时，仅「免费 + 无码可用」的模型放行，其余按原因返回 401/403。
     免费模型在限额内不扣次数；限额命中后若使用码仍可用则转为按次扣减，
     无码或码不可用才返回 429。
+    图片识别（工具 32）单独一条链路：需有效使用码、始终不扣次数、只按身份限流。
     """
-    prompt_filename = _resolve_prompt_filename(req.tool_id)
+    is_ocr = req.tool_id == OCR_TOOL_ID
+    if is_ocr:
+        # 识别需要有效使用码：扫码拍照同样走这道闸，不是匿名入口。
+        # 准入与限流放在最前面，不合法或超频的请求不会走到取图那一步。
+        if not ctx.ok:
+            raise ctx.error()
+        enforce_rate_limit(_identity_for(request, ctx.code), "ocr")
+        ocr_mode = (req.ocr_mode or DEFAULT_OCR_MODE).strip() or DEFAULT_OCR_MODE
+        if ocr_mode not in OCR_MODES:
+            raise HTTPException(status_code=400, detail=f"不支持的识别模式：{ocr_mode}")
+        prompt_filename = resolve_ocr_prompt_filename(ocr_mode)
+    else:
+        # OCR 之外的工具仍然必须有正文：这条校验原来由字段的 min_length 承担
+        if not req.input.strip():
+            raise HTTPException(status_code=400, detail="请输入内容")
+        prompt_filename = _resolve_prompt_filename(req.tool_id)
     if not prompt_filename:
         raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")
 
@@ -804,6 +971,19 @@ async def chat_stream(
             status_code=404,
             detail=f"Prompt file {prompt_filename}.md not found",
         )
+
+    # 图片识别：图片随请求上传（data URL）或来自扫码配对会话，二选一
+    ocr_images: list[str] = []
+    ocr_messages: Optional[list[dict]] = None
+    if is_ocr:
+        ocr_images = _resolve_ocr_images(req.images, req.pair_token, req.pair_order)
+        ocr_messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}]
+                + [{"type": "image_url", "image_url": {"url": url}} for url in ocr_images],
+            }
+        ]
 
     # 续写：首条消息与首次请求完全一致，接着放残文，最后挂一条续写指令。
     # 其余逻辑（额度、推理规则、停止事件、日志）与普通请求完全一致。
@@ -819,13 +999,23 @@ async def chat_stream(
 
     # 配置读取走短会话 + 线程池：不随 SSE 流占住连接池会话，也不阻塞事件循环
     cfg = await asyncio.to_thread(_load_cfg)
-    _validate_model(cfg, req.model)
-    model_used = req.model or cfg["llm_model"]
-    # 从模型列表中查找该模型的思考配置与免费标记；未配置则交由供应商默认
-    model_entry = find_model_entry(cfg["models"], model_used)
     code = ctx.code
-    _ensure_model_access(ctx, model_entry)
-    free_model = is_free_model(model_entry)
+    if is_ocr:
+        # 识别用后台配置的 OCR 模型，忽略请求里的 model（用户端根本看不到它）
+        model_used = cfg.get("ocr_model") or cfg["default_model"]
+        _validate_ocr_model(cfg, model_used)
+        model_entry = find_model_entry(cfg["models"], model_used)
+        # 始终不计费：不注册免费额度、不占额度预留、扣减次数恒为 0
+        free_model = False
+        charged_free = True
+    else:
+        _validate_model(cfg, req.model)
+        model_used = req.model or cfg["llm_model"]
+        # 从模型列表中查找该模型的思考配置与免费标记；未配置则交由供应商默认
+        model_entry = find_model_entry(cfg["models"], model_used)
+        _ensure_model_access(ctx, model_entry)
+        free_model = is_free_model(model_entry)
+        charged_free = free_model
 
     # 日志元数据：客户端信息与原始数据开关（开关随请求读取，改配置即时生效）
     client_ip, user_agent = get_client_info(request)
@@ -835,8 +1025,8 @@ async def chat_stream(
     owner_key = f"code:{code.id}" if code else identity_key(fingerprint=fp_hash, ip=client_ip)
 
     # 免费模型：优先走免费额度（不扣次数）并在建立 SSE 之前过防滥用限额；
-    # 限额命中时若使用码仍可用（含无限码）则转为按次计费，无码/码不可用才 429
-    charged_free = free_model
+    # 限额命中时若使用码仍可用（含无限码）则转为按次计费，无码/码不可用才 429。
+    # OCR 的 charged_free 在上方恒为真，不会进这里（识别始终不计费）。
     release_free_slot: Callable[[], None] = lambda: None
     if free_model:
         try:
@@ -856,8 +1046,14 @@ async def chat_stream(
             logger.info(
                 "免费模型限额命中，转为按次计费：model=%s code_id=%s", model_used, code.id
             )
-    # 日志展示用名称：迁移请求统一显示工具名而非底层 prompt 文件名
-    tool_name = MIGRATION_TOOL_NAME if req.tool_id == MIGRATION_TOOL_ID else prompt_filename
+    # 日志展示用名称：迁移与识别都用工具名而不是底层 prompt 文件名
+    # （识别有印刷/手写两份提示词，按文件名记会让同一个工具在日志里分成两条）
+    if is_ocr:
+        tool_name = OCR_TOOL_NAME
+    elif req.tool_id == MIGRATION_TOOL_ID:
+        tool_name = MIGRATION_TOOL_NAME
+    else:
+        tool_name = prompt_filename
     # 挂上业务上下文：路由内若有未捕获异常，全局处理器据此补一条使用日志
     _mark_usage_context(
         request,
@@ -879,7 +1075,8 @@ async def chat_stream(
         release_free_slot()
         raise
 
-    llm = _build_llm(cfg, model=req.model, chores=False)
+    # OCR 用后台配置的模型（上面已解析成 model_used），其余工具沿用请求里选的模型
+    llm = _build_llm(cfg, model=model_used, chores=False)
     base_request_id = req.request_id or f"{req.tool_id}_{id(request)}"
     request_id = base_request_id
     existing = _stop_events.get(base_request_id)
@@ -931,8 +1128,10 @@ async def chat_stream(
         try:
             async for item in llm.chat_stream_with_stop(
                 user_prompt=prompt,
-                messages=continue_messages,
-                model=req.model,
+                # OCR 走多模态消息序列（指令 + N 张图片），续写走残文序列，其余为 prompt 单条
+                messages=ocr_messages or continue_messages,
+                model=model_used,
+                max_tokens=cfg["ocr_max_tokens"] if is_ocr else None,
                 stop_event=stop_event,
                 reasoning_effort=reasoning_effort,
                 thinking_budget=thinking_budget,
@@ -996,9 +1195,15 @@ async def chat_stream(
                 }
             else:
                 # 保持现有工具的计费行为：流正常收尾（包括用户停止/断开）后扣 1 次；
-                # 免费额度内 quota_units=0 不扣，命中限额转按次计费时扣 1 次。
+                # 免费额度内 quota_units=0 不扣，命中限额转按次计费时扣 1 次，OCR 恒为 0。
                 if client_disconnected or stop_event.is_set():
                     status = STATUS_CANCELLED
+                # 整卷转录很容易撞输出上限：撞上了要明说，别让人拿着半份试卷往下走
+                if is_ocr and _hit_output_cap(usage, cfg["ocr_max_tokens"]):
+                    yield {
+                        "event": "truncated",
+                        "data": json.dumps({"limit": cfg["ocr_max_tokens"]}, ensure_ascii=False),
+                    }
                 if not charged:
                     units = await asyncio.to_thread(
                         _charge_usage,
@@ -1074,7 +1279,8 @@ async def chat_stream(
                 log_payload=log_payload_enabled,
                 error_message=_final_error_message(llm, status, error_message),
                 units=units,
-                input_text=req.input,
+                # OCR 的输入是图片：正文留空，日志里记张数，便于核对视觉调用量
+                input_text=req.input if not is_ocr else f"[图片 {len(ocr_images)} 张]",
                 rendered_prompt=prompt,
                 output_text="".join(output_parts),
                 provider_id=prov_id,

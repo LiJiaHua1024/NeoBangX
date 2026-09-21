@@ -10,3 +10,13 @@
 前端加载失败时 `script.js` 中的 `nbxFpInit()` 仍会静默降级，绝不阻塞业务。
 
 升级方式：重新下载上述地址覆盖本文件即可（对外 API：`new ThumbmarkJS.Thumbmark().get()`）。
+
+`qrcode-generator-1.4.4.js` 为 Kazuhiko Arase 的 qrcode-generator 浏览器构建（MIT 协议，可商用），
+来源：https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js
+拉取日期：2026-09-21（约 56KB，无依赖，全局函数 `qrcode(typeNumber, ecc)`）。
+
+用途：手机扫码拍照时在电脑端渲染二维码（`createSvgTag()` 输出 SVG，高分屏下比位图锐利）。
+自托管原因同上；未加载成功时配对弹窗自动退化为「显示完整网址 + 复制」，
+`script.js` 的 `qrSvg()` 返回空串即可，不影响其余功能。
+
+升级方式：重新下载上述地址覆盖本文件；保持文件名里的版本号同步更新，并改 `index.html` 里的 `?v=`。

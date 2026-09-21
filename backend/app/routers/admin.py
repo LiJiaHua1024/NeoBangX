@@ -56,10 +56,12 @@ from app.services.runtime_config import (
     MAX_VISIBLE_MODELS_LIMIT,
     MINERU_MODES,
     MINERU_MODELS,
+    OCR_MAX_TOKENS_LIMIT,
     REASONING_EFFORTS,
     TOOL_REASONING_UNSUPPORTED_ACTIONS,
     get_config_map,
     get_config_value,
+    has_any_capability,
     mask_config,
     parse_mirror_settings,
     parse_models,
@@ -114,8 +116,20 @@ class ModelEntry(BaseModel):
     thinking_budget: Optional[int] = Field(
         None, ge=1, description="思考 token 预算，优先于 reasoning_effort"
     )
-    chores_only: bool = Field(False, description="仅用于 Chores，不在 8000 用户端展示")
-    enabled: bool = Field(True, description="是否启用，禁用后用户端与 Chores 均不可用")
+    # 用途能力位：三者为空表示客户端未提交（旧版后台），按下面的 chores_only 迁移
+    user_usable: Optional[bool] = Field(
+        None, description="用户可用：出现在 8000 用户端的模型列表中"
+    )
+    ocr_usable: Optional[bool] = Field(
+        None, description="用于 OCR：可作为「识别图片文字」的识别模型"
+    )
+    chores_usable: Optional[bool] = Field(
+        None, description="用于 Chores：可作为标题生成等轻量任务的模型"
+    )
+    chores_only: bool = Field(
+        False, description="【已废弃】仅用于 Chores；新客户端请改用三项能力位"
+    )
+    enabled: bool = Field(True, description="是否启用；禁用后用户端、OCR 与 Chores 均不可用")
     is_free: bool = Field(False, description="免费模型：调用不消耗使用码次数，用户端显示「免费」标签")
     free_no_code: bool = Field(
         False, description="无码可用：没有使用码或次数已用尽时仍可调用（仅在免费模型下生效）"
@@ -151,6 +165,12 @@ class ConfigUpdateRequest(BaseModel):
     default_model: Optional[str] = None
     models: Optional[List[ModelEntry]] = None
     chores_model: Optional[str] = None
+    ocr_model: Optional[str] = Field(
+        None, description="OCR 模型，留空跟随默认模型；需带视觉能力"
+    )
+    ocr_max_tokens: Optional[int] = Field(
+        None, ge=256, le=OCR_MAX_TOKENS_LIMIT, description="OCR 单次输出 tokens 上限"
+    )
     max_tokens: Optional[int] = None
     timeout: Optional[int] = None
     first_token_timeout: Optional[int] = Field(
@@ -1873,6 +1893,13 @@ async def update_admin_config(
                     detail=f"非法思考强度：{effort}",
                 )
         pending_models = parse_models(serialize_models([m.model_dump() if hasattr(m, "model_dump") else m for m in raw["models"]]))
+        # 未禁用就必须有用途：三项全不勾的模型没有任何入口可用，等于配了个死模型
+        for _m in pending_models:
+            if _m.get("enabled", True) and not has_any_capability(_m):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"模型「{_m['name']}」未勾选任何用途：请至少勾选一项，或直接禁用该模型",
+                )
     # 预校验工具推理规则（若本次同时提交）
     if "tool_reasoning_rules" in raw and raw["tool_reasoning_rules"] is not None:
         known_tool_ids = {
@@ -1917,13 +1944,13 @@ async def update_admin_config(
         if key == "default_model":
             dm = str(value or "").strip()
             if dm:
-                # 校验 default_model 不可为仅 Chores / 已禁用模型
+                # 校验 default_model 须勾选「用户可用」且未禁用
                 check_models = pending_models if pending_models is not None else parse_models(get_config_map(db).get("models", ""))
                 hit = next((m for m in check_models if m["id"] == dm), None)
                 if not hit:
                     raise HTTPException(status_code=400, detail=f"默认模型不存在：{dm}")
-                if hit.get("chores_only"):
-                    raise HTTPException(status_code=400, detail="默认模型不可为仅 Chores 模型")
+                if not hit.get("user_usable", True):
+                    raise HTTPException(status_code=400, detail="默认模型未勾选「用户可用」")
                 if not hit.get("enabled", True):
                     raise HTTPException(status_code=400, detail=f"默认模型已禁用：{dm}")
             updates[key] = str(value)
@@ -1935,36 +1962,67 @@ async def update_admin_config(
                 hit = next((m for m in check_models if m["id"] == cm), None)
                 if not hit:
                     raise HTTPException(status_code=400, detail=f"Chores 模型不存在：{cm}")
+                if not hit.get("chores_usable", True):
+                    raise HTTPException(status_code=400, detail="Chores 模型未勾选「用于 Chores」")
                 if not hit.get("enabled", True):
                     raise HTTPException(status_code=400, detail=f"Chores 模型已禁用：{cm}")
             updates[key] = str(value)
             continue
+        if key == "ocr_model":
+            om = str(value or "").strip()
+            if om:
+                check_models = pending_models if pending_models is not None else parse_models(get_config_map(db).get("models", ""))
+                hit = next((m for m in check_models if m["id"] == om), None)
+                if not hit:
+                    raise HTTPException(status_code=400, detail=f"OCR 模型不存在：{om}")
+                if not hit.get("ocr_usable", False):
+                    raise HTTPException(status_code=400, detail="OCR 模型未勾选「用于 OCR」")
+                if not hit.get("enabled", True):
+                    raise HTTPException(status_code=400, detail=f"OCR 模型已禁用：{om}")
+            updates[key] = str(value)
+            continue
         updates[key] = str(value)
 
-    # 最终一致性校验：仅改 models（禁用某模型）但未同步改 default/chores 时拦截，
-    # 避免存量 default/chores 指向已禁用模型（与仅 Chores 同理）。
+    # 最终一致性校验：仅改 models（禁用某模型或取消某项能力）但未同步改
+    # default/chores/ocr 指向时拦截，避免存量指向一个已经用不了的模型。
     try:
         _old_cfg = get_config_map(db)
     except Exception:
         _old_cfg = {}
     _final_models = pending_models if pending_models is not None else parse_models(_old_cfg.get("models", ""))
-    if "default_model" in raw:
-        _final_default = str(raw.get("default_model") or "").strip()
-    else:
-        _final_default = (_old_cfg.get("default_model") or "").strip()
-    if "chores_model" in raw:
-        _final_chores = str(raw.get("chores_model") or "").strip()
-    else:
-        _final_chores = (_old_cfg.get("chores_model") or "").strip()
+
+    def _final_pointer(key: str) -> str:
+        if key in raw:
+            return str(raw.get(key) or "").strip()
+        return (_old_cfg.get(key) or "").strip()
+
+    def _find_final(model_id: str):
+        return next((m for m in _final_models if m["id"] == model_id), None)
+
+    # (配置键, 展示名, 能力位, 能力缺省值, 缺失能力时的提示)
+    _pointer_checks = (
+        ("default_model", "默认模型", "user_usable", True, "未勾选「用户可用」"),
+        ("chores_model", "Chores 模型", "chores_usable", True, "未勾选「用于 Chores」"),
+        ("ocr_model", "OCR 模型", "ocr_usable", False, "未勾选「用于 OCR」"),
+    )
     if _final_models:
-        if _final_default:
-            _hit = next((m for m in _final_models if m["id"] == _final_default), None)
-            if _hit is not None and not _hit.get("enabled", True):
-                raise HTTPException(status_code=400, detail=f"默认模型已禁用：{_final_default}，请先切换默认模型再禁用")
-        if _final_chores:
-            _hit = next((m for m in _final_models if m["id"] == _final_chores), None)
-            if _hit is not None and not _hit.get("enabled", True):
-                raise HTTPException(status_code=400, detail=f"Chores 模型已禁用：{_final_chores}，请先切换 Chores 模型再禁用")
+        for _key, _label, _cap, _cap_default, _reason in _pointer_checks:
+            _target = _final_pointer(_key)
+            if not _target:
+                continue
+            _hit = _find_final(_target)
+            if _hit is None:
+                continue
+            if not _hit.get("enabled", True):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{_label}已禁用：{_target}，请先切换{_label}再禁用",
+                )
+            if not _hit.get(_cap, _cap_default):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{_label}「{_target}」{_reason}，请先切换{_label}或为该模型勾选这项用途",
+                )
 
     # 线路镜像：开启时必须恰好配两条合法线路，否则前端无法确定自己的对端。
     # 与 default/chores 同理，按「本次提交 + 存量配置」合并后的**最终值**判断，

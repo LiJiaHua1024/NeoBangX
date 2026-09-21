@@ -154,6 +154,51 @@ _VOCAB = """## 超标词替换结果
 
 _TITLE = "高三英语语篇深度分析讲稿"
 
+# 图片识别的假转录：故意带上「学生答案 » 印刷原文」的对照痕迹，
+# 让人一眼看出返回的是「只转录印刷内容」的那一版
+_OCR_PRINTED = """## 第三部分 语言知识运用
+
+### 第一节 完形填空
+
+阅读下面的短文，从每题所给的四个选项中选出最佳选项。
+
+I was walking home when I noticed an old man sitting on a bench. He looked
+**41** and tired, so I stopped to ask if he needed help.
+
+41. A. worried   B. excited   C. grateful   D. curious
+
+### 第二节 语法填空
+
+在空白处填入适当的内容（1 个单词）或括号内单词的正确形式。
+
+Last summer I **56** (volunteer) at a local library, where I learned how to
+organize books **57** patiently.
+
+---
+
+## 第四部分 写作
+
+### 第一节 应用文写作
+
+假定你是李华，你校将举办英语演讲比赛。请你写一则通知。
+
+> 注意：词数 80 左右；可以适当增加细节，以使行文连贯。
+"""
+
+_OCR_HANDWRITTEN = """Last week our class held a discussion about whether students should do
+volunteer work during the summer holiday.
+
+Some students think it is a good chance to learn about [ILLEGIBLE] the real
+world. They say we can also make new friends and improve our communication
+skills.
+
+Others believe we should spend the time on our study, especially before the
+final exam.
+
+In my opinion, doing volunteer work is helpful, but we should [OBSCURED] our
+time well.
+"""
+
 
 def _echo(req: dict, input_text: str) -> str:
     """请求回执：把前端实际发来的字段写进正文，人工/agent 都能直接核对。"""
@@ -198,6 +243,8 @@ def build_content(name: str, plan: StreamPlan, req: dict, input_text: str, tool_
         )
     if name == "paper":
         return paper_mod.build_paper(plan, req, input_text)
+    if name == "ocr":
+        return _OCR_HANDWRITTEN if req.get("ocr_mode") == "handwritten" else _OCR_PRINTED
     return _GENERIC
 
 

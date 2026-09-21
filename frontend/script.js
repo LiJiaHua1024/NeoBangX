@@ -45,6 +45,7 @@ const ICON_PATHS = {
   "x": '<path d="M6 6l12 12M18 6 6 18"/>',
   "chevron-down": '<path d="m6 9 6 6 6-6"/>',
   "chevron-right": '<path d="m9 6 6 6-6 6"/>',
+  "chevrons-left": '<path d="m18 7-5 5 5 5M11 7l-5 5 5 5"/>',
   "chevrons-right": '<path d="m6 7 5 5-5 5M13 7l5 5-5 5"/>',
   "panel-right": '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M15 4.5v15"/>',
   "expand": '<path d="M9 3.5H5.5a2 2 0 0 0-2 2V9M15 3.5h3.5a2 2 0 0 1 2 2V9M15 20.5h3.5a2 2 0 0 0 2-2V15M9 20.5H5.5a2 2 0 0 1-2-2V15"/>',
@@ -83,7 +84,11 @@ const ICON_PATHS = {
   "pin": '<path d="M12 16.5V21"/><path d="M9.5 3h5v6.2l2.7 3.6a1 1 0 0 1-.8 1.6H7.6a1 1 0 0 1-.8-1.6l2.7-3.6V3Z"/>',
   "chevron-left": '<path d="m15 18-6-6 6-6"/>',
   "chevron-up": '<path d="m18 15-6-6-6 6"/>',
-  "print": '<path d="M7 8V3h10v5"/><path d="M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><rect x="7" y="14" width="10" height="7" rx="1"/>',
+  // —— 图片识别（拍照 / 相册 / 扫码） ——
+  "scan-text": '<path d="M4 8.5V6a2 2 0 0 1 2-2h2.5M15.5 4H18a2 2 0 0 1 2 2v2.5M20 15.5V18a2 2 0 0 1-2 2h-2.5M8.5 20H6a2 2 0 0 1-2-2v-2.5"/><path d="M8.5 9.5h7M8.5 12.5h7M8.5 15.5h4"/>',
+  "camera": '<path d="M3.5 9A2.5 2.5 0 0 1 6 6.5h1a1.6 1.6 0 0 0 1.4-.8l.5-.9a1.6 1.6 0 0 1 1.4-.8h3.4a1.6 1.6 0 0 1 1.4.8l.5.9a1.6 1.6 0 0 0 1.4.8h1A2.5 2.5 0 0 1 20.5 9v7A2.5 2.5 0 0 1 18 18.5H6A2.5 2.5 0 0 1 3.5 16Z"/><circle cx="12" cy="12.5" r="3.2"/>',
+  "image": '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.6" cy="10" r="1.5"/><path d="m4 17.2 4.3-4a2 2 0 0 1 2.7 0l3.4 3.2"/><path d="m13.6 15.2 1.5-1.4a2 2 0 0 1 2.7 0l2.2 2"/>',
+  "qr": '<rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.6"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1.6"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="1.6"/><path d="M14 14h3.2v3.2H14zM20.5 14v2.4M17.6 20.5h2.9M14 20.5h1.2"/>',
 };
 
 function icon(name, cls = "w-5 h-5") {
@@ -205,6 +210,43 @@ const CARD_REASONING_LIMIT = 2000;
    也不误标成已完成。识别刻意放宽（大小写、@ 数量、空格/下划线/连字符、裸词都要认），
    实测模型对定界符的写法会漂移（试卷工具的 @@TAG@@ 就吃过这个亏），严格匹配必漏。 */
 const CONTINUE_DONE_SRC = "[＠@]*\\s*CONTINUE[\\s_-]*DONE\\s*[＠@]*";
+
+/* ---------------- 图片识别（OCR）参数 ---------------- */
+// 工具 id 与后端 tools.py 的 OCR_TOOL_ID 一致
+const OCR_TOOL_ID = "32";
+// 单次最多识别张数（后端硬上限 12，这里保守到 8 页，够一份整卷）
+const OCR_MAX_IMAGES = 8;
+// 压缩长边与 JPEG 质量：上游视觉模型会把图缩到 1–2k 像素级，再大只是白占带宽
+const OCR_MAX_EDGE = 2000;
+const OCR_COMPRESS_QUALITY = 0.85;
+const OCR_DATA_URL_PREFIX = "data:image/jpeg;base64,";
+const OCR_MODES = {
+  printed: { label: "印刷试卷", rule: "只转录印刷文字，忽略手写答案与批注", icon: "scan-text" },
+  handwritten: { label: "手写作文", rule: "按修改后的最终状态逐字转录，保留原有拼写与语法错误", icon: "writing" },
+};
+// 识别类型由工具用途决定，不让用户选：会收到学生手写稿的只有「学生作文批改」，
+// 其余工具收到的都是原卷印刷稿（没有人会手抄一份试卷来拍）。要改绑定就改这张表。
+const OCR_HANDWRITTEN_TOOLS = ["10"]; // 学生作文批改
+// 只有这两处两种素材都可能来，保留手动选择：识别图片文字（通用转文字工具本身）、自由对话
+const OCR_MANUAL_MODE_TOOLS = ["25", "32"];
+function ocrModeForTool(toolId) {
+  return OCR_HANDWRITTEN_TOOLS.indexOf(String(toolId == null ? "" : toolId)) >= 0 ? "handwritten" : "printed";
+}
+function ocrModeCanChoose(toolId) {
+  return OCR_MANUAL_MODE_TOOLS.indexOf(String(toolId == null ? "" : toolId)) >= 0;
+}
+function ocrModeMeta(mode) {
+  return OCR_MODES[mode] || OCR_MODES.printed;
+}
+// 识别是付费的视觉调用（后端不计费但仅限流放行），始终要有效使用码，免码试用模型也不适用
+const OCR_CODE_HINT = "识别需要有效使用码";
+// 图片文件判定：MIME 优先（拖拽进来一般带类型），扩展名兜底（部分环境上传不带 type）
+const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "heic", "heif", "bmp", "gif", "avif"];
+function isImageFile(file, ext) {
+  const type = (file && file.type) || "";
+  if (type.indexOf("image/") === 0) return true;
+  return IMAGE_EXTENSIONS.indexOf(String(ext || "").toLowerCase()) >= 0;
+}
 
 /* ---------------- 试卷可视化全解：@@TAG@@ 标签识别（宽松版） ----------------
    契约要求标签独占一行且 @@TAG@@ 双向闭合，但实测模型会漂移：@@@PITFALLS::（多打一个 @、
@@ -1855,13 +1897,56 @@ function nbx() {
     _confirmResolve: null,
     _pdfAbort: null,
     get uploadHintText() {
-      const base = "支持 .docx / .doc / .txt / .md / .pdf，自动跳过听力";
+      const base = "支持 .docx / .doc / .txt / .md / .pdf 与图片，自动跳过听力";
       if (this.parseConfig && this.parseConfig.pdf_enabled === false) return base + "（PDF 解析未配置）";
       return base;
     },
     get uploadHintTitle() {
-      return "PDF 由云端解析，较大文件需等待；拍照/扫描件效果较差";
+      return "PDF 由云端解析，较大文件需等待；图片会先做文字识别";
     },
+    /* 工具数量不再写死：加一个工具就得改几处文案，久了必然对不上（当天就错过一次） */
+    get toolCountLabel() {
+      const total = (this.groups || []).reduce((sum, g) => sum + ((g.tools || []).length), 0);
+      return total ? `${total} 个` : "…";
+    },
+
+    /* --- 上传来源弹窗（已有原稿 / 需要拍照） --- */
+    uploadOpen: false,
+    uploadStep: "source",  // source | photo（识别图片文字工具、以及给识别批次补图片时直接从 photo 开始）
+    uploadImagesOnly: false, // 本次上传是否只收图片（见 uploadHasSourceStep）
+    uploadBusyLabel: "",   // 压缩/读取中的临时提示
+
+    /* --- 图片识别（识别图片文字：独立工具 + 弹窗两种形态共用同一套状态） --- */
+    ocrHost: "tool",       // tool = 独立工具工作区，modal = 其他工具上传流程里的阻塞弹窗
+    ocrModalOpen: false,   // 弹窗形态是否可见
+    ocrImages: [],         // 本地图片为 { id, name, size, dataUrl }；扫码来源为 { id, name, size, url }
+    ocrIndex: 0,           // 预览的是第几张
+    // 手动选的类型：只对 OCR_MANUAL_MODE_TOOLS 里的工具有意义，其它工具的类型由工具决定
+    ocrModeManual: "printed",   // printed = 印刷试卷，handwritten = 手写作文
+    ocrStage: "empty",          // empty | ready | streaming | done | error
+    ocrText: "",
+    ocrRendered: "",
+    ocrError: "",
+    ocrTruncated: false,
+    ocrMediaCollapsed: false,
+    ocrViewerOpen: false,
+    ocrElapsedSec: 0,
+    _ocrTimer: null,
+    _ocrRenderTimer: null,
+    _ocrAbort: null,
+    _ocrRequestId: "",
+    /* 扫码配对（阶段五） */
+    pairOpen: false,
+    pairToken: "",
+    pairUrl: "",
+    pairState: "waiting",  // waiting | connected | receiving | error
+    pairError: "",         // error 态的真实原因（配对过期、创建失败…），别再统一说成「配对已失效」
+    pairCount: 0,          // 服务器上已有的照片数（界面用）
+    _pairCount: 0,         // 上一帧的照片数：只认「0 → 第 1 张」那一刻来自动收起窗口
+    pairExpiresIn: 0,
+    _pairTimer: null,
+    _pairSource: null,
+    ocrPairToken: "",      // 本次识别取自扫码会话时的 token（请求改带 token，不回传图片）
 
     /* --- 面板状态 --- */
     leftOpen: false,
@@ -2898,6 +2983,7 @@ function nbx() {
     get mascotIsBusy() {
       return !!(
         this.streaming
+        || this.ocrStreaming
         || (this.migration && (this.migration.analyzing || this.migration.moreAnalyzing
           || this.migration.prechecking || this.migration.generating))
         || (this.vocab && (this.vocab.checking || this.vocab.replacing))
@@ -2915,6 +3001,11 @@ function nbx() {
       }
       if (this.isVisualPaperTool) {
         return !this.vpHasData && !this.streaming && !this.inputCollapsed;
+      }
+      if (this.isOcrTool) {
+        // 识别结果不落在 output/submittedInput 上，通用分支会一直放行；这里按工作区是否已占用判断：
+        // 有图之后整块是预览与转录文本，没有能安全落脚的地方
+        return !this.ocrHasImage;
       }
       return !this.inputCollapsed && !this.submittedInput && !this.output && !this.errorMsg;
     },
@@ -3668,6 +3759,15 @@ function nbx() {
       this.openCodeModal(parts.join("；"));
       return false;
     },
+    /* 图片识别的专用门禁：它始终要有效使用码，免码试用模型在这里不适用，
+       所以不能用 ensureCanRun —— 那条会把无码用户放进去，再被后端 401 挡回来，
+       用户先看到的是等待窗口里的「配对已失效，请重新扫码」，而真正的原因只是没填码。
+       提示一律走使用码弹窗：弹窗遮罩会把 toast 糊住，等于没说。 */
+    requireCodeForOcr(message) {
+      if (this.isAuthenticated) return true;
+      this.openCodeModal(message || OCR_CODE_HINT);
+      return false;
+    },
 
     /* ============ API：工具与模型 ============ */
     async loadTools() {
@@ -3763,6 +3863,7 @@ function nbx() {
       this.resetMigration();
       this.resetVocab();
       this.resetVisualPaper();
+      this.resetOcr();
       const el = ev && ev.currentTarget ? ev.currentTarget : null;
       if (el && this._bg) {
         const r = el.getBoundingClientRect();
@@ -3789,6 +3890,7 @@ function nbx() {
       this.leftOpen = false;
       this.activeHistoryId = null;
       this.resetReasoning();
+      this.resetOcr();
       this.scheduleMascotCheck(80);
     },
 
@@ -4040,14 +4142,13 @@ function nbx() {
       return `文件名：${nm}${size}${extra ? " · " + extra : ""}`;
     },
     reselectPdfFile() {
-      // 警告弹窗的“重新选择文件”：关闭弹窗并弹出系统文件选择（自有按钮触发，非原生 UI 展示）
+      // 警告弹窗的“重新选择文件”：关闭弹窗并唤起文件选择（走来源弹窗里的文档入口，
+      // 不再按“第一个可见 file input”去猜——页面上的图片入口有好几个）
       this.scanWarnOpen = false;
       this.scanConfirming = false;
       this.$nextTick(() => {
-        const inputs = document.querySelectorAll('input[type="file"]');
-        for (const el of inputs) {
-          if (el && el.offsetParent !== null) { el.click(); break; }
-        }
+        const el = this.$refs.uploadFileInput;
+        if (el) el.click();
       });
     },
     async confirmScanContinue() {
@@ -4092,6 +4193,24 @@ function nbx() {
       const name = file.name || "";
       const dot = name.lastIndexOf(".");
       const ext = dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+      // 图片（含拖拽进来的）：不走文档解析，直接进图片识别
+      if (isImageFile(file, ext)) {
+        if (this.parsingFile) {
+          this.toast("文件正在解析中，请稍候", "warn");
+          return;
+        }
+        // 图片一律进图片识别：那条链路要使用码，先要码，再收图
+        if (!this.requireCodeForOcr(OCR_CODE_HINT)) return;
+        this.ocrHost = this.isOcrTool ? "tool" : "modal";
+        await this.acceptOcrImages([file]);
+        return;
+      }
+      // 识别图片文字这个工具只做「照片 → 文字」：已经有原稿的文件没有转过一道的必要，
+      // 直接说清楚，而不是把解析结果塞进一个它根本没渲染的输入框
+      if (this.isOcrTool) {
+        this.toast("本工具只处理图片，Word / PDF / 文本请直接在相应工具中使用", "warn");
+        return;
+      }
       const LOCAL = ["txt", "md", "markdown", "docx", "doc"];
       const REMOTE = ["pdf"];
       if (!ext) {
@@ -4272,6 +4391,742 @@ function nbx() {
       if (bytes < 1024) return bytes + " B";
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
       return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    },
+
+    /* ============ 上传来源（已有原稿 / 拍照识别） ============ */
+    get isOcrTool() {
+      return !!this.currentTool && this.currentTool.id === OCR_TOOL_ID;
+    },
+    get touchPrimary() {
+      // 主输入设备是触摸 = 手机/平板：桌面端（含带触摸屏的笔记本用鼠标时）不走系统相机
+      return matchMedia("(pointer: coarse)").matches;
+    },
+    get uploadHostLabel() {
+      return this.isOcrTool ? "" : "图片会先做文字识别，结果放进输入框";
+    },
+    /* 「已有原稿 / 没有原稿」这个分叉只对别的工具的普通上传成立：
+       识别图片文字这件事本身就是「把照片转成文字」，已经有原稿（Word/PDF/文本）就直接用，
+       没有转一道的必要；从识别批次里点加号补图片同理，那里只收图片。 */
+    get uploadHasSourceStep() {
+      return !this.isOcrTool && !this.uploadImagesOnly;
+    },
+    /* imagesOnly：给识别批次补图片（弹窗里的加号、换一批图片），只给相册/相机/扫码三个入口 */
+    openUploadDialog({ imagesOnly = false } = {}) {
+      if (this.parsingFile) {
+        this.toast("文件正在解析中，请稍候", "warn");
+        return;
+      }
+      // 识别工具整条链路都在做识别：在入口就要码，别让用户拍完照才发现跑不了
+      if (this.isOcrTool && !this.requireCodeForOcr(OCR_CODE_HINT)) return;
+      // 由谁发起就归谁：OCR 结果落回当前工具，还是在独立工作区里展示
+      this.ocrHost = this.isOcrTool ? "tool" : "modal";
+      this.uploadImagesOnly = imagesOnly || this.isOcrTool;
+      this.uploadStep = this.uploadHasSourceStep ? "source" : "photo";
+      this.uploadOpen = true;
+    },
+    closeUploadDialog() {
+      this.uploadOpen = false;
+      this.uploadBusyLabel = "";
+    },
+    /* 「没有原稿，需要拍照」这条支路只通往图片识别，同样先要码 */
+    gotoPhotoStep() {
+      if (!this.requireCodeForOcr(OCR_CODE_HINT)) return;
+      this.uploadStep = "photo";
+    },
+    backToSourceStep() {
+      this.uploadStep = "source";
+    },
+    /* 已有原稿：直接唤起系统文件选择（文档照旧走解析，图片转识别） */
+    pickUploadFile() {
+      const el = this.$refs.uploadFileInput;
+      if (!el) return;
+      this.closeUploadDialog();
+      el.click();
+    },
+    /* 相册/文件里的多张图片：accept=image/* 在手机上直接进系统相册（一键多选） */
+    pickUploadAlbum() {
+      const el = this.$refs.uploadAlbumInput;
+      if (!el) return;
+      this.closeUploadDialog();
+      el.click();
+    },
+    /* 现拍：capture 直达系统相机（这一项只在触摸设备上出现，见模板里的 x-show） */
+    pickUploadCamera() {
+      const el = this.$refs.uploadCameraInput;
+      if (!el) return;
+      this.closeUploadDialog();
+      el.click();
+    },
+    handleFileSelect(ev) {
+      const file = ev.target.files && ev.target.files[0];
+      if (file) this.readFileContent(file);
+      ev.target.value = "";
+    },
+    handleFileDrop(ev) {
+      this.dragOver = false;
+      const file = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+      if (file) this.readFileContent(file);
+    },
+
+    /* ============ 图片识别（OCR） ============ */
+    /* 压缩目标尺寸：长边压到 maxEdge 以内、短边按比例；本来就小则不放大 */
+    ocrTargetSize(w, h, maxEdge = OCR_MAX_EDGE) {
+      const width = Math.max(1, Math.round(Number(w) || 0));
+      const height = Math.max(1, Math.round(Number(h) || 0));
+      const long = Math.max(width, height);
+      if (!long || long <= maxEdge) return { width, height };
+      const scale = maxEdge / long;
+      return {
+        width: Math.max(1, Math.round(width * scale)),
+        height: Math.max(1, Math.round(height * scale)),
+      };
+    },
+    get ocrStreaming() {
+      return this.ocrStage === "streaming";
+    },
+    get ocrHasImage() {
+      return this.ocrImages.length > 0 || !!this.ocrPairToken;
+    },
+    get ocrBatchLabel() {
+      const total = this.ocrImages.length;
+      if (!total) return "还没有图片";
+      return total === 1 ? "1 张" : `${total} 张`;
+    },
+    get ocrCurrentImage() {
+      return this.ocrImages[this.ocrIndex] || this.ocrImages[0] || null;
+    },
+    get ocrElapsedText() {
+      return this.ocrElapsedSec > 0 ? `${this.ocrElapsedSec} 秒` : "";
+    },
+    /* 类型来源只有两个：能选的工具取用户的手动选择，其余工具按用途绑定（见 ocrModeForTool） */
+    get ocrModeSelectable() {
+      return ocrModeCanChoose(this.currentTool && this.currentTool.id);
+    },
+    get ocrMode() {
+      if (this.ocrModeSelectable) return this.ocrModeManual === "handwritten" ? "handwritten" : "printed";
+      return ocrModeForTool(this.currentTool && this.currentTool.id);
+    },
+    /* 类型面板只列出当前这一种；两种素材都可能来的工具才把两种都列出来 */
+    get ocrModeOptions() {
+      return Object.keys(OCR_MODES)
+        .filter((mode) => this.ocrModeSelectable || mode === this.ocrMode)
+        .map((mode) => Object.assign({ mode: mode, on: mode === this.ocrMode }, OCR_MODES[mode]));
+    },
+    get ocrTypeLabel() {
+      return ocrModeMeta(this.ocrMode).label;
+    },
+    get ocrModeHint() {
+      const meta = ocrModeMeta(this.ocrMode);
+      return `${meta.label}：${meta.rule}`;
+    },
+    /* 「开始识别」这步：有图、没在跑、也还没有结果时就给这一个落点。
+       不写成 stage === "ready"：只要批次里还有图，界面就不该是一块空白 */
+    get ocrNeedsStart() {
+      return this.ocrHasImage && !this.ocrStreaming && this.ocrStage !== "error" && !this.ocrText;
+    },
+    resetOcr() {
+      try { if (this._ocrAbort) this._ocrAbort.abort(); } catch { /* 忽略 */ }
+      this._ocrAbort = null;
+      this._stopOcrTimer();
+      this.releasePairSession();
+      this.ocrImages = [];
+      this.ocrIndex = 0;
+      this.ocrStage = "empty";
+      this.ocrText = "";
+      this.ocrRendered = "";
+      this.ocrError = "";
+      this.ocrTruncated = false;
+      this.ocrMediaCollapsed = false;
+      this.ocrViewerOpen = false;
+      this.ocrModalOpen = false;
+      this._ocrMediaTouched = false;
+      this.ocrHost = this.isOcrTool ? "tool" : "modal";
+    },
+    /* 相册/相机选中的图片（也可能来自拖拽）：压缩后并入批次，等用户确认类型再开始 */
+    async onOcrFilesSelect(ev) {
+      const files = Array.from((ev.target && ev.target.files) || []);
+      if (ev.target) ev.target.value = "";
+      if (files.length) await this.acceptOcrImages(files);
+    },
+    async acceptOcrImages(files) {
+      const room = OCR_MAX_IMAGES - this.ocrImages.length;
+      if (room <= 0) {
+        this.toast(`一次最多识别 ${OCR_MAX_IMAGES} 张，请先移除部分图片`, "warn");
+        return;
+      }
+      const picked = files.slice(0, room);
+      if (files.length > room) {
+        this.toast(`一次最多 ${OCR_MAX_IMAGES} 张，已取前 ${room} 张`, "warn");
+      }
+      this.uploadBusyLabel = `正在处理 ${picked.length} 张图片…`;
+      // 批次里混入本地图片时，先把扫码那几张落到本地：一次请求只能带一种来源
+      if (this.ocrPairToken && this.ocrImages.length) await this._materializePairImages();
+      const added = [];
+      let failed = 0;
+      for (const file of picked) {
+        try {
+          added.push(await this.ocrCompressImage(file));
+        } catch (e) {
+          failed += 1;
+        }
+      }
+      this.uploadBusyLabel = "";
+      if (!added.length) {
+        this.toast("图片无法读取，请改用 JPG 或 PNG 格式", "error");
+        return;
+      }
+      if (failed) {
+        this.toast(`${failed} 张图片无法读取，已跳过；HEIC 等格式请先转为 JPG`, "warn");
+      }
+      this.ocrImages.push(...added);
+      this.ocrIndex = Math.min(this.ocrIndex, this.ocrImages.length - 1);
+      // 图片就位后停在「开始识别」这一步：真要送出去识别得由用户按下按钮，不替他顺手按下
+      this.enterOcrStartStep();
+    },
+    /* 进入「确认类型 / 开始识别」这步：已有结果先留着（可复制），按下开始识别才覆盖 */
+    enterOcrStartStep() {
+      if (this.ocrStreaming) return;
+      if (!this.ocrHasImage) return;
+      this.ocrError = "";
+      this.ocrStage = "ready";
+      // 扫码引导弹窗还开着时不叠第二个弹窗：关掉它时再打开识别面板
+      if (this.ocrHost === "modal" && !this.pairOpen) this.ocrModalOpen = true;
+    },
+    /* 换类型本身不跑识别：点一下切换就重来一遍，用户会以为自己按错了什么。
+       类型定了的工具不给换（面板里只剩当前这一种，也压根没有可点的第二张卡） */
+    chooseOcrMode(mode) {
+      if (!this.ocrModeSelectable) return;
+      this.ocrModeManual = mode === "handwritten" ? "handwritten" : "printed";
+    },
+    /* 图片压缩：长边 ≤2000、JPEG 0.85、白底。
+       上游视觉模型会把图缩到 1–2k 像素级，再传大图只是白占带宽（服务器带宽很紧） */
+    ocrCompressImage(file) {
+      return new Promise((resolve, reject) => {
+        if (!file) {
+          reject(new Error("没有图片"));
+          return;
+        }
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const { width, height } = this.ocrTargetSize(img.naturalWidth, img.naturalHeight);
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, width, height);
+            ctx.drawImage(img, 0, 0, width, height);
+            const dataUrl = canvas.toDataURL("image/jpeg", OCR_COMPRESS_QUALITY);
+            if (!dataUrl || dataUrl.indexOf("data:image/jpeg") !== 0) {
+              throw new Error("图片编码失败");
+            }
+            resolve({
+              id: "img_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+              name: file.name || "photo.jpg",
+              size: Math.round(Math.max(0, dataUrl.length - OCR_DATA_URL_PREFIX.length) * 0.75),
+              dataUrl,
+            });
+          } catch (e) {
+            reject(e);
+          } finally {
+            URL.revokeObjectURL(url);
+          }
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error("无法解码这张图片"));
+        };
+        img.src = url;
+      });
+    },
+    /* 把扫码会话里的图片落成本地 data URL（只在混入本地图片时才需要，
+       正常扫码流程不动它：OCR 请求只带 token，图片不重复过网） */
+    async _materializePairImages() {
+      for (const item of this.ocrImages) {
+        if (item.dataUrl || !item.url) continue;
+        try {
+          const res = await fetch(item.url, { headers: { ...this.authHeaders() } });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          item.dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ""));
+            reader.onerror = () => reject(new Error("读取失败"));
+            reader.readAsDataURL(blob);
+          });
+          item.size = blob.size;
+          delete item.url;
+        } catch (e) {
+          this.toast("扫码照片读取失败，已跳过该张", "warn");
+        }
+      }
+      this.ocrImages = this.ocrImages.filter((item) => item.dataUrl);
+      // 图片已经落到本地，会话没用了：立刻释放服务器内存
+      this.releasePairSession();
+    },
+    toggleOcrMedia() {
+      this.ocrMediaCollapsed = !this.ocrMediaCollapsed;
+    },
+    selectOcrImage(i) {
+      this.ocrIndex = Math.max(0, Math.min(i, this.ocrImages.length - 1));
+    },
+    /* 批次变了（删/排序/追加）就得重新拍板：停掉在跑的识别，回到「开始识别」这步，
+       但已有文本先留着（可复制），按下开始识别才覆盖 */
+    _afterBatchChanged() {
+      if (this.ocrStreaming) this.ocrCancel();
+      if (!this.ocrImages.length && !this.ocrPairToken) {
+        this.ocrStage = "empty";
+        this.ocrText = "";
+        this.ocrRendered = "";
+        this.ocrError = "";
+        return;
+      }
+      if (this.ocrStage === "done" || this.ocrStage === "error" || this.ocrStage === "streaming") {
+        this.enterOcrStartStep();
+      }
+    },
+    removeOcrImage(i) {
+      this.ocrImages.splice(i, 1);
+      this.ocrIndex = Math.max(0, Math.min(this.ocrIndex, this.ocrImages.length - 1));
+      this._afterBatchChanged();
+    },
+    /* 排序：批次顺序就是转录顺序（多页试卷按页拼），所以上/下移是实义操作 */
+    moveOcrImage(i, delta) {
+      const target = i + delta;
+      if (i < 0 || i >= this.ocrImages.length) return;
+      if (target < 0 || target >= this.ocrImages.length) return;
+      const [item] = this.ocrImages.splice(i, 1);
+      this.ocrImages.splice(target, 0, item);
+      this.ocrIndex = target;
+      this._afterBatchChanged();
+    },
+    async ocrStart() {
+      if (this.ocrStreaming) return;
+      // 使用码是识别的硬前提：先问码，再谈有没有图
+      if (!this.requireCodeForOcr(OCR_CODE_HINT)) return;
+      if (!this.ocrHasImage) {
+        this.toast("请先选择图片", "warn");
+        return;
+      }
+      this.retreatMascot();
+      if (this.ocrHost === "modal") this.ocrModalOpen = true;
+      // 手机上默认把图片收成一条：窄屏里图片占满上半屏会把正文挤没
+      if (!this._ocrMediaTouched) {
+        this.ocrMediaCollapsed = !matchMedia("(min-width: 1024px)").matches;
+        this._ocrMediaTouched = true;
+      }
+      this.ocrError = "";
+      this.ocrTruncated = false;
+      this.ocrText = "";
+      this.ocrRendered = "";
+      this.ocrStage = "streaming";
+      this.ocrElapsedSec = 0;
+      this._startOcrTimer();
+      const requestId = "ocr_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      this._ocrRequestId = requestId;
+      const ctrl = new AbortController();
+      this._ocrAbort = ctrl;
+      const payload = { tool_id: OCR_TOOL_ID, ocr_mode: this.ocrMode, request_id: requestId, input: "" };
+      if (this.ocrPairToken) {
+        // 扫码来源：只带 token + 电脑端排好的顺序，图片字节不回传
+        payload.pair_token = this.ocrPairToken;
+        const order = this.ocrImages.map((item) => item.pairIndex).filter((n) => Number.isInteger(n));
+        if (order.length) payload.pair_order = order;
+      } else {
+        payload.images = this.ocrImages.map((item) => item.dataUrl);
+      }
+      try {
+        const res = await fetch("/api/chat/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...this.authHeaders() },
+          body: JSON.stringify(payload),
+          signal: ctrl.signal,
+        });
+        if (!res.ok) throw await this._ocrHttpError(res);
+        await this.consumeSSE(res, (event, data) => {
+          if (event === "token") {
+            let text = data;
+            try { text = JSON.parse(data); } catch { /* 兼容旧式未编码 token */ }
+            this.ocrText += text || "";
+            this.scheduleOcrRender();
+          } else if (event === "truncated") {
+            this.ocrTruncated = true;
+          } else if (event === "error") {
+            let msg = "识别失败，请稍后重试";
+            try { msg = JSON.parse(data).message || msg; } catch { /* 保留默认文案 */ }
+            throw new Error(msg);
+          }
+        });
+        this.ocrStage = "done";
+        this.flushOcrRender();
+        if (this.ocrTruncated) {
+          this.toast("结果可能不完整：可减少一次识别的张数，或请管理员调大 OCR 输出上限", "warn");
+        }
+      } catch (e) {
+        if (e && e.name === "AbortError") {
+          // 用户主动取消：已出的内容留着，按完成态展示
+          this.flushOcrRender();
+          this.ocrStage = this.ocrText ? "done" : "ready";
+          return;
+        }
+        if (e && (e.status === 401 || e.status === 403)) {
+          this.handleAuthFailure(e.message || "请先输入使用码");
+        }
+        this.ocrError = describeError(e, "识别失败，请稍后重试");
+        this.flushOcrRender();
+        this.ocrStage = "error";
+      } finally {
+        this._stopOcrTimer();
+        if (this._ocrAbort === ctrl) this._ocrAbort = null;
+      }
+    },
+    async _ocrHttpError(res) {
+      let detail = "";
+      try {
+        const data = await res.json();
+        if (data && data.detail != null) {
+          detail = typeof data.detail === "string" ? data.detail : (formatApiDetail(data.detail) || "");
+        }
+      } catch { /* 无正文时用状态码兜底 */ }
+      if (!detail) {
+        if (res.status === 401) detail = "请先输入使用码后再识别（识别需要有效使用码）";
+        else if (res.status === 403) detail = "使用码不可用或额度已用尽";
+        else if (res.status === 429) detail = "识别太频繁了，请稍后再试";
+        else detail = `识别失败（HTTP ${res.status}）`;
+      }
+      const err = new Error(detail);
+      err.status = res.status;
+      return err;
+    },
+    scheduleOcrRender() {
+      // 与结果区同样按内容长度节流：长文流式渲染太密会拖慢主线程
+      if (this._ocrRenderTimer) return;
+      this._ocrRenderTimer = setTimeout(() => {
+        this._ocrRenderTimer = null;
+        this.ocrRendered = renderMd(this.ocrText);
+      }, streamRenderDelay(this.ocrText.length, 60));
+    },
+    /* 收尾时立刻渲染一次：节流定时器会被 _stopOcrTimer 清掉，
+       不清这一步的话最后一段（往往就是全部内容）永远上不了屏 */
+    flushOcrRender() {
+      if (this._ocrRenderTimer) {
+        clearTimeout(this._ocrRenderTimer);
+        this._ocrRenderTimer = null;
+      }
+      this.ocrRendered = renderMd(this.ocrText);
+    },
+    _startOcrTimer() {
+      this._stopOcrTimer();
+      this._ocrTimer = setInterval(() => {
+        if (this.ocrStreaming) this.ocrElapsedSec += 1;
+      }, 1000);
+    },
+    _stopOcrTimer() {
+      if (this._ocrTimer) clearInterval(this._ocrTimer);
+      this._ocrTimer = null;
+      if (this._ocrRenderTimer) {
+        clearTimeout(this._ocrRenderTimer);
+        this._ocrRenderTimer = null;
+      }
+    },
+    ocrCancel() {
+      try { if (this._ocrAbort) this._ocrAbort.abort(); } catch { /* 忽略 */ }
+      if (this._ocrRequestId) {
+        // 通知后端停流：断开的连接不会自动让上游停下
+        fetch("/api/chat/stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...this.authHeaders() },
+          body: JSON.stringify({ request_id: this._ocrRequestId }),
+        }).catch(() => {});
+        this._ocrRequestId = "";
+      }
+      this._stopOcrTimer();
+    },
+    ocrRetry() {
+      if (this.ocrStreaming) return;
+      this.ocrStart();
+    },
+    /* 弹窗形态：把识别结果当作「已读取的文字」放进当前工具的输入框 */
+    ocrUseText() {
+      const text = this.ocrText.trim();
+      if (!text) {
+        this.toast("还没有可用的识别结果", "warn");
+        return;
+      }
+      this.input = text;
+      this.inputMode = "text";
+      this.attachedFile = null;
+      this.ocrModalOpen = false;
+      const from = this.ocrImages.length ? `已写入 ${this.ocrImages.length} 张图片的识别结果` : "已写入识别结果";
+      this.toast(`${from}，可继续编辑后执行`);
+      this.$nextTick(() => this.autoGrow());
+    },
+    /* 弹窗形态：换一批图片（清空当前批次后重开上传，只给图片入口） */
+    ocrRepick() {
+      this.ocrModalOpen = false;
+      this.resetOcr();
+      this.openUploadDialog({ imagesOnly: true });
+    },
+    copyOcrText() {
+      if (!this.ocrText.trim()) {
+        this.toast("还没有可复制的内容", "warn");
+        return;
+      }
+      copyToClipboard(this.ocrText);
+      this.toast("识别结果已复制");
+    },
+    ocrCloseModal() {
+      if (this.ocrStreaming) {
+        this.ocrCancel();
+        return;
+      }
+      this.ocrModalOpen = false;
+      this.resetOcr();
+    },
+
+    /* ============ 手机扫码拍摄（电脑端） ============ */
+    /* 自托管 QR 库不可用时返回空串：弹窗退化为「显示网址 + 复制」，功能不中断 */
+    qrSvg(text) {
+      try {
+        if (typeof qrcode !== "function" || !text) return "";
+        const qr = qrcode(0, "M");
+        qr.addData(text);
+        qr.make();
+        return qr.createSvgTag({ cellSize: 4, margin: 8, scalable: true });
+      } catch (e) {
+        return "";
+      }
+    },
+    get pairStateText() {
+      if (this.pairState === "connected") return "手机已连接";
+      if (this.pairState === "receiving") return `已收到 ${this.pairCount} 张`;
+      // error 的具体原因从哪来就写哪：过期、限流、断网各不相同，别一律说成「配对已失效」
+      if (this.pairState === "error") return this.pairError || "配对已失效，请重新扫码";
+      return "等待手机扫码…";
+    },
+    /* 手机上只有相机，拍完的照片逐张直传上来；排序、删除与何时开始识别都在电脑上 */
+    get pairHasPhotos() {
+      return this.pairCount > 0;
+    },
+    /* 还有一条在传的会话：照片会继续到，批次里那几张的字节也还在这条会话的内存里 */
+    get pairLive() {
+      return !!this.pairToken && this.pairExpiresIn > 0 && this.pairState !== "error";
+    },
+    get pairCountdown() {
+      const sec = Math.max(0, this.pairExpiresIn);
+      const m = Math.floor(sec / 60);
+      const s = String(sec % 60).padStart(2, "0");
+      return `${m}:${s}`;
+    },
+    async startPairing() {
+      if (!this.requireCodeForOcr(OCR_CODE_HINT)) return;
+      this.closeUploadDialog();
+      // 已有在传的会话（窗口被收起过，手机可能还在拍）：接着用它，别再建一条——
+      // 批次里那几张照片的字节就在这条会话上，换 token 它们就对不上号了
+      if (this.pairLive) {
+        this.pairOpen = true;
+        this.pairError = "";
+        if (!this._pairSource) this._pairConnect();
+        return;
+      }
+      // 上一条会话已经没了：批次里挂着它的下标，先清干净再开新会话
+      this._expirePairSession();
+      this.pairOpen = true;
+      this.pairState = "waiting";
+      this.pairError = "";
+      this.pairCount = 0;
+      this._pairCount = 0;
+      this.pairUrl = "";
+      this.pairToken = "";
+      try {
+        const res = await fetch("/api/ocr/pair", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...this.authHeaders() },
+          // 把当前配色交给手机页：手机上一眼就是电脑这套主题，不会突然换一身皮
+          body: JSON.stringify({
+            theme: this.theme,
+            sky: this.theme === "sora" ? this.skyPeriod() : "",
+          }),
+        });
+        if (!res.ok) {
+          let detail = "";
+          try {
+            const data = await res.json();
+            if (data && data.detail != null) {
+              detail = typeof data.detail === "string" ? data.detail : (formatApiDetail(data.detail) || "");
+            }
+          } catch { /* 无正文时用状态码兜底 */ }
+          throw Object.assign(
+            new Error(detail || `无法创建配对（HTTP ${res.status}）`),
+            { status: res.status }
+          );
+        }
+        const data = await res.json();
+        this.pairToken = data.token || "";
+        // 绝对地址在前端拼：反代下由浏览器告诉我们真实的 origin 最可靠
+        this.pairUrl = location.origin + (data.path || `/m/upload?token=${this.pairToken}`);
+        this.pairExpiresIn = Number(data.expires_in) || 0;
+        this.ocrPairToken = this.pairToken;
+        this.ocrHost = this.isOcrTool ? "tool" : "modal";
+        this._pairConnect();
+      } catch (e) {
+        // 会话没建起来就没什么可等的：收起等待窗口，把真实原因交给码弹窗/toast 呈现，
+        // 而不是留一个写着「配对已失效，请重新扫码」的空窗口盖在真正的原因上面
+        this.closePairing();
+        this.pairState = "error";
+        this.pairError = describeError(e, "无法创建配对，请重试");
+        if (e && e.status === 401) this.handleAuthFailure(OCR_CODE_HINT);
+        else this.toast(this.pairError, "error");
+      }
+    },
+    _pairConnect() {
+      this._stopPairTimer();
+      this._pairCountdown();
+      this._pairTimer = setInterval(() => this._pairCountdown(), 1000);
+      // 状态用 SSE 推送：手机每传一张都会让电脑端立刻看到进度
+      try {
+        const es = new EventSource(`/api/ocr/pair/${this.pairToken}/events`);
+        this._pairSource = es;
+        es.addEventListener("state", (ev) => {
+          let data = {};
+          try { data = JSON.parse(ev.data); } catch { /* 忽略坏帧 */ }
+          const prevCount = this._pairCount;
+          this.pairCount = Number(data.count) || 0;
+          this._pairCount = this.pairCount;
+          this.pairExpiresIn = Number(data.expires_in) || this.pairExpiresIn;
+          // 新照片到了：批次里只记下标与预览地址，像素留在服务器内存里等识别请求，
+          // 电脑端为预览只下载这一次（排序/删除只改这份下标清单）
+          const arrived = this.ocrImages.filter((item) => Number.isInteger(item.pairIndex)).length;
+          for (let i = arrived; i < this.pairCount; i += 1) {
+            this.ocrImages.push({
+              id: `pair_${i}_${Date.now().toString(36)}`,
+              name: `手机照片 ${i + 1}`,
+              size: 0,
+              pairIndex: i,
+              url: `/api/ocr/pair/${this.pairToken}/image?i=${i}&t=${Date.now().toString(36)}`,
+            });
+          }
+          if (this.pairCount > 0) {
+            this.pairState = "receiving";
+            // 只认「0 张 → 第 1 张」这一刻：配对到此成立，把二维码窗口让给识别工作区。
+            // 会话和这条 SSE 都留着——手机还能接着拍，照片继续进批次，什么时候开始识别
+            // 由电脑端说了算。之后的帧不再动窗口：用户手动打开它就是为了再看一眼二维码，
+            // 不该被随后到的照片顶掉
+            if (prevCount === 0) {
+              if (this.pairOpen || this.ocrStage === "empty") {
+                this.pairOpen = false;
+                this.enterOcrStartStep();
+              }
+            }
+          } else if (data.state === "connected") {
+            this.pairState = "connected";
+          }
+        });
+        es.addEventListener("error", (ev) => {
+          // 服务端推来的过期/失效说明了原因就照它写（event: error 带 message）
+          let msg = "";
+          try { msg = String((JSON.parse(ev.data) || {}).message || ""); } catch { /* 连接中断没有正文 */ }
+          if (msg) {
+            this.pairError = msg;
+            this._expirePairSession();
+            es.close();
+            this._pairSource = null;
+          }
+        });
+      } catch (e) {
+        this.pairState = "error";
+        this.pairError = "无法连接服务器，请检查网络后重试";
+      }
+    },
+    _pairCountdown() {
+      if (this.pairExpiresIn <= 0) {
+        this._stopPairTimer();
+        this._expirePairSession();
+        return;
+      }
+      this.pairExpiresIn -= 1;
+    },
+    _stopPairTimer() {
+      if (this._pairTimer) clearInterval(this._pairTimer);
+      this._pairTimer = null;
+    },
+    /* 会话过期或已失效：服务器内存里那批照片没了，批次里挂着的下标也就成了空气。
+       还没出结果就把它们清掉（免得留下一堆坏掉的预览）；已经识别出文字的只提示、不动批次——
+       把图删掉会让界面退回空状态，反而把用户已经拿到的文字藏起来。 */
+    _expirePairSession() {
+      this.pairState = "error";
+      this.pairError = this.pairError || "配对已过期，请重新扫码";
+      this._stopPairTimer();
+      if (!this.ocrImages.some((item) => Number.isInteger(item.pairIndex))) return;
+      if (this.ocrText) {
+        this.toast("手机照片已过期；已识别出的文字不受影响", "warn");
+        return;
+      }
+      this._dropStalePairImages("手机照片已过期，请重新扫码拍摄");
+    },
+    /* 丢掉批次里那些属于已消失会话的照片（字节已经没了，留着只有坏预览和错位的下标） */
+    _dropStalePairImages(notice) {
+      const stale = this.ocrImages.filter((item) => Number.isInteger(item.pairIndex));
+      if (!stale.length) return 0;
+      this.ocrImages = this.ocrImages.filter((item) => !Number.isInteger(item.pairIndex));
+      this.ocrIndex = Math.max(0, Math.min(this.ocrIndex, this.ocrImages.length - 1));
+      this.ocrPairToken = "";
+      this.pairToken = "";
+      this.pairUrl = "";
+      this.pairCount = 0;
+      if (!this.ocrImages.length) {
+        this.ocrStage = "empty";
+        this.ocrText = "";
+        this.ocrRendered = "";
+        this.ocrError = "";
+      } else {
+        this._afterBatchChanged();
+      }
+      if (notice) this.toast(notice, "warn");
+      return stale.length;
+    },
+    /* 关掉配对窗口并断开这条 SSE。有没有照片决定要不要释放会话：
+       有照片就留着（识别请求还要按 token 去服务器内存取字节），没有就顺手删掉这个空会话。 */
+    closePairing({ release = null } = {}) {
+      this._stopPairTimer();
+      if (this._pairSource) {
+        try { this._pairSource.close(); } catch { /* 忽略 */ }
+        this._pairSource = null;
+      }
+      this.pairOpen = false;
+      const keep = release === null ? this.pairHasPhotos : !release;
+      if (keep) return;
+      this.ocrPairToken = this.pairToken;
+      this.releasePairSession();
+    },
+    /* 释放服务器内存里的那批照片（清空批次、换一批、离开工具时调用） */
+    releasePairSession() {
+      const token = this.ocrPairToken || this.pairToken;
+      if (token) {
+        fetch(`/api/ocr/pair/${token}`, { method: "DELETE", headers: { ...this.authHeaders() } }).catch(() => {});
+      }
+      this.ocrPairToken = "";
+      this.pairToken = "";
+      this.pairUrl = "";
+      this.pairCount = 0;
+    },
+    /* 手动收起配对窗口（✕ / Esc / 点遮罩）：手机那边已经有人了（报到过，或有照片）
+       就别释放——照片只在服务器内存里，释放等于把用户刚拍的删掉，只是不再看这个窗口；
+       没人连过（也没照片）才真的把这条空会话放掉。 */
+    cancelPairing() {
+      if (this.pairHasPhotos || this.pairState === "connected") {
+        this.pairOpen = false;
+        if (this.pairHasPhotos) this.enterOcrStartStep();
+        return;
+      }
+      this.closePairing();
+    },
+    copyPairUrl() {
+      if (!this.pairUrl) return;
+      copyToClipboard(this.pairUrl);
+      this.toast("网址已复制");
     },
 
     /* ============ 智能错题迁移 ============ */
@@ -8432,11 +9287,14 @@ function nbx() {
        超标词的 AI 替换流不置 streaming，漏判会在 resetVocab 重建状态后
        让在途 token 继续写入新对象、污染历史数据 */
     get isBusy() {
-      return this.streaming || (this.migration && this.migration.generating) || (this.vocab && this.vocab.replacing);
+      return this.streaming || this.ocrStreaming
+        || (this.migration && this.migration.generating)
+        || (this.vocab && this.vocab.replacing);
     },
     /* 确认弹窗期间状态可能已自行结束（如刚好生成完），这里逐个复检 */
     stopBusyStreams() {
       if (this.streaming) this.abortActiveGeneration();
+      if (this.ocrStreaming) this.ocrCancel();
       if (this.migration && this.migration.generating) this.stopMigration();
       if (this.vocab && this.vocab.replacing) this.stopVocabReplace();
     },
