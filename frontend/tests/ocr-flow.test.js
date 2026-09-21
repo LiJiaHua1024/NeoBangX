@@ -41,6 +41,20 @@ if (typeof global.matchMedia !== "function") {
   });
 }
 
+/* 假 Image：编辑落地那一环要用它读自然尺寸并等 onload。
+   尺寸固定给一组，真正的像素换算由 ocrBakePlan 单独验（见下面的烘焙计划用例） */
+global.Image = class FakeImage {
+  constructor() {
+    this.naturalWidth = 2000;
+    this.naturalHeight = 1000;
+  }
+  set src(value) {
+    this._src = value;
+    setTimeout(() => { if (this.onload) this.onload(); }, 0);
+  }
+  get src() { return this._src; }
+};
+
 function makeWindow() {
   const mq = {
     matches: false,
@@ -59,7 +73,10 @@ function loadModule(storage) {
     "performance", "requestAnimationFrame", "MutationObserver", "IntersectionObserver",
     "NbxMirror", "NbxVersions", "NbxMirrorStore", "NbxMirrorPeer",
     SRC + "\nreturn { nbx: nbx, isImageFile: isImageFile, OCR_MAX_IMAGES: OCR_MAX_IMAGES, OCR_TOOL_ID: OCR_TOOL_ID,"
-      + " OCR_MODES: OCR_MODES, ocrModeForTool: ocrModeForTool, ocrModeCanChoose: ocrModeCanChoose };"
+      + " OCR_MODES: OCR_MODES, ocrModeForTool: ocrModeForTool, ocrModeCanChoose: ocrModeCanChoose,"
+      + " OCR_CROP_HANDLES: OCR_CROP_HANDLES, OCR_EDIT_QUALITY: OCR_EDIT_QUALITY,"
+      + " ocrRotateRect: ocrRotateRect, ocrRotatedSize: ocrRotatedSize, ocrFitSize: ocrFitSize,"
+      + " ocrBakePlan: ocrBakePlan };"
   );
   const api = factory(
     makeWindow(), undefined, storage, undefined, { origin: "http://localhost:8000", hostname: "localhost" },
@@ -76,6 +93,55 @@ function loadModule(storage) {
   c.authHeaders = () => ({ Authorization: "Bearer test-token" });
   c.handleAuthFailure = function (hint) { this.authFailures = (this.authFailures || []).concat(hint || ""); };
   return { api, c };
+}
+
+/* 编辑落地的用例要真的走一遍画布：给一个只会记账的假 document 与假 Image，
+   记下每张画布的尺寸与 drawImage 的坐标，断言的是「计划有没有被照做」 */
+function loadWithFakeDom(storage) {
+  const record = { sizes: [], draws: [] };
+  const ctx = {
+    fillStyle: "",
+    fillRect: () => {},
+    save: () => {},
+    restore: () => {},
+    translate: () => {},
+    rotate: () => {},
+    drawImage: (...args) => record.draws.push(args.length),
+  };
+  const fakeDocument = {
+    createElement(tag) {
+      if (tag !== "canvas") return {};
+      const canvas = { width: 0, height: 0 };
+      // 尺寸都是在 getContext 之前定好的：这里记一笔就等于记下了每张画布最终多宽多高
+      canvas.getContext = () => {
+        record.sizes.push([canvas.width, canvas.height]);
+        return ctx;
+      };
+      canvas.toDataURL = () => "data:image/jpeg;base64,EDITED";
+      return canvas;
+    },
+  };
+  const factory = new Function(
+    "window", "document", "localStorage", "sessionStorage", "location", "navigator",
+    "performance", "requestAnimationFrame", "MutationObserver", "IntersectionObserver",
+    "NbxMirror", "NbxVersions", "NbxMirrorStore", "NbxMirrorPeer",
+    SRC + "\nreturn { nbx: nbx };"
+  );
+  const api = factory(
+    makeWindow(), fakeDocument, storage, undefined, { origin: "http://localhost:8000", hostname: "localhost" },
+    undefined, undefined, undefined, undefined, undefined,
+    global.NbxMirror, V, undefined, undefined
+  );
+  const c = api.nbx();
+  c.$refs = {};
+  c.$nextTick = (fn) => { if (fn) fn(); };
+  c.toasts = [];
+  c.toast = function (msg, type) { this.toasts.push({ msg, type }); };
+  c.autoGrow = () => {};
+  c.retreatMascot = () => {};
+  c.authHeaders = () => ({ Authorization: "Bearer test-token" });
+  c.handleAuthFailure = function (hint) { this.authFailures = (this.authFailures || []).concat(hint || ""); };
+  return { c, record };
 }
 
 /* 识别链路一律要有有效使用码（见 requireCodeForOcr），所以驱动识别流程的用例
@@ -1088,6 +1154,472 @@ test("删空图片后不留空白：类型一并收起，空状态给回入口",
   assert.ok(/x-show="ocrHasImage" class="px-5 py-3 border-t/.test(html), "无图时页脚那排按钮一并收起");
   // 工具工作区里三处一起判断，两处形态保持一致
   assert.strictEqual((html.match(/x-show="!ocrHasImage"/g) || []).length, 2);
+});
+
+/* ---------------- 图片查看 / 编辑（转正 · 裁剪） ---------------- */
+
+/* 编辑里的几何全是纯函数：先把「转正后框跟着转」和「一次烘焙出什么像素」钉死 */
+test("旋转选择框：跟着内容一起转，来回转是互逆的", () => {
+  const { api } = loadModule(makeStorage());
+  const rect = { x: 0.1, y: 0.2, w: 0.3, h: 0.4 };
+  const cw = api.ocrRotateRect(rect, 1);
+  assert.deepStrictEqual(cw, { x: 0.4, y: 0.1, w: 0.4, h: 0.3 }, "顺时针 90°：宽高互换，位置随内容走");
+  assert.deepStrictEqual(api.ocrRotateRect(cw, -1), rect, "再逆时针转回来还是原来那个框");
+  // 顶部横条转 90° 应该落到右边：说明框跟的是内容，不是「留在原地」
+  assert.deepStrictEqual(api.ocrRotateRect({ x: 0, y: 0, w: 0.5, h: 0.25 }, 1),
+    { x: 0.75, y: 0, w: 0.25, h: 0.5 });
+  // 满幅怎么转都还是满幅（不会被浮点误差挤出画面）
+  assert.deepStrictEqual(api.ocrRotateRect({ x: 0, y: 0, w: 1, h: 1 }, 1), { x: 0, y: 0, w: 1, h: 1 });
+  assert.deepStrictEqual(api.ocrRotateRect(null, -1), { x: 0, y: 0, w: 1, h: 1 });
+  assert.deepStrictEqual(api.ocrRotatedSize(2000, 1000, 270), { width: 1000, height: 2000 });
+  assert.deepStrictEqual(api.ocrRotatedSize(2000, 1000, 180), { width: 2000, height: 1000 });
+  assert.deepStrictEqual(api.ocrRotatedSize(2000, 1000, -90), { width: 1000, height: 2000 }, "负角度也要认");
+});
+
+test("适配尺寸：按 contain 缩放，装得下就不放大；量不到舞台时先给 0", () => {
+  const { api } = loadModule(makeStorage());
+  assert.deepStrictEqual(api.ocrFitSize(2000, 1000, 400, 400), { width: 400, height: 200 });
+  assert.deepStrictEqual(api.ocrFitSize(1000, 2000, 400, 400), { width: 200, height: 400 });
+  assert.deepStrictEqual(api.ocrFitSize(300, 150, 1000, 1000), { width: 300, height: 150 }, "小图不放大");
+  assert.deepStrictEqual(api.ocrFitSize(300, 150, 0, 0), { width: 0, height: 0 }, "还没量到舞台");
+});
+
+test("烘焙计划：旋转换宽高、裁剪落成像素、边界不留缝", () => {
+  const { api } = loadModule(makeStorage());
+  const full = api.ocrBakePlan(2000, 1000, 0, null);
+  assert.deepStrictEqual([full.rotW, full.rotH, full.sx, full.sy, full.sw, full.sh, full.outW, full.outH],
+    [2000, 1000, 0, 0, 2000, 1000, 2000, 1000], "不转不裁：整幅原样");
+
+  const p = api.ocrBakePlan(2000, 1000, 90, { x: 0.25, y: 0.5, w: 0.5, h: 0.25 });
+  assert.deepStrictEqual([p.rotW, p.rotH], [1000, 2000], "90° 之后画布换宽高");
+  assert.deepStrictEqual([p.sx, p.sy, p.sw, p.sh], [250, 1000, 500, 500], "框按旋转后的画面换算");
+  assert.deepStrictEqual([p.outW, p.outH], [500, 500]);
+
+  // 贴着右下角的框 + 浮点误差：裁出来的矩形必须还在画布里，且至少有 1 像素
+  const edge = api.ocrBakePlan(1000, 800, 270, { x: 0.9, y: 0.9, w: 0.1, h: 0.1 });
+  assert.deepStrictEqual([edge.rotW, edge.rotH], [800, 1000]);
+  assert.ok(edge.sx + edge.sw <= edge.rotW && edge.sy + edge.sh <= edge.rotH, "不能裁出界");
+  const odd = api.ocrBakePlan(999, 997, 0, { x: 0.333, y: 0.333, w: 0.667, h: 0.667 });
+  assert.ok(odd.outW >= 1 && odd.outH >= 1 && odd.sx + odd.sw <= odd.rotW && odd.sy + odd.sh <= odd.rotH);
+  // 越界的框（理论上不该出现）也按边界处理，不能给出负宽高
+  const wild = api.ocrBakePlan(1000, 1000, 0, { x: 1.4, y: -0.2, w: 3, h: 2 });
+  assert.ok(wild.sx >= 0 && wild.sy >= 0 && wild.outW >= 1 && wild.outH >= 1);
+  assert.ok(wild.sx + wild.sw <= wild.rotW && wild.sy + wild.sh <= wild.rotH);
+});
+
+/* 假事件 / 假画面框：拖动那套逻辑照跑，只是不用真浏览器 */
+function fakeFrame() {
+  return {
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
+    setPointerCapture: () => {},
+    clientWidth: 100,
+    clientHeight: 100,
+  };
+}
+function fakePointer(over) {
+  const ev = { pointerId: 1, clientX: 0, clientY: 0, preventDefault: () => {} };
+  return Object.assign(ev, over);
+}
+function handleTarget(name) {
+  return { closest: () => ({ dataset: { h: name } }) };
+}
+
+test("裁剪框拖动：空白处拖出新框、框内拖动挪位、拖把手改边", () => {
+  const { c } = loadModule(makeStorage());
+  c.ocrImages = [{ id: "a", name: "a.jpg", size: 1, dataUrl: IMG }];
+  c.ocrIndex = 0;
+  c.ocrEditBaseW = 1000;
+  c.ocrEditBaseH = 1000;
+  c.toggleOcrCrop();
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0, y: 0, w: 1, h: 1 }, "打开裁剪先给满幅框");
+  const frame = fakeFrame();
+
+  // 空白处拖出一个新框：从 (10,10) 拉到 (40,50)
+  c.ocrEditDown(fakePointer({ clientX: 10, clientY: 10, currentTarget: frame, target: frame }));
+  assert.strictEqual(c._ocrDrag.mode, "newrect", "尺幅 1 倍时空白处拖动就是画新框");
+  c.ocrEditMove(fakePointer({ clientX: 40, clientY: 50, currentTarget: frame }));
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.1, y: 0.1, w: 0.3, h: 0.4 });
+  c.ocrEditUp({ pointerId: 1 });
+  assert.strictEqual(c._ocrDrag, null, "松手就不再拖了");
+
+  // 手一抖划过的针尖大框不算数，保留原来的框（从框外起手 = 画新框）
+  c.ocrEditDown(fakePointer({ clientX: 5, clientY: 5, currentTarget: frame, target: frame }));
+  assert.strictEqual(c._ocrDrag.mode, "newrect");
+  c.ocrEditMove(fakePointer({ clientX: 7, clientY: 7, currentTarget: frame }));
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.1, y: 0.1, w: 0.3, h: 0.4 }, "太小的框当作没画");
+  c.ocrEditUp({ pointerId: 1 });
+
+  // 框内拖动：整框挪位，尺寸不变；到边就停住，不会挤出画面
+  c.ocrEditDown(fakePointer({ clientX: 30, clientY: 30, currentTarget: frame, target: frame }));
+  assert.strictEqual(c._ocrDrag.mode, "move");
+  c.ocrEditMove(fakePointer({ clientX: 60, clientY: 60, currentTarget: frame }));
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.4, y: 0.4, w: 0.3, h: 0.4 });
+  c.ocrEditMove(fakePointer({ clientX: 95, clientY: 95, currentTarget: frame }));
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.7, y: 0.6, w: 0.3, h: 0.4 }, "右下角顶住，不能再往外");
+  c.ocrEditUp({ pointerId: 1 });
+
+  // 拖右下角把手：对角固定，只动这一条边
+  c.ocrEditCrop = { x: 0.2, y: 0.2, w: 0.4, h: 0.4 };
+  c.ocrEditDown(fakePointer({ clientX: 50, clientY: 50, currentTarget: frame, target: handleTarget("se") }));
+  assert.strictEqual(c._ocrDrag.mode, "resize");
+  assert.strictEqual(c._ocrDrag.handle, "se");
+  c.ocrEditMove(fakePointer({ clientX: 80, clientY: 90, currentTarget: frame }));
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.2, y: 0.2, w: 0.7, h: 0.8 });
+  // 往回拖过头也不翻转：最小边长兜住，对角（nw）始终钉在原地
+  c.ocrEditMove(fakePointer({ clientX: 5, clientY: 5, currentTarget: frame }));
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.2, y: 0.2, w: 0.04, h: 0.04 });
+  c.ocrEditUp({ pointerId: 1 });
+
+  // 放大之后空白处拖动是平移画面（手指要能把细节挪出来对边），不再是画新框
+  c.ocrEditFull = { w: 400, h: 400 };   // 可见窗口的尺寸（这里没有裁剪，等于整幅）
+  c._ocrSetView(2, 0, 0, 0, 0);
+  c.ocrEditDown(fakePointer({ clientX: 5, clientY: 95, currentTarget: frame, target: frame }));
+  assert.strictEqual(c._ocrDrag.mode, "pan", "放大之后空白处拖动是平移");
+  c.ocrEditMove(fakePointer({ clientX: 55, clientY: 95, currentTarget: frame }));
+  assert.strictEqual(c.ocrEditView.x, 50);
+  c.ocrEditUp({ pointerId: 1 });
+
+  // 平移被夹在多出来的那半里，缩回 1 倍位置归零
+  c.ocrEditView = { scale: 2, x: 9999, y: -9999 };
+  c._clampOcrView();
+  assert.deepStrictEqual(c.ocrEditView, { scale: 2, x: 200, y: -200 });
+  c._ocrSetView(1, 0, 0, 0, 0);
+  assert.deepStrictEqual(c.ocrEditView, { scale: 1, x: 0, y: 0 });
+});
+
+test("触屏双指：第二根手指落下就转成缩放，松手后不再接着拖", () => {
+  const { c } = loadModule(makeStorage());
+  c.ocrImages = [{ id: "a", name: "a.jpg", size: 1, dataUrl: IMG }];
+  c.ocrIndex = 0;
+  c.ocrEditBaseW = 1000;
+  c.ocrEditBaseH = 1000;
+  c.ocrEditFull = { w: 400, h: 400 };   // 可见窗口的尺寸（这里没有裁剪，等于整幅）
+  c.toggleOcrCrop();
+  const frame = fakeFrame();
+
+  c.ocrEditDown(fakePointer({ pointerId: 1, clientX: 0, clientY: 0, currentTarget: frame, target: frame }));
+  assert.strictEqual(c._ocrDrag.mode, "newrect");
+  c.ocrEditDown(fakePointer({ pointerId: 2, clientX: 100, clientY: 0, currentTarget: frame, target: frame }));
+  assert.strictEqual(c._ocrDrag.mode, "pinch", "第二根手指落下：刚才的单指动作作废");
+  // 两指拉远一倍 = 放大一倍；松掉一根后，剩下那根不该接管拖拽（起点已作废，硬接会跳一下）
+  c.ocrEditMove(fakePointer({ pointerId: 2, clientX: 200, clientY: 0, currentTarget: frame }));
+  assert.strictEqual(c.ocrEditView.scale, 2, "两指拉开一倍就放大一倍");
+  const after = Object.assign({}, c.ocrEditView);
+  c.ocrEditUp({ pointerId: 2 });
+  assert.strictEqual(c._ocrDrag, null);
+  c.ocrEditMove(fakePointer({ pointerId: 1, clientX: 300, clientY: 0, currentTarget: frame }));
+  assert.deepStrictEqual(c.ocrEditView, after, "剩下那根手指不再接着拖");
+});
+
+test("转正与裁剪：转一下框跟着转，重置只撤未生效的，识别中不许动", () => {
+  const { c } = loadModule(makeStorage());
+  c.ocrImages = [{ id: "a", name: "a.jpg", size: 1, dataUrl: IMG }];
+  c.ocrIndex = 0;
+  c.ocrEditBaseW = 1000;
+  c.ocrEditBaseH = 800;
+  c.toggleOcrCrop();
+  c.ocrEditCrop = { x: 0.2, y: 0.2, w: 0.5, h: 0.5 };
+  c.rotateOcrEditor(1);
+  assert.strictEqual(c.ocrEditRotate, 90);
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.3, y: 0.2, w: 0.5, h: 0.5 }, "框跟着内容转，不是留在原地");
+  c.rotateOcrEditor(-1);
+  assert.strictEqual(c.ocrEditRotate, 0);
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.2, y: 0.2, w: 0.5, h: 0.5 });
+
+  c.resetOcrEdits();
+  assert.strictEqual(c.ocrEditDirty, false);
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0, y: 0, w: 1, h: 1 }, "重置后还开着裁剪工具：回到满幅框");
+  c.toggleOcrCrop();
+  assert.strictEqual(c.ocrEditCropOn, false);
+  c.resetOcrEdits();
+  assert.strictEqual(c.ocrEditCrop, null, "工具收起后重置 = 彻底不裁");
+
+  // 识别中：编辑按钮是禁用的，方法自己也要挡住（两处都拦，别只靠界面）
+  c.ocrStage = "streaming";
+  c.ocrEditCrop = { x: 0.2, y: 0.2, w: 0.5, h: 0.5 };
+  c.rotateOcrEditor(1);
+  assert.strictEqual(c.ocrEditRotate, 0);
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.2, y: 0.2, w: 0.5, h: 0.5 });
+});
+
+test("编辑落地：旋转与裁剪一次烘焙进 dataUrl，原图留底可还原", async () => {
+  const { c, record } = loadWithFakeDom(makeStorage());
+  const item = { id: "a", name: "a.jpg", size: 100, dataUrl: "data:image/jpeg;base64,ORIG" };
+  c.ocrImages = [item];
+  c.ocrIndex = 0;
+  c.ocrStage = "done";
+  c.ocrText = "上一版结果";
+  c.ocrEditBase = item.dataUrl;
+  c.ocrEditBaseW = 2000;
+  c.ocrEditBaseH = 1000;
+  assert.strictEqual(c.ocrEditDirty, false, "刚打开时没有待生效的改动");
+
+  c.ocrEditRotate = 90;
+  c.ocrEditCrop = { x: 0.25, y: 0.5, w: 0.5, h: 0.25 };
+  c.ocrEditCropOn = true;
+  assert.strictEqual(c.ocrEditDirty, true);
+
+  assert.strictEqual(await c.applyOcrEdit(), true);
+  assert.deepStrictEqual(record.sizes, [[1000, 2000], [500, 500]], "先画旋转后的整幅，再从中裁出 500×500");
+  assert.deepStrictEqual(record.draws, [5, 9], "第一次贴整幅（五参），第二次从它裁（九参）");
+  // 请求体取的就是 item.dataUrl（见 ocrStart），换掉它就是换掉送出去的那张
+  assert.strictEqual(item.dataUrl, "data:image/jpeg;base64,EDITED");
+  assert.strictEqual(item.sourceUrl, "data:image/jpeg;base64,ORIG", "第一次动它之前留一份原样");
+  assert.strictEqual(item.edited, true);
+  assert.ok(item.w === 500 && item.h === 500, "把新的像素尺寸记下来");
+  assert.ok(item.size > 0, "体积也重新算过");
+  assert.strictEqual(c.ocrEditBase, item.dataUrl, "基准换成刚生成的这张，接着再改从它出发");
+  assert.strictEqual(c.ocrEditDirty, false);
+  assert.strictEqual(c.ocrEditCropOn, false, "烘焙完裁剪工具收起");
+  // 画面变了：上一版转录结果对不上了，退回「开始识别」，但文本留着可复制
+  assert.strictEqual(c.ocrStage, "ready");
+  assert.strictEqual(c.ocrText, "上一版结果");
+  assert.strictEqual(c.ocrEditCanRestore, true);
+
+  await c.restoreOcrOriginal();
+  assert.strictEqual(item.dataUrl, "data:image/jpeg;base64,ORIG");
+  assert.strictEqual(item.edited, false);
+  assert.strictEqual(c.ocrEditCanRestore, false, "退回去之后就不该再有「还原原图」");
+});
+
+test("关闭编辑器：有改动就落地，纯看图一个像素都不碰", async () => {
+  const { c, record } = loadWithFakeDom(makeStorage());
+  const item = { id: "a", name: "a.jpg", size: 1, dataUrl: "data:image/jpeg;base64,ORIG" };
+  c.ocrImages = [item];
+  c.ocrIndex = 0;
+  c.ocrEditBase = item.dataUrl;
+  c.ocrEditBaseW = 800;
+  c.ocrEditBaseH = 600;
+  c.ocrViewerOpen = true;
+  await c.closeOcrEditor();
+  assert.strictEqual(c.ocrViewerOpen, false);
+  assert.strictEqual(item.dataUrl, "data:image/jpeg;base64,ORIG", "只是放大看一眼，不该动图片");
+  assert.strictEqual(record.sizes.length, 0, "没有改动就不该开画布");
+  assert.strictEqual(c.ocrEditBase, "", "关掉后编辑态清干净，下一次打开是干净的一张");
+
+  c.ocrViewerOpen = true;
+  c.ocrEditBase = item.dataUrl;
+  c.ocrEditBaseW = 800;
+  c.ocrEditBaseH = 600;
+  c.ocrEditRotate = 90;
+  await c.closeOcrEditor();
+  assert.deepStrictEqual(record.sizes, [[600, 800], [600, 800]], "转向后整幅就是 600×800");
+  assert.strictEqual(item.dataUrl, "data:image/jpeg;base64,EDITED");
+  assert.strictEqual(c.ocrViewerOpen, false);
+  assert.strictEqual(c.ocrEditDirty, false);
+  assert.ok(c.toasts.some((t) => t.msg === "已转正"), "落地了要给个回执");
+});
+
+test("画面尺寸与样式：量到舞台后，图片正好落在画面框里（NaN/undefined 回归护栏）", () => {
+  const { c } = loadModule(makeStorage());
+  c.ocrImages = [{ id: "a", name: "a.jpg", size: 1, dataUrl: IMG, w: 1333, h: 2000 }];
+  c.ocrIndex = 0;
+  // 舞台量不出来时两个尺寸都是 0：这时样式里不能出现 NaN/undefined（浏览器会把整条声明丢掉，
+  // 图片就退回自然尺寸、还停在别处——曾经就是这样跟白底错位的）
+  c.ocrEditBaseW = 1333;
+  c.ocrEditBaseH = 2000;
+  c.syncOcrEditorSize();
+  assert.strictEqual(c.ocrEditImg.w, 0, "拿不到舞台尺寸时先给 0，等下一次量");
+
+  c.$refs = { ocrEditStage: { clientWidth: 1064, clientHeight: 626 } };
+  c.syncOcrEditorSize();
+  assert.deepStrictEqual(c.ocrEditImg, { w: 401, h: 602 }, "装进舞台（两端各留 12px）后按比例缩");
+  assert.deepStrictEqual(c.ocrEditFull, { w: 401, h: 602 }, "不转时整幅就是它");
+  assert.strictEqual(c.ocrEditImageStyle,
+    "width:401px;height:602px;margin-left:0px;margin-top:0px;transform:rotate(0deg)");
+  assert.strictEqual(c.ocrEditFrameStyle, "width:401px;height:602px;transform:translate(0.00px,0.00px) scale(1.0000)");
+  assert.strictEqual(c.ocrEditRectStyle, "left:0.000%;top:0.000%;width:100.000%;height:100.000%");
+  [c.ocrEditImageStyle, c.ocrEditFrameStyle].forEach((s) => {
+    assert.strictEqual(/NaN|undefined/.test(s), false, `样式里出现了无效值：${s}`);
+  });
+
+  // 转 90°：整幅换宽高，图片本身不重算尺寸（它靠 CSS transform 转），左上角跟着挪到居中位置
+  c.rotateOcrEditor(1);
+  assert.deepStrictEqual(c.ocrEditFull, { w: 602, h: 401 });
+  assert.deepStrictEqual(c.ocrEditImg, { w: 401, h: 602 });
+  assert.strictEqual(c.ocrEditImageStyle,
+    "width:401px;height:602px;margin-left:100.5px;margin-top:-100.5px;transform:rotate(90deg)");
+  c.rotateOcrEditor(-1);
+  assert.deepStrictEqual(c.ocrEditFull, { w: 401, h: 602 });
+
+  // 窗口变小：画面跟着缩，仍然不出无效值
+  c.$refs.ocrEditStage = { clientWidth: 300, clientHeight: 300 };
+  c.syncOcrEditorSize();
+  assert.ok(c.ocrEditFull.w <= 276 && c.ocrEditFull.h <= 276);
+  assert.strictEqual(/NaN|undefined/.test(c.ocrEditImageStyle), false);
+});
+
+/* 从几何反推「窗口里实际看到的是整幅的哪一块」——必须正好等于裁剪框。
+   只断言样式字符串是没用的：那串是从同一个公式推出来的，符号写反了它照样对得上。
+   这里改成从「图片被推到哪」倒着算可见区域，方向错了必然报错 */
+function visibleRegion(c) {
+  const full = c.ocrEditFull;
+  const img = c.ocrEditImg;
+  const box = c.ocrEditWinSize;
+  const m = /margin-left:(-?[\d.]+)px;margin-top:(-?[\d.]+)px/.exec(c.ocrEditImageStyle);
+  const left = Number(m[1]);
+  const top = Number(m[2]);
+  return {
+    // 画面（旋转后）那个框的左上角在窗口坐标里的位置 ÷ 整幅尺寸 = 可见区域原点
+    x: +((full.w / 2 - img.w / 2 - left) / full.w).toFixed(3),
+    y: +((full.h / 2 - img.h / 2 - top) / full.h).toFixed(3),
+    w: +(box.w / full.w).toFixed(3),
+    h: +(box.h / full.h).toFixed(3),
+  };
+}
+
+/* 窗口尺寸是取整的，比例会差半个像素：比到 0.002 就够，而符号写反是 0.5 级的错误 */
+function assertSameRegion(c, want, msg) {
+  const got = visibleRegion(c);
+  ["x", "y", "w", "h"].forEach((k) => {
+    assert.ok(Math.abs(got[k] - want[k]) <= 0.002, `${msg}：${k} 期望 ${want[k]}，实际 ${got[k]}`);
+  });
+}
+
+test("实时预览：退出裁剪即显示裁完的样子（只是把框外不显示，不重新编码）", () => {
+  const { c } = loadModule(makeStorage());
+  c.ocrImages = [{ id: "a", name: "a.jpg", size: 1, dataUrl: IMG }];
+  c.ocrIndex = 0;
+  c.ocrEditBaseW = 1333;
+  c.ocrEditBaseH = 2000;
+  c.$refs = { ocrEditStage: { clientWidth: 1064, clientHeight: 626 } };
+  c.syncOcrEditorSize();
+  const full = c.ocrEditFrameStyle;
+
+  // 裁剪工具开着 = 看整幅（框外留着做参照），画面框不动
+  c.toggleOcrCrop();
+  assert.strictEqual(c.ocrEditFrameStyle, full, "还在裁剪时看的是整幅");
+  assert.ok(c.ocrEditImageStyle.indexOf("margin-left:0px") >= 0, "看整幅时图片左上角就在原点");
+  c.ocrEditCrop = { x: 0.1, y: 0.2, w: 0.5, h: 0.4 };
+  assert.strictEqual(c.ocrEditFrameStyle, full, "拖框的过程中也还是整幅，否则没法调整");
+
+  // 退出裁剪 = 立刻按裁剪范围显示：画面框缩到 201×241，图片往左上推出去
+  c.toggleOcrCrop();
+  assert.strictEqual(c.ocrEditCropOn, false);
+  assert.strictEqual(c.ocrEditFrameStyle, "width:201px;height:241px;transform:translate(0.00px,0.00px) scale(1.0000)");
+  assert.strictEqual(c.ocrEditImageStyle,
+    "width:401px;height:602px;margin-left:-40.1px;margin-top:-120.4px;transform:rotate(0deg)");
+  assertSameRegion(c, { x: 0.1, y: 0.2, w: 0.5, h: 0.4 },
+    "窗口里看到的必须是裁剪框框住的那一块（推反方向会算成负数）");
+  assert.strictEqual(/NaN|undefined/.test(c.ocrEditFrameStyle + c.ocrEditImageStyle), false);
+  // 放大边界跟着可见的这一块算，不是跟着整幅
+  c.ocrEditView = { scale: 2, x: 999, y: 999 };
+  c._clampOcrView();
+  assert.deepStrictEqual(c.ocrEditView, { scale: 2, x: 100.5, y: 120.5 });
+
+  // 换成偏右下的一块：可见区域跟着走，仍然是这个框
+  c.ocrEditCrop = { x: 0.5, y: 0.5, w: 0.25, h: 0.25 };
+  assertSameRegion(c, { x: 0.5, y: 0.5, w: 0.25, h: 0.25 }, "换一块，看到的就跟着换");
+  // 转 90°：框跟着内容转（右下的块转到左下），画面框换宽高，窗口里看到的仍是这个框
+  c.rotateOcrEditor(1);
+  assert.deepStrictEqual(c.ocrEditFull, { w: 602, h: 401 });
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.25, y: 0.5, w: 0.25, h: 0.25 }, "框跟着内容转到了左下");
+  assert.strictEqual(c.ocrEditFrameStyle.indexOf("width:151px;height:100px"), 0);
+  assertSameRegion(c, c.ocrEditCrop, "转 90° 后窗口里看到的还是当前这个框");
+  c.rotateOcrEditor(-1);
+
+  // 再回到裁剪：又看回整幅，框也还在（可以接着调）
+  c.ocrEditCrop = { x: 0.1, y: 0.2, w: 0.5, h: 0.4 };
+  c.toggleOcrCrop();
+  assert.strictEqual(c.ocrEditFrameStyle, full);
+  assert.deepStrictEqual(c.ocrEditCrop, { x: 0.1, y: 0.2, w: 0.5, h: 0.4 });
+  assert.deepStrictEqual(c.ocrEditView, { scale: 1, x: 0, y: 0 }, "进出裁剪都从整幅看起");
+
+  // 重置（裁剪工具里）＝ 回到不裁：框回满幅，预览也就成了整幅
+  c.resetOcrEdits();
+  assert.strictEqual(c.ocrEditCropped, false);
+  c.toggleOcrCrop();
+  assert.strictEqual(c.ocrEditFrameStyle, full, "重置之后没有裁剪范围，看的就是整幅");
+});
+
+test("裁剪模式下的退出手势：Esc 先退出裁剪，再按一次才关闭编辑器", () => {
+  const { c } = loadModule(makeStorage());
+  c.ocrImages = [{ id: "a", name: "a.jpg", size: 1, dataUrl: IMG }];
+  c.ocrIndex = 0;
+  c.ocrViewerOpen = true;
+  c.ocrEditBaseW = 1000;
+  c.ocrEditBaseH = 800;
+  c.toggleOcrCrop();
+  assert.strictEqual(c.ocrEditCropOn, true);
+
+  const esc = { key: "Escape", preventDefault: () => {} };
+  c.ocrEditorKey(esc);
+  assert.strictEqual(c.ocrEditCropOn, false, "第一次 Esc 只是退出裁剪，让人先看到结果");
+  assert.strictEqual(c.ocrViewerOpen, true, "别把整个编辑器关掉");
+
+  c.ocrEditorKey(esc);
+  assert.strictEqual(c.ocrViewerOpen, false, "再按一次才关闭");
+});
+
+test("编辑器接线：入口即编辑、八个把手、Esc 不许穿透到下面的弹窗", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "script.js"), "utf8");
+  const { api } = loadModule(makeStorage());
+
+  // 两个入口（工具工作区 + 上传弹窗）都走 openOcrEditor：放大与编辑是同一个界面
+  assert.strictEqual((html.match(/@click="openOcrEditor\(\)"/g) || []).length, 2);
+  assert.strictEqual(html.indexOf('@click="ocrViewerOpen = false"'), -1, "看图的遮罩不再一点就关（会误伤刚拖好的框）");
+  assert.ok(html.indexOf('@resize.window="ocrViewerOpen && syncOcrEditorSize()"') >= 0, "转屏/改窗口要重算画面尺寸");
+  assert.strictEqual((html.match(/x-ref="ocrEditStage"/g) || []).length, 1);
+
+  // 工具条在顶栏中间，退出只有一个显眼的「完成」
+  assert.ok(/<div class="ocr-editor-head">[\s\S]*?class="ocr-editor-tools"[\s\S]*?ocr-editor-done/.test(html),
+    "顶栏里依次是标题、居中工具条、完成按钮");
+  assert.strictEqual((html.match(/@click="closeOcrEditor\(\)"/g) || []).length, 1, "退出只留一个入口，别让人找两个");
+  assert.ok(html.indexOf('class="btn-primary ocr-editor-done"') >= 0, "「完成」要是实心主按钮，不然找不到");
+  assert.ok(html.indexOf('@click="rotateOcrEditor(-1)"') >= 0 && html.indexOf('@click="rotateOcrEditor(1)"') >= 0);
+  assert.ok(html.indexOf('@click="toggleOcrCrop()"') >= 0);
+  assert.ok(html.indexOf('@click="resetOcrEdits()"') >= 0 && html.indexOf('@click="restoreOcrOriginal()"') >= 0);
+  assert.strictEqual(html.indexOf("selectAllOcrCrop"), -1, "「整幅」撤了：它的作用已经被重置覆盖");
+  assert.strictEqual(src.indexOf("selectAllOcrCrop"), -1, "别把它留在代码里没人用");
+  assert.ok(html.indexOf('@pointerdown="ocrEditDown($event)"') >= 0);
+  assert.ok(html.indexOf('@wheel.prevent="ocrEditWheel($event)"') >= 0, "滚轮缩放要拦下页面滚动");
+  assert.ok(html.indexOf('@click.self="ocrEditCropOn && toggleOcrCrop()"') >= 0, "点画面外的留白处也能退出裁剪看结果");
+  assert.ok(html.indexOf(':class="{ \'is-morphing\': !ocrEditCropOn }"') >= 0, "退出裁剪时尺寸变化要形变一下");
+  assert.strictEqual((html.match(/x-show="ocrEditCropOn"/g) || []).length, 1, "只剩裁剪框本身跟着这个开关");
+  assert.strictEqual((html.match(/<span class="ocr-tool-text">/g) || []).length, 5, "每个工具都配一句文字说明");
+  assert.ok(html.indexOf('<p class="ocr-editor-tip" x-text="ocrEditorTip">') >= 0, "操作说明常驻，跟着状态换文案");
+  assert.strictEqual((html.match(/x-for="h in ocrCropHandles"/g) || []).length, 1);
+  assert.strictEqual(api.OCR_CROP_HANDLES.length, 8, "四角 + 四边");
+  ["nw", "n", "ne", "w", "e", "sw", "s", "se"].forEach((h) => {
+    assert.ok(api.OCR_CROP_HANDLES.indexOf(h) >= 0, `缺了 ${h} 把手`);
+    assert.ok(css.indexOf(".ocr-crop-h.is-" + h) >= 0, `样式里缺了 ${h} 把手`);
+  });
+
+  // Esc：编辑器在最上层，按一次只该关它
+  assert.strictEqual((html.match(/!ocrViewerOpen &&/g) || []).length, 3,
+    "上传弹窗 / 配对弹窗 / 识别弹窗的 Esc 都要让开编辑器");
+
+  // 样式：触摸手势自己吃（不然拖动会变成页面滚动），把手在触屏上加大
+  assert.ok(/\.ocr-editor-frame\s*\{[^}]*touch-action:\s*none/.test(css));
+  assert.ok(/\.ocr-editor-stage\s*\{[^}]*touch-action:\s*none/.test(css));
+  assert.ok(/@media \(pointer: coarse\)\s*\{[^}]*\.ocr-crop-h\s*\{\s*--crop-h/.test(css), "触屏把手要更大");
+  assert.ok(css.indexOf(".ocr-crop-h::after") >= 0, "把手的触摸热区要往外扩");
+  assert.strictEqual(css.indexOf(".ocr-viewer"), -1, "旧的纯查看器样式不再留残渣");
+  assert.strictEqual(css.indexOf(".ocr-editor-bar"), -1, "底部那排按钮已经撤掉，改成顶部居中");
+  assert.strictEqual(/\.ocr-editor-frame\s*\{[^}]*background:/.test(css), false,
+    "画面框不铺白底：尺寸没算上时会露出一块跟图片错位的白盒子");
+  // 实时预览靠这一层裁掉框外：溢出必须藏住，并且要有形变让人看出结果
+  assert.ok(/\.ocr-editor-window\s*\{[^}]*overflow:\s*hidden/.test(css), "画面窗口要裁掉框外的部分");
+  assert.ok(/\.ocr-editor-frame\.is-morphing[\s\S]{0,200}transition:\s*width/.test(css), "退出裁剪要形变");
+  // Tailwind Preflight（@layer base）里有 img, video { max-width: 100% }：不在这张图上解开，
+  // 窗口一小图片就被压扁，预览看着像错位（这条是在浏览器里量出来才发现的）。
+  // 注释里就带着带花括号的代码片段，先把注释去掉再按规则体匹配
+  const cssBare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.ok(/\.ocr-editor-img\s*\{[^}]*max-width:\s*none/.test(cssBare), "编辑器里的图片必须允许比窗口大");
+
+  // 悬停只在真有指针设备时给：触屏上 :hover 会粘住，点完一直亮着
+  assert.strictEqual((css.match(/\.ocr-tool[^\s{]*:hover/g) || []).length, 2);
+  assert.ok(/@media \(hover: hover\) and \(pointer: fine\)\s*\{[\s\S]*?\.ocr-tool:hover/.test(css),
+    "触屏不给 hover 反馈，只有鼠标/触控板才亮");
+  assert.ok(/\.ocr-editor-tools\s*\{[^}]*justify-content:\s*center/.test(css), "工具条居中");
+  assert.ok(/\.ocr-tools-pill\s*\{[^}]*border-radius:\s*999px/.test(css), "胶囊只包住按钮本身，不拉满整行");
+  assert.ok(/@media \(min-width: 768px\)\s*\{[\s\S]*?\.ocr-editor-head\s*\{\s*display:\s*grid/.test(css),
+    "够宽就一行三列，工具条真正居中");
+  assert.ok(/\.ocr-tool-text\s*\{\s*display:\s*none/.test(css), "窄屏先只有图标");
+  assert.ok(/@media \(min-width: 640px\)\s*\{\s*\.ocr-tool-text\s*\{\s*display:\s*inline/.test(css),
+    "宽度够了就给图标配文字说明");
 });
 
 /* ---------------- 运行 ---------------- */

@@ -89,6 +89,13 @@ const ICON_PATHS = {
   "camera": '<path d="M3.5 9A2.5 2.5 0 0 1 6 6.5h1a1.6 1.6 0 0 0 1.4-.8l.5-.9a1.6 1.6 0 0 1 1.4-.8h3.4a1.6 1.6 0 0 1 1.4.8l.5.9a1.6 1.6 0 0 0 1.4.8h1A2.5 2.5 0 0 1 20.5 9v7A2.5 2.5 0 0 1 18 18.5H6A2.5 2.5 0 0 1 3.5 16Z"/><circle cx="12" cy="12.5" r="3.2"/>',
   "image": '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.6" cy="10" r="1.5"/><path d="m4 17.2 4.3-4a2 2 0 0 1 2.7 0l3.4 3.2"/><path d="m13.6 15.2 1.5-1.4a2 2 0 0 1 2.7 0l2.2 2"/>',
   "qr": '<rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.6"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1.6"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="1.6"/><path d="M14 14h3.2v3.2H14zM20.5 14v2.4M17.6 20.5h2.9M14 20.5h1.2"/>',
+  // —— 图片查看 / 编辑（转正 · 裁剪） ——
+  "rotate-ccw": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  "rotate-cw": '<path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+  "crop": '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
+  "expand": '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
+  "undo": '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
+  "history": '<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>',
 };
 
 function icon(name, cls = "w-5 h-5") {
@@ -237,6 +244,87 @@ function ocrModeCanChoose(toolId) {
 }
 function ocrModeMeta(mode) {
   return OCR_MODES[mode] || OCR_MODES.printed;
+}
+
+/* ---- 图片编辑（转正 · 裁剪）的参数与几何 ---- */
+// 裁剪/转正后重新编码的质量：原图是 0.85 已经是二次编码，这里留高一点，别再叠一层损失
+const OCR_EDIT_QUALITY = 0.9;
+// 整幅：不做任何裁剪时的选择框
+const OCR_FULL_RECT = { x: 0, y: 0, w: 1, h: 1 };
+// 裁剪框的最小边长（占画面比例）：再小手指一抖就没了，也裁不出能认的字
+const OCR_CROP_MIN = 0.04;
+// 八个把手：四角 + 四边（nw/n/ne/w/e/sw/s/se）
+const OCR_CROP_HANDLES = ["nw", "n", "ne", "w", "e", "sw", "s", "se"];
+// 放大上限与双击放大的倍数：试卷上的小字放到 8 倍足够对到行，再大只是糊
+const OCR_VIEW_MAX = 8;
+const OCR_VIEW_TAP = 2.5;
+
+/* 几何一律用归一化矩形（x/y/w/h 都是 0–1）算，只在烘焙那一刻换成像素。
+   旋转、裁剪、屏幕尺寸三件事各算各的，互不牵扯；下面都是纯函数，测试直接验算。 */
+function ocrClampNum(v, lo, hi) {
+  return v < lo ? lo : (v > hi ? hi : v);
+}
+function ocrClamp01(v) {
+  return ocrClampNum(Number(v) || 0, 0, 1);
+}
+// 归一化值留三位小数：够用，也让断言能直接写死
+function ocrRound3(v) {
+  return Math.round(v * 1000) / 1000;
+}
+/* 图转了 90°，选择框跟着转：不转的话，用户转完图会发现框跑去框别的地方了。
+   顺时针（dir > 0）时，旧画面上的点 (x,y) 落到新画面的 (1-y,x)，矩形随之换宽高 */
+function ocrRotateRect(rect, dir) {
+  const r = rect || OCR_FULL_RECT;
+  const cw = dir > 0;
+  const out = cw
+    ? { x: 1 - r.y - r.h, y: r.x, w: r.h, h: r.w }
+    : { x: r.y, y: 1 - r.x - r.w, w: r.h, h: r.w };
+  return {
+    x: ocrRound3(ocrClamp01(out.x)),
+    y: ocrRound3(ocrClamp01(out.y)),
+    w: ocrRound3(ocrClamp01(out.w)),
+    h: ocrRound3(ocrClamp01(out.h)),
+  };
+}
+/* 旋转后的画面尺寸：90/270 交换宽高 */
+function ocrRotatedSize(w, h, rotate) {
+  const r = (((Number(rotate) || 0) % 360) + 360) % 360;
+  const width = Math.max(1, Math.round(Number(w) || 1));
+  const height = Math.max(1, Math.round(Number(h) || 1));
+  return r === 90 || r === 270 ? { width: height, height: width } : { width, height };
+}
+/* 按比例装进一个盒子（contain）：装得下就原样，绝不放大 */
+function ocrFitSize(w, h, boxW, boxH) {
+  const width = Math.max(1, Math.round(Number(w) || 1));
+  const height = Math.max(1, Math.round(Number(h) || 1));
+  const bw = Math.max(0, Number(boxW) || 0);
+  const bh = Math.max(0, Number(boxH) || 0);
+  if (!bw || !bh) return { width: 0, height: 0 };
+  const k = Math.min(bw / width, bh / height, 1);
+  return { width: Math.max(1, Math.round(width * k)), height: Math.max(1, Math.round(height * k)) };
+}
+/* 烘焙计划：一次画布同时完成「旋转」和「裁剪」，中间不落第二次编码。
+   crop 的坐标系是「旋转之后」的画面——就是用户在屏幕上画框看到的那张，
+   所以先按旋转后的尺寸换算像素，再把矩形夹进画布内，避免浮点误差裁出界 */
+function ocrBakePlan(w, h, rotate, crop) {
+  const baseW = Math.max(1, Math.round(Number(w) || 1));
+  const baseH = Math.max(1, Math.round(Number(h) || 1));
+  const r = (((Number(rotate) || 0) % 360) + 360) % 360;
+  const rotated = ocrRotatedSize(baseW, baseH, r);
+  const c = crop || OCR_FULL_RECT;
+  let sx = Math.round(ocrClamp01(c.x) * rotated.width);
+  let sy = Math.round(ocrClamp01(c.y) * rotated.height);
+  let sw = Math.max(1, Math.round(ocrClamp01(c.w) * rotated.width));
+  let sh = Math.max(1, Math.round(ocrClamp01(c.h) * rotated.height));
+  sx = ocrClampNum(sx, 0, rotated.width - 1);
+  sy = ocrClampNum(sy, 0, rotated.height - 1);
+  sw = ocrClampNum(sw, 1, rotated.width - sx);
+  sh = ocrClampNum(sh, 1, rotated.height - sy);
+  return {
+    baseW, baseH, rotate: r,
+    rotW: rotated.width, rotH: rotated.height,
+    sx, sy, sw, sh, outW: sw, outH: sh,
+  };
 }
 // 识别是付费的视觉调用（后端不计费但仅限流放行），始终要有效使用码，免码试用模型也不适用
 const OCR_CODE_HINT = "识别需要有效使用码";
@@ -1929,8 +2017,23 @@ function nbx() {
     ocrError: "",
     ocrTruncated: false,
     ocrMediaCollapsed: false,
-    ocrViewerOpen: false,
     ocrElapsedSec: 0,
+    /* 全屏查看（点图放大）同时也是编辑：转正与裁剪都先只记在这里，
+       关闭时一次性烘焙进 dataUrl——转两次再裁一次也只编码一次，不叠画质损失 */
+    ocrViewerOpen: false,
+    ocrEditBase: "",            // 打开时那张图（data URL）：重置回到这里，也是烘焙的输入
+    ocrEditBaseW: 0,            // 它的自然像素尺寸（未旋转）
+    ocrEditBaseH: 0,
+    ocrEditRotate: 0,           // 待应用的旋转（0/90/180/270）
+    ocrEditCrop: null,          // 待应用的裁剪（归一化，坐标系是「旋转之后」的画面）
+    ocrEditCropOn: false,       // 裁剪工具是否展开
+    ocrEditFull: { w: 0, h: 0 },    // 整幅图在屏幕上的显示尺寸（旋转后）
+    ocrEditImg: { w: 0, h: 0 },     // 未旋转画面在屏幕上的显示尺寸（旋转靠 CSS transform）
+    ocrEditView: { scale: 1, x: 0, y: 0 },   // 放大与平移（看细节用）
+    ocrEditBusy: false,         // 正在取图 / 正在烘焙：这期间不接第二次操作
+    _ocrPointers: null,         // 屏幕上的指针（触屏双指缩放要用）
+    _ocrDrag: null,             // 本次拖拽的起点与目标（裁剪框/平移）
+    _ocrDragged: false,
     _ocrTimer: null,
     _ocrRenderTimer: null,
     _ocrAbort: null,
@@ -4541,6 +4644,7 @@ function nbx() {
       this.ocrModalOpen = false;
       this._ocrMediaTouched = false;
       this.ocrHost = this.isOcrTool ? "tool" : "modal";
+      this.resetOcrEdit();
     },
     /* 相册/相机选中的图片（也可能来自拖拽）：压缩后并入批次，等用户确认类型再开始 */
     async onOcrFilesSelect(ev) {
@@ -4625,6 +4729,8 @@ function nbx() {
             resolve({
               id: "img_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
               name: file.name || "photo.jpg",
+              w: width,
+              h: height,
               size: Math.round(Math.max(0, dataUrl.length - OCR_DATA_URL_PREFIX.length) * 0.75),
               dataUrl,
             });
@@ -4702,6 +4808,488 @@ function nbx() {
       this.ocrIndex = target;
       this._afterBatchChanged();
     },
+
+    /* ---- 全屏查看 / 编辑（转正 · 裁剪） ---- */
+    /* 点图放大就是编辑入口：放大看那些 [ILLEGIBLE] 的地方、顺手把多余的边和拍歪的角度修掉，
+       是同一个动作的两半，分成两个界面反而要用户先想「我该点哪个」 */
+    get ocrCropHandles() {
+      return OCR_CROP_HANDLES;
+    },
+    /* 满幅的框等于没裁：不算改动，免得为它白跑一次重新编码（0.85 → 0.9 也白掉一层） */
+    get ocrEditCropped() {
+      const c = this.ocrEditCrop;
+      return !!c && !(c.x <= 0.0005 && c.y <= 0.0005 && c.w >= 0.999 && c.h >= 0.999);
+    },
+    /* 有待生效的旋转或裁剪：关闭时会一次性落地（见 closeOcrEditor） */
+    get ocrEditDirty() {
+      return this.ocrEditRotate % 360 !== 0 || this.ocrEditCropped;
+    },
+    get ocrEditCanRestore() {
+      const item = this.ocrCurrentImage;
+      return !!(item && item.sourceUrl);
+    },
+    get ocrEditTitle() {
+      const total = this.ocrImages.length;
+      const name = (this.ocrCurrentImage && this.ocrCurrentImage.name) || "";
+      const head = total ? `第 ${this.ocrIndex + 1} / ${total} 张` : "";
+      return name ? `${head} · ${name}` : head;
+    },
+    /* 提示行跟着状态走：这一步能做什么、改了以后什么时候生效，都写在这一行里。
+       触屏不给鼠标那套快捷键说明（那上面没有滚轮也没有 [ ]） */
+    get ocrEditorTip() {
+      if (this.ocrEditCropOn) {
+        return this.touchPrimary
+          ? "拖动四角或边调整范围；再点一次「裁剪」就能看到裁完的样子"
+          : "拖动四角或边调整范围；空白处拖出新范围，再点一次「裁剪」就能看到裁完的样子";
+      }
+      if (this.ocrEditDirty) return "看到的就是裁完的样子；点「完成」写入这张图片";
+      return this.touchPrimary
+        ? "点「裁剪」可修掉多余的边，两指缩放看细节"
+        : "点「裁剪」可修掉多余的边；滚轮缩放，[ ] 转 90°，Esc 完成";
+    },
+    /* 画面窗口：裁剪工具开着时看整幅（框外要留着做参照才好动手），关掉后只显示裁剪范围内的那部分。
+       这就是实时预览——一个像素都不动、也不重新编码，只是把框外的部分不显示出来 */
+    get ocrEditWindow() {
+      if (this.ocrEditCropOn) return OCR_FULL_RECT;
+      return this.ocrEditCropped ? this.ocrEditCrop : OCR_FULL_RECT;
+    },
+    get ocrEditWinSize() {
+      const full = this.ocrEditFull;
+      if (!full.w || !full.h) return { w: 0, h: 0 };
+      const win = this.ocrEditWindow;
+      return {
+        w: Math.max(1, Math.round(full.w * win.w)),
+        h: Math.max(1, Math.round(full.h * win.h)),
+      };
+    },
+    get ocrEditFrameStyle() {
+      const box = this.ocrEditWinSize;
+      const v = this.ocrEditView;
+      return `width:${box.w}px;height:${box.h}px;transform:translate(${v.x.toFixed(2)}px,${v.y.toFixed(2)}px) scale(${v.scale.toFixed(4)})`;
+    },
+    get ocrEditImageStyle() {
+      const full = this.ocrEditFull;
+      const img = this.ocrEditImg;
+      const win = this.ocrEditWindow;
+      // 窗口是「镜头」，画面在它后面推：要看到靠右下的一块，就得把图片往左上（负方向）推，
+      // 推出去的距离正是裁剪原点在屏幕上的像素。再叠上「把整幅居中」的那半格，
+      // 就是图片左上角该在的位置。符号写反过一次：不裁剪时 win=0 看不出来，一裁就跑反方向。
+      const left = ocrRound3(full.w / 2 - win.x * full.w - img.w / 2);
+      const top = ocrRound3(full.h / 2 - win.y * full.h - img.h / 2);
+      return `width:${img.w}px;height:${img.h}px;margin-left:${left}px;margin-top:${top}px;transform:rotate(${this.ocrEditRotate}deg)`;
+    },
+    get ocrEditRectStyle() {
+      const c = this.ocrEditCrop || OCR_FULL_RECT;
+      return `left:${(c.x * 100).toFixed(3)}%;top:${(c.y * 100).toFixed(3)}%;width:${(c.w * 100).toFixed(3)}%;height:${(c.h * 100).toFixed(3)}%`;
+    },
+    /* 扫码来源的那几张，字节还在服务器内存里：编辑前先落到本地。
+       与「批次里再补一张本地图片」走的是同一条路（一次请求只能带一种来源） */
+    async openOcrEditor() {
+      const first = this.ocrCurrentImage;
+      if (!first || this.ocrEditBusy) return;
+      this.ocrEditBusy = true;
+      try {
+        if (!first.dataUrl) await this._materializePairImages();
+        const item = this.ocrCurrentImage;
+        if (!item || !item.dataUrl) throw new Error("图片没能读到本地");
+        const img = await this._ocrLoadImage(item.dataUrl);
+        this.ocrEditBase = item.dataUrl;
+        this.ocrEditBaseW = img.naturalWidth || item.w || 1;
+        this.ocrEditBaseH = img.naturalHeight || item.h || 1;
+        this.ocrEditRotate = 0;
+        this.ocrEditCrop = null;
+        this.ocrEditCropOn = false;
+        this.fitOcrView();
+        this.ocrViewerOpen = true;
+        await this.$nextTick();
+        this.syncOcrEditorSize();
+        this._ocrWatchStage();
+      } catch (e) {
+        this.toast(describeError(e, "图片打开失败，请重试"), "error");
+      } finally {
+        this.ocrEditBusy = false;
+      }
+    },
+    /* 关闭 = 落地：待应用的旋转与裁剪在这里一次烘焙完，直接关掉也不会白调半天。
+       没有改动就是纯看图，不留任何痕迹 */
+    async closeOcrEditor() {
+      if (this.ocrEditBusy) return;
+      const dirty = this.ocrEditDirty && !this.ocrStreaming;
+      const what = this.ocrEditCropped
+        ? (this.ocrEditRotate % 360 ? "已裁剪并转正" : "已裁剪")
+        : "已转正";
+      if (dirty) {
+        this.ocrEditBusy = true;
+        try {
+          // 烘焙失败就留在编辑器里：别把用户刚调好的角度和范围一起吞掉
+          if (!(await this.applyOcrEdit())) return;
+        } finally {
+          this.ocrEditBusy = false;
+        }
+      }
+      this.ocrViewerOpen = false;
+      this.resetOcrEdit();
+      if (dirty) {
+        this.toast(what);
+        this.enterOcrStartStep();
+      }
+    },
+    resetOcrEdit() {
+      if (this._ocrStageRO) {
+        try { this._ocrStageRO.disconnect(); } catch { /* 忽略 */ }
+        this._ocrStageRO = null;
+      }
+      this.ocrEditBase = "";
+      this.ocrEditBaseW = 0;
+      this.ocrEditBaseH = 0;
+      this.ocrEditRotate = 0;
+      this.ocrEditCrop = null;
+      this.ocrEditCropOn = false;
+      this.ocrEditFull = { w: 0, h: 0 };
+      this.ocrEditImg = { w: 0, h: 0 };
+      this.ocrEditView = { scale: 1, x: 0, y: 0 };
+      this._ocrDrag = null;
+      this._ocrPointers = null;
+      this._ocrDragged = false;
+    },
+    /* 把待应用的旋转与裁剪烧进这张图：一次画布画完旋转、再一次裁掉多余部分。
+       基准随即换成刚生成的这张——接着再转再裁都从它出发，不会层层叠加 */
+    async applyOcrEdit() {
+      const item = this.ocrCurrentImage;
+      if (!item || !this.ocrEditBase) return false;
+      const plan = ocrBakePlan(this.ocrEditBaseW, this.ocrEditBaseH, this.ocrEditRotate, this.ocrEditCrop);
+      try {
+        const img = await this._ocrLoadImage(this.ocrEditBase);
+        const mid = document.createElement("canvas");
+        mid.width = plan.rotW;
+        mid.height = plan.rotH;
+        const mctx = mid.getContext("2d");
+        mctx.fillStyle = "#ffffff";
+        mctx.fillRect(0, 0, plan.rotW, plan.rotH);
+        mctx.save();
+        mctx.translate(plan.rotW / 2, plan.rotH / 2);
+        mctx.rotate((plan.rotate * Math.PI) / 180);
+        mctx.drawImage(img, -plan.baseW / 2, -plan.baseH / 2, plan.baseW, plan.baseH);
+        mctx.restore();
+        const out = document.createElement("canvas");
+        out.width = plan.outW;
+        out.height = plan.outH;
+        const octx = out.getContext("2d");
+        octx.fillStyle = "#ffffff";
+        octx.fillRect(0, 0, plan.outW, plan.outH);
+        octx.drawImage(mid, plan.sx, plan.sy, plan.sw, plan.sh, 0, 0, plan.outW, plan.outH);
+        const dataUrl = out.toDataURL("image/jpeg", OCR_EDIT_QUALITY);
+        if (!dataUrl || dataUrl.indexOf("data:image/jpeg") !== 0) throw new Error("图片编码失败");
+        // 第一次动它之前留一份原样：裁错了还能整个退回去（只在本次会话里有效）
+        if (!item.sourceUrl) item.sourceUrl = item.dataUrl;
+        item.dataUrl = dataUrl;
+        item.edited = true;
+        item.w = plan.outW;
+        item.h = plan.outH;
+        item.size = Math.round(Math.max(0, dataUrl.length - OCR_DATA_URL_PREFIX.length) * 0.75);
+        this.ocrEditBase = dataUrl;
+        this.ocrEditBaseW = plan.outW;
+        this.ocrEditBaseH = plan.outH;
+        this.ocrEditRotate = 0;
+        this.ocrEditCrop = null;
+        this.ocrEditCropOn = false;
+        this.syncOcrEditorSize();
+        this._afterBatchChanged();
+        return true;
+      } catch (e) {
+        this.toast(describeError(e, "图片处理失败，请重试"), "error");
+        return false;
+      }
+    },
+    /* 回到最初上传的那张照片（本次会话里留的底；刷新页面后就只剩当前这张了） */
+    async restoreOcrOriginal() {
+      const item = this.ocrCurrentImage;
+      if (!item || !item.sourceUrl || this.ocrEditBusy || this.ocrStreaming) return;
+      this.ocrEditBusy = true;
+      try {
+        const original = item.sourceUrl;
+        const img = await this._ocrLoadImage(original);
+        item.dataUrl = original;
+        delete item.sourceUrl;
+        item.edited = false;
+        item.w = img.naturalWidth || item.w;
+        item.h = img.naturalHeight || item.h;
+        item.size = Math.round(Math.max(0, original.length - OCR_DATA_URL_PREFIX.length) * 0.75);
+        this.ocrEditBase = original;
+        this.ocrEditBaseW = img.naturalWidth || 1;
+        this.ocrEditBaseH = img.naturalHeight || 1;
+        this.ocrEditRotate = 0;
+        this.ocrEditCrop = null;
+        this.ocrEditCropOn = false;
+        this.fitOcrView();
+        this.syncOcrEditorSize();
+        this._afterBatchChanged();
+        this.toast("已还原原图");
+      } catch (e) {
+        this.toast("原图读取失败，请重试", "error");
+      } finally {
+        this.ocrEditBusy = false;
+      }
+    },
+    /* 每次转 90°：选择框跟着内容转，否则用户转完图会发现框跑到别处去了 */
+    rotateOcrEditor(dir) {
+      if (this.ocrStreaming || this.ocrEditBusy) return;
+      const step = dir > 0 ? 1 : -1;
+      this.ocrEditRotate = (this.ocrEditRotate + step * 90 + 360) % 360;
+      if (this.ocrEditCrop) this.ocrEditCrop = ocrRotateRect(this.ocrEditCrop, step);
+      this.fitOcrView();
+      this.syncOcrEditorSize();
+    },
+    toggleOcrCrop() {
+      if (this.ocrStreaming || this.ocrEditBusy) return;
+      this.ocrEditCropOn = !this.ocrEditCropOn;
+      // 第一次开裁剪工具：先给一个满幅的框，用户从任意一边往里收都是直接可拖的
+      if (this.ocrEditCropOn && !this.ocrEditCrop) this.ocrEditCrop = Object.assign({}, OCR_FULL_RECT);
+      // 两种状态都从「整幅」看起：进去时要看清全图才好定范围，出来时要看全裁完的结果
+      this.fitOcrView();
+    },
+    /* 重置：撤掉还没生效的旋转与裁剪（裁剪框回到满幅，等于不裁）。
+       已经烘焙进图片的用「还原原图」退 */
+    resetOcrEdits() {
+      if (this.ocrStreaming || this.ocrEditBusy) return;
+      this.ocrEditRotate = 0;
+      this.ocrEditCrop = this.ocrEditCropOn ? Object.assign({}, OCR_FULL_RECT) : null;
+      this.fitOcrView();
+      this.syncOcrEditorSize();
+    },
+    fitOcrView() {
+      this.ocrEditView = { scale: 1, x: 0, y: 0 };
+    },
+    /* 画面尺寸跟着舞台算：舞台两端各留 12px，不让图贴着屏幕边。
+       旋转 90/270 时画面框换宽高（图片本身靠 CSS transform 转，尺寸不用重算） */
+    syncOcrEditorSize() {
+      const stage = this.$refs && this.$refs.ocrEditStage;
+      if (!stage || !this.ocrEditBaseW || !this.ocrEditBaseH) return;
+      const boxW = Math.max(0, stage.clientWidth - 24);
+      const boxH = Math.max(0, stage.clientHeight - 24);
+      if (!boxW || !boxH) return;   // 还在淡入/隐藏：下一次 resize 或打开时再量
+      const fit = ocrFitSize(this.ocrEditBaseW, this.ocrEditBaseH, boxW, boxH);
+      const swapped = this.ocrEditRotate % 180 === 90;
+      // 注意键名：ocrFitSize 给的是 width/height，样式里读的是 w/h，写错就是 undefinedpx，
+      // 整条声明会被浏览器丢掉、图片退回自然尺寸还不居中（别再踩）
+      this.ocrEditImg = { w: fit.width, h: fit.height };
+      this.ocrEditFull = swapped ? { w: fit.height, h: fit.width } : { w: fit.width, h: fit.height };
+      this._clampOcrView();
+    },
+    /* 舞台一变矮就要重算：裁剪工具会多出一个按钮和一行提示，窄屏上工具栏可能因此换行，
+       而画面尺寸是照舞台算的。窗口 resize 能盖住桌面，手机转屏/工具栏换行只有观察者盖得住 */
+    _ocrWatchStage() {
+      const stage = this.$refs && this.$refs.ocrEditStage;
+      if (!stage || typeof ResizeObserver !== "function") return;
+      if (!this._ocrStageRO) this._ocrStageRO = new ResizeObserver(() => this.syncOcrEditorSize());
+      try { this._ocrStageRO.observe(stage); } catch { /* 忽略 */ }
+    },
+    /* 放大后画面不能拖出框外：留出的边界正好是「多出来的那半」 */
+    _clampOcrView() {
+      const v = this.ocrEditView;
+      if (v.scale <= 1.001) {
+        v.scale = 1;
+        v.x = 0;
+        v.y = 0;
+        return;
+      }
+      const box = this.ocrEditWinSize;
+      const mx = ((v.scale - 1) * box.w) / 2;
+      const my = ((v.scale - 1) * box.h) / 2;
+      v.x = ocrClampNum(v.x, -mx, mx);
+      v.y = ocrClampNum(v.y, -my, my);
+    },
+    _ocrStageCenter() {
+      const stage = this.$refs && this.$refs.ocrEditStage;
+      if (!stage) return { x: 0, y: 0 };
+      const r = stage.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    },
+    /* 以屏幕上某一点为锚缩放：放大后那一点还在原地，不会「一放大就找不到刚才那行字」。
+       dx/dy 是额外的平移（双指缩放时中点在动，要跟着走） */
+    _ocrSetView(scale, clientX, clientY, dx, dy) {
+      const v = this.ocrEditView;
+      const s1 = ocrClampNum(Number(scale) || 1, 1, OCR_VIEW_MAX);
+      const k = v.scale ? s1 / v.scale : 1;
+      const c = this._ocrStageCenter();
+      const cx = clientX - c.x;
+      const cy = clientY - c.y;
+      v.x = cx - (cx - v.x) * k + (dx || 0);
+      v.y = cy - (cy - v.y) * k + (dy || 0);
+      v.scale = s1;
+      this._clampOcrView();
+    },
+    ocrEditWheel(ev) {
+      if (!this.ocrViewerOpen) return;
+      this._ocrSetView(this.ocrEditView.scale * Math.exp(-ev.deltaY * 0.0016), ev.clientX, ev.clientY, 0, 0);
+    },
+    ocrEditDblClick(ev) {
+      this._ocrSetView(this.ocrEditView.scale > 1.001 ? 1 : OCR_VIEW_TAP, ev.clientX, ev.clientY, 0, 0);
+    },
+    /* 屏幕坐标 → 画面内的归一化坐标。框上带着缩放，getBoundingClientRect 拿到的是缩放后的框，
+       所以这里算出来的比例天然是对的，放大多少倍都不用另算 */
+    _ocrNormPoint(ev, el) {
+      const r = el.getBoundingClientRect();
+      return {
+        x: r.width ? ocrClamp01((ev.clientX - r.left) / r.width) : 0,
+        y: r.height ? ocrClamp01((ev.clientY - r.top) / r.height) : 0,
+      };
+    },
+    /* 拖动写回的选择框统一收到三位小数：浮点尾巴会一路进到样式字符串和烘焙换算里，
+       而千分之一像素的差别谁也看不出来 */
+    _setOcrCrop(x, y, w, h) {
+      this.ocrEditCrop = { x: ocrRound3(x), y: ocrRound3(y), w: ocrRound3(w), h: ocrRound3(h) };
+    },
+    /* 指针按下：鼠标与触屏走同一条路（Pointer Events），只在「框外空白处拖动」这一处分叉——
+       没放大时拖出新裁剪框（鼠标和触屏都一样，此时画面本来也没得平移），
+       放大后则是平移画面（手指要能挪动细节去对边） */
+    ocrEditDown(ev) {
+      if (!this.ocrCurrentImage || this.ocrEditBusy || this.ocrStreaming) return;
+      const frame = ev.currentTarget;
+      if (!this._ocrPointers) this._ocrPointers = new Map();
+      this._ocrDragged = false;
+      this._ocrPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      try { frame.setPointerCapture(ev.pointerId); } catch { /* 环境不支持就算了 */ }
+      if (this._ocrPointers.size === 1) {
+        const n = this._ocrNormPoint(ev, frame);
+        const handle = ev.target && ev.target.closest ? ev.target.closest("[data-h]") : null;
+        const crop = this.ocrEditCrop;
+        // 满幅框上「框内拖动」是搬不动的（左右都顶到边了），此时一律当作画新框：
+        // 刚打开裁剪工具第一下就能直接拉出想要的区域，不用先跟把手较劲
+        const full = !!crop && crop.w >= 0.999 && crop.h >= 0.999;
+        const inside = !full && !!(crop && n.x >= crop.x && n.x <= crop.x + crop.w && n.y >= crop.y && n.y <= crop.y + crop.h);
+        const mode = this.ocrEditCropOn
+          ? (handle ? "resize" : (inside ? "move" : (this.ocrEditView.scale > 1.001 ? "pan" : "newrect")))
+          : "pan";
+        this._ocrDrag = {
+          mode: mode,
+          id: ev.pointerId,
+          n: n,
+          x: ev.clientX,
+          y: ev.clientY,
+          rect: crop ? Object.assign({}, crop) : null,
+          handle: handle ? handle.dataset.h : "",
+          view: Object.assign({}, this.ocrEditView),
+        };
+        return;
+      }
+      // 第二根手指落下：整段转成双指缩放，刚才单指那一下作废（否则会边裁边窜）
+      const pts = Array.from(this._ocrPointers.values());
+      this._ocrDrag = {
+        mode: "pinch",
+        d: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1,
+        mid: { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 },
+      };
+    },
+    ocrEditMove(ev) {
+      const drag = this._ocrDrag;
+      if (!drag) return;
+      if (this._ocrPointers && this._ocrPointers.has(ev.pointerId)) {
+        this._ocrPointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      }
+      this._ocrDragged = true;
+      if (drag.mode === "pinch") {
+        const pts = Array.from((this._ocrPointers || new Map()).values());
+        if (pts.length < 2) return;
+        const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || drag.d;
+        const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+        this._ocrSetView(this.ocrEditView.scale * (d / drag.d), mid.x, mid.y, mid.x - drag.mid.x, mid.y - drag.mid.y);
+        drag.d = d;
+        drag.mid = mid;
+        return;
+      }
+      if (ev.pointerId !== drag.id) return;
+      if (drag.mode === "pan") {
+        this.ocrEditView.x = drag.view.x + (ev.clientX - drag.x);
+        this.ocrEditView.y = drag.view.y + (ev.clientY - drag.y);
+        this._clampOcrView();
+        return;
+      }
+      const n = this._ocrNormPoint(ev, ev.currentTarget);
+      const dx = n.x - drag.n.x;
+      const dy = n.y - drag.n.y;
+      const r = drag.rect || OCR_FULL_RECT;
+      if (drag.mode === "move") {
+        this._setOcrCrop(
+          ocrClampNum(r.x + dx, 0, 1 - r.w),
+          ocrClampNum(r.y + dy, 0, 1 - r.h),
+          r.w,
+          r.h
+        );
+        return;
+      }
+      if (drag.mode === "newrect") {
+        const x1 = Math.min(n.x, drag.n.x);
+        const x2 = Math.max(n.x, drag.n.x);
+        const y1 = Math.min(n.y, drag.n.y);
+        const y2 = Math.max(n.y, drag.n.y);
+        // 手心一抖划过的小框没有意义，当作没画（保留原来的框）
+        if (x2 - x1 >= OCR_CROP_MIN && y2 - y1 >= OCR_CROP_MIN) {
+          this._setOcrCrop(x1, y1, x2 - x1, y2 - y1);
+        }
+        return;
+      }
+      // resize：拖哪条边就动哪条边，对角固定
+      let x1 = r.x;
+      let y1 = r.y;
+      let x2 = r.x + r.w;
+      let y2 = r.y + r.h;
+      const h = drag.handle;
+      if (h.indexOf("w") >= 0) x1 = ocrClampNum(r.x + dx, 0, x2 - OCR_CROP_MIN);
+      if (h.indexOf("e") >= 0) x2 = ocrClampNum(r.x + r.w + dx, x1 + OCR_CROP_MIN, 1);
+      if (h.indexOf("n") >= 0) y1 = ocrClampNum(r.y + dy, 0, y2 - OCR_CROP_MIN);
+      if (h.indexOf("s") >= 0) y2 = ocrClampNum(r.y + r.h + dy, y1 + OCR_CROP_MIN, 1);
+      this._setOcrCrop(x1, y1, x2 - x1, y2 - y1);
+    },
+    ocrEditUp(ev) {
+      if (this._ocrPointers && this._ocrPointers.has(ev.pointerId)) this._ocrPointers.delete(ev.pointerId);
+      // 双指松掉一根也不再接着拖：这一段的起点已经作废，硬接会跳一下
+      this._ocrDrag = null;
+    },
+    /* 编辑器里的键盘：只在看图时接管。Esc 在裁剪里先退出裁剪（这才看得到裁完的样子），
+       再按一次才是「完成并关闭」；转正是 []，裁剪是 C，0 回到整幅 */
+    ocrEditorKey(ev) {
+      if (!this.ocrViewerOpen) return;
+      const k = ev.key;
+      if (k === "Escape") {
+        ev.preventDefault();
+        if (this.ocrEditCropOn) this.toggleOcrCrop();
+        else this.closeOcrEditor();
+        return;
+      }
+      if (k === "[") {
+        ev.preventDefault();
+        this.rotateOcrEditor(-1);
+        return;
+      }
+      if (k === "]") {
+        ev.preventDefault();
+        this.rotateOcrEditor(1);
+        return;
+      }
+      if (k === "c" || k === "C") {
+        ev.preventDefault();
+        this.toggleOcrCrop();
+        return;
+      }
+      if (k === "0") {
+        ev.preventDefault();
+        this.fitOcrView();
+      }
+    },
+    _ocrLoadImage(src) {
+      return new Promise((resolve, reject) => {
+        if (!src) {
+          reject(new Error("没有图片"));
+          return;
+        }
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("图片读取失败"));
+        img.src = src;
+      });
+    },
+
     async ocrStart() {
       if (this.ocrStreaming) return;
       // 使用码是识别的硬前提：先问码，再谈有没有图

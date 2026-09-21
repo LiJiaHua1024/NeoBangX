@@ -3511,17 +3511,163 @@ mark, .vp-hl {
 .pair-state.is-live { color: var(--accent); }
 .pair-state.is-live::before { background: #34d399; box-shadow: 0 0 8px rgba(52, 211, 153, 0.6); }
 
-/* 图片全屏查看：核对 [ILLEGIBLE] 这类字迹时放大看 */
-.ocr-viewer {
+/* 图片查看兼编辑：点图放大后可以转正、裁掉多余的边角。
+   遮罩比识别弹窗还高一档（z-index 90）：它是「看细节」的最后一步，上面不该再压别的东西；
+   遮罩下沿留出安全区，手机上的工具条不会被 home 条盖住 */
+.ocr-editor {
   position: fixed; inset: 0; z-index: 90;
-  display: flex; align-items: center; justify-content: center; padding: 1.2rem;
-  background: color-mix(in srgb, #000 78%, transparent);
+  display: flex; flex-direction: column;
+  background: color-mix(in srgb, #000 84%, transparent);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  cursor: zoom-out;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  user-select: none;
+  -webkit-user-select: none;
 }
-.ocr-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 0.6rem; }
-.ocr-viewer-close { position: absolute; top: 0.9rem; right: 0.9rem; color: #fff; }
+/* 顶栏：左边「第几张 · 文件名」，中间工具条，右边「完成」。
+   窄屏放不下就折成两行——第二行单独留给工具条并居中，图片高度靠 ResizeObserver 自己重算 */
+.ocr-editor-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.5rem;
+  flex: 0 0 auto; padding: 0.55rem 0.7rem 0.15rem;
+}
+.ocr-editor-name {
+  order: 1; flex: 1 1 auto; min-width: 0;
+  font-size: 0.78rem; color: rgba(255, 255, 255, 0.72);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 工具条是这一步的主操作，做成深色玻璃胶囊浮在顶部中央：
+   底色写死深色不走主题令牌——底下这层永远是近黑遮罩，浅色主题的玻璃会在白地上配白字 */
+.ocr-editor-tools {
+  order: 3; flex: 1 1 100%;
+  display: flex; justify-content: center;
+}
+.ocr-tools-pill {
+  display: flex; align-items: center; gap: 0.15rem;
+  padding: 0.22rem; border-radius: 999px;
+  background: rgba(26, 24, 22, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 14px 36px -16px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.ocr-tool {
+  display: inline-flex; align-items: center; gap: 0.32rem;
+  height: 2.5rem; padding: 0 0.72rem; border-radius: 999px;
+  border: 0; cursor: pointer;
+  background: transparent; color: #fff;
+  font-family: var(--font); font-size: 0.8rem; font-weight: 600;
+}
+.ocr-tool.on {
+  background: color-mix(in srgb, var(--accent) 62%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 78%, transparent);
+}
+.ocr-tool[disabled] { opacity: 0.32; cursor: default; }
+.ocr-tool-text { display: none; }
+.ocr-editor-done { order: 2; flex: 0 0 auto; gap: 0.35rem; min-height: 2.6rem; padding: 0 1.1rem; font-family: var(--font); }
+/* 悬停反馈只在真有指针设备时给：触屏上 :hover 会粘住，点完一直亮着，反而分不清哪个是选中的 */
+@media (hover: hover) and (pointer: fine) {
+  .ocr-tool:hover:not([disabled]) { background: rgba(255, 255, 255, 0.16); }
+  .ocr-tool.on:hover:not([disabled]) { background: color-mix(in srgb, var(--accent) 70%, transparent); }
+}
+@media (min-width: 640px) {
+  .ocr-tool-text { display: inline; }
+}
+@media (min-width: 768px) {
+  /* 宽度够了就一行：三列栅格让工具条真正居中，不受两侧宽窄影响 */
+  .ocr-editor-head { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+  .ocr-editor-name { grid-column: 1; }
+  .ocr-editor-tools { grid-column: 2; flex: 0 0 auto; }
+  .ocr-editor-done { grid-column: 3; justify-self: end; }
+}
+.ocr-editor-stage {
+  flex: 1 1 auto; min-height: 0; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: none;
+}
+/* 画面框：尺寸由 JS 算好（整幅的显示尺寸 × 当前窗口），图片在里面按窗口偏移。
+   不铺白底，也不裁溢出——裁切交给里面那层窗口，裁剪框的把手才能露到框外 */
+.ocr-editor-frame {
+  position: relative;
+  border-radius: 0.5rem;
+  box-shadow: 0 24px 60px -28px rgba(0, 0, 0, 0.85);
+  touch-action: none;
+}
+/* 画面窗口：只显示当前裁剪范围内的那部分。退出裁剪时的尺寸变化做成形变，
+   让人一眼看出「这就是裁完的样子」；进入裁剪模式不加过渡，免得拖框时尺寸还在动 */
+.ocr-editor-window {
+  position: absolute; inset: 0; overflow: hidden;
+  border-radius: inherit;
+}
+.ocr-editor-frame.is-morphing,
+.ocr-editor-frame.is-morphing .ocr-editor-img {
+  transition: width 0.18s var(--ease-out), height 0.18s var(--ease-out),
+    margin 0.18s var(--ease-out);
+}
+.ocr-editor-img {
+  position: absolute; left: 0; top: 0; display: block;
+  /* 这张画必须允许比它的窗口大：窗口就是用来裁掉框外的。
+     Tailwind Preflight（@layer base）里有一条 img, video { max-width: 100% }，
+     不显式解开的话窗口一小图片就被压扁——裁完的预览会看着像错位、根本不是那一块 */
+  max-width: none;
+  max-height: none;
+  background: #fff;
+  transform-origin: center center;
+  -webkit-user-drag: none;
+}
+.ocr-crop { position: absolute; inset: 0; }
+/* 框外压暗：一个矩形加一大圈 box-shadow 就够了（四块拼色在圆角处会露缝），
+   只这一层裁掉溢出，把手才能在框外也露出来 */
+.ocr-crop-clip { position: absolute; inset: 0; overflow: hidden; pointer-events: none; border-radius: 0.5rem; }
+.ocr-crop-shade { position: absolute; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.52); }
+.ocr-crop-rect {
+  position: absolute; box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  cursor: move;
+}
+/* 三分线：只在拖动裁剪框时才有意义，静态时压得很淡 */
+.ocr-crop-grid {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.333% - 0.5px), rgba(255, 255, 255, 0.3) calc(33.333% - 0.5px), rgba(255, 255, 255, 0.3) calc(33.333% + 0.5px), transparent calc(33.333% + 0.5px)),
+    linear-gradient(to right, transparent calc(66.666% - 0.5px), rgba(255, 255, 255, 0.3) calc(66.666% - 0.5px), rgba(255, 255, 255, 0.3) calc(66.666% + 0.5px), transparent calc(66.666% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.333% - 0.5px), rgba(255, 255, 255, 0.3) calc(33.333% - 0.5px), rgba(255, 255, 255, 0.3) calc(33.333% + 0.5px), transparent calc(33.333% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(66.666% - 0.5px), rgba(255, 255, 255, 0.3) calc(66.666% - 0.5px), rgba(255, 255, 255, 0.3) calc(66.666% + 0.5px), transparent calc(66.666% + 0.5px));
+}
+/* 八个把手：视觉小、热区大（::after 往外扩一圈），手指按得住，鼠标也不挡视线 */
+.ocr-crop-h {
+  --crop-h: 1.05rem;
+  position: absolute; width: var(--crop-h); height: var(--crop-h);
+  background: #fff; border-radius: 0.22rem;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.ocr-crop-h::after { content: ""; position: absolute; inset: -0.7rem; }
+.ocr-crop-h.is-nw { left: 0; top: 0; transform: translate(-50%, -50%); cursor: nwse-resize; }
+.ocr-crop-h.is-n { left: 50%; top: 0; transform: translate(-50%, -50%); cursor: ns-resize; }
+.ocr-crop-h.is-ne { left: 100%; top: 0; transform: translate(-50%, -50%); cursor: nesw-resize; }
+.ocr-crop-h.is-w { left: 0; top: 50%; transform: translate(-50%, -50%); cursor: ew-resize; }
+.ocr-crop-h.is-e { left: 100%; top: 50%; transform: translate(-50%, -50%); cursor: ew-resize; }
+.ocr-crop-h.is-sw { left: 0; top: 100%; transform: translate(-50%, -50%); cursor: nesw-resize; }
+.ocr-crop-h.is-s { left: 50%; top: 100%; transform: translate(-50%, -50%); cursor: ns-resize; }
+.ocr-crop-h.is-se { left: 100%; top: 100%; transform: translate(-50%, -50%); cursor: nwse-resize; }
+.ocr-crop-h.is-n,
+.ocr-crop-h.is-s { width: 1.3rem; height: 0.4rem; }
+.ocr-crop-h.is-w,
+.ocr-crop-h.is-e { width: 0.4rem; height: 1.3rem; }
+/* 触屏：把手再大一圈，热区跟着长 */
+@media (pointer: coarse) {
+  .ocr-crop-h { --crop-h: 1.3rem; }
+  .ocr-crop-h.is-n,
+  .ocr-crop-h.is-s { width: 1.6rem; height: 0.46rem; }
+  .ocr-crop-h.is-w,
+  .ocr-crop-h.is-e { width: 0.46rem; height: 1.6rem; }
+}
+/* 一行操作说明：能做什么、改动什么时候生效都写在这里，跟着状态换文案 */
+.ocr-editor-tip {
+  flex: 0 0 auto; margin: 0; padding: 0 0.9rem 0.35rem;
+  text-align: center; font-size: 0.75rem; line-height: 1.55;
+  color: rgba(255, 255, 255, 0.62);
+}
+.ocr-editor-sep { flex: 0 0 auto; width: 1px; height: 1.4rem; margin: 0 0.2rem; background: rgba(255, 255, 255, 0.18); }
 
 /* ≥lg：左栏只做预览，宽度收在 34% 且设上限，可整栏收成一条 */
 @media (min-width: 1024px) {
@@ -3551,6 +3697,10 @@ mark, .vp-hl {
   .ocr-main-head { padding: 0.45rem 0.7rem; }
   .ocr-body { padding: 0.8rem 0.9rem 1.2rem; }
   .ocr-side-body { padding: 0.5rem; }
+  /* 编辑器工具条：窄屏只有图标，按钮压到 40px 的触摸下限附近，一排排得下 */
+  .ocr-tools-pill { gap: 0.1rem; padding: 0.18rem; }
+  .ocr-tool { height: 2.4rem; padding: 0 0.6rem; }
+  .ocr-editor-done { min-height: 2.4rem; padding: 0 0.85rem; }
 }
 
 /* ============================================================

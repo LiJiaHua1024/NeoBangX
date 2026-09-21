@@ -1584,7 +1584,7 @@
                           :title="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
                           :aria-label="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
                           x-html="icon(ocrMediaCollapsed ? 'chevrons-right' : 'chevrons-left','w-4 h-4')"></button>
-                  <span class="text-xs text-dim truncate" x-text="ocrBatchLabel + ' · 点击图片可放大'"></span>
+                  <span class="text-xs text-dim truncate" x-text="ocrBatchLabel + ' · 点击可放大、裁剪'"></span>
                   <button type="button" class="icon-btn ml-auto" style="width:2rem;height:2rem" @click="openUploadDialog({ imagesOnly: true })"
                           title="添加图片，与已有的图片一起识别"
                           x-html="icon('plus','w-4 h-4')"></button>
@@ -1592,7 +1592,7 @@
                 <div class="ocr-side-body" x-show="!ocrMediaCollapsed">
                   <template x-if="ocrCurrentImage">
                     <img class="ocr-photo" :src="ocrCurrentImage.dataUrl || ocrCurrentImage.url"
-                         :alt="ocrCurrentImage.name" @click="ocrViewerOpen = true" title="点击放大查看">
+                         :alt="ocrCurrentImage.name" @click="openOcrEditor()" title="点击放大查看、裁剪与转正">
                   </template>
                 </div>
                 <div class="ocr-thumbs" x-show="!ocrMediaCollapsed && ocrImages.length > 1">
@@ -2541,7 +2541,7 @@
     <input type="file" x-ref="uploadAlbumInput" class="hidden" accept="image/*" multiple @change="onOcrFilesSelect($event)">
     <input type="file" x-ref="uploadCameraInput" class="hidden" accept="image/*" capture="environment" @change="onOcrFilesSelect($event)">
     <div x-show="uploadOpen" class="modal-mask is-nested" :class="{ 'under-stack': ocrModalOpen }" x-transition.opacity x-cloak
-         @click.self="closeUploadDialog()" @keydown.escape.window="uploadOpen && closeUploadDialog()">
+         @click.self="closeUploadDialog()" @keydown.escape.window="uploadOpen && !ocrViewerOpen && closeUploadDialog()">
       <div class="modal-card modal-lg glass-deep pop-in" @click.stop role="dialog" aria-modal="true" aria-labelledby="upload-dialog-title">
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <button type="button" class="icon-btn" x-show="uploadStep === 'photo' && uploadHasSourceStep" @click="backToSourceStep()"
@@ -2609,7 +2609,7 @@
          它的职责就是让手机连上，连上了就该让位给识别工作区。
          右上角的 ✕ 只用于手机连不上、想换一次配对这类特殊情况 -->
     <div x-show="pairOpen" class="modal-mask is-nested" :class="{ 'under-stack': ocrModalOpen }" x-transition.opacity x-cloak
-         @click.self="cancelPairing()" @keydown.escape.window="pairOpen && cancelPairing()">
+         @click.self="cancelPairing()" @keydown.escape.window="pairOpen && !ocrViewerOpen && cancelPairing()">
       <div class="modal-card modal-md glass-deep pop-in" @click.stop role="dialog" aria-modal="true">
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('qr','w-4 h-4')"></span>
@@ -2634,7 +2634,7 @@
          与「识别图片文字」工具工作区共用同一套 ocr* 状态和同一份布局：
          改布局时两处一起改（本页无构建步骤，没有可复用的局部模板） -->
     <div x-show="ocrModalOpen" class="modal-mask" x-transition.opacity x-cloak
-         @click.self="!ocrStreaming && ocrCloseModal()" @keydown.escape.window="ocrModalOpen && ocrCloseModal()">
+         @click.self="!ocrStreaming && ocrCloseModal()" @keydown.escape.window="ocrModalOpen && !ocrViewerOpen && ocrCloseModal()">
       <div class="modal-card modal-ocr glass-deep pop-in" @click.stop role="dialog" aria-modal="true" aria-labelledby="ocr-modal-title">
         <div class="flex items-center gap-2 px-5 py-3 border-b shrink-0 flex-wrap" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('scan-text','w-4 h-4')"></span>
@@ -2665,7 +2665,7 @@
                       :title="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
                       :aria-label="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
                       x-html="icon(ocrMediaCollapsed ? 'chevrons-right' : 'chevrons-left','w-4 h-4')"></button>
-              <span class="text-xs text-dim truncate" x-text="ocrBatchLabel + ' · 点击图片可放大'"></span>
+              <span class="text-xs text-dim truncate" x-text="ocrBatchLabel + ' · 点击可放大、裁剪'"></span>
               <button type="button" class="icon-btn ml-auto" style="width:2rem;height:2rem" @click="openUploadDialog({ imagesOnly: true })"
                       title="添加图片，与已有的图片一起识别"
                       x-html="icon('plus','w-4 h-4')"></button>
@@ -2673,7 +2673,7 @@
             <div class="ocr-side-body" x-show="!ocrMediaCollapsed">
               <template x-if="ocrCurrentImage">
                 <img class="ocr-photo" :src="ocrCurrentImage.dataUrl || ocrCurrentImage.url"
-                     :alt="ocrCurrentImage.name" @click="ocrViewerOpen = true" title="点击放大查看">
+                     :alt="ocrCurrentImage.name" @click="openOcrEditor()" title="点击放大查看、裁剪与转正">
               </template>
             </div>
             <div class="ocr-thumbs" x-show="!ocrMediaCollapsed && ocrImages.length > 1">
@@ -2790,13 +2790,72 @@
       </div>
     </div>
 
-    <!-- ==================== 图片全屏查看（核对 [ILLEGIBLE] 之类时放大看） ==================== -->
-    <div x-show="ocrViewerOpen" class="ocr-viewer" x-transition.opacity x-cloak
-         @click="ocrViewerOpen = false" @keydown.escape.window="ocrViewerOpen = false">
-      <template x-if="ocrCurrentImage">
-        <img :src="ocrCurrentImage.dataUrl || ocrCurrentImage.url" :alt="ocrCurrentImage.name">
-      </template>
-      <button type="button" class="icon-x ocr-viewer-close" @click="ocrViewerOpen = false" title="关闭">×</button>
+    <!-- ==================== 图片查看 / 编辑（转正 · 裁剪） ====================
+         点图放大就是编辑入口：核对 [ILLEGIBLE] 的地方、顺手把多余的边和拍歪的角度修掉。
+         电脑：框内拖动挪位、拖四角或边调整、空白处拖出新范围、滚轮缩放、[ ] 转 90°、Esc 完成
+         手机：两指缩放看细节、拖把手调整；没放大时空白处拖动同样能重画范围 -->
+    <div x-show="ocrViewerOpen" class="ocr-editor" x-transition.opacity x-cloak
+         role="dialog" aria-modal="true" aria-label="图片查看与编辑"
+         @keydown.window="ocrEditorKey($event)" @resize.window="ocrViewerOpen && syncOcrEditorSize()"
+         @wheel.prevent="ocrEditWheel($event)">
+      <div class="ocr-editor-head">
+        <span class="ocr-editor-name" x-text="ocrEditTitle"></span>
+        <!-- 工具条居中放：宽屏带文字说明，窄屏只有图标（第二行），不抢图片的高度 -->
+        <div class="ocr-editor-tools">
+          <div class="ocr-tools-pill">
+            <button type="button" class="ocr-tool" @click="rotateOcrEditor(-1)" :disabled="ocrStreaming || ocrEditBusy"
+                    title="向左转 90°（[）" aria-label="向左转 90°">
+              <span x-html="icon('rotate-ccw','w-5 h-5')"></span><span class="ocr-tool-text">左转</span>
+            </button>
+            <button type="button" class="ocr-tool" @click="rotateOcrEditor(1)" :disabled="ocrStreaming || ocrEditBusy"
+                    title="向右转 90°（]）" aria-label="向右转 90°">
+              <span x-html="icon('rotate-cw','w-5 h-5')"></span><span class="ocr-tool-text">右转</span>
+            </button>
+            <button type="button" class="ocr-tool" :class="{ on: ocrEditCropOn }" @click="toggleOcrCrop()"
+                    :disabled="ocrStreaming || ocrEditBusy" :aria-pressed="ocrEditCropOn ? 'true' : 'false'"
+                    title="裁剪（C）" aria-label="裁剪">
+              <span x-html="icon('crop','w-5 h-5')"></span><span class="ocr-tool-text">裁剪</span>
+            </button>
+            <span class="ocr-editor-sep" aria-hidden="true"></span>
+            <button type="button" class="ocr-tool" @click="resetOcrEdits()" :disabled="!ocrEditDirty || ocrEditBusy"
+                    title="撤掉还没生效的旋转与裁剪" aria-label="重置调整">
+              <span x-html="icon('undo','w-5 h-5')"></span><span class="ocr-tool-text">重置</span>
+            </button>
+            <button type="button" class="ocr-tool" x-show="ocrEditCanRestore" x-cloak @click="restoreOcrOriginal()"
+                    :disabled="ocrEditBusy" title="回到最初上传的那张照片" aria-label="还原原图">
+              <span x-html="icon('history','w-5 h-5')"></span><span class="ocr-tool-text">原图</span>
+            </button>
+          </div>
+        </div>
+        <button type="button" class="btn-primary ocr-editor-done" @click="closeOcrEditor()" :disabled="ocrEditBusy">
+          <span x-html="icon('check','w-4 h-4')"></span>完成
+        </button>
+      </div>
+
+      <p class="ocr-editor-tip" x-text="ocrEditorTip"></p>
+
+      <div class="ocr-editor-stage" x-ref="ocrEditStage" @click.self="ocrEditCropOn && toggleOcrCrop()">
+        <div class="ocr-editor-frame" :class="{ 'is-morphing': !ocrEditCropOn }" :style="ocrEditFrameStyle"
+             @pointerdown="ocrEditDown($event)" @pointermove="ocrEditMove($event)"
+             @pointerup="ocrEditUp($event)" @pointercancel="ocrEditUp($event)"
+             @dblclick="ocrEditDblClick($event)">
+          <!-- 画面窗口：退出裁剪后它只留裁剪范围那么大，图片多出来的部分被这里裁掉——
+               这就是实时预览，一个像素都没重画，只是把框外的不显示出来 -->
+          <div class="ocr-editor-window">
+            <img class="ocr-editor-img" :src="ocrEditBase" :alt="ocrEditTitle" :style="ocrEditImageStyle" draggable="false">
+          </div>
+          <div class="ocr-crop" x-show="ocrEditCropOn" x-cloak>
+            <!-- 框外压暗交给这一层：它跟画面框同大且裁切溢出，把手则在框外也能露出来 -->
+            <div class="ocr-crop-clip"><div class="ocr-crop-shade" :style="ocrEditRectStyle"></div></div>
+            <div class="ocr-crop-rect" :style="ocrEditRectStyle">
+              <span class="ocr-crop-grid" aria-hidden="true"></span>
+              <template x-for="h in ocrCropHandles" :key="h">
+                <span class="ocr-crop-h" :class="'is-' + h" :data-h="h"></span>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ==================== 通用确认弹窗（自研 UI，替代浏览器原生 confirm） ==================== -->
