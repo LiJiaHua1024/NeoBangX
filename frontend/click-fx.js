@@ -6,8 +6,11 @@
 
    设计要点：
    1) 闸门：reduced-motion / saveData / 慢网 / #fx=off / 用户已关闭 → 连库都不加载。
-   2) 网络：只在 window.load 之后、浏览器空闲时才拉 240KB(gzip) 的库，不抢首屏。
+   2) 网络：只在 window.load 之后、浏览器空闲时才拉库，不抢首屏。
       没加载出来之前就是没有特效，不排队、不补播。
+      传输体积由后端 StaticCacheMiddleware 保证：636KB 源文件经 brotli 约 237KB、
+      gzip 约 250KB（实测）；带 ?v= 的 URL 走 immutable 长缓存，重复访问零请求。
+      改动库本体后必须同步提升 VENDOR 的版本号，否则客户端拿旧缓存。
    3) 尺寸：库内部尺寸 ∝ 画布高度（referenceHeight=1080），横屏天然正确；竖屏手机的
       短边是宽度，环相对短边会被放大两倍以上，故按「短边/高度」归一化。
    4) 触屏：库默认在 pointerdown 当场生成圆环，于是「滑动页面」起手也会冒环。
@@ -60,7 +63,7 @@
   var LS_OFF = "nbx_fx_off";        // 永久开关（将来设置窗口用的就是这把钥匙）
   var LS_PERF = "nbx_fx_perf";      // 本机性能记录（设备数据，不入线路镜像）
   var SS_OFFERED = "nbx_fx_offered"; // 本会话是否已弹过询问卡
-  var VENDOR = "/static/vendor/ba-click-fx/ba-click-fx.js?v=fxlib133";
+  var VENDOR = "/static/vendor/ba-click-fx/ba-click-fx.js?v=fxlib133p1";
 
   /* ---------------- 调试开关（沿用 #sky=night&moon=full 的既有约定） ---------------- */
   var hash = new URLSearchParams(location.hash.replace(/^#/, ""));

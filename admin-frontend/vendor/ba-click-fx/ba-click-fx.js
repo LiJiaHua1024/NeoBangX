@@ -19,33 +19,54 @@ function s(e) {
 function c(e, t = "none") {
 	return s(e) ? e : t;
 }
-function l(e, t, a = 1) {
-	let o = r(t);
-	if (o <= 1e-6) return [
+/* [NBX-PERF-E] l 增加可选输出缓冲：调用方传入复用数组时零分配；不传时行为与原先
+   完全一致（新建数组返回）。输出值与内运算序逐元素相同 */
+function l(e, t, a = 1, o = null) {
+	let s = r(t);
+	if (s <= 1e-6) {
+		let i = o ?? [
+			0,
+			0,
+			0
+		];
+		return i[0] = 0, i[1] = 0, i[2] = 0, i;
+	}
+	let c = Math.min(s, Math.max(0, Number(e?.[0]) || 0)), u = Math.min(s, Math.max(0, Number(e?.[1]) || 0)), d = Math.min(s, Math.max(0, Number(e?.[2]) || 0)), f = c > u ? c : u;
+	if (f = f > d ? f : d, f <= 1e-6) {
+		let i = o ?? [
+			0,
+			0,
+			0
+		];
+		return i[0] = c, i[1] = u, i[2] = d, i;
+	}
+	let m = Math.max(r(a), 1e-6), h = r(s / m), g = f / m, _ = n * (i(.25, .75, g / Math.max(h, 1e-6)) * i(.03125, .25, g));
+	let v = o ?? [
 		0,
 		0,
 		0
 	];
-	let s = [
-		0,
-		1,
-		2
-	].map((t) => Math.min(o, Math.max(0, Number(e?.[t]) || 0))), c = Math.max(...s);
-	if (c <= 1e-6) return s;
-	let l = Math.max(r(a), 1e-6), u = r(o / l), d = c / l, f = n * (i(.25, .75, d / Math.max(u, 1e-6)) * i(.03125, .25, d));
-	return s.map((e) => e + (c - e) * f);
+	return v[0] = c + (f - c) * _, v[1] = u + (f - u) * _, v[2] = d + (f - d) * _, v;
 }
+/* [NBX-PERF-E] 输入/输出三元组均复用模块级 scratch，逐像素零分配 */
+let _lInScratch = [
+	0,
+	0,
+	0
+], _lOutScratch = [
+	0,
+	0,
+	0
+];
 function u(e, t = "none", n = 1) {
 	if (t !== "bright-core" || !e?.data) return e;
 	let r = e.data;
 	for (let e = 0; e + 3 < r.length; e += 4) {
 		let t = r[e + 3] / 255;
 		if (t <= 1e-6) continue;
-		let i = l([
-			r[e] / 255 * t,
-			r[e + 1] / 255 * t,
-			r[e + 2] / 255 * t
-		], t, n);
+		let a = _lInScratch;
+		a[0] = r[e] / 255 * t, a[1] = r[e + 1] / 255 * t, a[2] = r[e + 2] / 255 * t;
+		let i = l(a, t, n, _lOutScratch);
 		r[e] = Math.round(i[0] / t * 255), r[e + 1] = Math.round(i[1] / t * 255), r[e + 2] = Math.round(i[2] / t * 255);
 	}
 	return e;
@@ -61,12 +82,12 @@ function d(e, t = null, n = null, r = 1, i = "coverage", a = "lighter") {
 			o[e] = 0, o[e + 1] = 0, o[e + 2] = 0, o[e + 3] = 0;
 			continue;
 		}
-		let u = [
-			o[e] / 255 * r,
-			o[e + 1] / 255 * r,
-			o[e + 2] / 255 * r
-		], d = Math.max(...u), f = Math.min(1, l / Math.max(d, 1e-6));
-		o[e] = Math.round(u[0] * f / l * 255), o[e + 1] = Math.round(u[1] * f / l * 255), o[e + 2] = Math.round(u[2] * f / l * 255), o[e + 3] = Math.round(l * 255);
+		/* [NBX-PERF-E] 原实现每像素新建三元组 + Math.max(...u) 展开；改为标量顺序比较，
+		   最大值与后续乘法序列逐位一致 */
+		let u0 = o[e] / 255 * r, u1 = o[e + 1] / 255 * r, u2 = o[e + 2] / 255 * r, d = u0 > u1 ? u0 : u1;
+		d = d > u2 ? d : u2;
+		let f = Math.min(1, l / Math.max(d, 1e-6));
+		o[e] = Math.round(u0 * f / l * 255), o[e + 1] = Math.round(u1 * f / l * 255), o[e + 2] = Math.round(u2 * f / l * 255), o[e + 3] = Math.round(l * 255);
 	}
 	return e;
 }
@@ -2714,7 +2735,14 @@ var Cr = class {
 		return this.sceneBackgroundSource !== null;
 	}
 	constructor(e, t = {}) {
-		this.canvas = e, this.sceneEnabled = !0, this.gl = null, this.available = !1, this.contextLost = !1, this.displayWidth = 1, this.displayHeight = 1, this.sourceWidth = 0, this.sourceHeight = 0, this.width = 0, this.height = 0, this.dpr = 1, this.resolutionScale = 0, this.diffusion = 0, this.sampleScale = 1, this.maximumTextureSize = 0, this.maximumViewportWidth = 0, this.maximumViewportHeight = 0, this.vertexCount = 0, this.vertexData = new Float32Array($n * Jn), this.sceneDiskVertexCount = 0, this.sceneDiskVertexData = new Float32Array($n * Yn), this.ringVertexCount = 0, this.ringVertexData = new Float32Array($n * Xn), this.triangleVertexCount = 0, this.triangleVertexData = new Float32Array($n * Zn), this.trailVertexCount = 0, this.trailVertexData = new Float32Array($n * Qn), this.sourceTarget = null, this.bloomSourceTarget = null, this.sceneOverlayTarget = null, this.levels = [], this.sceneFrameReady = !1, this.bloomSourceFrameReady = !1, this.sceneOverlayFrameReady = !1, this.sceneBackgroundFrameReady = !1, this.sceneBackgroundSource = null, this.sceneBackgroundWidth = 0, this.sceneBackgroundHeight = 0, this.sceneBackgroundUploadRetryPending = !1, this.sceneBackgroundTexture = null, this.sceneBackgroundTarget = null, this.failedResizeSignature = null, this.programs = null, this.emissionBuffer = null, this.emissionVao = null, this.sceneDiskBuffer = null, this.sceneDiskVao = null, this.ringBuffer = null, this.ringVao = null, this.ringTexture = null, this.triangleBuffer = null, this.triangleVao = null, this.triangleTexture = null, this.triangleOverlayTexture = null, this.trailTexture = null, this.circleTexture = null, this.fullscreenVao = null, this.stats = {
+		this.canvas = e, this.sceneEnabled = !0, this.gl = null, this.available = !1, this.contextLost = !1, this.displayWidth = 1, this.displayHeight = 1, this.sourceWidth = 0, this.sourceHeight = 0, this.width = 0, this.height = 0, this.dpr = 1, this.resolutionScale = 0, this.diffusion = 0, this.sampleScale = 1, this.maximumTextureSize = 0, this.maximumViewportWidth = 0, this.maximumViewportHeight = 0, this.vertexCount = 0, this.vertexData = new Float32Array($n * Jn), this.sceneDiskVertexCount = 0, this.sceneDiskVertexData = new Float32Array($n * Yn), this.ringVertexCount = 0, this.ringVertexData = new Float32Array($n * Xn), this.triangleVertexCount = 0, this.triangleVertexData = new Float32Array($n * Zn), this.trailVertexCount = 0, this.trailVertexData = new Float32Array($n * Qn), this.sourceTarget = null, this.bloomSourceTarget = null, this.sceneOverlayTarget = null, this.levels = [], this.sceneFrameReady = !1, this.bloomSourceFrameReady = !1, this.sceneOverlayFrameReady = !1, this.sceneBackgroundFrameReady = !1, this.sceneBackgroundSource = null, this.sceneBackgroundWidth = 0, this.sceneBackgroundHeight = 0, this.sceneBackgroundUploadRetryPending = !1, this.sceneBackgroundTexture = null, this.sceneBackgroundTarget = null, this.failedResizeSignature = null,
+		/* [NBX-PERF-C] uniform location 查表缓存：program 不重链接时 location 稳定，
+		   免去每帧每 batch/pass 反复 getUniformLocation 的驱动往返；context 丢失重建时
+		   _initialize 重新建 program，缓存随实例自然失效 */
+		this._uniformLocations = /* @__PURE__ */ new Map(),
+		/* [NBX-PERF-D] 圆环弧采样缓冲：复用实例级 scratch 按需扩容，免去每 ring 每帧 new */
+		this._ringArcA = /* @__PURE__ */ new Float64Array(0), this._ringArcB = /* @__PURE__ */ new Float64Array(0),
+		this.programs = null, this.emissionBuffer = null, this.emissionVao = null, this.sceneDiskBuffer = null, this.sceneDiskVao = null, this.ringBuffer = null, this.ringVao = null, this.ringTexture = null, this.triangleBuffer = null, this.triangleVao = null, this.triangleTexture = null, this.triangleOverlayTexture = null, this.trailTexture = null, this.circleTexture = null, this.fullscreenVao = null, this.stats = {
 			vertexCount: 0,
 			sceneVertexCount: 0,
 			sceneDiskVertexCount: 0,
@@ -2768,7 +2796,11 @@ var Cr = class {
 		this._forgetResourceReferences(), this._initialize(), this.failedResizeSignature = null;
 	}
 	_forgetResourceReferences() {
-		this.sourceTarget = null, this.bloomSourceTarget = null, this.sceneOverlayTarget = null, this.levels = [], this.sceneFrameReady = !1, this.bloomSourceFrameReady = !1, this.sceneOverlayFrameReady = !1, this.sceneBackgroundFrameReady = !1, this.failedResizeSignature = null, this.programs = null, this.emissionBuffer = null, this.emissionVao = null, this.sceneDiskBuffer = null, this.sceneDiskVao = null, this.ringBuffer = null, this.ringVao = null, this.ringTexture = null, this.triangleBuffer = null, this.triangleVao = null, this.triangleTexture = null, this.triangleOverlayTexture = null, this.trailTexture = null, this.circleTexture = null, this.sceneBackgroundTexture = null, this.sceneBackgroundTarget = null, this.fullscreenVao = null, this.vertexCount = 0, this.sceneDiskVertexCount = 0, this.ringVertexCount = 0, this.triangleVertexCount = 0, this.trailVertexCount = 0, this.stats.vertexCount = 0, this.stats.sceneVertexCount = 0, this.stats.sceneDiskVertexCount = 0, this.stats.sceneRingVertexCount = 0, this.stats.sceneTriangleVertexCount = 0, this.stats.sceneTrailVertexCount = 0, this.stats.diskVertexCount = 0, this.stats.ringVertexCount = 0, this.stats.triangleVertexCount = 0, this.stats.trailVertexCount = 0, this.stats.levelCount = 0, this.stats.bloomPixels = 0;
+		this.sourceTarget = null, this.bloomSourceTarget = null, this.sceneOverlayTarget = null, this.levels = [], this.sceneFrameReady = !1, this.bloomSourceFrameReady = !1, this.sceneOverlayFrameReady = !1, this.sceneBackgroundFrameReady = !1, this.failedResizeSignature = null, this.programs = null,
+		/* [NBX-PERF-C] program 将随 _initialize 重建，location 查表一并作废，
+		   避免 Map 持有已删除的 program 对象 */
+		this._uniformLocations = /* @__PURE__ */ new Map(),
+		this.emissionBuffer = null, this.emissionVao = null, this.sceneDiskBuffer = null, this.sceneDiskVao = null, this.ringBuffer = null, this.ringVao = null, this.ringTexture = null, this.triangleBuffer = null, this.triangleVao = null, this.triangleTexture = null, this.triangleOverlayTexture = null, this.trailTexture = null, this.circleTexture = null, this.sceneBackgroundTexture = null, this.sceneBackgroundTarget = null, this.fullscreenVao = null, this.vertexCount = 0, this.sceneDiskVertexCount = 0, this.ringVertexCount = 0, this.triangleVertexCount = 0, this.trailVertexCount = 0, this.stats.vertexCount = 0, this.stats.sceneVertexCount = 0, this.stats.sceneDiskVertexCount = 0, this.stats.sceneRingVertexCount = 0, this.stats.sceneTriangleVertexCount = 0, this.stats.sceneTrailVertexCount = 0, this.stats.diskVertexCount = 0, this.stats.ringVertexCount = 0, this.stats.triangleVertexCount = 0, this.stats.trailVertexCount = 0, this.stats.levelCount = 0, this.stats.bloomPixels = 0;
 	}
 	_createTarget(e, t) {
 		let n = this.gl, r = n.createTexture(), i = n.createFramebuffer();
@@ -2850,7 +2882,7 @@ var Cr = class {
 		if (!e || !this.programs?.sceneBackground || !this.sourceTarget || this.sourceWidth <= 0 || this.sourceHeight <= 0) return null;
 		let r = this.gl, i = this.programs.sceneBackground, a = this._getSceneBackgroundUvScale(t, n), o = null;
 		try {
-			o = this._createTarget(this.sourceWidth, this.sourceHeight), r.disable(r.BLEND), r.useProgram(i), this._bindTexture(i, "u_background", e, 0), r.uniform2f(r.getUniformLocation(i, "u_uvScale"), a[0], a[1]), this._drawFullscreen(i, o, this.sourceWidth, this.sourceHeight);
+			o = this._createTarget(this.sourceWidth, this.sourceHeight), r.disable(r.BLEND), r.useProgram(i), this._bindTexture(i, "u_background", e, 0), r.uniform2f(this._uloc(i, "u_uvScale"), a[0], a[1]), this._drawFullscreen(i, o, this.sourceWidth, this.sourceHeight);
 			let t = r.getError();
 			if (t !== r.NO_ERROR) throw Error(`WebGL2 Scene 背景解析错误码 ${t}`);
 			return o;
@@ -2914,22 +2946,22 @@ var Cr = class {
 	_drawTexturedAdditiveBatch(e, t, n, r, i, a, o = !0, s = !1, c = !1) {
 		if (e <= 0) return;
 		let l = this.gl, u = this.programs.triangle;
-		a ? l.blendFuncSeparate(l.ONE, l.ONE, l.ONE, l.ONE_MINUS_SRC_ALPHA) : l.blendFuncSeparate(l.ONE, l.ONE, l.ZERO, l.ONE), l.useProgram(u), l.uniform1i(l.getUniformLocation(u, "u_transparentOverlay"), +!!a), l.uniform1i(l.getUniformLocation(u, "u_alphaModulatesEmission"), +!!o), l.uniform1i(l.getUniformLocation(u, "u_antialiasGeometryCoverage"), +!!s), l.uniform1i(l.getUniformLocation(u, "u_roundTriangle"), +!!c), l.uniform2f(l.getUniformLocation(u, "u_displaySize"), this.displayWidth, this.displayHeight), l.activeTexture(l.TEXTURE0), l.bindTexture(l.TEXTURE_2D, i), l.uniform1i(l.getUniformLocation(u, "u_texture"), 0), l.bindVertexArray(r), l.bindBuffer(l.ARRAY_BUFFER, n), l.bufferData(l.ARRAY_BUFFER, t, l.DYNAMIC_DRAW), l.drawArrays(l.TRIANGLES, 0, e);
+		a ? l.blendFuncSeparate(l.ONE, l.ONE, l.ONE, l.ONE_MINUS_SRC_ALPHA) : l.blendFuncSeparate(l.ONE, l.ONE, l.ZERO, l.ONE), l.useProgram(u), l.uniform1i(this._uloc(u, "u_transparentOverlay"), +!!a), l.uniform1i(this._uloc(u, "u_alphaModulatesEmission"), +!!o), l.uniform1i(this._uloc(u, "u_antialiasGeometryCoverage"), +!!s), l.uniform1i(this._uloc(u, "u_roundTriangle"), +!!c), l.uniform2f(this._uloc(u, "u_displaySize"), this.displayWidth, this.displayHeight), l.activeTexture(l.TEXTURE0), l.bindTexture(l.TEXTURE_2D, i), l.uniform1i(this._uloc(u, "u_texture"), 0), l.bindVertexArray(r), l.bindBuffer(l.ARRAY_BUFFER, n), l.bufferData(l.ARRAY_BUFFER, t, l.DYNAMIC_DRAW), l.drawArrays(l.TRIANGLES, 0, e);
 	}
 	_drawGeometryBatches(e, t = !1, n = null) {
 		let r = this.gl, i = Math.max(0, n?.disk ?? 1), a = Math.max(0, n?.ring ?? 1);
 		if (r.enable(r.BLEND), r.blendEquation(r.FUNC_ADD), this.sceneDiskVertexCount > 0) {
 			let e = this.programs.sceneDisk;
-			r.blendFunc(r.ONE, r.ONE_MINUS_SRC_ALPHA), r.useProgram(e), r.uniform2f(r.getUniformLocation(e, "u_displaySize"), this.displayWidth, this.displayHeight), r.uniform1f(r.getUniformLocation(e, "u_emissionScale"), i), r.activeTexture(r.TEXTURE0), r.bindTexture(r.TEXTURE_2D, this.circleTexture), r.uniform1i(r.getUniformLocation(e, "u_texture"), 0), r.bindVertexArray(this.sceneDiskVao), r.bindBuffer(r.ARRAY_BUFFER, this.sceneDiskBuffer), r.bufferData(r.ARRAY_BUFFER, this.sceneDiskVertexData.subarray(0, this.sceneDiskVertexCount * Yn), r.DYNAMIC_DRAW), r.drawArrays(r.TRIANGLES, 0, this.sceneDiskVertexCount);
+			r.blendFunc(r.ONE, r.ONE_MINUS_SRC_ALPHA), r.useProgram(e), r.uniform2f(this._uloc(e, "u_displaySize"), this.displayWidth, this.displayHeight), r.uniform1f(this._uloc(e, "u_emissionScale"), i), r.activeTexture(r.TEXTURE0), r.bindTexture(r.TEXTURE_2D, this.circleTexture), r.uniform1i(this._uloc(e, "u_texture"), 0), r.bindVertexArray(this.sceneDiskVao), r.bindBuffer(r.ARRAY_BUFFER, this.sceneDiskBuffer), r.bufferData(r.ARRAY_BUFFER, this.sceneDiskVertexData.subarray(0, this.sceneDiskVertexCount * Yn), r.DYNAMIC_DRAW), r.drawArrays(r.TRIANGLES, 0, this.sceneDiskVertexCount);
 		}
 		if (this._drawTexturedAdditiveBatch(this.trailVertexCount, this.trailVertexData.subarray(0, this.trailVertexCount * Qn), this.triangleBuffer, this.triangleVao, this.trailTexture, t, !1, !0), this.vertexCount > 0) {
 			t ? r.blendFuncSeparate(r.ONE, r.ONE, r.ONE, r.ONE_MINUS_SRC_ALPHA) : r.blendFuncSeparate(r.ONE, r.ONE, r.ZERO, r.ONE), r.useProgram(e);
-			let n = r.getUniformLocation(e, "u_transparentOverlay");
-			n !== null && r.uniform1i(n, +!!t), r.uniform2f(r.getUniformLocation(e, "u_displaySize"), this.displayWidth, this.displayHeight), r.bindVertexArray(this.emissionVao), r.bindBuffer(r.ARRAY_BUFFER, this.emissionBuffer), r.bufferData(r.ARRAY_BUFFER, this.vertexData.subarray(0, this.vertexCount * Jn), r.DYNAMIC_DRAW), r.drawArrays(r.TRIANGLES, 0, this.vertexCount);
+			let n = this._uloc(e, "u_transparentOverlay");
+			n !== null && r.uniform1i(n, +!!t), r.uniform2f(this._uloc(e, "u_displaySize"), this.displayWidth, this.displayHeight), r.bindVertexArray(this.emissionVao), r.bindBuffer(r.ARRAY_BUFFER, this.emissionBuffer), r.bufferData(r.ARRAY_BUFFER, this.vertexData.subarray(0, this.vertexCount * Jn), r.DYNAMIC_DRAW), r.drawArrays(r.TRIANGLES, 0, this.vertexCount);
 		}
 		if (this.ringVertexCount > 0) {
 			let e = this.programs.dissolveRing;
-			t ? r.blendFuncSeparate(r.ONE, r.ONE, r.ONE, r.ONE_MINUS_SRC_ALPHA) : r.blendFuncSeparate(r.SRC_ALPHA, r.ONE, r.ZERO, r.ONE), r.useProgram(e), r.uniform1i(r.getUniformLocation(e, "u_transparentOverlay"), +!!t), r.uniform1f(r.getUniformLocation(e, "u_emissionScale"), a), r.uniform2f(r.getUniformLocation(e, "u_displaySize"), this.displayWidth, this.displayHeight), r.activeTexture(r.TEXTURE0), r.bindTexture(r.TEXTURE_2D, this.ringTexture), r.uniform1i(r.getUniformLocation(e, "u_texture"), 0), r.bindVertexArray(this.ringVao), r.bindBuffer(r.ARRAY_BUFFER, this.ringBuffer), r.bufferData(r.ARRAY_BUFFER, this.ringVertexData.subarray(0, this.ringVertexCount * Xn), r.DYNAMIC_DRAW), r.drawArrays(r.TRIANGLES, 0, this.ringVertexCount);
+			t ? r.blendFuncSeparate(r.ONE, r.ONE, r.ONE, r.ONE_MINUS_SRC_ALPHA) : r.blendFuncSeparate(r.SRC_ALPHA, r.ONE, r.ZERO, r.ONE), r.useProgram(e), r.uniform1i(this._uloc(e, "u_transparentOverlay"), +!!t), r.uniform1f(this._uloc(e, "u_emissionScale"), a), r.uniform2f(this._uloc(e, "u_displaySize"), this.displayWidth, this.displayHeight), r.activeTexture(r.TEXTURE0), r.bindTexture(r.TEXTURE_2D, this.ringTexture), r.uniform1i(this._uloc(e, "u_texture"), 0), r.bindVertexArray(this.ringVao), r.bindBuffer(r.ARRAY_BUFFER, this.ringBuffer), r.bufferData(r.ARRAY_BUFFER, this.ringVertexData.subarray(0, this.ringVertexCount * Xn), r.DYNAMIC_DRAW), r.drawArrays(r.TRIANGLES, 0, this.ringVertexCount);
 		}
 		this.triangleVertexCount > 0 && this._drawTexturedAdditiveBatch(this.triangleVertexCount, this.triangleVertexData.subarray(0, this.triangleVertexCount * Zn), this.triangleBuffer, this.triangleVao, t ? this.triangleOverlayTexture : this.triangleTexture, t, !0, !1, !0), r.disable(r.BLEND);
 	}
@@ -3080,10 +3112,15 @@ var Cr = class {
 		let a = Array.isArray(r?.[0]), o = a ? r[0] : r, s = a ? r[1] : r, c = a ? r[2] : r, l = o[0] * i, u = o[1] * i, d = o[2] * i, f = s[0] * i, p = s[1] * i, m = s[2] * i, h = c[0] * i, g = c[1] * i, _ = c[2] * i;
 		Math.max(l, u, d, f, p, m, h, g, _) <= 0 || (this._ensureVertexCapacity(3), this._appendVertex(e.x, e.y, l, u, d, i), this._appendVertex(t.x, t.y, f, p, m, i), this._appendVertex(n.x, n.y, h, g, _, i));
 	}
+	/* [NBX-PERF-D] 圆环弧线 sin/cos 缓冲：按需扩容后复用，每帧对 0.._ 全量覆写后才读，
+   数值序列与原先每 ring 每帧 new Float64Array(_ + 1) 完全一致 */
+	_ringArcBuffers(e) {
+		return this._ringArcA.length < e && (this._ringArcA = new Float64Array(e)), this._ringArcB.length < e && (this._ringArcB = new Float64Array(e)), [this._ringArcA, this._ringArcB];
+	}
 	addDissolveRing(e, t, n, r, i, a, o, s, c, l, u, d, f) {
 		let p = s[0] * c, m = s[1] * c, h = s[2] * c;
 		if (n <= 0 || r <= 0 || Math.max(p, m, h) <= 0) return;
-		let g = H(Math.round(a), 1, 32), _ = H(Math.round(o), 32, 512), v = Math.max(0, n - r * .5), y = r / g, b = new Float64Array(_ + 1), x = new Float64Array(_ + 1), S = H(c, 0, 1), C = Number.isFinite(l) ? H(l, 0, 1) : 1, w = Number.isFinite(u) ? H(u, 0, 1) : 0, T = (Number.isFinite(d) ? H(d, 0, 1) : 1) - w, E = f >= 0 ? 1 : -1;
+		let g = H(Math.round(a), 1, 32), _ = H(Math.round(o), 32, 512), v = Math.max(0, n - r * .5), y = r / g, [b, x] = this._ringArcBuffers(_ + 1), S = H(c, 0, 1), C = Number.isFinite(l) ? H(l, 0, 1) : 1, w = Number.isFinite(u) ? H(u, 0, 1) : 0, T = (Number.isFinite(d) ? H(d, 0, 1) : 1) - w, E = f >= 0 ? 1 : -1;
 		for (let e = 0; e <= _; e++) {
 			let t = i + e / _ * Math.PI * 2;
 			b[e] = Math.cos(t), x[e] = Math.sin(t);
@@ -3130,9 +3167,17 @@ var Cr = class {
 		let x = u / f, S = d / f, C = g.reduce((e, [, t]) => Math.max(e, t), 0), w = p * C, T = m * C, E = h * C;
 		c && (this._appendVertex(e.x + y.x, e.y + y.y, w, T, E, i), this._appendVertex(e.x - y.x, e.y - y.y, w, T, E, i), this._appendVertex(e.x - x * _, e.y - S * _, w, T, E, i)), l && (this._appendVertex(t.x + b.x, t.y + b.y, w, T, E, i), this._appendVertex(t.x + x * _, t.y + S * _, w, T, E, i), this._appendVertex(t.x - b.x, t.y - b.y, w, T, E, i));
 	}
+	/* [NBX-PERF-C] uniform location 查表：同 program 同 name 的查询结果缓存，
+	   返回值与直接 getUniformLocation 完全一致（含未使用 uniform 的 null） */
+	_uloc(e, t) {
+		let n = this._uniformLocations.get(e);
+		if (n === void 0) n = /* @__PURE__ */ new Map(), this._uniformLocations.set(e, n);
+		if (!n.has(t)) n.set(t, this.gl.getUniformLocation(e, t));
+		return n.get(t);
+	}
 	_bindTexture(e, t, n, r) {
 		let i = this.gl;
-		i.activeTexture(i.TEXTURE0 + r), i.bindTexture(i.TEXTURE_2D, n), i.uniform1i(i.getUniformLocation(e, t), r);
+		i.activeTexture(i.TEXTURE0 + r), i.bindTexture(i.TEXTURE_2D, n), i.uniform1i(this._uloc(e, t), r);
 	}
 	_drawFullscreen(e, t, n, r) {
 		let i = this.gl;
@@ -3144,7 +3189,7 @@ var Cr = class {
 	}
 	_renderPrefilter(e) {
 		let t = this.gl, n = this.programs.prefilter, r = this.levels[0], i = this.bloomSourceFrameReady ? this.bloomSourceTarget : this.sourceTarget, a = Number.isFinite(e.softKnee) ? H(e.softKnee, 0, 1) : 0, o = Ct(e.clamp);
-		t.useProgram(n), this._bindTexture(n, "u_source", i.texture, 0), t.uniform2f(t.getUniformLocation(n, "u_sourceTexel"), 1 / this.sourceWidth, 1 / this.sourceHeight), t.uniform1f(t.getUniformLocation(n, "u_threshold"), St(e.threshold)), t.uniform1f(t.getUniformLocation(n, "u_softKnee"), a), t.uniform1f(t.getUniformLocation(n, "u_clampMax"), o), this._drawFullscreen(n, r.down, r.width, r.height);
+		t.useProgram(n), this._bindTexture(n, "u_source", i.texture, 0), t.uniform2f(this._uloc(n, "u_sourceTexel"), 1 / this.sourceWidth, 1 / this.sourceHeight), t.uniform1f(this._uloc(n, "u_threshold"), St(e.threshold)), t.uniform1f(this._uloc(n, "u_softKnee"), a), t.uniform1f(this._uloc(n, "u_clampMax"), o), this._drawFullscreen(n, r.down, r.width, r.height);
 	}
 	_renderSceneOverlay() {
 		if (!this.sourceTarget || !this.sceneOverlayTarget || !this.programs?.sceneOverlay) return !1;
@@ -3153,15 +3198,15 @@ var Cr = class {
 	}
 	_renderDownsample(e, t) {
 		let n = this.gl, r = this.programs.downsample;
-		n.useProgram(r), this._bindTexture(r, "u_source", e.down.texture, 0), n.uniform2f(n.getUniformLocation(r, "u_sourceTexel"), 1 / e.width, 1 / e.height), this._drawFullscreen(r, t.down, t.width, t.height);
+		n.useProgram(r), this._bindTexture(r, "u_source", e.down.texture, 0), n.uniform2f(this._uloc(r, "u_sourceTexel"), 1 / e.width, 1 / e.height), this._drawFullscreen(r, t.down, t.width, t.height);
 	}
 	_renderUpsample(e, t, n) {
 		let r = this.gl, i = this.programs.upsample;
-		return r.useProgram(i), this._bindTexture(i, "u_accumulatedCoarse", n, 0), this._bindTexture(i, "u_currentFine", e.down.texture, 1), r.uniform2f(r.getUniformLocation(i, "u_accumulatedCoarseTexel"), 1 / t.width, 1 / t.height), r.uniform1f(r.getUniformLocation(i, "u_sampleScale"), this.sampleScale), this._drawFullscreen(i, e.up, e.width, e.height), e.up.texture;
+		return r.useProgram(i), this._bindTexture(i, "u_accumulatedCoarse", n, 0), this._bindTexture(i, "u_currentFine", e.down.texture, 1), r.uniform2f(this._uloc(i, "u_accumulatedCoarseTexel"), 1 / t.width, 1 / t.height), r.uniform1f(this._uloc(i, "u_sampleScale"), this.sampleScale), this._drawFullscreen(i, e.up, e.width, e.height), e.up.texture;
 	}
 	_renderFinal(e, t, n = !1, r = !1, i = !1) {
 		let a = this.gl, o = this.programs.final;
-		a.bindFramebuffer(a.FRAMEBUFFER, null), a.viewport(0, 0, this.canvas.width, this.canvas.height), a.disable(a.BLEND), a.clearColor(0, 0, 0, 0), a.clear(a.COLOR_BUFFER_BIT), a.useProgram(o), this._bindTexture(o, "u_bloom", e, 0), this._bindTexture(o, "u_scene", n ? i ? this.sceneOverlayTarget.texture : this.sourceTarget.texture : e, 1), this._bindTexture(o, "u_background", r ? this.sceneBackgroundTarget.texture : e, 2), this._bindTexture(o, "u_sceneEnergy", n ? this.sourceTarget.texture : e, 3), a.uniform1i(a.getUniformLocation(o, "u_hasScene"), +!!n), a.uniform1i(a.getUniformLocation(o, "u_hasBackground"), +!!r), a.uniform1i(a.getUniformLocation(o, "u_transparentOverlay"), +(t.outputCompositing === "browser-overlay")), a.uniform1i(a.getUniformLocation(o, "u_visualMaxAlpha"), +(t.overlayAlphaPolicy === "visual-max")), a.uniform1i(a.getUniformLocation(o, "u_brightUnknownBackground"), +(t.overlayColorCompensation === "bright-core")), a.uniform1i(a.getUniformLocation(o, "u_hostAdditive"), +!!ke(t.hostCompositing)), a.uniform2f(a.getUniformLocation(o, "u_bloomTexel"), 1 / this.width, 1 / this.height), a.uniform1f(a.getUniformLocation(o, "u_sampleScale"), this.sampleScale), a.uniform1f(a.getUniformLocation(o, "u_intensity"), xt(t.intensity)), a.uniform1f(a.getUniformLocation(o, "u_overlayAlphaLimit"), H(t.overlayAlphaLimit ?? 1, 0, 1)), a.uniform1f(a.getUniformLocation(o, "u_opacity"), H(t.opacity ?? 1, 0, 1)), a.bindVertexArray(this.fullscreenVao), a.drawArrays(a.TRIANGLES, 0, 3);
+		a.bindFramebuffer(a.FRAMEBUFFER, null), a.viewport(0, 0, this.canvas.width, this.canvas.height), a.disable(a.BLEND), a.clearColor(0, 0, 0, 0), a.clear(a.COLOR_BUFFER_BIT), a.useProgram(o), this._bindTexture(o, "u_bloom", e, 0), this._bindTexture(o, "u_scene", n ? i ? this.sceneOverlayTarget.texture : this.sourceTarget.texture : e, 1), this._bindTexture(o, "u_background", r ? this.sceneBackgroundTarget.texture : e, 2), this._bindTexture(o, "u_sceneEnergy", n ? this.sourceTarget.texture : e, 3), a.uniform1i(this._uloc(o, "u_hasScene"), +!!n), a.uniform1i(this._uloc(o, "u_hasBackground"), +!!r), a.uniform1i(this._uloc(o, "u_transparentOverlay"), +(t.outputCompositing === "browser-overlay")), a.uniform1i(this._uloc(o, "u_visualMaxAlpha"), +(t.overlayAlphaPolicy === "visual-max")), a.uniform1i(this._uloc(o, "u_brightUnknownBackground"), +(t.overlayColorCompensation === "bright-core")), a.uniform1i(this._uloc(o, "u_hostAdditive"), +!!ke(t.hostCompositing)), a.uniform2f(this._uloc(o, "u_bloomTexel"), 1 / this.width, 1 / this.height), a.uniform1f(this._uloc(o, "u_sampleScale"), this.sampleScale), a.uniform1f(this._uloc(o, "u_intensity"), xt(t.intensity)), a.uniform1f(this._uloc(o, "u_overlayAlphaLimit"), H(t.overlayAlphaLimit ?? 1, 0, 1)), a.uniform1f(this._uloc(o, "u_opacity"), H(t.opacity ?? 1, 0, 1)), a.bindVertexArray(this.fullscreenVao), a.drawArrays(a.TRIANGLES, 0, 3);
 	}
 	render(e, t = {}) {
 		if (!this.available || this.contextLost || !this.sourceTarget || this.levels.length === 0) return !1;
@@ -4015,10 +4060,17 @@ function hi(e, t, n) {
 }
 var gi = class {
 	constructor(e) {
-		this.canvas = e, this.gl = null, this.available = !1, this.contextLost = !1, this.destroyed = !1, this.displayWidth = 1, this.displayHeight = 1, this.dpr = 1, this.width = 0, this.height = 0, this.maximumTextureSize = 0, this.maximumViewportWidth = 0, this.maximumViewportHeight = 0, this.failedResizeSignature = null, this.finalProgram = null, this.coverageProgram = null, this.fullscreenVao = null, this.coverageVao = null, this.coverageBuffer = null, this.effectTexture = null, this.bloomTexture = null, this.coverageTexture = null, this.coverageFramebuffer = null, this.circleTexture = null, this.backgroundTexture = null, this.backgroundSource = null, this.backgroundWidth = 0, this.backgroundHeight = 0, this.backgroundUploadRetryPending = !1, this.coverageVertexCount = 0, this.coverageVertexData = /* @__PURE__ */ new Float32Array(240), this._onContextLost = this._handleContextLost.bind(this), this._onContextRestored = this._handleContextRestored.bind(this), this.canvas?.addEventListener?.("webglcontextlost", this._onContextLost), this.canvas?.addEventListener?.("webglcontextrestored", this._onContextRestored), this._initialize();
+		this.canvas = e, this.gl = null, this.available = !1, this.contextLost = !1, this.destroyed = !1, this.displayWidth = 1, this.displayHeight = 1, this.dpr = 1, this.width = 0, this.height = 0, this.maximumTextureSize = 0, this.maximumViewportWidth = 0, this.maximumViewportHeight = 0, this.failedResizeSignature = null, this.finalProgram = null, this.coverageProgram = null, this.fullscreenVao = null, this.coverageVao = null, this.coverageBuffer = null, this.effectTexture = null, this.bloomTexture = null, this.coverageTexture = null, this.coverageFramebuffer = null, this.circleTexture = null, this.backgroundTexture = null, this.backgroundSource = null, this.backgroundWidth = 0, this.backgroundHeight = 0, this.backgroundUploadRetryPending = !1, this.coverageVertexCount = 0, this.coverageVertexData = /* @__PURE__ */ new Float32Array(240), this._uniformLocations = /* @__PURE__ */ new Map(), this._onContextLost = this._handleContextLost.bind(this), this._onContextRestored = this._handleContextRestored.bind(this), this.canvas?.addEventListener?.("webglcontextlost", this._onContextLost), this.canvas?.addEventListener?.("webglcontextrestored", this._onContextRestored), this._initialize();
 	}
 	get hasSceneBackground() {
 		return this.backgroundTexture !== null;
+	}
+	/* [NBX-PERF-C] uniform location 查表缓存，语义与 Cr._uloc 相同 */
+	_uloc(e, t) {
+		let n = this._uniformLocations.get(e);
+		if (n === void 0) n = /* @__PURE__ */ new Map(), this._uniformLocations.set(e, n);
+		if (!n.has(t)) n.set(t, this.gl.getUniformLocation(e, t));
+		return n.get(t);
 	}
 	_discardPendingErrors() {
 		let e = this.gl;
@@ -4062,7 +4114,7 @@ var gi = class {
 	}
 	_deleteResources() {
 		let e = this.gl;
-		this._deleteFrameResources(), e && !this.contextLost && (e.deleteProgram(this.finalProgram), e.deleteProgram(this.coverageProgram), e.deleteVertexArray(this.fullscreenVao), e.deleteVertexArray(this.coverageVao), e.deleteBuffer(this.coverageBuffer), e.deleteTexture(this.circleTexture), e.deleteTexture(this.backgroundTexture)), this.finalProgram = null, this.coverageProgram = null, this.fullscreenVao = null, this.coverageVao = null, this.coverageBuffer = null, this.circleTexture = null, this.backgroundTexture = null;
+		this._deleteFrameResources(), e && !this.contextLost && (e.deleteProgram(this.finalProgram), e.deleteProgram(this.coverageProgram), e.deleteVertexArray(this.fullscreenVao), e.deleteVertexArray(this.coverageVao), e.deleteBuffer(this.coverageBuffer), e.deleteTexture(this.circleTexture), e.deleteTexture(this.backgroundTexture)), this.finalProgram = null, this.coverageProgram = null, this._uniformLocations = /* @__PURE__ */ new Map(), this.fullscreenVao = null, this.coverageVao = null, this.coverageBuffer = null, this.circleTexture = null, this.backgroundTexture = null;
 	}
 	_createFrameResources(e, t) {
 		let n = this.gl, r = n.createTexture(), i = n.createTexture(), a = n.createFramebuffer();
@@ -4152,7 +4204,7 @@ var gi = class {
 	}
 	_drawCoverage() {
 		let e = this.gl;
-		e.bindFramebuffer(e.FRAMEBUFFER, this.coverageFramebuffer), e.viewport(0, 0, this.width, this.height), e.disable(e.DEPTH_TEST), e.disable(e.SCISSOR_TEST), e.disable(e.CULL_FACE), e.clearColor(0, 0, 0, 0), e.clear(e.COLOR_BUFFER_BIT), this.coverageVertexCount !== 0 && (e.enable(e.BLEND), e.blendEquation(e.FUNC_ADD), e.blendFunc(e.ONE, e.ONE_MINUS_SRC_ALPHA), e.useProgram(this.coverageProgram), e.uniform2f(e.getUniformLocation(this.coverageProgram, "u_displaySize"), this.displayWidth, this.displayHeight), e.activeTexture(e.TEXTURE0), e.bindTexture(e.TEXTURE_2D, this.circleTexture), e.uniform1i(e.getUniformLocation(this.coverageProgram, "u_circle"), 0), e.bindVertexArray(this.coverageVao), e.bindBuffer(e.ARRAY_BUFFER, this.coverageBuffer), e.bufferData(e.ARRAY_BUFFER, this.coverageVertexData.subarray(0, this.coverageVertexCount * oi), e.DYNAMIC_DRAW), e.drawArrays(e.TRIANGLES, 0, this.coverageVertexCount));
+		e.bindFramebuffer(e.FRAMEBUFFER, this.coverageFramebuffer), e.viewport(0, 0, this.width, this.height), e.disable(e.DEPTH_TEST), e.disable(e.SCISSOR_TEST), e.disable(e.CULL_FACE), e.clearColor(0, 0, 0, 0), e.clear(e.COLOR_BUFFER_BIT), this.coverageVertexCount !== 0 && (e.enable(e.BLEND), e.blendEquation(e.FUNC_ADD), e.blendFunc(e.ONE, e.ONE_MINUS_SRC_ALPHA), e.useProgram(this.coverageProgram), e.uniform2f(this._uloc(this.coverageProgram, "u_displaySize"), this.displayWidth, this.displayHeight), e.activeTexture(e.TEXTURE0), e.bindTexture(e.TEXTURE_2D, this.circleTexture), e.uniform1i(this._uloc(this.coverageProgram, "u_circle"), 0), e.bindVertexArray(this.coverageVao), e.bindBuffer(e.ARRAY_BUFFER, this.coverageBuffer), e.bufferData(e.ARRAY_BUFFER, this.coverageVertexData.subarray(0, this.coverageVertexCount * oi), e.DYNAMIC_DRAW), e.drawArrays(e.TRIANGLES, 0, this.coverageVertexCount));
 	}
 	_getBackgroundUvScale() {
 		let e = this.backgroundWidth / this.backgroundHeight, t = this.displayWidth / this.displayHeight;
@@ -4160,7 +4212,7 @@ var gi = class {
 	}
 	_drawFinal(e = !1) {
 		let t = this.gl, n = this._getBackgroundUvScale();
-		t.bindFramebuffer(t.FRAMEBUFFER, null), t.viewport(0, 0, this.width, this.height), t.disable(t.BLEND), t.disable(t.DEPTH_TEST), t.disable(t.SCISSOR_TEST), t.disable(t.CULL_FACE), t.clearColor(0, 0, 0, 0), t.clear(t.COLOR_BUFFER_BIT), t.useProgram(this.finalProgram), t.activeTexture(t.TEXTURE0), t.bindTexture(t.TEXTURE_2D, this.effectTexture), t.uniform1i(t.getUniformLocation(this.finalProgram, "u_effect"), 0), t.activeTexture(t.TEXTURE1), t.bindTexture(t.TEXTURE_2D, this.coverageTexture), t.uniform1i(t.getUniformLocation(this.finalProgram, "u_coverage"), 1), t.activeTexture(t.TEXTURE2), t.bindTexture(t.TEXTURE_2D, this.backgroundTexture), t.uniform1i(t.getUniformLocation(this.finalProgram, "u_background"), 2), t.activeTexture(t.TEXTURE3), t.bindTexture(t.TEXTURE_2D, this.bloomTexture ?? this.effectTexture), t.uniform1i(t.getUniformLocation(this.finalProgram, "u_bloom"), 3), t.uniform1i(t.getUniformLocation(this.finalProgram, "u_hasBloom"), +!!e), t.uniform2f(t.getUniformLocation(this.finalProgram, "u_backgroundUvScale"), n[0], n[1]), t.bindVertexArray(this.fullscreenVao), t.drawArrays(t.TRIANGLES, 0, 3);
+		t.bindFramebuffer(t.FRAMEBUFFER, null), t.viewport(0, 0, this.width, this.height), t.disable(t.BLEND), t.disable(t.DEPTH_TEST), t.disable(t.SCISSOR_TEST), t.disable(t.CULL_FACE), t.clearColor(0, 0, 0, 0), t.clear(t.COLOR_BUFFER_BIT), t.useProgram(this.finalProgram), t.activeTexture(t.TEXTURE0), t.bindTexture(t.TEXTURE_2D, this.effectTexture), t.uniform1i(this._uloc(this.finalProgram, "u_effect"), 0), t.activeTexture(t.TEXTURE1), t.bindTexture(t.TEXTURE_2D, this.coverageTexture), t.uniform1i(this._uloc(this.finalProgram, "u_coverage"), 1), t.activeTexture(t.TEXTURE2), t.bindTexture(t.TEXTURE_2D, this.backgroundTexture), t.uniform1i(this._uloc(this.finalProgram, "u_background"), 2), t.activeTexture(t.TEXTURE3), t.bindTexture(t.TEXTURE_2D, this.bloomTexture ?? this.effectTexture), t.uniform1i(this._uloc(this.finalProgram, "u_bloom"), 3), t.uniform1i(this._uloc(this.finalProgram, "u_hasBloom"), +!!e), t.uniform2f(this._uloc(this.finalProgram, "u_backgroundUvScale"), n[0], n[1]), t.bindVertexArray(this.fullscreenVao), t.drawArrays(t.TRIANGLES, 0, 3);
 	}
 	render(e, t = null) {
 		if (!this.available || this.contextLost || !this.gl || !this.effectTexture || !this.coverageTexture || !this.coverageFramebuffer || !this.backgroundTexture || e?.width !== this.width || e?.height !== this.height || !this._uploadEffectCanvas(e)) return !1;
@@ -4206,11 +4258,18 @@ function _i(e) {
 		softKnee: e.softKnee
 	};
 }
+/* [NBX-PERF-D] 钳制缓冲复用模块级 scratch：原实现每次调用 t.map 新建数组并用
+   Math.max(...i) 展开求最大值。输入相同时，写入 e.energy 的数值与运算顺序完全一致 */
+let _viClamp = [];
 function vi(e, t, n, r) {
-	let i = t.map((t) => Math.min(e.clampMax, Math.max(0, t))), a = Math.max(...i);
+	let a = 0, l = t.length;
+	for (let i = 0; i < l; i++) {
+		let v = Math.min(e.clampMax, Math.max(0, t[i]));
+		_viClamp[i] = v, v > a && (a = v);
+	}
 	if (a <= 0 || n <= 0) return;
 	let o = jt(a, e.threshold, e.softKnee) * n;
-	for (let t = 0; t < 3; t++) e.energy[t] += i[t] / a * o;
+	for (let i = 0; i < 3; i++) e.energy[i] += _viClamp[i] / a * o;
 	e.transport += o, e.moment += r * o;
 }
 function yi(e, t, n) {
@@ -5221,6 +5280,10 @@ function bo(e) {
 	for (let t = 1; t < e.length; t++) if (e[t].x !== e[t - 1].x || e[t].y !== e[t - 1].y) return !0;
 	return !1;
 }
+/* [NBX-PERF-G] 供 _hasVisibleEffects 的 some 回调复用：原实现每次调用新建闭包 */
+function _nbxStrokeVisible(e) {
+	return bo(e.points);
+}
 function xo(e, t = F.trail) {
 	return ma(t.gradient, e);
 }
@@ -5649,7 +5712,15 @@ var Xo = class {
 			vertexCount: 0,
 			levelCount: 0,
 			bloomPixels: 0
-		}, this.nativeTrailBloomSurface = void 0, this.nativeClickBloomSurface = null, this.nativeClickBloomMaskSurface = null, this.width = 0, this.height = 0, this.dpr = 1, this.fxConfig = structuredClone(F), this._themeHueShift = ra(this.config.themeColor), this._relativeOklchTheme = this.config.themeColorMode === "relative-oklch" ? ot(this.config.themeColor) : null, this.waves = [], this.shards = [], this.trailStrokes = [], this.currentTrailStroke = null, this.activeTrailOwnerId = null, this.nextTrailOwnerId = 1, this.trailShardCounts = /* @__PURE__ */ new Map(), this.activePointerId = null, this.activePointerSource = null, this.fallbackTouchPointerId = null, this.lastPointerPosition = null, this.lastPointerTime = 0, this.lastInputSampleSourceTime = null, this.trailDistanceSinceShard = 0, this.touchGestureStarts = /* @__PURE__ */ new Map(), this.touchPointerFilterResults = [], this.closedShadowPointerDecisions = /* @__PURE__ */ new WeakMap(), this.usesTouchInputFallback = Ki(), this.touchActionListenersAttached = !1, this.closedShadowTouchListenersAttached = !1;
+		}, this.nativeTrailBloomSurface = void 0, this.nativeClickBloomSurface = null, this.nativeClickBloomMaskSurface = null, this.width = 0, this.height = 0, this.dpr = 1, this.fxConfig = structuredClone(F), this._themeHueShift = ra(this.config.themeColor), this._relativeOklchTheme = this.config.themeColorMode === "relative-oklch" ? ot(this.config.themeColor) : null,
+		/* [NBX-PERF-A/B] fxConfig 版本戳与签名缓存：每次提交自增，签名仅在此时失效 */
+		this._fxConfigVersion = 0, this._fxConfigSignature = null,
+		/* [NBX-PERF-A] 主题版本戳：Co() 经 _a() 读取模块级相对 oklch 主题（K），
+		   换肤会改变拖尾测量结果，故主题变更也要参与测量缓存的失效判定 */
+		this._themeVersion = 0,
+		/* [NBX-PERF-D] 原生辉光每帧分配改为池化 scratch（数值序列不变） */
+		this._angularMassPool = [], this._bloomRgbScratch = new Float64Array(3),
+		this.waves = [], this.shards = [], this.trailStrokes = [], this.currentTrailStroke = null, this.activeTrailOwnerId = null, this.nextTrailOwnerId = 1, this.trailShardCounts = /* @__PURE__ */ new Map(), this.activePointerId = null, this.activePointerSource = null, this.fallbackTouchPointerId = null, this.lastPointerPosition = null, this.lastPointerTime = 0, this.lastInputSampleSourceTime = null, this.trailDistanceSinceShard = 0, this.touchGestureStarts = /* @__PURE__ */ new Map(), this.touchPointerFilterResults = [], this.closedShadowPointerDecisions = /* @__PURE__ */ new WeakMap(), this.usesTouchInputFallback = Ki(), this.touchActionListenersAttached = !1, this.closedShadowTouchListenersAttached = !1;
 		let s = performance.now();
 		if (this.clickTimeMs = 0, this.trailTimeMs = 0, this.lastClickTimeSource = s, this.lastTrailTimeSource = s, this.animationFrame = null, this.lastFrameTime = null, this.renderingFrame = !1, this.paused = !1, this.destroyed = !1, this.domPointerListenersAttached = !1, this._onResize = () => this._resize(), this._onPointerDown = this._handlePointerDown.bind(this), this._onPointerMove = this._handlePointerMove.bind(this), this._onPointerUp = this._handlePointerUp.bind(this), this._onPointerCancel = this._handlePointerCancel.bind(this), this._onClosedShadowPointerDown = this._handleClosedShadowPointerDown.bind(this), this._onTouchStart = this._handleTouchStart.bind(this), this._onTouchMove = this._handleTouchMove.bind(this), this._onTouchEnd = this._handleTouchEnd.bind(this), this._onBlur = this._cancelPointer.bind(this), this._onFrame = this._renderFrame.bind(this), this._onWebGLContextLost = this._handleWebGLContextLost.bind(this), this._onWebGLContextRestored = this._handleWebGLContextRestored.bind(this), this._onWebGLEffectContextLost = this._handleWebGLEffectContextLost.bind(this), this._onWebGLEffectContextRestored = this._handleWebGLEffectContextRestored.bind(this), this._onCanvasSceneContextLost = this._handleCanvasSceneContextLost.bind(this), this._onCanvasSceneContextRestored = this._handleCanvasSceneContextRestored.bind(this), this._resize(), a && !o && !this._prepareWebGLEffectBackend()) {
 			if (this.context = this.canvas.getContext("2d"), !this.context) throw this.animationFrame !== null && (Gi(this.animationFrame), this.animationFrame = null), Error("BAClickFX 无法在 OffscreenCanvas 上初始化 WebGL2；请使用新的画布并显式选择 Canvas2D");
@@ -6001,6 +6072,9 @@ var Xo = class {
 	_commitFxParamConfig(e) {
 		for (let e of Object.keys(this.fxConfig)) delete this.fxConfig[e];
 		Object.assign(this.fxConfig, e);
+		/* [NBX-PERF-A/B] 配置提交是 fxConfig 唯一的变更入口：自增版本戳并作废签名缓存，
+		   使拖尾测量缓存（A）与软件 bloom 帧签名（B）在此处统一失效 */
+		this._fxConfigVersion++, this._fxConfigSignature = null;
 	}
 	resize(e, t, n) {
 		this._resize(e, t, n);
@@ -6157,7 +6231,9 @@ var Xo = class {
 		this.currentTrailStroke = {
 			active: !0,
 			ownerId: this.activeTrailOwnerId,
-			points: r
+			points: r,
+			/* [NBX-PERF-A] 新建 stroke 的 points 版本号从 1 起，见 _updateTrail 的缓存判定 */
+			pointsVersion: 1
 		}, this.trailStrokes.push(this.currentTrailStroke);
 	}
 	_beginTrailOwner() {
@@ -6174,7 +6250,7 @@ var Xo = class {
 		this.trailShardCounts.set(e.ownerId, t);
 	}
 	_ensureCurrentTrailStroke(e) {
-		this.lastPointerPosition && (this.currentTrailStroke ? (this.currentTrailStroke.points.length === 0 || this.currentTrailStroke.points.length === 1 && e - this.currentTrailStroke.points[0].bornAt >= this.fxConfig.trail.lifetimeMs) && (this.currentTrailStroke.points.length = 0, this.currentTrailStroke.points.push(yo(this.lastPointerPosition.x, this.lastPointerPosition.y, e)), this.lastPointerTime = e, this.trailDistanceSinceShard = 0) : (this._startTrailStroke(this.lastPointerPosition, e), this.lastPointerTime = e, this.trailDistanceSinceShard = 0));
+		this.lastPointerPosition && (this.currentTrailStroke ? (this.currentTrailStroke.points.length === 0 || this.currentTrailStroke.points.length === 1 && e - this.currentTrailStroke.points[0].bornAt >= this.fxConfig.trail.lifetimeMs) && (this.currentTrailStroke.points.length = 0, this.currentTrailStroke.points.push(yo(this.lastPointerPosition.x, this.lastPointerPosition.y, e)), this.currentTrailStroke.pointsVersion = (this.currentTrailStroke.pointsVersion | 0) + 1, this.lastPointerTime = e, this.trailDistanceSinceShard = 0) : (this._startTrailStroke(this.lastPointerPosition, e), this.lastPointerTime = e, this.trailDistanceSinceShard = 0));
 	}
 	_appendPointerSample(e, t) {
 		if (!this.currentTrailStroke || !this.lastPointerPosition) return;
@@ -6185,6 +6261,8 @@ var Xo = class {
 			let i = r / o, a = Y(n.x, e.x, i), s = Y(n.y, e.y, i), c = Y(this.lastPointerTime, t, i);
 			this.currentTrailStroke.points.push(yo(a, s, c));
 		}
+		/* [NBX-PERF-A] points 追加后递增版本号，使 _updateTrail 的测量缓存失效 */
+		this.currentTrailStroke.pointsVersion = (this.currentTrailStroke.pointsVersion | 0) + 1;
 		this._spawnTrailShards(n, e, i, this.lastPointerTime, t), this.lastPointerPosition = e, this.lastPointerTime = t;
 	}
 	_spawnTrailShards(e, t, n, r, i) {
@@ -6781,7 +6859,10 @@ var Xo = class {
 			i.trailEmissionAlpha,
 			a.width,
 			a.geometryWidth,
-			JSON.stringify(this.fxConfig),
+			/* [NBX-PERF-B] fxConfig 序列化结果按版本戳缓存：本方法每帧被调用 2~3 次，
+			   而 fxConfig 仅在 _commitFxParamConfig 提交时变化（那里自增版本戳并作废缓存）。
+			   配置未变时复用同一字符串，序列化输出逐字节一致 */
+			(this._fxConfigSignature === null && (this._fxConfigSignature = JSON.stringify(this.fxConfig)), this._fxConfigSignature),
 			t,
 			n,
 			r
@@ -6991,6 +7072,13 @@ var Xo = class {
 		for (let t of this.shards) t.draw(this.context, e, this._getEffectiveOpacity(), this.fxConfig, n, r, i);
 		t && this._drawNativeClickBloom(e);
 	}
+	/* [NBX-PERF-D] 圆环角质量分布缓冲池：按波内 ring 序号取用，取出即清零，
+	   语义等同新建的零初始化 Float64Array(64) */
+	_angularMassScratch(e) {
+		let t = this._angularMassPool;
+		for (; t.length <= e;) t.push(new Float64Array(64));
+		return t[e].fill(0);
+	}
 	_drawNativeClickBloom(e, t = this.context, n = this._getCanvasOutputCompositing()) {
 		let r = this.fxConfig.bloom, i = this._getEffectiveOpacity();
 		if (r.intensity <= 0 || r.clickEmissionScale <= 0 || i <= 0) return;
@@ -7004,27 +7092,37 @@ var Xo = class {
 				let o = (2 * t / 16) ** 2 * r.diskAlpha / .65;
 				for (let e = 0; e < 16; e++) for (let r = 0; r < 16; r++) {
 					let a = (r + .5) / 16, s = (e + .5) / 16, c = (Math.floor(s * 512) * 512 + Math.floor(a * 512)) * 4;
-					vi(i, n.map((e, t) => e * ga(Cn[c + t])), o, ((a * 2 - 1) ** 2 + (s * 2 - 1) ** 2) * t ** 2);
+					/* [NBX-PERF-D] 颜色三元组（Q() 恒为 3 元素）写入实例级 scratch，
+					   免去每像素 n.map 分配；乘法序列与原实现一致 */
+					let v = this._bloomRgbScratch;
+					v[0] = n[0] * ga(Cn[c]), v[1] = n[1] * ga(Cn[c + 1]), v[2] = n[2] * ga(Cn[c + 2]);
+					vi(i, v, o, ((a * 2 - 1) ** 2 + (s * 2 - 1) ** 2) * t ** 2);
 				}
 				s.push(i);
 			}
 			let u = this.fxConfig.rings, d = o.ageMs / u.lifetimeMs;
 			if (d < 1 && r.ringAlpha > 0 && r.ringBlur > 0) {
-				let t = Q(u.colorKeys, d, u.hdrIntensity * a * r.ringEmissionAlpha);
-				for (let n of o.rings) {
-					let i = Xa(n, d, e, u), a = _i(r);
-					a.blurScale = r.ringBlur / 80, a.radius = i.radius, a.width = i.width, a.angularMass = /* @__PURE__ */ new Float64Array(64);
-					let o = Math.max(1, Math.round(u.radialSamples)), c = a.angularMass.length, l = Math.min(1, Math.max(1e-6, i.width * this.dpr * r.resolutionScale * .75)), f = W * i.radius * i.width / c * r.ringAlpha / .35 / l;
+				let t = Q(u.colorKeys, d, u.hdrIntensity * a * r.ringEmissionAlpha), rings = o.rings;
+				for (let n = 0; n < rings.length; n++) {
+					let ring = rings[n], i = Xa(ring, d, e, u), a2 = _i(r);
+					a2.blurScale = r.ringBlur / 80, a2.radius = i.radius, a2.width = i.width;
+					/* [NBX-PERF-D] angularMass 改池化缓冲并按帧清零：与 new Float64Array(64)
+					   的零初始化语义一致；该缓冲仅在本波处理内存活，跨波复用无交叉影响 */
+					a2.angularMass = this._angularMassScratch(n);
+					let o = Math.max(1, Math.round(u.radialSamples)), c = a2.angularMass.length, l = Math.min(1, Math.max(1e-6, i.width * this.dpr * r.resolutionScale * .75)), f = W * i.radius * i.width / c * r.ringAlpha / .35 / l;
 					for (let e = 0; e < c; e++) {
 						let r = 0;
 						for (let t = 0; t < o; t++) r += Wa((e + .5) / c, (t + .5) / o, i.threshold, u);
 						r *= l / o;
-						let s = a.transport;
-						vi(a, t.map((e) => e * r), f, i.radius * i.radius);
-						let d = (e + .5) / c, p = (((u.dissolveDirection >= 0 ? d : 1 - d) + n.rotation / W) % 1 + 1) % 1 * c, m = Math.floor(p), h = p - m, g = a.transport - s;
-						a.angularMass[m] += g * (1 - h), a.angularMass[(m + 1) % c] += g * h;
+						let s = a2.transport;
+						/* [NBX-PERF-D] 颜色三元组写入 scratch，免去每角度采样的 map 分配 */
+						let v = this._bloomRgbScratch;
+						v[0] = t[0] * r, v[1] = t[1] * r, v[2] = t[2] * r;
+						vi(a2, v, f, i.radius * i.radius);
+						let d2 = (e + .5) / c, p = (((u.dissolveDirection >= 0 ? d2 : 1 - d2) + ring.rotation / W) % 1 + 1) % 1 * c, m = Math.floor(p), h = p - m, g = a2.transport - s;
+						a2.angularMass[m] += g * (1 - h), a2.angularMass[(m + 1) % c] += g * h;
 					}
-					s.push(a);
+					s.push(a2);
 				}
 			}
 			let f = o.x, p = o.y, m = bi(s, this.width, this.height, this.dpr, r);
@@ -7086,45 +7184,48 @@ var Xo = class {
 		for (let t = this.trailStrokes.length - 1; t >= 0; t--) {
 			let n = this.trailStrokes[t], r = 0;
 			for (; r < n.points.length && e - n.points[r].bornAt >= a;) r++;
-			if (r > 0 && n.points.splice(0, r), n.points.length >= 2) {
+			if (r > 0 && (n.points.splice(0, r), n.pointsVersion = (n.pointsVersion | 0) + 1), n.points.length >= 2) {
 				let e = i ? null : this.fxConfig.bloom.trailEmission;
-				n.trailFrameData = Co(n.points, this.fxConfig.trail, e, !0);
+				/* [NBX-PERF-A] Co() 是 (points, trail 配置, emission, 相对 oklch 主题) 的纯函数。
+				   四者均未变时直接复用上帧测量结果：pointsVersion 覆盖全部 points 变更点，
+				   _fxConfigVersion 覆盖配置提交，_themeVersion 覆盖换肤，i 区分 emission 模式。
+				   同输入重算同一函数，输出逐字节一致；指针静止或采样间隔内的帧直接命中 */
+				let o = n.pointsVersion + ":" + this._fxConfigVersion + ":" + this._themeVersion + ":" + (i ? 1 : 0);
+				n.trailFrameData && n.trailFrameDataKey === o || (n.trailFrameData = Co(n.points, this.fxConfig.trail, e, !0), n.trailFrameDataKey = o);
 			} else n.trailFrameData = null;
 			!n.active && n.points.length < 2 && this.trailStrokes.splice(t, 1);
 		}
 		r && this._drawCanvasTrails(t, n);
 	}
 	_updateWaves(e, t, n, r = !0) {
+		/* [NBX-PERF-G] 三个 getter 与循环无关，提到循环外求值（帧内返回值恒定） */
+		let o = r ? this._getCanvasOutputCompositing() : null, p = r ? this._getEffectiveOpacity() : 0, a = r ? this._getEffectiveOverlayAlphaLimit() : 0;
 		for (let i = this.waves.length - 1; i >= 0; i--) {
-			let a = this.waves[i];
-			if (a.updateTo(e), a.dead) {
+			let l = this.waves[i];
+			if (l.updateTo(e), l.dead) {
 				this.waves.splice(i, 1);
 				continue;
 			}
-			if (r) {
-				let e = this._getCanvasOutputCompositing();
-				a.drawBase(this.context, t, this._getEffectiveOpacity(), n, e, this.dpr, "none", this._getEffectiveOverlayAlphaLimit());
-			}
+			r && l.drawBase(this.context, t, p, n, o, this.dpr, "none", a);
 		}
 	}
 	_drawWaveRings(e, t, n = !1, r = this._getCanvasOutputCompositing(), i = "none", a = this._getEffectiveOverlayAlphaLimit()) {
 		for (let o of this.waves) o.drawRings(this.context, e, this._getEffectiveOpacity(), t, this.dpr, r, n, i, a);
 	}
 	_updateShards(e, t, n, r = !0) {
+		/* [NBX-PERF-G] getter 与循环无关，提到循环外求值（帧内返回值恒定） */
+		let o = r ? this._getCanvasOutputCompositing() : null, p = r ? this._getEffectiveOpacity() : 0, a = r ? this._getEffectiveOverlayAlphaLimit() : 0;
 		for (let i = this.shards.length - 1; i >= 0; i--) {
-			let a = this.shards[i];
-			if (a.kind === "trail" ? a.updateTo(t) : a.updateTo(e), a.dead) {
-				this._releaseTrailShardOwner(a), this.shards.splice(i, 1);
+			let l = this.shards[i];
+			if (l.kind === "trail" ? l.updateTo(t) : l.updateTo(e), l.dead) {
+				this._releaseTrailShardOwner(l), this.shards.splice(i, 1);
 				continue;
 			}
-			if (r) {
-				let e = this._getCanvasOutputCompositing();
-				a.draw(this.context, n, this._getEffectiveOpacity(), this.fxConfig, e, "none", this._getEffectiveOverlayAlphaLimit());
-			}
+			r && l.draw(this.context, n, p, this.fxConfig, o, "none", a);
 		}
 	}
 	_hasVisibleEffects() {
-		return this.waves.length > 0 || this.shards.length > 0 || this.trailStrokes.some((e) => bo(e.points));
+		return this.waves.length > 0 || this.shards.length > 0 || this.trailStrokes.some(_nbxStrokeVisible);
 	}
 	boom(e = this.width / 2, t = this.height / 2) {
 		this.destroyed || this.paused || !this.config.clickEnabled || (this._spawnClick(q(Number(e) || 0, 0, this.width), q(Number(t) || 0, 0, this.height)), this._requestRender());
@@ -7148,10 +7249,10 @@ var Xo = class {
 	}
 	_applyThemeColor(e) {
 		let t = Fe(e, re);
-		this.config.themeColor = t, this._themeHueShift = ra(t), this._relativeOklchTheme = this.config.themeColorMode === "relative-oklch" ? ot(t) : null;
+		this.config.themeColor = t, this._themeHueShift = ra(t), this._relativeOklchTheme = this.config.themeColorMode === "relative-oklch" ? ot(t) : null, this._themeVersion++;
 	}
 	setThemeColorMode(e) {
-		return this.destroyed || !Ie(e) ? !1 : (this.config.themeColorMode = e, this._relativeOklchTheme = e === "relative-oklch" ? ot(this.config.themeColor) : null, this._requestRender(), !0);
+		return this.destroyed || !Ie(e) ? !1 : (this.config.themeColorMode = e, this._relativeOklchTheme = e === "relative-oklch" ? ot(this.config.themeColor) : null, this._themeVersion++, this._requestRender(), !0);
 	}
 	setInputSamplingRate(e) {
 		return this.destroyed || !Se(e) ? !1 : (this.updateConfig({ inputSamplingRate: e }), !0);

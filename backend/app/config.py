@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     admin_static_dir: Path = Path("../admin-frontend")
     data_dir: Path = Path("./data")
 
+    # 静态资源服务：压缩与缓存头（实现见 app.middleware.StaticCacheMiddleware）
+    # 关闭压缩 / brotli 可在弱 CPU 上用环境变量回退（STATIC_COMPRESS=false）
+    static_compress: bool = True
+    static_brotli: bool = True  # 仅 gzip 兜底：设 false 或 brotli 包缺失时生效
+    static_cache_max_age: int = 31536000  # 带 ?v= 版本号的静态资源缓存秒数
+
     # JWT / 使用码
     jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_expire_days: int = 365

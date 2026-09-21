@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import SessionLocal, bootstrap_lock, init_db
+from app.middleware import StaticCacheMiddleware
 from app.routers import auth, chat, parse, tools
 from app.services.request_log import (
     STATUS_ERROR,
@@ -222,6 +223,15 @@ async def get_config():
 static_path = Path(settings.static_dir)
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=static_path), name="static")
+
+# 静态资源压缩 + 缓存头（只作用于 /static/** 与 /，API/SSE 不受影响）
+app.add_middleware(
+    StaticCacheMiddleware,
+    static_dir=static_path,
+    compress=settings.static_compress,
+    brotli=settings.static_brotli,
+    max_age=settings.static_cache_max_age,
+)
 
 
 @app.get("/")

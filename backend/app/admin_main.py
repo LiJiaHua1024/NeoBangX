@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import SessionLocal, bootstrap_lock, init_db
+from app.middleware import StaticCacheMiddleware
 from app.routers import admin
 from app.services.runtime_config import seed_config_from_env
 from app.services.usage_code import apply_jwt_secret_override, ensure_bootstrap_code
@@ -74,6 +75,15 @@ async def health_check():
 admin_static = Path(settings.admin_static_dir)
 if admin_static.exists():
     app.mount("/static", StaticFiles(directory=admin_static), name="admin-static")
+
+# 静态资源压缩 + 缓存头（只作用于 /static/** 与 /，API 不受影响）
+app.add_middleware(
+    StaticCacheMiddleware,
+    static_dir=admin_static,
+    compress=settings.static_compress,
+    brotli=settings.static_brotli,
+    max_age=settings.static_cache_max_age,
+)
 
 
 @app.get("/")
