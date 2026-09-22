@@ -1117,8 +1117,8 @@ test("类型面板按 ocrModeOptions 渲染：不许再退回硬编码的两张�
   assert.ok(html.indexOf('x-for="opt in ocrModeOptions"') >= 0, "面板要走 ocrModeOptions");
   assert.strictEqual(html.indexOf("chooseOcrMode('printed')"), -1, "卡片不能再写死两种类型");
   assert.strictEqual(html.indexOf("chooseOcrMode('handwritten')"), -1, "卡片不能再写死两种类型");
-  assert.ok(html.indexOf('x-show="ocrHasImage && !ocrStreaming && !ocrNeedsStart && ocrModeSelectable"') >= 0,
-    "「换类型」只对能选的工具出现");
+  assert.strictEqual((html.match(/x-show="ocrHasImage && ocrHasText && !ocrStreaming && !ocrStartStepVisible && ocrModeSelectable"/g) || []).length, 2,
+    "「换类型」只对能选的工具出现，且只在看着结果时出现（两处形态都要）");
   // 工具工作区与弹窗两处形态都要一样
   assert.strictEqual((html.match(/x-for="opt in ocrModeOptions"/g) || []).length, 2);
 });
@@ -1193,17 +1193,52 @@ test("已有原稿与图片上传分清：文件框不收图片，文案也不�
   assert.ok(c.uploadHostLabel.indexOf("文档") >= 0, c.uploadHostLabel);
 });
 
-test("收起图片栏：图标是双箭头，收起后两个按钮竖排不压到右边", () => {
+test("收起图片区：图标是双箭头，收起后两个按钮竖排不压到右边", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
 
   assert.strictEqual(html.indexOf("'chevron-right' : 'chevron-left'"), -1, "单箭头像「返回」，不能再用");
   assert.strictEqual((html.match(/ocrMediaCollapsed \? 'chevrons-right' : 'chevrons-left'/g) || []).length, 2);
-  assert.ok(html.indexOf("展开图片栏") >= 0 && html.indexOf("收起图片栏") >= 0, "title 要说清是收起/展开图片栏");
+  assert.ok(html.indexOf("展开图片区") >= 0 && html.indexOf("收起图片区") >= 0, "title 要说清是收起/展开图片区");
   assert.ok(/\.ocr-side\.is-collapsed \.ocr-side-head\s*\{[^}]*flex-direction:\s*column/.test(css),
     "收起成一条时要竖排，否则两个按钮会溢出压到类型条上");
   assert.ok(/\.ocr-side\.is-collapsed \.ocr-side-head > span\s*\{\s*display:\s*none/.test(css),
     "收起时那行「1 张 · 点击图片可放大」要藏掉");
+  // 3.25rem 的细条里塞不下缩略图与批次操作，收起时要一并让位（标记里不再逐个判断）
+  assert.ok(/\.ocr-side\.is-collapsed \.ocr-thumbs,[\s\S]{0,80}\.ocr-side\.is-collapsed \.ocr-side-foot\s*\{\s*display:\s*none/.test(css),
+    "收成一条时缩略图与批次操作也要藏掉");
+});
+
+/* 手机上这一栏的规则全都踩过坑：图片区被正文挤矮后把内容溢到下一排（类型条上叠着一行字）、
+   大图预览占满上半屏把正文挤没、缩略图上 18px 的 × 一按就删错。
+   这几条 CSS 是手机端能不能用的底线，改动时必须一起改这里 */
+test("手机端布局：图片只占一条、正文优先、按钮按得住且不重叠", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+
+  // 根因守卫：图片区不许被压缩，超出部分自己裁（不写这两条就会溢到下一排）
+  assert.ok(/\.ocr-side\s*\{[^}]*flex:\s*0 0 auto;[\s\S]{0,40}overflow:\s*hidden/.test(css),
+    "图片区要「不压缩 + 自己裁」，否则被挤矮后会把内容画到下一排上");
+  assert.ok(/\.ocr-main\s*\{[^}]*min-height:\s*\d/.test(css), "正文区要有最小高度，不能被图片区挤成 0");
+  // 动作条：装不下就换行，不许横向溢出
+  assert.ok(/\.ocr-main-head\s*\{\s*flex-wrap:\s*wrap/.test(css) || /\.ocr-main-head\s*\{[^}]*flex-wrap:\s*wrap/.test(css),
+    "动作条要能换行");
+  assert.ok(/\.ocr-main-acts\s*\{[^}]*flex-wrap:\s*wrap/.test(css), "按钮组自己也要能换行");
+
+  const phone = css.slice(css.indexOf("@media (max-width: 640px)"));
+  assert.ok(/\.ocr-side-head\s*\{\s*display:\s*none/.test(phone), "手机上不出现图片区的标题行");
+  assert.ok(/\.ocr-side-fold,\s*\.ocr-side-body\s*\{\s*display:\s*none\s*!important/.test(phone),
+    "手机上看细节走全屏编辑器，大图预览与它的开合按钮都不出现");
+  assert.ok(/\.ocr-thumb-del\s*\{\s*display:\s*none/.test(phone), "缩略图上那个 18px 的 × 手指按不准，误触是真删");
+  assert.ok(/\.ocr-side-foot \.icon-btn\s*\{\s*width:\s*2\.4rem\s*!important/.test(phone),
+    "图片操作按钮在手机上要放到触屏下限那一档");
+  assert.ok(/\.ocr-side-add-phone\s*\{\s*display:\s*inline-flex/.test(phone),
+    "手机上头一行的加号被收起，操作行里必须有加图入口");
+  assert.ok(/\.ocr-main-acts \.btn-ghost\s*\{[^}]*flex:\s*1 1 0/.test(phone), "手机上三个按钮等宽分开排");
+
+  // 标记：缩略图点一下就是进编辑器（窄屏没有别的地方能看细节），两处形态都要接上
+  assert.strictEqual((html.match(/@click="onOcrThumbTap\(i\)"/g) || []).length, 2, "缩略图要走同一个入口");
+  assert.strictEqual((html.match(/ocr-side-add-phone/g) || []).length, 2, "加图入口在工作区与弹窗里都要有");
 });
 
 test("删空图片后不留空白：类型一并收起，空状态给回入口", () => {
@@ -1221,12 +1256,291 @@ test("删空图片后不留空白：类型一并收起，空状态给回入口",
 
   // 界面：无图时类型胶囊、分栏、页脚一起收起，换成空状态卡
   assert.ok(/class="ocr-type-chip ml-auto" x-show="ocrHasImage"/.test(html), "弹窗标题上的类型要跟着图片走");
-  assert.ok(/x-show="!ocrHasImage" x-cloak class="flex-1 min-h-0 overflow-y-auto scroll-thin"/.test(html),
+  assert.ok(/x-show="!ocrHasImage && !ocrHasText" x-cloak class="flex-1 min-h-0 overflow-y-auto scroll-thin"/.test(html),
     "弹窗里要有空状态卡，不能留一块空壳");
-  assert.ok(/x-show="ocrHasImage" class="ocr-split/.test(html), "分栏只在有图时出现");
-  assert.ok(/x-show="ocrHasImage" class="px-5 py-3 border-t/.test(html), "无图时页脚那排按钮一并收起");
-  // 工具工作区里三处一起判断，两处形态保持一致
-  assert.strictEqual((html.match(/x-show="!ocrHasImage"/g) || []).length, 2);
+  assert.ok(/x-show="ocrHasImage \|\| ocrHasText" class="ocr-split/.test(html), "分栏在有图或有识别结果时出现");
+  assert.ok(/x-show="ocrHasImage \|\| ocrHasText" class="ocr-foot/.test(html), "无图无结果时页脚那排按钮一并收起");
+  // 图片区只认图片：历史记录不存图片，打开一条记录时不该凭空长出一条空图片条
+  assert.strictEqual((html.match(/class="ocr-side" :class="\{ 'is-collapsed': ocrMediaCollapsed \}" x-show="ocrHasImage"/g) || []).length, 2,
+    "两处形态的图片区都只在真有图片时出现");
+  // 工具工作区里两处一起判断，两个形态保持一致
+  assert.strictEqual((html.match(/x-show="!ocrHasImage && !ocrHasText"/g) || []).length, 2);
+});
+
+/* ---------------- 识别记录（历史） ----------------
+   独立用它（工具 32 工作区）时，识别结果必须留痕：成功、已停止、出错都不能含糊——
+   半份转录被当成完整结果往下用，比没有记录更糟 */
+
+const OCR_TOOL = { id: "32", name: "识别图片文字", icon: "scan-text", description: "" };
+
+/* 在独立工作区里跑一次识别（会写历史） */
+async function runOcrTool(c, frames, images) {
+  c.currentTool = OCR_TOOL;
+  c.ocrHost = "tool";
+  if (images) c.ocrImages = images;
+  await withFetch(frames, async () => { await c.ocrStart(); });
+}
+
+/* 中途被取消的假流：第一帧正常到达，之后每一次读都挂住，直到真的被 abort。
+   真 fetch 被打断就是这样（流不会自己断），stub 不能比现实宽松——
+   第二帧直接 reject 的话，取消甚至还没发生，测出来的就不是用户点的那个取消 */
+function withCanceledFetch(frames) {
+  const original = global.fetch;
+  const abortError = () => Object.assign(new Error("aborted"), { name: "AbortError" });
+  global.fetch = (url, options) => {
+    if (String(url).indexOf("/api/chat/stop") >= 0) {
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ status: "stopped" }) });
+    }
+    const signal = options && options.signal;
+    const text = frames.map(([event, data]) => `event: ${event}\ndata: ${data}\n\n`).join("");
+    const bytes = new TextEncoder().encode(text);
+    let sent = false;
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      body: {
+        getReader() {
+          return {
+            read() {
+              if (!sent) {
+                sent = true;
+                return Promise.resolve({ done: false, value: bytes });
+              }
+              return new Promise((resolve, reject) => {
+                if (!signal) return;   // 没有 signal 就没有「打断」这回事，这一读永远挂着
+                if (signal.aborted) reject(abortError());
+                else signal.addEventListener("abort", () => reject(abortError()));
+              });
+            },
+          };
+        },
+      },
+    });
+  };
+  return () => { global.fetch = original; };
+}
+
+test("识别成功留一条记录：正文、类型、张数、标题都在，图片字节不进历史", async () => {
+  const c = loadAuthed();
+  c.ocrModeManual = "handwritten";
+  const images = [
+    { id: "a", name: "卷子1.jpg", size: 10, dataUrl: IMG },
+    { id: "b", name: "卷子2.jpg", size: 10, dataUrl: IMG },
+  ];
+  await runOcrTool(c, [["token", JSON.stringify("二、高三下统筹\n培优交流")], ["done", "[DONE]"]], images);
+
+  assert.strictEqual(c.history.length, 1, "识别完必须留一条记录");
+  const rec = c.history[0];
+  assert.strictEqual(rec.toolId, "32");
+  assert.strictEqual(rec.toolName, "识别图片文字");
+  assert.strictEqual(rec.output, "二、高三下统筹\n培优交流");
+  assert.strictEqual(rec.title, "二、高三下统筹", "标题取正文里第一行有内容的，列表里才认得出");
+  assert.strictEqual(rec.partial, false);
+  assert.strictEqual(rec.error, "");
+  assert.strictEqual(rec.model, "", "识别模型由后台配置，前端不知道就不写");
+  assert.strictEqual(rec.ocr.mode, "handwritten");
+  assert.strictEqual(rec.ocr.count, 2);
+  assert.deepStrictEqual(rec.ocr.names, ["卷子1.jpg", "卷子2.jpg"]);
+  assert.strictEqual(rec.ocr.truncated, false);
+  assert.ok(rec.input.indexOf("2 张") >= 0 && rec.input.indexOf("手写作文") >= 0, rec.input);
+  // 图片字节绝不能进历史：localStorage 只有几 MB，一份整卷就能把别的记录全挤出去
+  assert.strictEqual(JSON.stringify(rec.indexOf ? rec : rec).indexOf("data:image"), -1, "历史里不许出现图片");
+});
+
+test("用户取消：按「已停止」收尾并留 partial 记录，已识别的内容一个字都不丢", async () => {
+  const c = loadAuthed();
+  const restore = withCanceledFetch([["token", JSON.stringify("半份转录")]]);
+  try {
+    c.currentTool = OCR_TOOL;
+    c.ocrHost = "tool";
+    c.ocrImages = [{ id: "a", name: "a.jpg", size: 10, dataUrl: IMG }];
+    const run = c.ocrStart();
+    await new Promise((r) => setTimeout(r, 0));   // 让第一帧先落地
+    c.ocrCancel();                                 // 用户按下「取消」
+    await run;
+  } finally {
+    restore();
+  }
+
+  assert.strictEqual(c.ocrStage, "stopped", "取消不是「完成」");
+  assert.strictEqual(c.ocrText, "半份转录");
+  assert.strictEqual(c.history.length, 1);
+  assert.strictEqual(c.history[0].partial, true, "记录要标成已停止");
+  assert.strictEqual(c.history[0].error, "");
+  assert.strictEqual(c.history[0].output, "半份转录");
+  assert.ok(c.toasts.some((t) => t.msg.indexOf("已停止") >= 0), "要有「已停止」的提示");
+});
+
+test("后端以 [CANCELLED] 收尾：同样算「已停止」，不当成完整结果", async () => {
+  const c = loadAuthed();
+  await runOcrTool(c, [["token", JSON.stringify("半份")], ["done", "[CANCELLED]"]],
+    [{ id: "a", name: "a.jpg", size: 1, dataUrl: IMG }]);
+
+  assert.strictEqual(c.ocrStage, "stopped");
+  assert.strictEqual(c.ocrStopped, true);
+  assert.strictEqual(c.history[0].partial, true);
+  assert.strictEqual(c.history[0].output, "半份");
+});
+
+test("出错：原因写进记录；同批重跑写回一条，换一批才另开一条", async () => {
+  const c = loadAuthed();
+  const images = [{ id: "a", name: "a.jpg", size: 1, dataUrl: IMG }];
+
+  await runOcrTool(c, [["error", JSON.stringify({ message: "识别失败，请稍后重试" })]], images);
+  assert.strictEqual(c.ocrStage, "error");
+  assert.strictEqual(c.history.length, 1);
+  assert.strictEqual(c.history[0].error, "识别失败，请稍后重试");
+
+  // 同一批再错一次（用户点重试）：合并进同一条，不在列表里刷出一串一样的失败
+  await runOcrTool(c, [["error", JSON.stringify({ message: "识别失败，请稍后重试" })]], images);
+  assert.strictEqual(c.history.length, 1, "同一批连续失败要合并成一条");
+
+  // 重试成功：写回同一条，partial / error 都要清干净
+  await runOcrTool(c, [["token", JSON.stringify("全文")], ["done", "[DONE]"]], images);
+  assert.strictEqual(c.history.length, 1, "同一批重跑还是那条记录");
+  assert.strictEqual(c.history[0].output, "全文");
+  assert.strictEqual(c.history[0].error, "");
+  assert.strictEqual(c.history[0].partial, false);
+  assert.strictEqual(c.ocrStage, "done", "重试成功后状态要回到完成");
+
+  // 换一批图片：这是另一次识别，另开一条
+  await runOcrTool(c, [["token", JSON.stringify("第二张图")], ["done", "[DONE]"]],
+    [{ id: "z", name: "z.jpg", size: 1, dataUrl: IMG }]);
+  assert.strictEqual(c.history.length, 2);
+  assert.strictEqual(c.history[0].output, "第二张图");
+});
+
+test("有结果之后仍能回到类型选择：换类型不是死键", async () => {
+  const c = loadAuthed();
+  c.currentTool = OCR_TOOL;
+  c.ocrHost = "tool";
+  c.ocrImages = [{ id: "a", name: "a.jpg", size: 1, dataUrl: IMG }];
+
+  await withFetch([["token", JSON.stringify("转录")], ["done", "[DONE]"]], async () => { await c.ocrStart(); });
+  assert.strictEqual(c.ocrStage, "done");
+  assert.strictEqual(c.ocrStartStepVisible, false, "看着结果时不该再叠着类型面板");
+
+  // 「换类型」要真能把人送回类型那一步——旧结果先留着（还能复制），而不是点了没反应
+  c.enterOcrStartStep();
+  assert.strictEqual(c.ocrStartStepVisible, true);
+  assert.strictEqual(c.ocrText, "转录", "回到类型选择不该把已有结果清掉");
+
+  // 选了另一种类型再开跑：面板让位给结果区，请求也换成新类型
+  c.chooseOcrMode("handwritten");
+  assert.strictEqual(c.ocrMode, "handwritten");
+  await withFetch([["token", JSON.stringify("换过类型的结果")], ["done", "[DONE]"]], async () => { await c.ocrStart(); });
+  assert.strictEqual(c.ocrStartStepVisible, false);
+  assert.strictEqual(c.ocrText, "换过类型的结果");
+  assert.strictEqual(c.history.length, 2, "换了类型就是另一次识别，另开一条记录");
+
+  // 没有图片时这一步不成立（历史记录里只有文字）
+  c.ocrImages = [];
+  c.enterOcrStartStep();
+  assert.strictEqual(c.ocrStartStepVisible, false);
+});
+
+test("弹窗形态：识别照跑，但不写自己的历史（文字随后写进宿主工具的输入框）", async () => {
+  const c = loadAuthed();
+  c.currentTool = { id: "13", name: "试卷可视化全解" };
+  c.ocrImages = [{ id: "a", name: "a.jpg", size: 1, dataUrl: IMG }];
+  c.ocrHost = "modal";
+
+  await withFetch([["token", JSON.stringify("转录")], ["done", "[DONE]"]], async () => { await c.ocrStart(); });
+  assert.strictEqual(c.ocrStage, "done");
+  assert.strictEqual(c.history.length, 0, "弹窗是给别的工具做录入的一步，不在这里再记一份");
+
+  c.ocrUseText();
+  assert.strictEqual(c.input, "转录", "结果照样交给宿主工具");
+});
+
+test("打开识别记录：回到独立工具、按状态还原，图片区不出现", async () => {
+  const c = loadAuthed();
+  const base = {
+    id: "h1", toolId: "32", toolName: "识别图片文字", icon: "scan-text",
+    input: "图片 2 张 · 手写作文", output: "二、高三下统筹", fileName: "卷子1.jpg",
+    createdAt: Date.now(), _bodyLoaded: true,
+    ocr: { sig: "2|a,b|local|handwritten", mode: "handwritten", count: 2, names: ["卷子1.jpg"], truncated: false },
+  };
+
+  await c.openHistory({ ...base });
+  assert.strictEqual(c.currentTool.id, "32");
+  assert.strictEqual(c.isOcrTool, true, "回到独立工作区，而不是宿主工具");
+  assert.strictEqual(c.ocrText, "二、高三下统筹");
+  assert.strictEqual(c.ocrModeManual, "handwritten", "类型跟着记录走");
+  assert.strictEqual(c.ocrStage, "history");
+  assert.strictEqual(c.ocrImages.length, 0, "历史不存图片");
+  assert.strictEqual(c.ocrHasImage, false);
+  assert.strictEqual(c.ocrHasText, true, "只有文字也要把工作区显示出来");
+  assert.strictEqual(c.ocrNeedsStart, false, "没有图片就不该出现「开始识别」面板");
+
+  await c.openHistory({ ...base, id: "h2", partial: true });
+  assert.strictEqual(c.ocrStage, "stopped", "上次是被停下的，打开就要标出来");
+  assert.strictEqual(c.ocrStopped, true);
+
+  await c.openHistory({ ...base, id: "h3", error: "识别失败，请稍后重试" });
+  assert.strictEqual(c.ocrStage, "error");
+  assert.strictEqual(c.ocrError, "识别失败，请稍后重试");
+
+  // 列表：没有模型名的记录别留一个孤零零的「·」
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  assert.ok(/<span class="truncate" x-show="item.model"/.test(html), "模型位要跟着 model 有没有再显示");
+  // 回看记录时的出口是「另起一次」，不是给这条记录补图：
+  // 历史记录已经生成完了，语义上只能复制它、或者开始新的一次
+  assert.strictEqual((html.match(/x-show="ocrHasText && !ocrHasImage && !ocrStreaming" @click="startNewOcr\(\)"/g) || []).length, 2,
+    "工作区与弹窗两处都要给出「新的识别」入口");
+  assert.strictEqual(html.indexOf("上传图片"), -1, "回看记录时不该出现「上传图片」这种像在给记录补图的入口");
+  // 错误卡里的「重试」同样要有图片可重试：历史记录只有文字，按下去只会弹「请先选择图片」
+  assert.strictEqual((html.match(/class="btn-primary" x-show="ocrHasImage" @click="ocrRetry\(\)"/g) || []).length, 2,
+    "重试按钮要跟着有没有图片出现");
+});
+
+test("回看记录时点「新的识别」：工作区回空状态，历史那条原样不动", async () => {
+  const c = loadAuthed();
+  const record = {
+    id: "h1", toolId: "32", toolName: "识别图片文字", icon: "scan-text",
+    input: "图片 2 张 · 手写作文", output: "旧的转录结果", fileName: "",
+    createdAt: Date.now(), _bodyLoaded: true,
+    ocr: { sig: "2|a,b|local|handwritten", mode: "handwritten", count: 2, names: [], truncated: false },
+  };
+  c.history = [record];   // 列表里已经有这条（打开历史的前提）
+  await c.openHistory(record);
+  assert.strictEqual(c.ocrStage, "history");
+  assert.strictEqual(c.ocrHasText, true);
+
+  c.startNewOcr();
+  assert.strictEqual(c.ocrStage, "empty", "回到空状态，上传入口才会出现");
+  assert.strictEqual(c.ocrHasText, false);
+  assert.strictEqual(c.ocrHasImage, false);
+  assert.strictEqual(c.ocrStartStepVisible, false);
+  assert.strictEqual(c.ocrText, "", "工作区里的旧文字清掉（它已经在历史里）");
+  assert.strictEqual(c.history.length, 1, "历史记录一条都不许少");
+  assert.strictEqual(c.history[0].output, "旧的转录结果");
+  // 清掉归属：下一次识别写新记录，不会回头覆盖刚才看的那条
+  assert.strictEqual(c._ocrHistoryId, "");
+});
+
+test("识别记录的快照能过镜像层往返（导出/线路同步不许丢字段）", () => {
+  const M = global.NbxMirror;
+  const index = M.sanitizeIndex ? M.sanitizeIndex({
+    v: 3, id: "h1", toolId: "32", toolName: "识别图片文字", icon: "scan-text",
+    title: "二、高三下统筹", error: "", partial: true, createdAt: 1, updatedAt: 2,
+    model: "", inputHead: "图片 2 张 · 手写作文", hasOcr: true,
+  }) : null;
+  assert.ok(index, "索引里多出来的标量不该让整条记录作废");
+  assert.strictEqual(index.partial, true);
+  assert.strictEqual(index.hasOcr, true, "识别标记要能跟着索引一起同步");
+
+  const body = M.sanitizeBody({
+    input: "图片 2 张 · 手写作文", output: "二、高三下统筹", fileName: "卷子1.jpg",
+    ocr: { sig: "2|a,b|local|handwritten", mode: "handwritten", count: 2, names: ["卷子1.jpg"], truncated: true },
+  });
+  assert.ok(body && body.ocr, "识别记录的快照必须原样搬运，不能被白名单丢掉");
+  assert.strictEqual(body.ocr.mode, "handwritten");
+  assert.deepStrictEqual(body.ocr.names, ["卷子1.jpg"]);
+  assert.strictEqual(body.ocr.truncated, true);
+  // 老信封（没有 ocr 字段）重算出来不能多出键：否则旧备份会被判成摘要不符
+  const legacy = M.sanitizeBody({ input: "a", output: "b", fileName: "c" });
+  assert.deepStrictEqual(Object.keys(legacy), ["input", "output", "fileName"]);
 });
 
 /* ---------------- 图片查看 / 编辑（转正 · 裁剪） ---------------- */

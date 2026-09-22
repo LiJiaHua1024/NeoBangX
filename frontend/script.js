@@ -245,6 +245,17 @@ function ocrModeCanChoose(toolId) {
 function ocrModeMeta(mode) {
   return OCR_MODES[mode] || OCR_MODES.printed;
 }
+/* 识别记录在历史列表里的标题：取正文第一个像样的行的前 16 个字。
+   不调 /api/chat/title——转录结果本身就是最认得出这份材料的东西，让模型再总结一遍
+   纯属多花一次调用。Markdown 前缀（#、-、>）与空白先剥掉，免得列表里全是符号。 */
+function ocrHistoryTitle(text) {
+  const lines = String(text || "").split("\n");
+  for (const raw of lines) {
+    const line = raw.replace(/^[\s#>*\-+]+/, "").trim();
+    if (line.length >= 2) return line.slice(0, 16);
+  }
+  return "";
+}
 
 /* ---- 图片编辑（转正 · 裁剪）的参数与几何 ---- */
 // 裁剪/转正后重新编码的质量：原图是 0.85 已经是二次编码，这里留高一点，别再叠一层损失
@@ -1100,6 +1111,8 @@ function historyBodyOf(item) {
   };
   if (item.migration) body.migration = item.migration;
   if (item.visualPaper) body.visualPaper = item.visualPaper;
+  // 识别记录的元信息（类型 / 张数 / 是否截断 / 批次签名），图片字节不在这里面
+  if (item.ocr) body.ocr = item.ocr;
   // 回答版本（重新生成保留的历次结果，见 nbx-versions.js）。
   // item.output/model/partial/error 始终是活动版本的投影，这里只多带一份历史版本。
   // 只有一版时不写：单版本记录与版本化之前的数据形状完全一致，镜像摘要也不受影响。
@@ -2011,12 +2024,18 @@ function nbx() {
     ocrIndex: 0,           // 预览的是第几张
     // 手动选的类型：只对 OCR_MANUAL_MODE_TOOLS 里的工具有意义，其它工具的类型由工具决定
     ocrModeManual: "printed",   // printed = 印刷试卷，handwritten = 手写作文
-    ocrStage: "empty",          // empty | ready | streaming | done | error
+    // stopped = 没跑完就停了（用户点取消，或后端以 [CANCELLED] 收尾）：已出的内容要留着，
+    // 但要按「一半」交代，不能跟 done 一样当成完整结果；history = 从历史记录打开的回看态
+    ocrStage: "empty",          // empty | ready | streaming | done | stopped | error | history
     ocrText: "",
     ocrRendered: "",
     ocrError: "",
     ocrTruncated: false,
     ocrMediaCollapsed: false,
+    _ocrMediaTouched: false,    // 用户手动开合过图片区：本批不再按屏幕宽度覆盖他的选择
+    _ocrCancelReason: "",       // user = 用户点了取消，batch = 批次变了被动停：两者的收尾不同
+    _ocrHistoryId: "",          // 本批图片上一次写进历史的那条 id（同批重跑写回它，不刷屏）
+    ocrStartStep: false,        // 正停在「确认类型 / 开始识别」这一步（见 ocrStartStepVisible）
     ocrElapsedSec: 0,
     /* 全屏查看（点图放大）同时也是编辑：转正与裁剪都先只记在这里，
        关闭时一次性烘焙进 dataUrl——转两次再裁一次也只编码一次，不叠画质损失 */
@@ -4613,6 +4632,20 @@ function nbx() {
     get ocrHasImage() {
       return this.ocrImages.length > 0 || !!this.ocrPairToken;
     },
+    /* 有内容可看（识别结果，或一条「停下/失败」的交代）。历史记录不存图片，
+       所以「有文字没图片」是常态：工作区、动作条都不能只认 ocrHasImage */
+    get ocrHasText() {
+      return !!this.ocrText || this.ocrStage === "stopped" || this.ocrStage === "error";
+    },
+    get ocrStopped() {
+      return this.ocrStage === "stopped";
+    },
+    /* 看识别结果 = 读长文，正文优先：手机上图片区默认收起（点缩略图进全屏编辑器看细节），
+       桌面左右分栏时左栏默认展开。抽出来给「重置、首次收图」共用——只在按下开始识别时
+       才设的话，手机上刚选完图就会被一屏大图顶掉正文的位置 */
+    _ocrDefaultCollapsed() {
+      return !matchMedia("(min-width: 1024px)").matches;
+    },
     get ocrBatchLabel() {
       const total = this.ocrImages.length;
       if (!total) return "还没有图片";
@@ -4650,6 +4683,13 @@ function nbx() {
     get ocrNeedsStart() {
       return this.ocrHasImage && !this.ocrStreaming && this.ocrStage !== "error" && !this.ocrText;
     },
+    /* 「确认类型 / 开始识别」这一步此刻是否真的显示。
+       光看「有没有结果」不够：已经有结果时用户仍要能回到这一步换类型
+       （工具 32 的手写/印刷切换只有这一个入口，回不去就等于永远换不了），
+       所以另立一个显式开关，由「换类型」与「收图后」两步置位 */
+    get ocrStartStepVisible() {
+      return this.ocrStartStep && this.ocrHasImage && !this.ocrStreaming && this.ocrStage !== "error";
+    },
     resetOcr() {
       try { if (this._ocrAbort) this._ocrAbort.abort(); } catch { /* 忽略 */ }
       this._ocrAbort = null;
@@ -4662,10 +4702,13 @@ function nbx() {
       this.ocrRendered = "";
       this.ocrError = "";
       this.ocrTruncated = false;
-      this.ocrMediaCollapsed = false;
+      this.ocrMediaCollapsed = this._ocrDefaultCollapsed();
       this.ocrViewerOpen = false;
       this.ocrModalOpen = false;
+      this.ocrStartStep = false;
       this._ocrMediaTouched = false;
+      this._ocrCancelReason = "";
+      this._ocrHistoryId = "";
       this.ocrHost = this.isOcrTool ? "tool" : "modal";
       this.resetOcrEdit();
     },
@@ -4707,6 +4750,9 @@ function nbx() {
       }
       this.ocrImages.push(...added);
       this.ocrIndex = Math.min(this.ocrIndex, this.ocrImages.length - 1);
+      // 这一批的图片区是展开还是收起，在收图这一步就定下来：手机上默认收起（正文优先），
+      // 桌面左右分栏时默认展开。用户自己点过折叠开关就按他的来，别再覆盖回去
+      if (!this._ocrMediaTouched) this.ocrMediaCollapsed = this._ocrDefaultCollapsed();
       // 图片就位后停在「开始识别」这一步：真要送出去识别得由用户按下按钮，不替他顺手按下
       this.enterOcrStartStep();
     },
@@ -4716,6 +4762,7 @@ function nbx() {
       if (!this.ocrHasImage) return;
       this.ocrError = "";
       this.ocrStage = "ready";
+      this.ocrStartStep = true;
       // 扫码引导弹窗还开着时不叠第二个弹窗：关掉它时再打开识别面板
       if (this.ocrHost === "modal" && !this.pairOpen) this.ocrModalOpen = true;
     },
@@ -4797,22 +4844,33 @@ function nbx() {
     },
     toggleOcrMedia() {
       this.ocrMediaCollapsed = !this.ocrMediaCollapsed;
+      // 用户自己动过这个开关：本批之后不再按屏幕宽度改回去
+      this._ocrMediaTouched = true;
     },
     selectOcrImage(i) {
       this.ocrIndex = Math.max(0, Math.min(i, this.ocrImages.length - 1));
     },
+    /* 点缩略图：先选中它，再分档决定要不要顺手打开全屏编辑器。
+       窄屏（没有左右分栏、大图预览被收起）时缩略图就是唯一的看图入口，
+       不点开就没有地方看细节、转正、裁剪了；宽屏左栏就是大图，点一下只换选中项 */
+    onOcrThumbTap(i) {
+      this.selectOcrImage(i);
+      if (this._ocrDefaultCollapsed()) this.openOcrEditor();
+    },
     /* 批次变了（删/排序/追加）就得重新拍板：停掉在跑的识别，回到「开始识别」这步，
        但已有文本先留着（可复制），按下开始识别才覆盖 */
     _afterBatchChanged() {
-      if (this.ocrStreaming) this.ocrCancel();
+      if (this.ocrStreaming) this.ocrCancel("batch");
       if (!this.ocrImages.length && !this.ocrPairToken) {
         this.ocrStage = "empty";
         this.ocrText = "";
         this.ocrRendered = "";
         this.ocrError = "";
+        this.ocrStartStep = false;
         return;
       }
-      if (this.ocrStage === "done" || this.ocrStage === "error" || this.ocrStage === "streaming") {
+      if (this.ocrStage === "done" || this.ocrStage === "stopped" || this.ocrStage === "error"
+        || this.ocrStage === "streaming" || this.ocrStage === "history") {
         this.enterOcrStartStep();
       }
     },
@@ -5324,10 +5382,10 @@ function nbx() {
       this.retreatMascot();
       if (this.ocrHost === "modal") this.ocrModalOpen = true;
       // 手机上默认把图片收成一条：窄屏里图片占满上半屏会把正文挤没
-      if (!this._ocrMediaTouched) {
-        this.ocrMediaCollapsed = !matchMedia("(min-width: 1024px)").matches;
-        this._ocrMediaTouched = true;
-      }
+      if (!this._ocrMediaTouched) this.ocrMediaCollapsed = this._ocrDefaultCollapsed();
+      this._ocrCancelReason = "";
+      // 开始跑了：类型那一步让位给结果区（跑完还能用「换类型」回来）
+      this.ocrStartStep = false;
       this.ocrError = "";
       this.ocrTruncated = false;
       this.ocrText = "";
@@ -5356,6 +5414,9 @@ function nbx() {
           signal: ctrl.signal,
         });
         if (!res.ok) throw await this._ocrHttpError(res);
+        // 后端以 [CANCELLED] 收尾 = 这次没跑完（停止请求生效、连接被掐），
+        // 不能跟 [DONE] 一样当成「识别完了」交给用户
+        let serverStopped = false;
         await this.consumeSSE(res, (event, data) => {
           if (event === "token") {
             let text = data;
@@ -5364,22 +5425,33 @@ function nbx() {
             this.scheduleOcrRender();
           } else if (event === "truncated") {
             this.ocrTruncated = true;
+          } else if (event === "done" && data === "[CANCELLED]") {
+            serverStopped = true;
           } else if (event === "error") {
             let msg = "识别失败，请稍后重试";
             try { msg = JSON.parse(data).message || msg; } catch { /* 保留默认文案 */ }
             throw new Error(msg);
           }
         });
-        this.ocrStage = "done";
         this.flushOcrRender();
+        this.ocrStage = serverStopped ? "stopped" : "done";
+        this.pushOcrHistory(this.ocrStage);
         if (this.ocrTruncated) {
           this.toast("结果可能不完整：可减少一次识别的张数，或请管理员调大 OCR 输出上限", "warn");
         }
+        if (this.ocrStage === "stopped") this.toast("已停止识别，已经识别出的内容已保留", "warn");
       } catch (e) {
         if (e && e.name === "AbortError") {
-          // 用户主动取消：已出的内容留着，按完成态展示
           this.flushOcrRender();
-          this.ocrStage = this.ocrText ? "done" : "ready";
+          // 只有用户自己点的取消按「已停止」收尾：批次变更 / 切工具导致的被动停止，
+          // 落点由发起方决定，这里不要再改状态，也不要为一次被撤销的识别留记录
+          if (this._ocrCancelReason !== "user") return;
+          // 用户主动取消：已出的内容是真实产出，按「已停止」交代并留一条记录
+          this.ocrStage = this.ocrText ? "stopped" : "ready";
+          if (this.ocrText) {
+            this.pushOcrHistory("stopped");
+            this.toast("已停止识别，已经识别出的内容已保留", "warn");
+          }
           return;
         }
         if (e && (e.status === 401 || e.status === 403)) {
@@ -5388,8 +5460,10 @@ function nbx() {
         this.ocrError = describeError(e, "识别失败，请稍后重试");
         this.flushOcrRender();
         this.ocrStage = "error";
+        this.pushOcrHistory("error");
       } finally {
         this._stopOcrTimer();
+        this._ocrCancelReason = "";
         if (this._ocrAbort === ctrl) this._ocrAbort = null;
       }
     },
@@ -5442,7 +5516,11 @@ function nbx() {
         this._ocrRenderTimer = null;
       }
     },
-    ocrCancel() {
+    /* reason：user = 用户按下取消（默认）；batch = 批次变了被动停。
+       只有用户自己停的那次才按「已停止」交代并留记录（见 ocrStart 的收尾），
+       被动停的落点由发起方（_afterBatchChanged / resetOcr）决定 */
+    ocrCancel(reason = "user") {
+      this._ocrCancelReason = reason;
       try { if (this._ocrAbort) this._ocrAbort.abort(); } catch { /* 忽略 */ }
       if (this._ocrRequestId) {
         // 通知后端停流：断开的连接不会自动让上游停下
@@ -5480,6 +5558,13 @@ function nbx() {
       this.resetOcr();
       this.openUploadDialog({ imagesOnly: true });
     },
+    /* 回看历史记录时的唯一出口：另起一次识别。
+       这条记录是已经生成完的一次结果，不归这一屏再管——把工作区放回空状态（上传入口回来），
+       历史里那份一个字都不动；下一次识别自然落在一条新记录上 */
+    startNewOcr() {
+      if (this.ocrStreaming) return;
+      this.resetOcr();
+    },
     copyOcrText() {
       if (!this.ocrText.trim()) {
         this.toast("还没有可复制的内容", "warn");
@@ -5495,6 +5580,103 @@ function nbx() {
       }
       this.ocrModalOpen = false;
       this.resetOcr();
+    },
+    /* ---- 识别记录（历史） ----
+       本批图片 + 当前类型的签名：同批重跑写回同一条记录，换批或换类型才新开一条。
+       历史不存图片，所以签名只看图片 id 与类型——裁剪/转正改的是 dataUrl，仍是同一批 */
+    _ocrBatchSig() {
+      const ids = this.ocrImages.map((item) => String(item.id || "")).join(",");
+      return `${this.ocrImages.length}|${ids}|${this.ocrPairToken ? "pair" : "local"}|${this.ocrMode}`;
+    },
+    /* 识别留痕，只给独立工作区（「识别图片文字」工具本身）写：
+       弹窗形态是给别的工具做「录入」的一步，文字随后写进宿主工具的输入框、由宿主那一条
+       记录承担（见 ocrUseText），在这里再记一份只会让历史列表出现两条重复内容。
+       state 直接来自状态机：done / stopped / error——已停止与出错都要如实标出来，
+       不然用户回头翻记录会把半份转录当成完整结果 */
+    pushOcrHistory(state, errorMsg = "") {
+      if (this.ocrHost !== "tool") return null;
+      const text = this.ocrText;
+      // 一个字都没出的普通收尾（纯取消）不值得占位；出错即使没出字也要留痕，
+      // 用户点「重试」还是会回来找那条失败原因
+      if (!text.trim() && state !== "error") return null;
+      const count = this.ocrImages.length;
+      const label = ocrModeMeta(this.ocrMode).label;
+      const names = this.ocrImages.map((item) => String(item.name || "")).filter(Boolean);
+      const sig = this._ocrBatchSig();
+      const fields = {
+        toolId: OCR_TOOL_ID,
+        toolName: "识别图片文字",
+        icon: "scan-text",
+        input: count ? `图片 ${count} 张 · ${label}` : label,
+        fileName: names.join("、").slice(0, 120),
+        title: ocrHistoryTitle(text),
+        output: text,
+        // 识别走的是后台配置的 OCR 模型，前端不知道是哪个，就如实留空
+        // （列表里 model 为空时不显示模型位，见历史卡片）
+        model: "",
+        partial: state === "stopped",
+        error: state === "error"
+          ? String(errorMsg || this.ocrError || "识别失败").slice(0, 300)
+          : "",
+        // 快照：列表只用标量，这里给下一次同批重跑与「结果可能不完整」的提示留依据。
+        // 图片本身的字节不进历史（localStorage 只有几 MB，一份整卷就能把它撑爆）
+        ocr: {
+          sig,
+          mode: this.ocrMode,
+          count,
+          names: names.slice(0, OCR_MAX_IMAGES),
+          truncated: !!this.ocrTruncated,
+        },
+      };
+      const prevId = this._ocrHistoryId;
+      const prev = prevId ? this.history.find((item) => item.id === prevId) : null;
+      // 还是那批图片（同批重跑、失败重试）：写回原记录，不在列表里刷出一串半截结果
+      if (prev && prev.ocr && prev.ocr.sig === sig) {
+        this._hydrateHistory(prev);
+        // 这次一个 token 都没出（比如重试又失败）：保留上一次已识别出的内容，越重试越少最糟
+        if (!text.trim() && prev.output) fields.output = prev.output;
+        Object.assign(prev, fields);
+        NbxVersions.syncActive(prev);
+        this._persistHistoryItem(prev);
+        return prev;
+      }
+      const item = this._unshiftHistory({
+        id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+        createdAt: Date.now(),
+        ...fields,
+      });
+      this._ocrHistoryId = item.id;
+      return item;
+    },
+    /* 打开一条识别记录：历史不存图片，所以恢复的是「文字 + 类型 + 状态」三样，
+       图片区整块不出现；要重新识别得重新上传图片（按钮就藏在有这个前提的地方） */
+    openOcrHistory(item) {
+      this._hydrateHistory(item);
+      const tool = this.findTool(OCR_TOOL_ID) || {
+        id: OCR_TOOL_ID, name: "识别图片文字", icon: "scan-text",
+        description: "图片转文字（试卷、手写作文）", prompt_loaded: true,
+      };
+      this.currentTool = tool;
+      this.resetOcr();
+      const snap = item.ocr || {};
+      this.ocrModeManual = snap.mode === "handwritten" ? "handwritten" : "printed";
+      this.ocrText = item.output || "";
+      this.ocrRendered = renderMd(this.ocrText);
+      this.ocrTruncated = !!snap.truncated;
+      this.ocrImages = [];
+      this.ocrIndex = 0;
+      // 记下这条是谁：在它基础上重跑仍旧写回这一条，而不是又开一条
+      this._ocrHistoryId = item.id;
+      this.ocrError = item.error || "";
+      this.ocrStage = item.error ? "error" : (item.partial ? "stopped" : "history");
+      this.rightMobileOpen = false;
+      // 上一批的滚动位置不该带到这一条上（工作区那份正文区在文档里排第一，弹窗那份在后）
+      this.$nextTick(() => {
+        try {
+          const el = document.querySelector(".ocr-body");
+          if (el) el.scrollTop = 0;
+        } catch { /* 无 DOM 的环境（测试）不需要复位滚动 */ }
+      });
     },
 
     /* ============ 手机扫码拍摄（电脑端） ============ */
@@ -5626,6 +5808,8 @@ function nbx() {
             // 由电脑端说了算。之后的帧不再动窗口：用户手动打开它就是为了再看一眼二维码，
             // 不该被随后到的照片顶掉
             if (prevCount === 0) {
+              // 第一批照片到了：与本地收图同一个口径——手机上图片区默认收起，正文优先
+              if (!this._ocrMediaTouched) this.ocrMediaCollapsed = this._ocrDefaultCollapsed();
               if (this.pairOpen || this.ocrStage === "empty") {
                 this.pairOpen = false;
                 this.enterOcrStartStep();
@@ -8801,6 +8985,11 @@ function nbx() {
       }
       if (item.visualPaper || item.hasPaper || item.toolId === "13") {
         this.openVisualPaperHistory(item);
+        return;
+      }
+      // 识别记录回放到 OCR 工作区（历史不存图片，所以回来后是「只有文字」的形态）
+      if (item.ocr || item.toolId === OCR_TOOL_ID) {
+        this.openOcrHistory(item);
         return;
       }
       const tool = this.findTool(item.toolId);

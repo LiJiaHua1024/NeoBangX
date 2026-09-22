@@ -9,7 +9,7 @@
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=ocr260921a">
+  <link rel="stylesheet" href="/static/styles.css?v=ocr260922b">
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -41,7 +41,7 @@
   <script defer src="/static/nbx-mirror-peer.js?v=mirror4"></script>
   <!-- 回答版本容器（重新生成保留旧结果）：纯函数层，必须先于 script.js 加载 -->
   <script defer src="/static/nbx-versions.js?v=ver1"></script>
-  <script defer src="/static/script.js?v=ocr260921a"></script>
+  <script defer src="/static/script.js?v=ocr260922b"></script>
   <script defer src="/static/vp-print.js?v=export3mode1"></script>
   <!-- 点击特效接入层（懒加载 vendor/ba-click-fx，不抢首屏） -->
   <script defer src="/static/click-fx.js?v=fx260922a"></script>
@@ -1558,10 +1558,14 @@
                 <h2 class="font-bold leading-tight truncate" style="font-size:.98rem" x-text="currentTool.name"></h2>
                 <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
               </div>
+              <!-- 窄档：历史入口（识别记录也回到这里看）；宽屏右侧栏常驻，不需要 -->
+              <button class="icon-btn ml-auto shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                      @click="rightMobileOpen = true" title="历史与收藏" aria-label="打开历史与收藏"
+                      x-html="icon('clock','w-5 h-5')"></button>
             </div>
 
             <!-- 空状态：图片入口占满结果区，不做成角落里的小按钮 -->
-            <div x-show="!ocrHasImage" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
+            <div x-show="!ocrHasImage && !ocrHasText" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
               <div class="ocr-empty" @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false"
                    @drop.prevent="handleFileDrop($event)" :class="{ 'drag-over': dragOver }">
                 <div class="ocr-empty-card glass-soft">
@@ -1576,16 +1580,17 @@
               </div>
             </div>
 
-            <!-- 有图：≥lg 左右分栏，小屏自动变「图上文下」 -->
-            <div x-show="ocrHasImage" x-cloak class="ocr-split mascot-keepout flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
-              <div class="ocr-side" :class="{ 'is-collapsed': ocrMediaCollapsed }">
+            <!-- 有图或有结果：≥lg 左右分栏（图左文右），窄屏一律「图一条 + 正文占满」。
+                 历史记录不存图片，所以「有文字没图片」是常态，这里不能只认 ocrHasImage -->
+            <div x-show="ocrHasImage || ocrHasText" x-cloak class="ocr-split mascot-keepout flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+              <div class="ocr-side" :class="{ 'is-collapsed': ocrMediaCollapsed }" x-show="ocrHasImage">
                 <div class="ocr-side-head">
-                  <button type="button" class="icon-btn" style="width:2rem;height:2rem" @click="toggleOcrMedia()"
-                          :title="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
-                          :aria-label="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
+                  <button type="button" class="icon-btn ocr-side-fold" style="width:2rem;height:2rem" @click="toggleOcrMedia()"
+                          :title="ocrMediaCollapsed ? '展开图片区' : '收起图片区'"
+                          :aria-label="ocrMediaCollapsed ? '展开图片区' : '收起图片区'"
                           x-html="icon(ocrMediaCollapsed ? 'chevrons-right' : 'chevrons-left','w-4 h-4')"></button>
-                  <span class="text-xs text-dim truncate" x-text="ocrBatchLabel + ' · 点击可放大、裁剪'"></span>
-                  <button type="button" class="icon-btn ml-auto" style="width:2rem;height:2rem" @click="openUploadDialog({ imagesOnly: true })"
+                  <span class="text-xs text-dim truncate ocr-side-label" x-text="ocrBatchLabel + ' · 点击可放大、裁剪'"></span>
+                  <button type="button" class="icon-btn ml-auto ocr-side-add" style="width:2rem;height:2rem" @click="openUploadDialog({ imagesOnly: true })"
                           title="添加图片，与已有的图片一起识别"
                           x-html="icon('plus','w-4 h-4')"></button>
                 </div>
@@ -1595,16 +1600,18 @@
                          :alt="ocrCurrentImage.name" @click="openOcrEditor()" title="点击放大查看、裁剪与转正">
                   </template>
                 </div>
-                <div class="ocr-thumbs" x-show="!ocrMediaCollapsed && ocrImages.length > 1">
+                <!-- 缩略图条：一行横向滚动。窄屏大图预览是收起的，点缩略图直接进全屏编辑器看细节 -->
+                <div class="ocr-thumbs" x-show="ocrImages.length" :class="{ 'is-single': ocrImages.length < 2 }">
                   <template x-for="(img, i) in ocrImages" :key="img.id">
-                    <button type="button" class="ocr-thumb" :class="{ on: i === ocrIndex }" @click="selectOcrImage(i)" :title="img.name">
+                    <button type="button" class="ocr-thumb" :class="{ on: i === ocrIndex }" @click="onOcrThumbTap(i)" :title="img.name">
                       <img :src="img.dataUrl || img.url" :alt="img.name">
                       <span class="ocr-thumb-del" @click.stop="removeOcrImage(i)" title="移除这张">×</span>
                     </button>
                   </template>
                 </div>
-                <!-- 批次筛选：顺序就是转录顺序（多页试卷按页拼），所以前移/后移是实义操作 -->
-                <div class="ocr-side-foot" x-show="!ocrMediaCollapsed && ocrImages.length">
+                <!-- 批次筛选：顺序就是转录顺序（多页试卷按页拼），所以前移/后移是实义操作。
+                     窄屏这一行也是图片的加图入口（头一行的加号在手机上收起） -->
+                <div class="ocr-side-foot" x-show="ocrImages.length">
                   <span class="text-[11px] text-faint" x-text="'第 ' + (ocrIndex + 1) + ' / ' + ocrImages.length + ' 张'"></span>
                   <span class="ml-auto flex items-center gap-1">
                     <button type="button" class="icon-btn" style="width:1.9rem;height:1.9rem"
@@ -1616,6 +1623,9 @@
                     <button type="button" class="icon-btn danger" style="width:1.9rem;height:1.9rem"
                             @click="removeOcrImage(ocrIndex)" title="移除这张"
                             x-html="icon('trash','w-4 h-4')"></button>
+                    <button type="button" class="icon-btn ocr-side-add-phone" style="width:1.9rem;height:1.9rem"
+                            @click="openUploadDialog({ imagesOnly: true })" title="添加图片，与已有的图片一起识别"
+                            x-html="icon('plus','w-4 h-4')"></button>
                   </span>
                 </div>
               </div>
@@ -1623,21 +1633,28 @@
               <div class="ocr-main">
                 <div class="ocr-main-head">
                   <span class="ocr-type-chip" x-text="ocrTypeLabel"></span>
-                  <span class="text-xs text-dim truncate hidden sm:inline" x-text="ocrModeHint"></span>
-                  <span class="ml-auto flex items-center gap-1.5 shrink-0">
+                  <span class="text-xs text-dim ocr-main-hint" x-text="ocrModeHint"></span>
+                  <span class="ocr-main-acts">
                     <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
-                            x-show="ocrHasImage && !ocrStreaming && !ocrNeedsStart && ocrModeSelectable" @click="enterOcrStartStep()"
+                            x-show="ocrHasImage && ocrHasText && !ocrStreaming && !ocrStartStepVisible && ocrModeSelectable" @click="enterOcrStartStep()"
                             title="回到类型选择（不会立刻重新识别）">
                       <span x-html="icon('replace','w-3.5 h-3.5')"></span>换类型
                     </button>
                     <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
-                            x-show="ocrText && !ocrStreaming && !ocrNeedsStart" @click="ocrStart()"
+                            x-show="ocrHasImage && ocrHasText && !ocrStreaming && !ocrStartStepVisible" @click="ocrStart()"
                             title="用当前类型重新识别这批图片">
                       <span x-html="icon('refresh','w-3.5 h-3.5')"></span>重新识别
                     </button>
                     <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
                             x-show="ocrText && !ocrStreaming" @click="copyOcrText()">
                       <span x-html="icon('copy','w-3.5 h-3.5')"></span>复制
+                    </button>
+                    <!-- 回看历史记录时（只有文字、没有图片）这里给的是「另起一次」，
+                         不是给这条记录补图：这条记录已经生成完了，历史里那份原样留着 -->
+                    <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
+                            x-show="ocrHasText && !ocrHasImage && !ocrStreaming" @click="startNewOcr()"
+                            title="清空这次回看，回到上传入口开始一次新的识别（历史记录不受影响）">
+                      <span x-html="icon('plus','w-3.5 h-3.5')"></span>新的识别
                     </button>
                     <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
                             x-show="ocrStreaming" @click="ocrCancel()">
@@ -1647,7 +1664,7 @@
                 </div>
                 <div class="ocr-body scroll-thin">
                   <!-- 类型由工具决定，这一步只是确认类型 + 开始识别：不替用户按下开始 -->
-                  <div class="ocr-type" x-show="ocrNeedsStart" x-cloak>
+                  <div class="ocr-type" x-show="ocrStartStepVisible" x-cloak>
                     <p class="ocr-type-title" x-text="ocrModeSelectable ? '选择识别类型' : '识别类型'"></p>
                     <p class="ocr-type-sub" x-show="ocrModeSelectable">两类素材的转录规则不同。</p>
                     <p class="ocr-type-live" x-show="pairLive">手机仍在传输：已收到 <span x-text="pairCount"></span> 张。开始识别后新上传的照片不计入本批。</p>
@@ -1680,17 +1697,24 @@
                       <span class="thinking-time" x-text="ocrElapsedText"></span>
                     </div>
                   </div>
-                  <div class="md ocr-text" x-show="!!ocrText && !ocrNeedsStart" x-html="ocrRendered"></div>
+                  <div class="md ocr-text" x-show="!!ocrText && !ocrStartStepVisible" x-html="ocrRendered"></div>
                   <span class="tw-cursor" x-show="ocrStreaming && !!ocrText"></span>
-                  <div class="ocr-note ocr-note-warn" x-show="ocrTruncated && !ocrStreaming && !ocrNeedsStart">
+                  <!-- 停下与截断都要如实交代：半份转录最容易被当成完整结果往下用 -->
+                  <div class="ocr-note ocr-note-warn" x-show="ocrStopped && !ocrStreaming && !ocrStartStepVisible">
+                    已停止识别：这是已经识别出的部分，可能不完整。可先复制现有内容，或重新识别一次。
+                  </div>
+                  <div class="ocr-note ocr-note-warn" x-show="ocrTruncated && !ocrStreaming && !ocrStartStepVisible && !ocrStopped">
                     结果可能不完整：输出达到上限。可减少一次识别的张数，或请管理员调大后台的「OCR 最大输出 Tokens」。
                   </div>
                   <div class="error-card" x-show="ocrStage === 'error'">
                     <div class="font-semibold mb-1">这次识别没有成功</div>
                     <div x-text="ocrError"></div>
                     <div class="error-actions mt-3">
-                      <button type="button" class="btn-primary" @click="ocrRetry()">重试</button>
-                      <button type="button" class="btn-ghost" @click="openUploadDialog()">换一张图片</button>
+                      <!-- 重试和换图都要有图片可谈（历史记录里只有文字）；
+                           没有图时只留「新的识别」——这条记录已经结束了，能做的是另起一次 -->
+                      <button type="button" class="btn-primary" x-show="ocrHasImage" @click="ocrRetry()">重试</button>
+                      <button type="button" class="btn-ghost" x-show="ocrHasImage" @click="openUploadDialog()">换一张图片</button>
+                      <button type="button" class="btn-ghost" x-show="!ocrHasImage" @click="startNewOcr()">新的识别</button>
                     </div>
                   </div>
                 </div>
@@ -2157,7 +2181,8 @@
                   </p>
                   <div class="flex items-center gap-1.5 mt-1.5 text-[11px] text-faint">
                     <span x-text="fmtTime(item.createdAt)"></span>
-                    <span class="truncate" x-text="'· ' + shortModel(item.model)"></span>
+                    <!-- 模型由后台配置决定的工具（识别图片文字）拿不到模型名，这时别留一个孤零零的「·」 -->
+                    <span class="truncate" x-show="item.model" x-text="'· ' + shortModel(item.model)"></span>
                   </div>
                 </div>
               </template>
@@ -2646,7 +2671,7 @@
         </div>
 
         <!-- 没有图片（删空了、或刚换过一批）：给回一个入口，不留一块空壳子 -->
-        <div x-show="!ocrHasImage" x-cloak class="flex-1 min-h-0 overflow-y-auto scroll-thin">
+        <div x-show="!ocrHasImage && !ocrHasText" x-cloak class="flex-1 min-h-0 overflow-y-auto scroll-thin">
           <div class="ocr-empty">
             <div class="ocr-empty-card glass-soft">
               <span class="ocr-empty-ico" x-html="icon('scan-text','w-8 h-8')"></span>
@@ -2659,15 +2684,15 @@
           </div>
         </div>
 
-        <div x-show="ocrHasImage" class="ocr-split flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
-          <div class="ocr-side" :class="{ 'is-collapsed': ocrMediaCollapsed }">
+        <div x-show="ocrHasImage || ocrHasText" class="ocr-split flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+          <div class="ocr-side" :class="{ 'is-collapsed': ocrMediaCollapsed }" x-show="ocrHasImage">
             <div class="ocr-side-head">
-              <button type="button" class="icon-btn" style="width:2rem;height:2rem" @click="toggleOcrMedia()"
-                      :title="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
-                      :aria-label="ocrMediaCollapsed ? '展开图片栏' : '收起图片栏'"
+              <button type="button" class="icon-btn ocr-side-fold" style="width:2rem;height:2rem" @click="toggleOcrMedia()"
+                      :title="ocrMediaCollapsed ? '展开图片区' : '收起图片区'"
+                      :aria-label="ocrMediaCollapsed ? '展开图片区' : '收起图片区'"
                       x-html="icon(ocrMediaCollapsed ? 'chevrons-right' : 'chevrons-left','w-4 h-4')"></button>
-              <span class="text-xs text-dim truncate" x-text="ocrBatchLabel + ' · 点击可放大、裁剪'"></span>
-              <button type="button" class="icon-btn ml-auto" style="width:2rem;height:2rem" @click="openUploadDialog({ imagesOnly: true })"
+              <span class="text-xs text-dim truncate ocr-side-label" x-text="ocrBatchLabel + ' · 点击可放大、裁剪'"></span>
+              <button type="button" class="icon-btn ml-auto ocr-side-add" style="width:2rem;height:2rem" @click="openUploadDialog({ imagesOnly: true })"
                       title="添加图片，与已有的图片一起识别"
                       x-html="icon('plus','w-4 h-4')"></button>
             </div>
@@ -2677,16 +2702,18 @@
                      :alt="ocrCurrentImage.name" @click="openOcrEditor()" title="点击放大查看、裁剪与转正">
               </template>
             </div>
-            <div class="ocr-thumbs" x-show="!ocrMediaCollapsed && ocrImages.length > 1">
+            <!-- 缩略图条：一行横向滚动。窄屏大图预览是收起的，点缩略图直接进全屏编辑器看细节 -->
+            <div class="ocr-thumbs" x-show="ocrImages.length" :class="{ 'is-single': ocrImages.length < 2 }">
               <template x-for="(img, i) in ocrImages" :key="img.id">
-                <button type="button" class="ocr-thumb" :class="{ on: i === ocrIndex }" @click="selectOcrImage(i)" :title="img.name">
+                <button type="button" class="ocr-thumb" :class="{ on: i === ocrIndex }" @click="onOcrThumbTap(i)" :title="img.name">
                   <img :src="img.dataUrl || img.url" :alt="img.name">
                   <span class="ocr-thumb-del" @click.stop="removeOcrImage(i)" title="移除这张">×</span>
                 </button>
               </template>
             </div>
-            <!-- 批次筛选：顺序就是转录顺序（多页试卷按页拼），所以前移/后移是实义操作 -->
-            <div class="ocr-side-foot" x-show="!ocrMediaCollapsed && ocrImages.length">
+            <!-- 批次筛选：顺序就是转录顺序（多页试卷按页拼），所以前移/后移是实义操作。
+                 窄屏这一行也是图片的加图入口（头一行的加号在手机上收起） -->
+            <div class="ocr-side-foot" x-show="ocrImages.length">
               <span class="text-[11px] text-faint" x-text="'第 ' + (ocrIndex + 1) + ' / ' + ocrImages.length + ' 张'"></span>
               <span class="ml-auto flex items-center gap-1">
                 <button type="button" class="icon-btn" style="width:1.9rem;height:1.9rem"
@@ -2698,6 +2725,9 @@
                 <button type="button" class="icon-btn danger" style="width:1.9rem;height:1.9rem"
                         @click="removeOcrImage(ocrIndex)" title="移除这张"
                         x-html="icon('trash','w-4 h-4')"></button>
+                <button type="button" class="icon-btn ocr-side-add-phone" style="width:1.9rem;height:1.9rem"
+                        @click="openUploadDialog({ imagesOnly: true })" title="添加图片，与已有的图片一起识别"
+                        x-html="icon('plus','w-4 h-4')"></button>
               </span>
             </div>
           </div>
@@ -2705,21 +2735,26 @@
           <div class="ocr-main">
             <div class="ocr-main-head">
               <span class="ocr-type-chip" x-text="ocrTypeLabel"></span>
-              <span class="text-xs text-dim truncate hidden sm:inline" x-text="ocrModeHint"></span>
-              <span class="ml-auto flex items-center gap-1.5 shrink-0">
+              <span class="text-xs text-dim ocr-main-hint" x-text="ocrModeHint"></span>
+              <span class="ocr-main-acts">
                 <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
-                        x-show="ocrHasImage && !ocrStreaming && !ocrNeedsStart && ocrModeSelectable" @click="enterOcrStartStep()"
+                        x-show="ocrHasImage && ocrHasText && !ocrStreaming && !ocrStartStepVisible && ocrModeSelectable" @click="enterOcrStartStep()"
                         title="回到类型选择（不会立刻重新识别）">
                   <span x-html="icon('replace','w-3.5 h-3.5')"></span>换类型
                 </button>
                 <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
-                        x-show="ocrText && !ocrStreaming && !ocrNeedsStart" @click="ocrStart()"
+                        x-show="ocrHasImage && ocrHasText && !ocrStreaming && !ocrStartStepVisible" @click="ocrStart()"
                         title="用当前类型重新识别这批图片">
                   <span x-html="icon('refresh','w-3.5 h-3.5')"></span>重新识别
                 </button>
                 <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
                         x-show="ocrText && !ocrStreaming" @click="copyOcrText()">
                   <span x-html="icon('copy','w-3.5 h-3.5')"></span>复制
+                </button>
+                <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
+                        x-show="ocrHasText && !ocrHasImage && !ocrStreaming" @click="startNewOcr()"
+                        title="清空这次回看，回到上传入口开始一次新的识别（历史记录不受影响）">
+                  <span x-html="icon('plus','w-3.5 h-3.5')"></span>新的识别
                 </button>
                 <button type="button" class="btn-ghost" style="padding:.32rem .68rem;font-size:.78rem"
                         x-show="ocrStreaming" @click="ocrCancel()">
@@ -2729,7 +2764,7 @@
             </div>
             <div class="ocr-body scroll-thin">
               <!-- 类型由工具决定，这一步只是确认类型 + 开始识别：不替用户按下开始 -->
-              <div class="ocr-type" x-show="ocrNeedsStart" x-cloak>
+              <div class="ocr-type" x-show="ocrStartStepVisible" x-cloak>
                 <p class="ocr-type-title" x-text="ocrModeSelectable ? '选择识别类型' : '识别类型'"></p>
                 <p class="ocr-type-sub" x-show="ocrModeSelectable">两类素材的转录规则不同。</p>
                 <p class="ocr-type-live" x-show="pairLive">手机仍在传输：已收到 <span x-text="pairCount"></span> 张。开始识别后新上传的照片不计入本批。</p>
@@ -2762,16 +2797,20 @@
                   <span class="thinking-time" x-text="ocrElapsedText"></span>
                 </div>
               </div>
-              <div class="md ocr-text" x-show="!!ocrText && !ocrNeedsStart" x-html="ocrRendered"></div>
+              <div class="md ocr-text" x-show="!!ocrText && !ocrStartStepVisible" x-html="ocrRendered"></div>
               <span class="tw-cursor" x-show="ocrStreaming && !!ocrText"></span>
-              <div class="ocr-note ocr-note-warn" x-show="ocrTruncated && !ocrStreaming && !ocrNeedsStart">
+              <!-- 停下与截断都要如实交代：半份转录最容易被当成完整结果往下用 -->
+              <div class="ocr-note ocr-note-warn" x-show="ocrStopped && !ocrStreaming && !ocrStartStepVisible">
+                已停止识别：这是已经识别出的部分，可能不完整。可先复制现有内容，或重新识别一次。
+              </div>
+              <div class="ocr-note ocr-note-warn" x-show="ocrTruncated && !ocrStreaming && !ocrStartStepVisible && !ocrStopped">
                 结果可能不完整：输出达到上限。可减少一次识别的张数，或请管理员调大后台的「OCR 最大输出 Tokens」。
               </div>
               <div class="error-card" x-show="ocrStage === 'error'">
                 <div class="font-semibold mb-1">这次识别没有成功</div>
                 <div x-text="ocrError"></div>
                 <div class="error-actions mt-3">
-                  <button type="button" class="btn-primary" @click="ocrRetry()">重试</button>
+                  <button type="button" class="btn-primary" x-show="ocrHasImage" @click="ocrRetry()">重试</button>
                   <button type="button" class="btn-ghost" @click="ocrRepick()">换一批图片</button>
                 </div>
               </div>
@@ -2779,9 +2818,9 @@
           </div>
         </div>
 
-        <div x-show="ocrHasImage" class="px-5 py-3 border-t flex items-center gap-2 shrink-0" style="border-color:var(--border)">
-          <span class="text-xs text-faint hidden sm:inline" x-text="ocrBatchLabel"></span>
-          <span class="ml-auto flex items-center gap-2">
+        <div x-show="ocrHasImage || ocrHasText" class="ocr-foot px-5 py-3 border-t flex items-center gap-2 shrink-0" style="border-color:var(--border)">
+          <span class="text-xs text-faint ocr-foot-label" x-text="ocrBatchLabel"></span>
+          <span class="ocr-foot-acts">
             <button type="button" class="btn-ghost" @click="ocrRepick()" :disabled="ocrStreaming">换一批图片</button>
             <button type="button" class="btn-primary" @click="ocrUseText()" :disabled="ocrStreaming || !ocrText">
               <span x-html="icon('check','w-4 h-4')"></span>使用这段文字

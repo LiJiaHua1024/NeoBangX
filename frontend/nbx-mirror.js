@@ -340,6 +340,10 @@
       out.versions = vers;
       out.activeVersionId = str(raw.activeVersionId, MAX_FIELD.id);
     }
+    // 识别记录的元信息（类型 / 张数 / 是否截断 / 批次签名，见识别图片文字）：
+    // 不认识结构，原样搬运即可。追加在已有键之后，理由同上
+    var ocr = cloneOpaque(raw.ocr);
+    if (ocr) out.ocr = ocr;
     return out;
   }
 

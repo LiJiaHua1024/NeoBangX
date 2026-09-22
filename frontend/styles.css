@@ -3369,10 +3369,15 @@ mark, .vp-hl {
 /* 识别弹窗：比其他弹窗大一号（宽屏约 1100px 宽、88vh 高），小屏自动变整屏抽屉 */
 .modal-ocr { max-width: min(94vw, 68rem); height: min(88vh, 47.5rem); max-height: 92dvh; }
 
-/* 识别工作区：≥lg 左右分栏（图左文右），小屏图上文下 */
+/* 识别工作区：≥lg 左右分栏（图左文右），窄屏是「图一条 + 正文占满」 */
 .ocr-split { min-height: 0; }
+/* 图片区：绝不允许被正文挤矮后再把内容溢到下一排。
+   手机上报的「类型条和按钮上叠着一行字」，根因就是这里只有 min-height:0：正文一多，
+   这一栏被压到 0 高，而里面那行（flex:0 0 auto）照旧画在自己的位置上，正好压住下一排。
+   所以这里写死「不压缩 + 自己裁」，需要限高时由下面各分档给 max-height。 */
 .ocr-side {
   display: flex; flex-direction: column; min-height: 0;
+  flex: 0 0 auto; overflow: hidden;
   border-bottom: 1px solid var(--border);
 }
 .ocr-side-head {
@@ -3393,9 +3398,12 @@ mark, .vp-hl {
   box-shadow: 0 12px 32px -20px rgba(0, 0, 0, 0.7);
   cursor: zoom-in;
 }
+/* 缩略图条：一行横向滚动，不论折叠与否都在（窄屏它就是唯一的看图入口）。
+   桌面左栏上方已经是大图，只有一张时这一行是多余的，那时才藏（见 ≥1024 段） */
 .ocr-thumbs {
   display: flex; gap: 0.4rem; flex: 0 0 auto;
   padding: 0.5rem 0.6rem; overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 .ocr-thumb {
   position: relative; flex: 0 0 auto; width: 3rem; height: 3rem; padding: 0;
@@ -3410,7 +3418,14 @@ mark, .vp-hl {
   border-radius: 0 0 0 0.5rem; font-size: 0.8rem; line-height: 1;
   background: color-mix(in srgb, #000 55%, transparent); color: #fff;
 }
-.ocr-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+/* 窄屏（手机）的图片操作行：加图入口只在这一行出现（头一行的加号在手机上被收起）。
+   宽屏头一行已经有加号，这里再给一个就是两个入口，反而犹豫点哪个 */
+.ocr-side-add-phone { display: none; }
+.ocr-main {
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
+  /* 正文优先：图片区不压缩，这里也不能被压成 0 高（小屏横屏时至少留得下几行字） */
+  min-height: 9rem;
+}
 /* 批次筛选条：前移/后移/移除都作用在「当前预览的那张」上 */
 .ocr-side-foot {
   display: flex; align-items: center; gap: 0.5rem; flex: 0 0 auto;
@@ -3422,7 +3437,17 @@ mark, .vp-hl {
   min-height: 2.8rem; padding: 0.5rem 0.9rem;
   border-bottom: 1px solid var(--border);
 }
+/* 当前类型说明：宽度不够时截断，绝不推着按钮换行或溢出。
+   flex-basis 写 0（不是 auto）：换行判定看的是「假设尺寸」，按内容算就会整行掉到下一行 */
+.ocr-main-hint { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 操作按钮组：右对齐，装不下就在本组内换行——这一排任何时候都不许压到别的元素上 */
+.ocr-main-acts {
+  flex: 0 0 auto; margin-left: auto;
+  display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.4rem;
+}
 .ocr-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0.9rem 1.1rem 1.4rem; }
+/* 弹窗底部条（换一批 / 使用这段文字）：主按钮吃掉剩余宽度，拇指够得着 */
+.ocr-foot-acts { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
 /* 识别结果是给人读的：限一个舒适行宽，不铺满整个工作区 */
 .ocr-text { max-width: 48rem; margin: 0 auto; }
 .ocr-placeholder { padding: 1.4rem 0; text-align: center; font-size: 0.82rem; color: var(--text-faint); }
@@ -3683,20 +3708,51 @@ mark, .vp-hl {
   }
   .ocr-side.is-collapsed .ocr-side-head > span { display: none; }
   .ocr-side.is-collapsed .ocr-side-head .ml-auto { margin-left: 0; }
+  /* 收成一条时缩略图与批次操作一并让位：3.25rem 宽的细条里塞不下它们 */
+  .ocr-side.is-collapsed .ocr-thumbs,
+  .ocr-side.is-collapsed .ocr-side-foot { display: none; }
+  /* 左栏上方就是大图，只有一张时那行缩略图是多余的（点了还要重新找） */
+  .ocr-thumbs.is-single { display: none; }
 }
 
-/* <lg：不分左右，图片默认收成顶部一条，展开时占上半屏 */
+/* <lg：不分左右。图片区默认收成「缩略图条 + 操作行」，展开时把大图预览放在两者之上，
+   并给它一个上限——正文才是这一屏的主角 */
 @media (max-width: 1023.98px) {
-  .ocr-side:not(.is-collapsed) { max-height: 42dvh; }
+  .ocr-side:not(.is-collapsed) { max-height: 46dvh; }
+  .ocr-side-body { max-height: 30dvh; }
+  /* 动作条：一行放不下就把按钮整组换到第二行（类型与它的说明留在第一行），不挤不叠 */
+  .ocr-main-head { flex-wrap: wrap; row-gap: 0.4rem; }
+  .ocr-main-acts { flex: 1 1 100%; margin-left: 0; }
 }
 
+/* 手机：图片区就是「一条缩略图 + 一行操作」。放大、转正、裁剪都在全屏编辑器里做
+   （点缩略图直接进去），所以这里不再留大图预览和它的开合按钮——
+   它们只会把正文挤到看不见 */
 @media (max-width: 640px) {
   .modal-ocr { height: 92dvh; max-height: 92dvh; }
   .upl-opt { min-height: 3.9rem; padding: 0.8rem 0.9rem; }
   .ocr-modes button { padding: 0.32rem 0.6rem; font-size: 0.75rem; }
-  .ocr-main-head { padding: 0.45rem 0.7rem; }
-  .ocr-body { padding: 0.8rem 0.9rem 1.2rem; }
+  .ocr-side-head { display: none; }
+  .ocr-side-fold, .ocr-side-body { display: none !important; }
+  .ocr-side { max-height: none; }
+  .ocr-thumbs { padding: 0.4rem 0.55rem; gap: 0.35rem; }
+  .ocr-thumb { width: 2.75rem; height: 2.75rem; }
+  /* 缩略图上那个 18px 的 × 手指按不准，误触却是真删：移除统一走下面那行的垃圾桶 */
+  .ocr-thumb-del { display: none; }
+  .ocr-side-foot { padding: 0.3rem 0.5rem; }
+  /* 触屏下限那一档：图标按钮放到 2.4rem（与编辑器工具条同一口径），一排排得下又按得住 */
+  .ocr-side-foot .icon-btn { width: 2.4rem !important; height: 2.4rem !important; }
+  .ocr-side-add-phone { display: inline-flex; }
+  /* 动作条：类型一行，按钮另一行且等宽分开——一手握住手机时每个都够得着 */
+  .ocr-main-head { padding: 0.4rem 0.6rem; gap: 0.35rem 0.5rem; }
+  .ocr-main-acts { gap: 0.35rem; }
+  .ocr-main-acts .btn-ghost { flex: 1 1 0; justify-content: center; min-height: 2.6rem; padding: 0 0.4rem; }
+  .ocr-body { padding: 0.7rem 0.85rem 1rem; }
   .ocr-side-body { padding: 0.5rem; }
+  /* 弹窗底部条：主按钮占满剩下的宽度，别让拇指去够一个小按钮 */
+  .ocr-foot-label { display: none; }
+  .ocr-foot-acts { flex: 1 1 auto; }
+  .ocr-foot-acts .btn-primary { flex: 1 1 auto; justify-content: center; }
   /* 编辑器工具条：窄屏只有图标，按钮压到 40px 的触摸下限附近，一排排得下 */
   .ocr-tools-pill { gap: 0.1rem; padding: 0.18rem; }
   .ocr-tool { height: 2.4rem; padding: 0 0.6rem; }
