@@ -4206,7 +4206,18 @@ function nbx() {
     /* ============ 文件上传 ============ */
     handleFileSelect(ev) {
       const file = ev.target.files && ev.target.files[0];
-      if (file) this.readFileContent(file);
+      if (file) {
+        // accept 过滤器能在系统文件对话框里被切成「所有文件」：图片仍拦下来，
+        // 指去「没有原稿，需要拍照」那条路，避免和相册入口重叠
+        const name = file.name || "";
+        const dot = name.lastIndexOf(".");
+        const ext = dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+        if (isImageFile(file, ext)) {
+          this.toast("图片请从「没有原稿，需要拍照」进入", "warn");
+        } else {
+          this.readFileContent(file);
+        }
+      }
       ev.target.value = "";
     },
     handleFileDrop(ev) {
@@ -4505,7 +4516,7 @@ function nbx() {
       return matchMedia("(pointer: coarse)").matches;
     },
     get uploadHostLabel() {
-      return this.isOcrTool ? "" : "图片会先做文字识别，结果放进输入框";
+      return this.isOcrTool ? "" : "文档解析成文字后放进输入框";
     },
     /* 「已有原稿 / 没有原稿」这个分叉只对别的工具的普通上传成立：
        识别图片文字这件事本身就是「把照片转成文字」，已经有原稿（Word/PDF/文本）就直接用，
@@ -4539,7 +4550,8 @@ function nbx() {
     backToSourceStep() {
       this.uploadStep = "source";
     },
-    /* 已有原稿：直接唤起系统文件选择（文档照旧走解析，图片转识别） */
+    /* 已有原稿：直接唤起系统文件选择（文档走解析；图片不从这条路进，
+       统一归「没有原稿，需要拍照」，两条路不重叠） */
     pickUploadFile() {
       const el = this.$refs.uploadFileInput;
       if (!el) return;
@@ -4562,7 +4574,18 @@ function nbx() {
     },
     handleFileSelect(ev) {
       const file = ev.target.files && ev.target.files[0];
-      if (file) this.readFileContent(file);
+      if (file) {
+        // accept 过滤器能在系统文件对话框里被切成「所有文件」：图片仍拦下来，
+        // 指去「没有原稿，需要拍照」那条路，避免和相册入口重叠
+        const name = file.name || "";
+        const dot = name.lastIndexOf(".");
+        const ext = dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+        if (isImageFile(file, ext)) {
+          this.toast("图片请从「没有原稿，需要拍照」进入", "warn");
+        } else {
+          this.readFileContent(file);
+        }
+      }
       ev.target.value = "";
     },
     handleFileDrop(ev) {

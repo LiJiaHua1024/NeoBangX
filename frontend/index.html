@@ -2537,7 +2537,7 @@
          三个隐藏 input 常驻在这里：编辑器里的「上传」按钮只负责打开这个弹窗，
          具体唤起哪一个由本弹窗决定（文档、相册多选、现拍各一个） -->
     <input type="file" x-ref="uploadFileInput" class="hidden"
-           accept=".txt,.md,.markdown,.docx,.doc,.pdf,image/*" @change="handleFileSelect($event)">
+           accept=".txt,.md,.markdown,.docx,.doc,.pdf" @change="handleFileSelect($event)">
     <input type="file" x-ref="uploadAlbumInput" class="hidden" accept="image/*" multiple @change="onOcrFilesSelect($event)">
     <input type="file" x-ref="uploadCameraInput" class="hidden" accept="image/*" capture="environment" @change="onOcrFilesSelect($event)">
     <div x-show="uploadOpen" class="modal-mask is-nested" :class="{ 'under-stack': ocrModalOpen }" x-transition.opacity x-cloak
@@ -2560,7 +2560,7 @@
               <span class="upl-opt-ico" x-html="icon('file-text','w-5 h-5')"></span>
               <span class="upl-opt-text">
                 <b>已有原稿</b>
-                <i>选择文件：Word、PDF、文本或图片</i>
+                <i>选择文件：Word、PDF、文本</i>
               </span>
             </button>
             <button type="button" class="upl-opt" @click="gotoPhotoStep()">
@@ -2572,7 +2572,8 @@
             </button>
           </div>
 
-          <!-- 第二步：怎么拍（相机那一项只在触摸设备上出现：桌面摄像头拍纸质材料效果差，不给这个入口） -->
+          <!-- 第二步：怎么拍（相机只在触摸设备上出现：桌面摄像头拍纸质材料效果差；
+               扫码拍摄只在非触摸设备上出现：手机自己就是拍摄端，扫码没有意义） -->
           <div class="upl-opts" x-show="uploadStep === 'photo'" x-cloak>
             <button type="button" class="upl-opt" x-show="touchPrimary" @click="pickUploadCamera()">
               <span class="upl-opt-ico" x-html="icon('camera','w-5 h-5')"></span>
@@ -2588,7 +2589,7 @@
                 <i x-text="touchPrimary ? '从相册中选取，可多张' : '选择已拍好的图片，可多张'"></i>
               </span>
             </button>
-            <button type="button" class="upl-opt" @click="startPairing()">
+            <button type="button" class="upl-opt" x-show="!touchPrimary" @click="startPairing()">
               <span class="upl-opt-ico" x-html="icon('qr','w-5 h-5')"></span>
               <span class="upl-opt-text">
                 <b>手机扫码拍摄<span class="upl-tag">推荐</span></b>

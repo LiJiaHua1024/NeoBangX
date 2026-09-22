@@ -947,6 +947,50 @@ test("识别工具里丢进文档类文件：给出提示而不是塞进看不�
   );
 });
 
+/* 「已有原稿」只收文档，图片统一走「没有原稿，需要拍照」：两条路不重叠 */
+
+test("已有原稿的文件框选到图片：拦下来并指去拍照支路，不进识别批次", async () => {
+  const { c } = loadModule(makeStorage());
+  let accepted = 0;
+  c.acceptOcrImages = async () => { accepted += 1; };
+
+  await c.handleFileSelect({
+    target: { files: [new File(["x"], "page.jpg", { type: "image/jpeg" })], value: "page.jpg" },
+  });
+
+  assert.strictEqual(accepted, 0, "文件框不是图片入口，别悄悄收进批次");
+  assert.strictEqual(c.ocrImages.length, 0);
+  assert.ok(c.toasts.some((t) => t.msg.indexOf("没有原稿，需要拍照") >= 0),
+    JSON.stringify(c.toasts));
+});
+
+test("已有原稿选到文档：照旧走解析，不受图片拦截影响", async () => {
+  const { c } = loadModule(makeStorage());
+  const seen = [];
+  c.readFileContent = async (file) => { seen.push(file.name); };
+
+  const file = new File(["hello"], "paper.txt", { type: "text/plain" });
+  await c.handleFileSelect({ target: { files: [file], value: "paper.txt" } });
+
+  assert.deepStrictEqual(seen, ["paper.txt"]);
+  assert.deepStrictEqual(c.toasts, []);
+});
+
+test("拖进来的图片仍走识别：拦的只是文件框，拖拽不是弹窗里的选项", async () => {
+  const { c } = loadModule(makeStorage());
+  c.isAuthenticated = true;
+  let accepted = 0;
+  c.acceptOcrImages = async () => { accepted += 1; };
+
+  c.handleFileDrop({
+    dataTransfer: { files: [new File(["x"], "page.jpg", { type: "image/jpeg" })] },
+  });
+  await new Promise((r) => setTimeout(r, 0));
+
+  assert.strictEqual(accepted, 1, "拖拽图片要照旧进识别批次");
+});
+
+
 test("批次筛选：排序与删除都会回到「开始识别」，顺序进请求", async () => {
   const { c } = loadModule(makeStorage());
   c.currentTool = { id: "32", name: "识别图片文字" };
@@ -1118,6 +1162,35 @@ test("批次里点加号：上传弹窗要能压住识别弹窗，而且只给�
   c.ocrRepick();
   assert.strictEqual(c.uploadStep, "photo");
   assert.strictEqual(c.uploadOpen, true);
+});
+
+test("拍照那一步按设备分流：手机不给扫码，桌面不给相机", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+
+  // 扫码是为了把照片送到这台设备：手机自己就是拍摄端，入口必须藏掉
+  assert.ok(/<button type="button" class="upl-opt" x-show="!touchPrimary" @click="startPairing\(\)">/.test(html),
+    "扫码拍摄只在非触摸设备上出现");
+  // 与之对称：相机拍照只在触摸设备上出现（桌面摄像头拍纸质材料效果差）
+  assert.ok(/<button type="button" class="upl-opt" x-show="touchPrimary" @click="pickUploadCamera\(\)">/.test(html),
+    "相机拍照只在触摸设备上出现");
+});
+
+test("已有原稿与图片上传分清：文件框不收图片，文案也不再提图片", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const { c } = loadModule(makeStorage());
+
+  const input = html.match(/<input type="file" x-ref="uploadFileInput"[^>]*>/);
+  assert.ok(input, "已有原稿的文件框要在");
+  assert.ok(input[0].indexOf("image/*") < 0, "accept 不该再带 image/*，图片归拍照那条路");
+  assert.ok(input[0].indexOf('.txt,.md,.markdown,.docx,.doc,.pdf') >= 0, "文档类型要留全");
+
+  assert.ok(html.indexOf("选择文件：Word、PDF、文本或图片") < 0, "副标题不能再提图片");
+  assert.ok(html.indexOf("选择文件：Word、PDF、文本") >= 0);
+
+  // source 步的提示语同样只讲文档
+  c.currentTool = { id: "13", name: "试卷可视化全解" };
+  assert.strictEqual(c.uploadHostLabel.indexOf("图片"), -1, c.uploadHostLabel);
+  assert.ok(c.uploadHostLabel.indexOf("文档") >= 0, c.uploadHostLabel);
 });
 
 test("收起图片栏：图标是双箭头，收起后两个按钮竖排不压到右边", () => {
