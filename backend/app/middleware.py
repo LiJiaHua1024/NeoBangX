@@ -6,8 +6,9 @@
 - 压缩：按 Accept-Encoding 优先 brotli 后退 gzip，对满足条件的 200 响应
   预压缩。压缩结果按 (路径, mtime_ns, size, 编码) 缓存在内存并受 LRU 上限
   约束，文件不变则零重复压缩 CPU；启动时后台线程预热全部可压缩资源。
-- 缓存头：URL 带 query string（本项目全部 ?v= 版本化资源）→ immutable
-  长缓存；不带 query → 短缓存 + stale-while-revalidate；`/` → no-cache。
+- 缓存头：URL 带 query string（本项目 ?v= 版本化资源）→ immutable 长缓存；
+  不带 query 与 `/` → no-cache（每次重验证，etag 命中即 304）。未版本化的
+  资源绝不能长缓存：改了文件而 URL 不变时，浏览器会一直用旧代码。
 - 透传：非 http scope、其它路径（API/SSE 绝不触碰）、非 200/304/206 状态、
   带 Range 的请求、HEAD、已带 Content-Encoding 或超出体积阈值的响应。
 
@@ -99,14 +100,12 @@ class StaticCacheMiddleware:
         compress: bool = True,
         brotli: bool = True,
         max_age: int = 31536000,
-        short_max_age: int = 3600,
     ) -> None:
         self.app = app
         self.static_dir = os.fspath(static_dir)
         self.compress = compress
         self.brotli = brotli and _brotli is not None
         self.max_age = max_age
-        self.short_max_age = short_max_age
         self._cache: "OrderedDict[Tuple[str, int, int, str], bytes]" = OrderedDict()
         self._lock = threading.Lock()
         if self.compress:
@@ -136,8 +135,9 @@ class StaticCacheMiddleware:
         if query:
             # 带 ?v= 版本号：内容变则 URL 变，可无限期缓存
             return f"public, max-age={self.max_age}, immutable"
-        # 未版本化的资源（如 thumbmark）：短缓存 + 后台重验证
-        return f"public, max-age={self.short_max_age}, stale-while-revalidate=86400"
+        # 未版本化的资源：文件内容变了 URL 却不变，长缓存会把旧代码钉在用户浏览器里
+        # （升级后「新 HTML + 旧 JS」混搭，界面直接错乱）。每次重验证，靠 etag 304 兜底。
+        return "no-cache"
 
     def _cache_get(self, key: Tuple[str, int, int, str]) -> Optional[bytes]:
         with self._lock:

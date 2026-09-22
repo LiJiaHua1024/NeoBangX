@@ -1,7 +1,7 @@
 """静态资源压缩与缓存头中间件测试。
 
-覆盖：brotli/gzip 协商、Cache-Control 三档策略、etag 304 透传、
-Range 透传、API 路径不受影响。注意 httpx 会按 Content-Encoding
+覆盖：brotli/gzip 协商、Cache-Control 两档策略（版本化长缓存 / 未版本化 no-cache）、
+etag 304 透传、Range 透传、API 路径不受影响。注意 httpx 会按 Content-Encoding
 自动解码，故断言压缩效果时看响应头，断言内容时直接读正文。
 """
 
@@ -29,14 +29,15 @@ def test_static_versioned_asset_is_immutable_and_compressed(client):
     assert "etag" in r.headers  # 上游 etag 原样保留，条件请求仍可 304
 
 
-def test_static_without_query_uses_short_cache(client):
-    # click-fx.js 不带 ?v= 请求：短缓存 + 后台重验证（兜底未版本化引用）
+def test_static_without_query_is_no_cache(client):
+    # 未版本化的资源（无 ?v=）必须每次重验证：改了文件而 URL 不变时，
+    # 长缓存会把旧代码钉在浏览器里，升级后出现「新 HTML + 旧 JS」的错配
     r = client.get("/static/click-fx.js")
     assert r.status_code == 200
     cc = r.headers["cache-control"]
-    assert "max-age=3600" in cc
-    assert "stale-while-revalidate=86400" in cc
+    assert cc == "no-cache"
     assert "immutable" not in cc
+    assert "etag" in r.headers  # 仍靠 etag 做条件请求，命中即 304
 
 
 def test_index_html_is_no_cache(client):

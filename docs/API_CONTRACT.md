@@ -165,7 +165,9 @@
       "score": 8.5,
       "reasoning_effort": null,
       "thinking_budget": null,
-      "chores_only": false,
+      "user_usable": true,
+      "ocr_usable": false,
+      "chores_usable": true,
       "enabled": true,
       "is_free": true,
       "free_no_code": true,
@@ -184,9 +186,19 @@
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
+| `user_usable` | bool | 用户可用：出现在 8000 用户端的模型列表里（缺省 true） |
+| `ocr_usable` | bool | 用于 OCR：可作为「识别图片文字」的识别模型（缺省 false） |
+| `chores_usable` | bool | 用于 Chores：可作为标题生成等轻量任务的模型（缺省 true） |
+| `enabled` | bool | 禁用后用户端、OCR 与 Chores 全不可用，是三项用途的上一级开关（缺省 true） |
 | `is_free` | bool | 免费模型：限额内调用不消耗使用码次数，用户端模型列表显示「免费」标签；限额命中后持可用使用码时转按次扣减 |
 | `free_no_code` | bool | 无码可用：没有使用码或次数已用尽时仍可调用（仅在 `is_free` 为真时生效） |
 | `free_limits` | object | 防滥用限额，键为 `minute` / `hour` / `day` / `week` / `month`，0 或 -1（含负数）= 不限制 |
+
+模型用途是**三个能力位**（`user_usable` / `ocr_usable` / `chores_usable`），`enabled=false`
+是它们的上一级开关。历史数据里只有旧的「仅 Chores」单开关时，读取侧自动迁移为
+`user_usable=!chores_only`、`ocr_usable=false`、`chores_usable=true`；响应中不再出现
+`chores_only`。`models` 为旧版逗号分隔格式时，每个模型按上述缺省值补齐
+（用户可用 + 用于 Chores，不默认开放 OCR）。
 
 ---
 
@@ -237,7 +249,7 @@
 （免码模型必然也是免费模型，两个标签并列），并在无使用码时默认选中可免码试用的模型。
 
 `max_visible_models` 为管理后台配置的模型下拉最大显示数（`0` = 不折叠）。
-`models` 已过滤掉**已禁用**与**仅 Chores**模型，因此该数组长度就是折叠计数的基数，
+`models` 已过滤掉**已禁用**与**未勾选「用户可用」**的模型，因此该数组长度就是折叠计数的基数，
 前端按 `min(长度, max_visible_models)` 渲染，超出部分折叠为「展开全部」。
 
 ### GET `/api/tools/models`
@@ -916,27 +928,49 @@ data: [DONE]
 {
   "config": {
     "default_model": "openrouter/google/gemini-2.0-flash",
-    "models": "openrouter/google/gemini-2.0-flash",
-    "llm_base_url": "",
-    "llm_api_key": "sk-****abcd",
-    "llm_model": "",
+    "models": [
+      {
+        "id": "openrouter/google/gemini-2.0-flash",
+        "name": "Gemini 2.0 Flash",
+        "description": "",
+        "score": 8.5,
+        "reasoning_effort": null,
+        "thinking_budget": null,
+        "user_usable": true,
+        "ocr_usable": false,
+        "chores_usable": true,
+        "enabled": true,
+        "is_free": true,
+        "free_no_code": true,
+        "free_limits": { "minute": 0, "hour": 0, "day": 0, "week": 0, "month": 0 }
+      }
+    ],
     "chores_model": "",
-    "chores_base_url": "",
-    "chores_api_key": "",
+    "ocr_model": "",
+    "ocr_max_tokens": "8192",
     "max_tokens": "4096",
     "timeout": "120",
+    "first_token_timeout": "30",
     "max_visible_models": "5",
     "log_payload": "false",
-    "log_retention_days": "0"
+    "log_retention_days": "0",
+    "tool_reasoning_rules": [],
+    "mirror_enabled": "false",
+    "mirror_origins": []
   },
   "keys": [ ... ],
-  "has_llm_api_key": true,
-  "has_chores_api_key": false
+  "reasoning_efforts": ["high", "low", "medium", "minimal", "none"],
+  "providers": [ ... ],
+  "model_provider_map": { ... },
+  "available_model_ids": [ ... ]
 }
 ```
 
+`config` 中的 `models` / `tool_reasoning_rules` / `mirror_origins` 已在服务端
+从存储字符串还原为对象或数组，前端无需二次解析；模型的三项用途能力位恒存在。
 `log_payload` 以字符串 `"true"` / `"false"` 存储；`log_retention_days` 为
-天数字符串，`"0"` 表示永久保留。
+天数字符串，`"0"` 表示永久保留。旧的单 URL 配置键（`llm_base_url` / `llm_api_key` /
+`llm_model` / `chores_base_url` / `chores_api_key`）已不再由配置读写，仅作为环境变量兜底存在。
 
 ### 11.8 更新配置
 
@@ -947,8 +981,18 @@ data: [DONE]
 ```json
 {
   "default_model": "openrouter/google/gemini-2.0-flash",
-  "models": "model1,model2",
-  "llm_api_key": "sk-...",
+  "models": [
+    {
+      "id": "openrouter/google/gemini-2.0-flash",
+      "name": "Gemini 2.0 Flash",
+      "user_usable": true,
+      "ocr_usable": false,
+      "chores_usable": true,
+      "enabled": true
+    }
+  ],
+  "ocr_model": "",
+  "ocr_max_tokens": 8192,
   "max_tokens": 4096,
   "max_visible_models": 5,
   "log_payload": true,
@@ -956,7 +1000,7 @@ data: [DONE]
 }
 ```
 
-说明：API Key 字段若含 `****` 则视为未修改；留空字符串则清除密钥。
+说明：`models` 是结构化数组（字段见上表），整体替换存储值；未出现在请求体中的键保持不变。
 `log_retention_days` 取值范围 `0 ~ 36500`，越界返回 422。
 `max_visible_models` 为用户端模型下拉的最大显示数，取值范围 `0 ~ 50`
 （`0` = 不折叠，保持全量显示），越界返回 422；只统计勾选了「用户可用」
@@ -1097,3 +1141,4 @@ openrouter/deepseek/deepseek-chat
 | 1.10.0 | 2026-09-13 | 模型下拉折叠：新增全局配置 `max_visible_models`（0~50，0 = 不折叠），`GET /api/tools/` 随模型列表下发该值，用户端下拉超出后折叠为前 N 个并提供「展开全部」；仅统计可见模型，已禁用与仅 Chores 模型不计入 |
 | 1.11.0 | 2026-09-18 | 试卷可视化全解（工具 13）输出格式 v2：语篇改为「`@@PASSAGE_DEF@@` 声明一次 + `@@PASSAGE_REF@@` 逐题按编号引用」，同一篇正文不再逐题重复（典型整卷省约 1 万输出 token）；解析改两趟，编号悬空时标记 `passageUnresolved` 并在左栏告警；旧内联 `@@PASSAGE@@` 与历史记录继续兼容，详见 12.1 |
 | 1.12.0 | 2026-09-21 | 图片识别（工具 32「识别图片文字」）：新增 `/api/chat/stream` 的 `images` / `ocr_mode` / `pair_token` 字段与 OCR 链路（须有效使用码、始终不计费仅限流、用后台配置的 `ocr_model`、撞输出上限发 `truncated` 事件），`input` 改为对非 OCR 工具必填；`ocr_mode` 由前端按所在工具决定（作文批改用手写规则、其余用印刷规则，只有工具 32 与 25 给用户选）；模型用途改为能力位 `user_usable` / `ocr_usable` / `chores_usable`（`chores_only` 废弃但读取时自动迁移），新增配置键 `ocr_model` / `ocr_max_tokens`；新增扫码配对接口 `/api/ocr/pair*` 与手机拍照页 `/m/upload`（手机页配色跟随电脑端当前主题，见 8.3） |
+| 1.13.0 | 2026-09-21 | 模型用途迁移的可用性修正：管理端「禁用模型」开关改为「启用模型」（标签此前与正向的 `enabled` 字段相反，打开开关即启用却写着"禁用"）；旧单 URL 配置迁移改为直读环境配置与库中旧键（此前从 `get_config_map` 取已被移出白名单的 `llm_base_url` / `llm_api_key`，恒为空），并会在启动时补齐已存在的空地址 Provider；静态资源改为「未版本化一律每次重验证」，避免升级后浏览器继续用旧 script.js（管理端 index.html 的资源版本串同步提升） |

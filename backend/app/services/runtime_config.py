@@ -496,32 +496,60 @@ def seed_config_from_env(db: Session) -> None:
         logger.warning("seed providers from legacy failed: %s", e)
 
 
-def _seed_providers_from_legacy(db: Session) -> None:
-    """检测旧单 URL 配置并迁移为首个 Provider + 全量 model_provider_map。"""
-    from sqlalchemy import select
+def _legacy_llm_value(db: Session, key: str, env_value: str) -> str:
+    """读取旧的单 URL 配置项（llm_base_url / llm_api_key）。
 
+    这些键早已被移出 CONFIG_KEYS 白名单（不能再从后台写入），但旧库里可能
+    仍存有值，所以这里像 resolve_llm_settings 的兜底路径一样直查主键，而不是走
+    get_config_map —— 后者只吸收白名单内的行，会让旧值在迁移时被静默丢弃。
+    取值优先级：库里的旧值 > 环境变量。
+    """
+    row = db.get(AppConfig, key)
+    if row is not None and row.value and row.value.strip():
+        return row.value.strip()
+    return (env_value or "").strip()
+
+
+def _seed_providers_from_legacy(db: Session) -> None:
+    """检测旧单 URL 配置并迁移为首个 Provider + 全量 model_provider_map。
+
+    对已存在但地址/密钥为空的 prov_migrated_main 做一次补齐：旧版的迁移读的是
+    白名单外的键，必定落成空 Provider，且「已有 Provider 就不再种入」的守卫让它
+    永远得不到修正 —— 这里只在字段为空时补，绝不覆盖后台手填的值。
+    """
     from app.models import LlmModelProvider, LlmProvider
 
-    # 若已存在任何 Provider，则不自动种入
-    existing_count = db.execute(select(LlmProvider)).scalars().first()
-    if existing_count is not None:
+    prov_id = "prov_migrated_main"
+    legacy_base = _legacy_llm_value(db, "llm_base_url", settings.llm_base_url)
+    legacy_key = _legacy_llm_value(db, "llm_api_key", settings.main_api_key)
+    existing = db.get(LlmProvider, prov_id)
+
+    if existing is not None:
+        # 旧库迁移留下的空 Provider：用仍在库里的旧地址 / 密钥补齐
+        repaired = False
+        if not (existing.base_url or "").strip() and legacy_base:
+            existing.base_url = legacy_base
+            repaired = True
+        if not (existing.api_key or "").strip() and legacy_key:
+            existing.api_key = legacy_key
+            repaired = True
+        if repaired:
+            db.commit()
+            logger.info("已补齐自动迁移的 Provider %s（旧单 URL 配置曾未被读取）", prov_id)
         return
 
-    cfg = get_config_map(db)
-    legacy_base = (cfg.get("llm_base_url") or "").strip()
-    legacy_key = (cfg.get("llm_api_key") or settings.main_api_key or "").strip()
-    # 若 legacy 完全为空，也按 models 生成一个 provider 占位（便于新部署直接可用）
-    models = parse_models(cfg.get("models") or settings.models)
+    # 若已存在其它 Provider，则不再自动种入
+    from sqlalchemy import select
+
+    if db.execute(select(LlmProvider)).scalars().first() is not None:
+        return
+
+    models = parse_models(get_config_map(db).get("models") or settings.models)
     if not models:
         return
-    # 仅当至少有一个非空 legacy 字段或 models 非空时才种入
-    # 无 legacy key 且 base_url 为空时，仍创建一个空 key 的 provider 占位，保证模型可用性检查能通过
+    # 旧库没留地址 / 密钥时也建一个空 Provider 占位：后台填上即可用，
+    # 也让模型可用性检查有据可依
     provider_name = "主服务（自动迁移）"
-    # 若 legacy_key 为空，仍创建 provider，key 留空（允许后续在后台填）
-    prov_id = "prov_migrated_main"
-    # 检查是否已存在该 id
-    if db.get(LlmProvider, prov_id) is not None:
-        return
     prov = LlmProvider(
         id=prov_id,
         name=provider_name,
