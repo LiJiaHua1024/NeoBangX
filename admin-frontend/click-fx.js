@@ -298,15 +298,9 @@
         setFx("rings.radialSamples", scaled(pristine.ringRadial, 0.6));
       },
     },
-    {
-      /* 最后一档：整体渲染后端从 WebGL2 换成 Canvas2D，连带放弃 GPU Bloom 走原生辉光。
-         这是唯一真正「换渲染方式」的一档，也是质量断崖最明显的一档，故放在最后。
-         注意：只设 bloomBackend 是没用的——库内部 _getRequestedBloomBackendState() 里
-         「WebGL 特效可见就返回 webgl2」优先于配置项；必须改 effectBackend 才会重新解析整条管线。
-         （DOM 模式下运行时切换是允许的；只有 Worker + OffscreenCanvas 才会抛错，本项目不用那种模式。） */
-      why: "整体渲染后端降为 Canvas2D",
-      apply: function () { try { fx.updateConfig({ effectBackend: "canvas2d", bloomBackend: "native" }); } catch (e) { /* 忽略 */ } },
-    },
+    // 刻意不设「换渲染后端为 Canvas2D」档：fx-bench 实测 Canvas2D 路径狂点时
+    // 每帧主线程 JS 达 74ms（p95 107ms），比 WebGL2 的亚毫秒级高约两个数量级，
+    // 视觉还更差——往它降级等于越降越卡。五档参数降级走完仍差 → 直接暂时禁用。
   ];
 
   /* 把档位设到 n：先还原原始参数、再按序重放前 n 档。可升可降、幂等。 */
