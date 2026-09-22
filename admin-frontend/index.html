@@ -126,7 +126,7 @@
       </div>
 
       <!-- 概览 -->
-      <section x-show="tab === 'dashboard'" class="panel-stack">
+      <template x-if="tab === 'dashboard'"><section class="panel-stack">
         <div class="stat-grid">
           <div class="stat-card glass">
             <div class="stat-label">使用码总数</div>
@@ -155,10 +155,10 @@
           </div>
           <p class="muted mt-4">主站端口 8000 对外；本管理后台 8001 仅内网访问。</p>
         </div>
-      </section>
+      </section></template>
 
       <!-- 用量分析：顶级 LLM API 后台风格，全部自研 UI（分段选择 + div 条形 + SVG 折线 + conic 环形，无浏览器原生控件） -->
-      <section x-show="tab === 'analytics'" class="panel-stack">
+      <template x-if="tab === 'analytics'"><section class="panel-stack">
         <div class="glass card toolbar ana-toolbar">
           <div class="seg-control" role="tablist" aria-label="时间范围">
             <template x-for="opt in analyticsDaysOptions" :key="opt.id">
@@ -172,7 +172,7 @@
             <button class="btn-ghost" @click="copyAnalyticsSummary()" x-show="analyticsData">复制摘要</button>
           </div>
         </div>
-        <p class="muted" x-show="analyticsData && analyticsData.range.daily_grain === 'week'">全部窗口跨度较大，已按自然周聚合展示趋势。</p>
+        <p class="muted" x-show="analyticsData && analyticsData?.range.daily_grain === 'week'">全部窗口跨度较大，已按自然周聚合展示趋势。</p>
 
         <div class="glass card" x-show="analyticsLoading && !analyticsData">
           <p class="muted">正在聚合用量数据…</p>
@@ -214,7 +214,7 @@
                 <div class="stat-label">平均耗时 / P95</div>
                 <div class="stat-value" x-text="fmtDuration(anaKpis().avg_duration_ms)"></div>
                 <div class="stat-foot">
-                  <span x-text="`P50 ${fmtDuration(analyticsData.latency.p50)} · P95 ${fmtDuration(analyticsData.latency.p95)} · P99 ${fmtDuration(analyticsData.latency.p99)}`"></span>
+                  <span x-text="`P50 ${fmtDuration(analyticsData?.latency?.p50)} · P95 ${fmtDuration(analyticsData?.latency?.p95)} · P99 ${fmtDuration(analyticsData?.latency?.p99)}`"></span>
                   <span class="delta" :class="deltaTone(anaDeltas()?.avg_duration_ms, true)" x-show="anaDeltas()" x-text="`环比 ${fmtDeltaRatio(anaDeltas()?.avg_duration_ms)}`"></span>
                 </div>
               </div>
@@ -229,14 +229,14 @@
               <div class="stat-card glass">
                 <div class="stat-label">扣费次数 / 备用切换</div>
                 <div class="stat-value" x-text="fmtCompact(anaKpis().units)"></div>
-                <div class="stat-foot" x-text="`备用切换 ${analyticsData.fallback.count} 次（${fmtPct(analyticsData.fallback.rate)}）· 平均尝试 ${analyticsData.fallback.avg_attempts ?? '—'} 次`"></div>
+                <div class="stat-foot" x-text="`备用切换 ${analyticsData?.fallback?.count} 次（${fmtPct(analyticsData?.fallback?.rate)}）· 平均尝试 ${analyticsData?.fallback?.avg_attempts ?? '—'} 次`"></div>
               </div>
             </div>
 
             <!-- 趋势 -->
             <div class="ana-grid-2">
               <div class="glass card">
-                <h2 class="card-title">请求趋势 <span class="dim" x-text="`· 峰值 ${analyticsData.peak ? analyticsData.peak.date + ' ' + analyticsData.peak.total + ' 次' : '—'}`"></span></h2>
+                <h2 class="card-title">请求趋势 <span class="dim" x-text="`· 峰值 ${analyticsData?.peak ? analyticsData?.peak.date + ' ' + analyticsData?.peak.total + ' 次' : '—'}`"></span></h2>
                 <div class="ana-bars" x-show="anaDaily().length">
                   <template x-for="d in anaDaily()" :key="d.date">
                     <div class="ana-bar-col" :title="`${d.date}：${fmtNum(d.total)} 次（成功 ${fmtNum(d.success)} / 异常 ${fmtNum(d.error)}）`">
@@ -300,8 +300,8 @@
                 <table class="data-table">
                   <thead><tr><th>模型</th><th class="num">请求</th><th>请求占比</th><th class="num">Tokens</th><th>Token 占比</th><th class="num">均耗时</th><th class="num">均 Tokens/次</th><th class="num">错误率</th></tr></thead>
                   <tbody>
-                    <tr x-show="!analyticsData.by_model.length"><td colspan="8" class="empty">暂无数据</td></tr>
-                    <template x-for="m in analyticsData.by_model" :key="m.model">
+                    <tr x-show="!analyticsData?.by_model.length"><td colspan="8" class="empty">暂无数据</td></tr>
+                    <template x-for="m in analyticsData?.by_model" :key="m.model">
                       <tr>
                         <td class="mono truncate-cell" data-label="模型" data-span="full" x-text="m.model"></td>
                         <td class="num mono" data-label="请求" x-text="fmtCompact(m.requests)"></td>
@@ -326,8 +326,8 @@
                 <table class="data-table">
                   <thead><tr><th>工具</th><th class="num">请求</th><th>请求占比</th><th class="num">Tokens</th><th>Token 占比</th><th class="num">均耗时</th><th class="num">错误率</th></tr></thead>
                   <tbody>
-                    <tr x-show="!analyticsData.by_tool.length"><td colspan="7" class="empty">暂无数据</td></tr>
-                    <template x-for="t in analyticsData.by_tool" :key="t.tool_id + t.tool_name">
+                    <tr x-show="!analyticsData?.by_tool.length"><td colspan="7" class="empty">暂无数据</td></tr>
+                    <template x-for="t in analyticsData?.by_tool" :key="t.tool_id + t.tool_name">
                       <tr>
                         <td data-label="工具" data-span="full"><span x-text="t.tool_name || t.tool_id"></span> <span class="dim mono" x-show="t.tool_id" x-text="`#${t.tool_id}`"></span><div class="mono dim" x-text="`输入 ${fmtCompact(t.prompt_tokens)} / 输出 ${fmtCompact(t.completion_tokens)}`"></div></td>
                         <td class="num mono" data-label="请求" x-text="fmtCompact(t.requests)"></td>
@@ -348,25 +348,25 @@
             <div class="ana-grid-2">
               <div class="glass card">
                 <h2 class="card-title">按 Provider <span class="dim">· 含备用切换率</span></h2>
-                <template x-for="p in analyticsData.by_provider" :key="p.provider_id">
+                <template x-for="p in analyticsData?.by_provider" :key="p.provider_id">
                   <div class="ana-row">
                     <div class="ana-row-head"><span class="mono" x-text="p.label"></span><span class="dim mono" x-text="`${fmtCompact(p.requests)} 次 · ${fmtPct(p.share)}`"></span></div>
                     <div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(p.share)}`"></div></div>
                     <div class="dim mono ana-row-foot" x-text="`Tokens ${fmtCompact(p.total_tokens)}（${fmtPct(p.token_share)}）· 平均耗时 ${fmtDuration(p.avg_duration_ms)} · 错误率 ${fmtPct(p.error_rate)} · 备用切换 ${fmtPct(p.fallback_rate)}`"></div>
                   </div>
                 </template>
-                <p class="muted" x-show="!analyticsData.by_provider.length">暂无 Provider 数据（旧数据无该字段会归为“未记录”）。</p>
+                <p class="muted" x-show="!analyticsData?.by_provider.length">暂无 Provider 数据（旧数据无该字段会归为“未记录”）。</p>
               </div>
               <div class="glass card">
                 <h2 class="card-title">最贵 / 最慢组合 <span class="dim">· 工具 × 模型</span></h2>
-                <template x-for="c in analyticsData.combos" :key="c.label">
+                <template x-for="c in analyticsData?.combos" :key="c.label">
                   <div class="ana-row">
                     <div class="ana-row-head"><span x-text="c.label"></span><span class="dim mono" x-text="`${fmtCompact(c.requests)} 次`"></span></div>
                     <div class="ana-hbar"><div class="ana-hbar-fill tok" :style="`width:${anaRowW(c.token_share)}`"></div></div>
                     <div class="dim mono ana-row-foot" x-text="`Tokens 占比 ${fmtPct(c.token_share)} · 平均 ${c.avg_tokens ?? '—'} Tokens/次 · 平均耗时 ${fmtDuration(c.avg_duration_ms)} · 错误率 ${fmtPct(c.error_rate)}`"></div>
                   </div>
                 </template>
-                <p class="muted" x-show="!analyticsData.combos.length">暂无组合数据。</p>
+                <p class="muted" x-show="!analyticsData?.combos.length">暂无组合数据。</p>
                 <p class="field-hint">优化顺序：Token 占比高 → 优先降本；平均耗时长 → 优先降延迟；错误率高 → 优先止血。</p>
               </div>
             </div>
@@ -379,8 +379,8 @@
                   <table class="data-table">
                     <thead><tr><th>使用码</th><th class="num">请求</th><th class="num">Tokens</th><th class="num">错误率</th><th>最近使用</th></tr></thead>
                     <tbody>
-                      <tr x-show="!analyticsData.top_codes.length"><td colspan="5" class="empty">暂无数据</td></tr>
-                      <template x-for="c in analyticsData.top_codes" :key="c.code">
+                      <tr x-show="!analyticsData?.top_codes.length"><td colspan="5" class="empty">暂无数据</td></tr>
+                      <template x-for="c in analyticsData?.top_codes" :key="c.code">
                         <tr>
                           <td class="mono" data-label="使用码" data-span="full"><span x-text="c.code"></span> <span class="dim" x-show="c.note" x-text="c.note"></span></td>
                           <td class="num mono" data-label="请求" x-text="`${fmtCompact(c.requests)}（${fmtPct(c.share)}）`"></td>
@@ -393,7 +393,7 @@
                   </table>
                 </div>
                 <h2 class="card-title" style="margin-top:1rem">按 Tokens 排行 <span class="dim">· 真正的开销大头</span></h2>
-                <template x-for="(c, i) in analyticsData.top_codes_by_tokens.slice(0, 8)" :key="'tok-' + c.code">
+                <template x-for="(c, i) in analyticsData?.top_codes_by_tokens.slice(0, 8)" :key="'tok-' + c.code">
                   <div class="ana-row">
                     <div class="ana-row-head"><span class="mono" x-text="`#${i + 1} ${c.code}`"></span><span class="dim mono" x-text="`${fmtCompact(c.total_tokens)}（${fmtPct(c.token_share)}）`"></span></div>
                     <div class="ana-hbar"><div class="ana-hbar-fill tok" :style="`width:${anaRowW(c.token_share)}`"></div></div>
@@ -402,14 +402,14 @@
               </div>
               <div class="glass card">
                 <h2 class="card-title">设备排行 <span class="dim">· 按请求（前 10）</span></h2>
-                <template x-for="d in analyticsData.top_devices" :key="d.device_id">
+                <template x-for="d in analyticsData?.top_devices" :key="d.device_id">
                   <div class="ana-row">
                     <div class="ana-row-head"><span x-text="d.label"></span><span class="dim mono" x-text="d.short_code"></span></div>
                     <div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(d.share)}`"></div></div>
                     <div class="dim mono ana-row-foot" x-text="`${fmtCompact(d.requests)} 次（${fmtPct(d.share)}）· ${fmtCompact(d.total_tokens)} tokens · 错误 ${fmtPct(d.error_rate)} · ${fmtTime(d.last_used_at)}`"></div>
                   </div>
                 </template>
-                <p class="muted" x-show="!analyticsData.top_devices.length">暂无设备数据（旧数据或未上报指纹）。</p>
+                <p class="muted" x-show="!analyticsData?.top_devices.length">暂无设备数据（旧数据或未上报指纹）。</p>
                 <h2 class="card-title" style="margin-top:1rem">状态分布</h2>
                 <div class="ana-donut-row">
                   <div class="ana-donut-svg ana-donut-wide" role="img" :aria-label="`成功率 ${fmtPct(anaKpis().success_rate)}`" @mouseleave="donutHover = null">
@@ -449,7 +449,7 @@
               <div class="glass card">
                 <h2 class="card-title">小时节律 <span class="dim">· UTC 小时，找高峰与空闲</span></h2>
                 <div class="ana-heat">
-                  <template x-for="h in analyticsData.by_hour" :key="h.hour">
+                  <template x-for="h in analyticsData?.by_hour" :key="h.hour">
                     <div class="ana-heat-cell" :style="anaHeatStyle(h.requests)" :title="`${h.hour} 点：${fmtNum(h.requests)} 次 / ${fmtNum(h.total_tokens)} Tokens / 异常 ${fmtNum(h.error)} 次`">
                       <span x-text="h.hour"></span>
                       <b x-text="h.requests"></b>
@@ -458,7 +458,7 @@
                 </div>
                 <p class="field-hint">颜色越深请求越密；结合星期分布判断是上课高峰还是异常突刺。</p>
                 <h2 class="card-title" style="margin-top:1rem">星期分布</h2>
-                <template x-for="w in analyticsData.by_weekday" :key="w.weekday">
+                <template x-for="w in analyticsData?.by_weekday" :key="w.weekday">
                   <div class="ana-row">
                     <div class="ana-row-head"><span x-text="w.label"></span><span class="dim mono" x-text="`${fmtCompact(w.requests)} 次 · ${fmtCompact(w.total_tokens)} tokens`"></span></div>
                     <div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(w.requests / Math.max(1, anaKpis().total))}`"></div></div>
@@ -466,16 +466,16 @@
                 </template>
               </div>
               <div class="glass card">
-                <h2 class="card-title">耗时分布 <span class="dim" x-text="`· P50 ${fmtDuration(analyticsData.latency.p50)} / P90 ${fmtDuration(analyticsData.latency.p90)} / P95 ${fmtDuration(analyticsData.latency.p95)} / P99 ${fmtDuration(analyticsData.latency.p99)} / 最大 ${fmtDuration(analyticsData.latency.max)}`"></span></h2>
-                <template x-for="b in analyticsData.latency.buckets" :key="b.label">
+                <h2 class="card-title">耗时分布 <span class="dim" x-text="`· P50 ${fmtDuration(analyticsData?.latency?.p50)} / P90 ${fmtDuration(analyticsData?.latency?.p90)} / P95 ${fmtDuration(analyticsData?.latency?.p95)} / P99 ${fmtDuration(analyticsData?.latency?.p99)} / 最大 ${fmtDuration(analyticsData?.latency?.max)}`"></span></h2>
+                <template x-for="b in analyticsData?.latency?.buckets" :key="b.label">
                   <div class="ana-row">
                     <div class="ana-row-head"><span class="mono" x-text="b.label"></span><span class="dim mono" x-text="`${fmtCompact(b.count)}（${fmtPct(b.share)}）`"></span></div>
                     <div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(b.share)}`"></div></div>
                   </div>
                 </template>
-                <p class="field-hint" x-text="`样本 ${fmtCompact(analyticsData.latency.count)} 次（耗时为空的不计）；P95 远大于均值说明长尾严重，优先查慢组合与 Provider 超时。`"></p>
+                <p class="field-hint" x-text="`样本 ${fmtCompact(analyticsData?.latency?.count)} 次（耗时为空的不计）；P95 远大于均值说明长尾严重，优先查慢组合与 Provider 超时。`"></p>
                 <h2 class="card-title" style="margin-top:1rem">数据质量</h2>
-                <p class="muted" x-text="`Tokens 未上报 ${fmtCompact(anaKpis().missing_tokens)}（${fmtPct(anaKpis().total ? anaKpis().missing_tokens / anaKpis().total : 0)}）· 估算口径 ${fmtCompact(anaKpis().estimated)} 次 · 耗时未记录 ${fmtCompact(anaKpis().missing_duration)} · 备用切换 ${analyticsData.fallback.count} 次（${fmtPct(analyticsData.fallback.rate)}，最大 ${analyticsData.fallback.max_attempts ?? '—'} 次）`"></p>
+                <p class="muted" x-text="`Tokens 未上报 ${fmtCompact(anaKpis().missing_tokens)}（${fmtPct(anaKpis().total ? anaKpis().missing_tokens / anaKpis().total : 0)}）· 估算口径 ${fmtCompact(anaKpis().estimated)} 次 · 耗时未记录 ${fmtCompact(anaKpis().missing_duration)} · 备用切换 ${analyticsData?.fallback?.count} 次（${fmtPct(analyticsData?.fallback?.rate)}，最大 ${analyticsData?.fallback?.max_attempts ?? '—'} 次）`"></p>
               </div>
             </div>
 
@@ -483,7 +483,7 @@
             <div class="ana-grid-2">
               <div class="glass card">
                 <h2 class="card-title">错误分类 Top <span class="dim">· 点击编号查看日志详情</span></h2>
-                <template x-for="e in analyticsData.top_errors" :key="e.example_log_id">
+                <template x-for="e in analyticsData?.top_errors" :key="e.example_log_id">
                   <div class="ana-err-card">
                     <div class="ana-err-top">
                       <button class="link-btn mono" @click="openAnalyticsLog(e.example_log_id)" x-text="`日志 #${e.example_log_id}`"></button>
@@ -505,9 +505,9 @@
                     </details>
                   </div>
                 </template>
-                <p class="muted" x-show="!analyticsData.top_errors.length">该窗口内暂无异常请求，服务状态良好。</p>
+                <p class="muted" x-show="!analyticsData?.top_errors.length">该窗口内暂无异常请求，服务状态良好。</p>
                 <h2 class="card-title" style="margin-top:1rem">最近异常记录（10 条）</h2>
-                <template x-for="r in analyticsData.recent_errors" :key="r.log_id">
+                <template x-for="r in analyticsData?.recent_errors" :key="r.log_id">
                   <div class="ana-recent-card" @click="openAnalyticsLog(r.log_id)">
                     <button class="link-btn mono" @click.stop="openAnalyticsLog(r.log_id)" x-text="`#${r.log_id}`"></button>
                     <span class="ana-recent-kind" x-text="anaErrInfo(r.error_message).kind"></span>
@@ -521,7 +521,7 @@
                     <div class="ana-recent-why" x-text="anaErrInfo(r.error_message).why"></div>
                   </div>
                 </template>
-                <p class="muted" x-show="!analyticsData.recent_errors.length">暂无最近异常记录。</p>
+                <p class="muted" x-show="!analyticsData?.recent_errors.length">暂无最近异常记录。</p>
               </div>
               <div class="glass card">
                 <h2 class="card-title">最慢请求 Top10 <span class="dim">· 点击跳详情，定位超时瓶颈</span></h2>
@@ -529,8 +529,8 @@
                   <table class="data-table">
                     <thead><tr><th>日志</th><th class="num">耗时</th><th>工具 / 模型</th><th class="num">Tokens</th><th>时间</th></tr></thead>
                     <tbody>
-                      <tr x-show="!analyticsData.slowest.length"><td colspan="5" class="empty">暂无耗时数据</td></tr>
-                      <template x-for="s in analyticsData.slowest" :key="s.log_id">
+                      <tr x-show="!analyticsData?.slowest.length"><td colspan="5" class="empty">暂无耗时数据</td></tr>
+                      <template x-for="s in analyticsData?.slowest" :key="s.log_id">
                         <tr class="log-row" @click="openAnalyticsLog(s.log_id)">
                           <td class="mono" data-label="日志" x-text="`#${s.log_id}`"></td>
                           <td class="num mono" data-label="耗时" x-text="fmtDuration(s.duration_ms)"></td>
@@ -547,10 +547,10 @@
             </div>
           </div>
         </template>
-      </section>
+      </section></template>
 
       <!-- 使用码 -->
-      <section x-show="tab === 'codes'" class="panel-stack">
+      <template x-if="tab === 'codes'"><section class="panel-stack">
         <div class="glass card toolbar">
           <div class="filters">
             <input type="search" x-model="codeQuery" @keydown.enter="codesPage = 1; loadCodes()" placeholder="搜索码 / 备注">
@@ -629,10 +629,10 @@
             <button class="btn-ghost" :disabled="codesPage * codesPageSize >= codesTotal" @click="codesPage++; loadCodes()">下一页</button>
           </div>
         </div>
-      </section>
+      </section></template>
 
       <!-- 日志 -->
-      <section x-show="tab === 'logs'" class="panel-stack">
+      <template x-if="tab === 'logs'"><section class="panel-stack">
         <!-- 统计卡：随筛选条件联动 -->
         <div class="stat-grid">
           <div class="stat-card glass">
@@ -861,10 +861,10 @@
         <p class="muted" x-show="payloadRecording === false" x-cloak>
           ⓘ 当前未开启「记录原始输入 / 输出」，日志详情只显示元数据。可到「日志设置」中开启。
         </p>
-      </section>
+      </section></template>
 
       <!-- 设备指纹 -->
-      <section x-show="tab === 'devices'" class="panel-stack">
+      <template x-if="tab === 'devices'"><section class="panel-stack">
         <div class="glass card toolbar">
           <div class="filters">
             <input type="search" x-model="deviceQuery" @keydown.enter="devicesPage = 1; loadDevices()" placeholder="搜索短码 / 备注 / 昵称">
@@ -931,10 +931,10 @@
           </div>
         </div>
         <p class="muted">指纹仅用于识别共享，不做拦截依据；客户端可伪造，仅供参考。</p>
-      </section>
+      </section></template>
 
       <!-- 配置 -->
-      <section x-show="tab === 'config'" class="panel-stack">
+      <template x-if="tab === 'config'"><section class="panel-stack">
         <!-- 模型管理（每模型独立 Provider 优先级） -->
         <div class="glass card">
           <div class="card-head-row">
@@ -1245,10 +1245,10 @@
           </div>
         </div>
 
-      </section>
+      </section></template>
 
       <!-- 文档解析 -->
-      <section x-show="tab === 'parse'" class="panel-stack">
+      <template x-if="tab === 'parse'"><section class="panel-stack">
         <div class="glass card">
           <div>
             <h2 class="card-title">解析模式</h2>
@@ -1311,10 +1311,10 @@
             <button class="btn-ghost" @click="loadMineru()">重新加载</button>
           </div>
         </div>
-      </section>
+      </section></template>
 
       <!-- 日志设置 -->
-      <section x-show="tab === 'logsettings'" class="panel-stack">
+      <template x-if="tab === 'logsettings'"><section class="panel-stack">
         <div class="glass card">
           <h2 class="card-title">日志设置</h2>
           <p class="muted mb-4">控制使用日志记录哪些内容、保留多久。保存后对之后的每次请求即时生效，无需重启服务。</p>
@@ -1354,10 +1354,10 @@
             </button>
           </div>
         </div>
-      </section>
+      </section></template>
 
       <!-- 线路镜像 -->
-      <section x-show="tab === 'mirror'" class="panel-stack">
+      <template x-if="tab === 'mirror'"><section class="panel-stack">
         <div class="glass card">
           <h2 class="card-title">线路镜像</h2>
           <p class="muted mb-4">
@@ -1413,7 +1413,7 @@
             <button class="btn-ghost" @click="loadConfig()">重新加载</button>
           </div>
         </div>
-      </section>
+      </section></template>
     </main>
 
     <!-- 生成使用码弹窗 -->
@@ -1937,8 +1937,8 @@
       <aside class="drawer glass" x-show="logDetailOpen">
         <div class="drawer-head">
           <div>
-            <h3>日志详情 <span class="mono dim" x-text="logDetail ? '#' + logDetail.id : ''"></span></h3>
-            <p class="field-hint" x-show="logDetail" x-text="fmtTime(logDetail.created_at)"></p>
+            <h3>日志详情 <span class="mono dim" x-text="logDetail ? '#' + logDetail?.id : ''"></span></h3>
+            <p class="field-hint" x-show="logDetail" x-text="fmtTime(logDetail?.created_at)"></p>
           </div>
           <button class="icon-x" @click="closeLogDetail()" title="关闭（Esc）">×</button>
         </div>
@@ -1950,105 +1950,105 @@
                 <div class="meta-item">
                   <span class="meta-label">状态</span>
                   <span class="meta-value">
-                    <span class="status-badge" :class="'st-' + (logDetail.status || 'success')"
-                          x-text="logStatusLabel(logDetail.status)"></span>
+                    <span class="status-badge" :class="'st-' + (logDetail?.status || 'success')"
+                          x-text="logStatusLabel(logDetail?.status)"></span>
                   </span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">耗时</span>
-                  <span class="meta-value mono" x-text="fmtDuration(logDetail.duration_ms)"></span>
+                  <span class="meta-value mono" x-text="fmtDuration(logDetail?.duration_ms)"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">总 Tokens</span>
                   <span class="meta-value mono"
-                        x-text="(logDetail.tokens_estimated ? '≈' : '') + fmtNum(logDetail.total_tokens)"></span>
+                        x-text="(logDetail?.tokens_estimated ? '≈' : '') + fmtNum(logDetail?.total_tokens)"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">输入 / 输出</span>
                   <span class="meta-value mono"
-                        x-text="`${logDetail.prompt_tokens ?? '—'} / ${logDetail.completion_tokens ?? '—'}`"></span>
+                        x-text="`${logDetail?.prompt_tokens ?? '—'} / ${logDetail?.completion_tokens ?? '—'}`"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">扣费次数</span>
-                  <span class="meta-value mono" x-text="fmtUnits(logDetail.units)"></span>
+                  <span class="meta-value mono" x-text="fmtUnits(logDetail?.units)"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">使用码</span>
-                  <span class="meta-value mono" x-text="logDetail.code"></span>
+                  <span class="meta-value mono" x-text="logDetail?.code"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">工具</span>
-                  <span class="meta-value" x-text="logDetail.tool_name || '—'"></span>
+                  <span class="meta-value" x-text="logDetail?.tool_name || '—'"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">工具 ID</span>
-                  <span class="meta-value mono break-any" x-text="logDetail.tool_id || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail?.tool_id || '—'"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">模型</span>
-                  <span class="meta-value mono break-any" x-text="logDetail.model || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail?.model || '—'"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">命中 Provider</span>
-                  <span class="meta-value mono break-any" x-text="logDetail.provider_name ? `${logDetail.provider_name} (${logDetail.provider_id})` : (logDetail.provider_id || '—')"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail?.provider_name ? `${logDetail?.provider_name} (${logDetail?.provider_id})` : (logDetail?.provider_id || '—')"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">Fallback 尝试</span>
-                  <span class="meta-value mono" x-text="logDetail.fallback_attempts != null ? `${logDetail.fallback_attempts} 次` : '—'"></span>
+                  <span class="meta-value mono" x-text="logDetail?.fallback_attempts != null ? `${logDetail?.fallback_attempts} 次` : '—'"></span>
                 </div>
                 <div class="meta-item meta-item-wide">
                   <span class="meta-label">请求 ID</span>
-                  <span class="meta-value mono break-any" x-text="logDetail.request_id || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail?.request_id || '—'"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">IP</span>
-                  <span class="meta-value mono break-any" x-text="logDetail.ip || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail?.ip || '—'"></span>
                 </div>
                 <div class="meta-item meta-item-wide">
                   <span class="meta-label">客户端 UA</span>
-                  <span class="meta-value mono break-any" x-text="logDetail.user_agent || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail?.user_agent || '—'"></span>
                 </div>
                 <div class="meta-item meta-item-wide">
                   <span class="meta-label">设备指纹</span>
                   <span class="meta-value">
-                    <span class="fp-badge" x-show="logDetail.device">
-                      <span class="fp-dot" :style="logDetail.device && logDetail.device.color ? 'background:' + logDetail.device.color : ''"></span>
-                      <span x-text="logDetail.device ? (logDetail.device.note || logDetail.device.auto_name || logDetail.device.short_code) : ''"></span>
-                      <span class="dim mono" x-show="logDetail.device" x-text="` · ${logDetail.device.short_code}`"></span>
+                    <span class="fp-badge" x-show="logDetail?.device">
+                      <span class="fp-dot" :style="logDetail?.device && logDetail?.device?.color ? 'background:' + logDetail?.device?.color : ''"></span>
+                      <span x-text="logDetail?.device ? (logDetail?.device?.note || logDetail?.device?.auto_name || logDetail?.device?.short_code) : ''"></span>
+                      <span class="dim mono" x-show="logDetail?.device" x-text="` · ${logDetail?.device?.short_code}`"></span>
                     </span>
-                    <span x-show="!logDetail.device">—</span>
-                    <button class="link-btn" x-show="logDetail.device" @click="openDeviceDetailFromLog()" style="margin-left:0.5rem">画像</button>
+                    <span x-show="!logDetail?.device">—</span>
+                    <button class="link-btn" x-show="logDetail?.device" @click="openDeviceDetailFromLog()" style="margin-left:0.5rem">画像</button>
                   </span>
                 </div>
-                <div class="meta-item meta-item-wide" x-show="logDetail.device && logDetail.device.device_summary">
+                <div class="meta-item meta-item-wide" x-show="logDetail?.device && logDetail?.device?.device_summary">
                   <span class="meta-label">设备摘要</span>
-                  <span class="meta-value mono break-any" x-text="logDetail.device.device_summary || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail?.device?.device_summary || '—'"></span>
                 </div>
               </div>
 
-              <div class="drawer-error" x-show="logDetail.error_message" x-cloak>
+              <div class="drawer-error" x-show="logDetail?.error_message" x-cloak>
                 <span class="meta-label">错误信息</span>
-                <div class="break-any" x-text="logDetail.error_message"></div>
+                <div class="break-any" x-text="logDetail?.error_message"></div>
               </div>
 
               <!-- 原始数据：仅在开启记录时入库 -->
-              <template x-if="logDetail.payload">
+              <template x-if="logDetail?.payload">
                 <div class="payload-list">
                   <template x-for="part in payloadParts" :key="part.key">
                     <details class="payload-block" :open="part.open">
                       <summary>
                         <span class="payload-title" x-text="part.label"></span>
                         <span class="payload-size mono"
-                              x-text="`${(logDetail.payload[part.key] || '').length} 字`"></span>
-                        <button class="link-btn" @click.prevent.stop="copyText(logDetail.payload[part.key] || '')">复制</button>
+                              x-text="`${(logDetail?.payload[part.key] || '').length} 字`"></span>
+                        <button class="link-btn" @click.prevent.stop="copyText(logDetail?.payload[part.key] || '')">复制</button>
                       </summary>
-                      <pre class="payload-pre mono" x-text="logDetail.payload[part.key] || '（空）'"></pre>
+                      <pre class="payload-pre mono" x-text="logDetail?.payload[part.key] || '（空）'"></pre>
                     </details>
                   </template>
                 </div>
               </template>
 
-              <div class="payload-empty" x-show="!logDetail.payload" x-cloak>
+              <div class="payload-empty" x-show="!logDetail?.payload" x-cloak>
                 本次请求未记录原始输入 / 输出（记录开关处于关闭状态）。
                 如需查看内容，请到「日志设置」开启后重新发起请求。
               </div>
@@ -2059,7 +2059,7 @@
 
         <div class="drawer-foot" x-show="logDetail && !logDetailLoading">
           <button class="btn-ghost" @click="filterByLogCode()" x-show="logDetail">查看该码的全部日志</button>
-          <button class="btn-ghost" @click="filterByLogDevice()" x-show="logDetail && logDetail.device">查看该设备的全部日志</button>
+          <button class="btn-ghost" @click="filterByLogDevice()" x-show="logDetail && logDetail?.device">查看该设备的全部日志</button>
           <button class="btn-ghost" @click="copyLogSummaryText()" x-show="logDetail">复制元数据</button>
         </div>
       </aside>
@@ -2071,8 +2071,8 @@
       <aside class="drawer glass" x-show="deviceDetailOpen">
         <div class="drawer-head">
           <div>
-            <h3>设备画像 <span class="mono dim" x-text="deviceDetail ? deviceDetail.device.short_code : ''"></span></h3>
-            <p class="field-hint" x-show="deviceDetail" x-text="deviceDetail.device.note || deviceDetail.device.auto_name || ''"></p>
+            <h3>设备画像 <span class="mono dim" x-text="deviceDetail ? deviceDetail?.device?.short_code : ''"></span></h3>
+            <p class="field-hint" x-show="deviceDetail" x-text="deviceDetail?.device?.note || deviceDetail?.device?.auto_name || ''"></p>
           </div>
           <button class="icon-x" @click="closeDeviceDetail()" title="关闭（Esc）">×</button>
         </div>
@@ -2086,46 +2086,46 @@
                   <span class="meta-label">设备</span>
                   <span class="meta-value">
                     <span class="fp-badge">
-                      <span class="fp-dot" :style="deviceDetail.device.color ? 'background:' + deviceDetail.device.color : ''"></span>
-                      <span x-text="deviceDetail.device.note || deviceDetail.device.auto_name || deviceDetail.device.short_code"></span>
+                      <span class="fp-dot" :style="deviceDetail?.device?.color ? 'background:' + deviceDetail?.device?.color : ''"></span>
+                      <span x-text="deviceDetail?.device?.note || deviceDetail?.device?.auto_name || deviceDetail?.device?.short_code"></span>
                     </span>
                   </span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">短码</span>
-                  <span class="meta-value mono" x-text="deviceDetail.device.short_code"></span>
+                  <span class="meta-value mono" x-text="deviceDetail?.device?.short_code"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">自动昵称</span>
-                  <span class="meta-value" x-text="deviceDetail.device.auto_name || '—'"></span>
+                  <span class="meta-value" x-text="deviceDetail?.device?.auto_name || '—'"></span>
                 </div>
                 <div class="meta-item meta-item-wide">
                   <span class="meta-label">指纹全哈希</span>
-                  <span class="meta-value mono break-any" x-text="deviceDetail.device.fingerprint || '—'"></span>
-                  <button class="link-btn" x-show="deviceDetail.device.fingerprint" @click="copyText(deviceDetail.device.fingerprint)">复制</button>
+                  <span class="meta-value mono break-any" x-text="deviceDetail?.device?.fingerprint || '—'"></span>
+                  <button class="link-btn" x-show="deviceDetail?.device?.fingerprint" @click="copyText(deviceDetail?.device?.fingerprint)">复制</button>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">首次出现</span>
-                  <span class="meta-value mono" x-text="fmtTime(deviceDetail.device.first_seen_at)"></span>
+                  <span class="meta-value mono" x-text="fmtTime(deviceDetail?.device?.first_seen_at)"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">末次活跃</span>
-                  <span class="meta-value mono" x-text="fmtTime(deviceDetail.device.last_seen_at)"></span>
+                  <span class="meta-value mono" x-text="fmtTime(deviceDetail?.device?.last_seen_at)"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">上报次数</span>
-                  <span class="meta-value mono" x-text="deviceDetail.device.seen_count"></span>
+                  <span class="meta-value mono" x-text="deviceDetail?.device?.seen_count"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">活跃天数</span>
-                  <span class="meta-value mono" x-text="deviceDetail.stats.active_days != null ? deviceDetail.stats.active_days + ' 天' : '—'"></span>
+                  <span class="meta-value mono" x-text="deviceDetail?.stats?.active_days != null ? deviceDetail?.stats?.active_days + ' 天' : '—'"></span>
                 </div>
               </div>
 
               <!-- 风险信号（仅供参考，不做拦截依据） -->
-              <div class="drawer-error" x-show="deviceDetail.signals && deviceDetail.signals.length" x-cloak>
+              <div class="drawer-error" x-show="deviceDetail?.signals && deviceDetail?.signals.length" x-cloak>
                 <span class="meta-label">共享风险提示（仅供参考）</span>
-                <template x-for="s in deviceDetail.signals" :key="s">
+                <template x-for="s in deviceDetail?.signals" :key="s">
                   <div class="break-any" x-text="'· ' + s"></div>
                 </template>
               </div>
@@ -2133,7 +2133,7 @@
               <!-- 画像：摘要翻译 -->
               <h4 class="card-title" style="margin:1.3rem 0 0.75rem">设备画像</h4>
               <div class="meta-grid">
-                <template x-for="p in deviceDetail.profile" :key="p.key">
+                <template x-for="p in deviceDetail?.profile" :key="p.key">
                   <div class="meta-item" :class="{ 'meta-item-wide': p.key === 'screen' || p.key === 'browser' || p.key === 'identity' || p.key === 'gpu' || p.key === 'langs' }">
                     <span class="meta-label" x-text="p.label"></span>
                     <span class="meta-value" x-text="p.value"></span>
@@ -2148,14 +2148,14 @@
                 <template x-if="aiProfileHtml">
                   <div class="md-body" x-html="aiProfileHtml"></div>
                 </template>
-                <div style="white-space:pre-wrap; font-size:0.84rem; line-height:1.65" x-show="deviceDetail.ai_profile && !aiProfileHtml"
-                     x-text="deviceDetail.ai_profile"></div>
-                <div class="dim" style="font-size:0.78rem" x-show="!deviceDetail.ai_profile">
+                <div style="white-space:pre-wrap; font-size:0.84rem; line-height:1.65" x-show="deviceDetail?.ai_profile && !aiProfileHtml"
+                     x-text="deviceDetail?.ai_profile"></div>
+                <div class="dim" style="font-size:0.78rem" x-show="!deviceDetail?.ai_profile">
                   尚未生成。点击下方按钮，用 Chores 模型基于该设备的全部数据（识别结论、使用码、IP、浏览器、活跃时段等）生成画像；
                   生成后保存，可随时点「重新生成」覆盖。
                 </div>
-                <div class="dim mono" style="font-size:0.72rem; margin-top:0.5rem" x-show="deviceDetail.ai_profile_at"
-                     x-text="`生成于 ${fmtTime(deviceDetail.ai_profile_at)} · 模型 ${deviceDetail.ai_profile_model || '—'}`"></div>
+                <div class="dim mono" style="font-size:0.72rem; margin-top:0.5rem" x-show="deviceDetail?.ai_profile_at"
+                     x-text="`生成于 ${fmtTime(deviceDetail?.ai_profile_at)} · 模型 ${deviceDetail?.ai_profile_model || '—'}`"></div>
                 <div class="ai-loading" x-show="aiProfileGenerating" x-cloak>
                   <span class="ai-spinner"></span>
                   <span>正在分析该设备的全部数据（识别、使用码、IP、时段…），约需几十秒</span>
@@ -2163,7 +2163,7 @@
                 <div class="drawer-error" x-show="aiProfileError" x-cloak x-text="aiProfileError"></div>
                 <button class="btn-ghost" style="margin-top:0.6rem" :disabled="aiProfileGenerating"
                         @click="generateAiProfile()"
-                        x-text="aiProfileGenerating ? '生成中…' : (deviceDetail.ai_profile ? '重新生成' : '生成 AI 画像')"></button>
+                        x-text="aiProfileGenerating ? '生成中…' : (deviceDetail?.ai_profile ? '重新生成' : '生成 AI 画像')"></button>
               </div>
 
               <!-- 使用概况 -->
@@ -2171,31 +2171,31 @@
               <div class="meta-grid">
                 <div class="meta-item">
                   <span class="meta-label">请求次数</span>
-                  <span class="meta-value mono" x-text="fmtNum(deviceDetail.stats.total_logs)"></span>
+                  <span class="meta-value mono" x-text="fmtNum(deviceDetail?.stats?.total_logs)"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">成功 / 停止 / 异常</span>
-                  <span class="meta-value mono" x-text="`${deviceDetail.stats.success || 0} / ${deviceDetail.stats.cancelled || 0} / ${deviceDetail.stats.error || 0}`"></span>
+                  <span class="meta-value mono" x-text="`${deviceDetail?.stats?.success || 0} / ${deviceDetail?.stats?.cancelled || 0} / ${deviceDetail?.stats?.error || 0}`"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">总 Tokens</span>
-                  <span class="meta-value mono" x-text="fmtNum(deviceDetail.stats.total_tokens)"></span>
+                  <span class="meta-value mono" x-text="fmtNum(deviceDetail?.stats?.total_tokens)"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">平均耗时</span>
-                  <span class="meta-value mono" x-text="fmtDuration(deviceDetail.stats.avg_duration_ms)"></span>
+                  <span class="meta-value mono" x-text="fmtDuration(deviceDetail?.stats?.avg_duration_ms)"></span>
                 </div>
               </div>
 
               <!-- 分布 -->
               <div class="payload-list">
-                <details class="payload-block" open x-show="deviceDetail.codes && deviceDetail.codes.length">
+                <details class="payload-block" open x-show="deviceDetail?.codes && deviceDetail?.codes.length">
                   <summary>
-                    <span class="payload-title" x-text="`关联使用码（${deviceDetail.codes.length}）`"></span>
-                    <span class="payload-size" x-show="deviceDetail.codes.length > 1">疑似共享</span>
+                    <span class="payload-title" x-text="`关联使用码（${deviceDetail?.codes.length}）`"></span>
+                    <span class="payload-size" x-show="deviceDetail?.codes.length > 1">疑似共享</span>
                   </summary>
                   <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
-                    <template x-for="c in deviceDetail.codes" :key="c.code">
+                    <template x-for="c in deviceDetail?.codes" :key="c.code">
                       <div style="display:flex; align-items:baseline; gap:0.5rem; flex-wrap:wrap">
                         <span class="mono" style="font-weight:700" x-text="c.code"></span>
                         <span class="dim" style="font-size:0.76rem" x-show="c.note" x-text="c.note"></span>
@@ -2205,12 +2205,12 @@
                   </div>
                 </details>
 
-                <details class="payload-block" x-show="deviceDetail.ips && deviceDetail.ips.length">
+                <details class="payload-block" x-show="deviceDetail?.ips && deviceDetail?.ips.length">
                   <summary>
-                    <span class="payload-title" x-text="`IP（${deviceDetail.ips.length}）`"></span>
+                    <span class="payload-title" x-text="`IP（${deviceDetail?.ips.length}）`"></span>
                   </summary>
                   <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
-                    <template x-for="x in deviceDetail.ips" :key="x.ip">
+                    <template x-for="x in deviceDetail?.ips" :key="x.ip">
                       <div style="display:flex; align-items:baseline; gap:0.5rem; flex-wrap:wrap">
                         <span class="mono" x-text="x.ip"></span>
                         <span class="dim mono" style="font-size:0.76rem; margin-left:auto" x-text="`×${x.count} · ${fmtTime(x.last_seen_at)}`"></span>
@@ -2219,12 +2219,12 @@
                   </div>
                 </details>
 
-                <details class="payload-block" x-show="deviceDetail.user_agents && deviceDetail.user_agents.length">
+                <details class="payload-block" x-show="deviceDetail?.user_agents && deviceDetail?.user_agents.length">
                   <summary>
-                    <span class="payload-title" x-text="`浏览器（${deviceDetail.user_agents.length} 种 UA）`"></span>
+                    <span class="payload-title" x-text="`浏览器（${deviceDetail?.user_agents.length} 种 UA）`"></span>
                   </summary>
                   <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.6rem">
-                    <template x-for="(u, idx) in deviceDetail.user_agents" :key="idx">
+                    <template x-for="(u, idx) in deviceDetail?.user_agents" :key="idx">
                       <div>
                         <div style="font-size:0.82rem; font-weight:650" x-text="`${u.browser} / ${u.os} / ${u.device_type}（×${u.count}）`"></div>
                         <div class="mono dim break-any" style="font-size:0.7rem; margin-top:2px" x-text="u.user_agent"></div>
@@ -2233,12 +2233,12 @@
                   </div>
                 </details>
 
-                <details class="payload-block" x-show="deviceDetail.tools && deviceDetail.tools.length">
+                <details class="payload-block" x-show="deviceDetail?.tools && deviceDetail?.tools.length">
                   <summary>
-                    <span class="payload-title" x-text="`常用工具（Top ${deviceDetail.tools.length}）`"></span>
+                    <span class="payload-title" x-text="`常用工具（Top ${deviceDetail?.tools.length}）`"></span>
                   </summary>
                   <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
-                    <template x-for="t in deviceDetail.tools" :key="t.tool_id + t.tool_name">
+                    <template x-for="t in deviceDetail?.tools" :key="t.tool_id + t.tool_name">
                       <div style="display:flex; align-items:baseline; gap:0.5rem">
                         <span style="font-size:0.82rem" x-text="t.tool_name || t.tool_id || '—'"></span>
                         <span class="dim mono" style="font-size:0.72rem" x-show="t.tool_id" x-text="`#${t.tool_id}`"></span>
@@ -2248,12 +2248,12 @@
                   </div>
                 </details>
 
-                <details class="payload-block" x-show="deviceDetail.models && deviceDetail.models.length">
+                <details class="payload-block" x-show="deviceDetail?.models && deviceDetail?.models.length">
                   <summary>
-                    <span class="payload-title" x-text="`常用模型（Top ${deviceDetail.models.length}）`"></span>
+                    <span class="payload-title" x-text="`常用模型（Top ${deviceDetail?.models.length}）`"></span>
                   </summary>
                   <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
-                    <template x-for="m in deviceDetail.models" :key="m.model">
+                    <template x-for="m in deviceDetail?.models" :key="m.model">
                       <div style="display:flex; align-items:baseline; gap:0.5rem">
                         <span class="mono" style="font-size:0.78rem" x-text="m.model"></span>
                         <span class="dim mono" style="font-size:0.76rem; margin-left:auto" x-text="`×${m.count}`"></span>
@@ -2262,12 +2262,12 @@
                   </div>
                 </details>
 
-                <details class="payload-block" open x-show="deviceDetail.recent_logs && deviceDetail.recent_logs.length">
+                <details class="payload-block" open x-show="deviceDetail?.recent_logs && deviceDetail?.recent_logs.length">
                   <summary>
-                    <span class="payload-title" x-text="`最近请求（${deviceDetail.recent_logs.length}）`"></span>
+                    <span class="payload-title" x-text="`最近请求（${deviceDetail?.recent_logs.length}）`"></span>
                   </summary>
                   <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
-                    <template x-for="r in deviceDetail.recent_logs" :key="r.id">
+                    <template x-for="r in deviceDetail?.recent_logs" :key="r.id">
                       <div style="display:flex; align-items:baseline; gap:0.5rem; flex-wrap:wrap">
                         <button class="link-btn mono" @click="openLogFromDevice(r.id)" x-text="'#' + r.id"></button>
                         <span class="dim mono" style="font-size:0.72rem" x-text="fmtTime(r.created_at)"></span>
@@ -2282,10 +2282,10 @@
                 <details class="payload-block">
                   <summary>
                     <span class="payload-title">原始摘要 JSON</span>
-                    <span class="payload-size mono" x-text="`${(deviceDetail.summary_raw || '').length} 字`"></span>
-                    <button class="link-btn" x-show="deviceDetail.summary_raw" @click.prevent.stop="copyText(deviceDetail.summary_raw)">复制</button>
+                    <span class="payload-size mono" x-text="`${(deviceDetail?.summary_raw || '').length} 字`"></span>
+                    <button class="link-btn" x-show="deviceDetail?.summary_raw" @click.prevent.stop="copyText(deviceDetail?.summary_raw)">复制</button>
                   </summary>
-                  <pre class="payload-pre mono" x-text="deviceDetail.summary_raw || '（空）'"></pre>
+                  <pre class="payload-pre mono" x-text="deviceDetail?.summary_raw || '（空）'"></pre>
                 </details>
               </div>
 
@@ -2297,7 +2297,7 @@
 
         <div class="drawer-foot" x-show="deviceDetail && !deviceDetailLoading">
           <button class="btn-ghost" @click="openDeviceEditorFromDetail()">编辑备注</button>
-          <button class="btn-ghost" @click="openDeviceLogs(deviceDetail.device)">查看日志</button>
+          <button class="btn-ghost" @click="openDeviceLogs(deviceDetail?.device)">查看日志</button>
           <button class="btn-ghost" @click="copyDeviceProfileText()">复制画像</button>
         </div>
       </aside>

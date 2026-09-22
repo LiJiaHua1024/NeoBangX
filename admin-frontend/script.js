@@ -1000,7 +1000,10 @@ function adminApp() {
     async refreshAll() {
       this.loading = true;
       try {
-        await Promise.all([this.loadStats(), this.loadCodes(), this.loadLogs()]);
+        // 启动只拉仪表盘自己要的统计；使用码、日志（含汇总）都等进入对应页签时
+        // 再拉（nav 已绑定 loadCodes / openLogsTab）。对照实验：日志数据启动即常驻
+        // 时高压连点必卡、拦掉则 0 卡死——页签数据不提前加载是这条性能线的硬约束。
+        await Promise.all([this.loadStats()]);
         if (this.tab === "config" || this.tab === "logsettings") await this.loadConfig();
         if (this.tab === "parse") await this.loadMineru();
         if (this.tab === "analytics") await this.loadAnalytics();
