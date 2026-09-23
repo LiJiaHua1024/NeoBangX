@@ -12,6 +12,9 @@ _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 DEFAULT_VARIABLES = {
     "user_input": "",
     "transfer_count": "1",
+    # 翻译工具的语言对：续写/重试路径若漏传，也要有一个说得过去的目标语言
+    "source_lang": "auto",
+    "target_lang": "简体中文",
 }
 
 

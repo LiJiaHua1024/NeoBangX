@@ -4,12 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>NeoBangX · Bang助教学，大有可AI</title>
-  <meta name="description" content="NeoBangX：32 个中学英语教学 AI 工具，输入使用码即可开始。">
+  <meta name="description" content="NeoBangX：33 个中学英语教学 AI 工具，输入使用码即可开始。">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23e9a15b'/%3E%3Cstop offset='1' stop-color='%23cf7038'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E">
 
   <!-- Tailwind CSS v4（无构建步骤，浏览器端编译） -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=ocr260922b">
+  <!-- 本地静态资源一律不带 ?v= 版本串：带 query 会被服务端缓存中间件当成「版本化资源」
+       下发 immutable 长缓存，于是「改了文件但忘了改版本串」时浏览器一直用旧代码，
+       新 HTML 配旧 JS/CSS 界面直接错乱，而手机端还没法 Ctrl+Shift+R 强刷。
+       不带版本串走 no-cache + etag：文件变了下一次加载自动就是新的，没变则 304（几乎零成本）。 -->
+  <link rel="stylesheet" href="/static/styles.css">
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -36,15 +40,16 @@
   <script defer src="/static/vendor/thumbmark.umd.js"></script>
   <!-- 二维码生成（扫码拍照）：未加载成功时配对弹窗退化为「复制网址」，功能不中断 -->
   <script defer src="/static/vendor/qrcode-generator-1.4.4.js"></script>
-  <script defer src="/static/nbx-mirror.js?v=mirror4"></script>
-  <script defer src="/static/nbx-mirror-store.js?v=mirror4"></script>
-  <script defer src="/static/nbx-mirror-peer.js?v=mirror4"></script>
+  <script defer src="/static/nbx-mirror.js"></script>
+  <script defer src="/static/nbx-mirror-store.js"></script>
+  <script defer src="/static/nbx-mirror-peer.js"></script>
   <!-- 回答版本容器（重新生成保留旧结果）：纯函数层，必须先于 script.js 加载 -->
-  <script defer src="/static/nbx-versions.js?v=ver1"></script>
-  <script defer src="/static/script.js?v=ocr260922b"></script>
-  <script defer src="/static/vp-print.js?v=export3mode1"></script>
+  <script defer src="/static/nbx-versions.js"></script>
+  <!-- 本地脚本同样不带 ?v=（理由见上面 styles.css 那一段） -->
+  <script defer src="/static/script.js"></script>
+  <script defer src="/static/vp-print.js"></script>
   <!-- 点击特效接入层（懒加载 vendor/ba-click-fx，不抢首屏） -->
-  <script defer src="/static/click-fx.js?v=fx260922a"></script>
+  <script defer src="/static/click-fx.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
 </head>
 
@@ -160,7 +165,7 @@
              :class="['mascot-' + mascotState, 'mascot-anchor-' + mascotAnchorName]"
              @dblclick="mascotSecretTap()"
              aria-hidden="true">
-          <img src="/static/Sora_Rabbit_Plush.png?v=sora260820" alt="" draggable="false">
+          <img src="/static/Sora_Rabbit_Plush.png" alt="" draggable="false">
         </div>
 
         <!-- 窄档：首页没有工具头部，历史入口浮在右上角（与工具页头部里那个同一角） -->
@@ -1723,8 +1728,332 @@
           </div>
         </template>
 
+        <!-- ========== 翻译（工具 33） ========== -->
+        <!-- 一进这个工具工作区就是两栏：左（宽屏）/ 上（窄屏）是原文，右 / 下是译文。
+             两栏各滚各的，滚动进度按比例互相对齐（可关）；折叠原文后译文独占工作区，阅读栏居中。
+             原文栏的输入框就是全站的 input：粘贴、上传解析、拍照识别写回都落在它上面。 -->
+        <template x-if="currentTool && isTranslateTool">
+          <div class="flex-1 min-h-0 flex flex-col">
+            <!-- 工具头部：语言对 + 模型。窄屏藏掉标题与描述，把宽度让给语言对与模型 -->
+            <div class="mascot-keepout px-3 sm:px-5 py-2.5 border-b flex items-center gap-2 sm:gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
+              <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                      @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
+                      x-html="icon('menu','w-5 h-5')"></button>
+              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
+                    style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
+                    x-html="icon(currentTool.icon,'w-5 h-5')"></span>
+              <div class="min-w-0 hidden md:block">
+                <h2 class="font-bold leading-tight truncate" style="font-size:.98rem" x-text="currentTool.name"></h2>
+                <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
+              </div>
+
+              <!-- 语言对：两个自研下拉夹一个交换钮。不用原生 select。
+                   click.outside 挂在两者共同的容器上：各挂各的话，点另一个钮会被对方当成
+                   「点到了外面」而立刻关掉，等于点不开 -->
+              <div class="tr-langs" @click.outside="closeTrMenu()">
+                <div class="ms-wrap">
+                  <button class="ms-trigger tr-lang-trigger" :class="{ 'open': trMenu === 'source' }"
+                          @click="toggleTrMenu('source')" :aria-expanded="trMenu === 'source'"
+                          :title="'原文语言：' + trSourceLabel">
+                    <span class="tr-lang-cap">原文</span>
+                    <span class="truncate" x-text="trSourceLabel"></span>
+                    <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                  </button>
+                  <div class="ms-menu glass-deep tr-lang-menu" x-show="trMenu === 'source'" x-cloak
+                       x-transition:enter="ms-anim"
+                       x-transition:enter-start="ms-anim-from"
+                       x-transition:enter-end="ms-anim-to"
+                       x-transition:leave="ms-anim-leave"
+                       x-transition:leave-start="ms-anim-to"
+                       x-transition:leave-end="ms-anim-from">
+                    <div class="ms-list scroll-thin">
+                      <template x-for="l in trSourceOptions" :key="l.id">
+                        <button class="ms-item" :class="{ 'on': l.id === trSourceLang }" @click="chooseTrSourceLang(l.id)">
+                          <div class="min-w-0">
+                            <div class="ms-item-title"><span class="truncate" x-text="l.label"></span></div>
+                            <div class="ms-item-sub truncate" x-show="l.native !== l.label" x-text="l.native"></div>
+                          </div>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+
+                <button type="button" class="icon-btn tr-swap" @click="swapTrLangs()"
+                        title="交换原文与译文语言" aria-label="交换原文与译文语言"
+                        x-html="icon('replace','w-4 h-4')"></button>
+
+                <div class="ms-wrap">
+                  <button class="ms-trigger tr-lang-trigger" :class="{ 'open': trMenu === 'target' }"
+                          @click="toggleTrMenu('target')" :aria-expanded="trMenu === 'target'"
+                          :title="'译文语言：' + trTargetLabel">
+                    <span class="tr-lang-cap">译文</span>
+                    <span class="truncate" x-text="trTargetLabel"></span>
+                    <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                  </button>
+                  <div class="ms-menu glass-deep tr-lang-menu" x-show="trMenu === 'target'" x-cloak
+                       x-transition:enter="ms-anim"
+                       x-transition:enter-start="ms-anim-from"
+                       x-transition:enter-end="ms-anim-to"
+                       x-transition:leave="ms-anim-leave"
+                       x-transition:leave-start="ms-anim-to"
+                       x-transition:leave-end="ms-anim-from">
+                    <div class="ms-list scroll-thin">
+                      <template x-for="l in trTargetOptions" :key="l.id">
+                        <button class="ms-item" :class="{ 'on': l.id === trTargetLang }" @click="chooseTrTargetLang(l.id)">
+                          <div class="min-w-0">
+                            <div class="ms-item-title"><span class="truncate" x-text="l.label"></span></div>
+                            <div class="ms-item-sub truncate" x-show="l.native !== l.label" x-text="l.native"></div>
+                          </div>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="ml-auto flex items-center gap-2">
+                <span class="text-xs text-faint hidden sm:inline">模型</span>
+                <div class="ms-wrap" @click.outside="closeModelMenu()">
+                  <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
+                          @click="toggleModelMenu()" aria-label="选择模型" :aria-expanded="modelMenuOpen">
+                    <span class="ms-spark" x-html="icon('sparkle','w-3.5 h-3.5')"></span>
+                    <span class="truncate" x-text="shortModel(selectedModel)"></span>
+                    <span class="ms-free" x-show="isFreeModel()" title="免费模型：调用不消耗使用码次数">免费</span>
+                    <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                  </button>
+                  <div class="ms-menu glass-deep" x-show="modelMenuOpen" x-cloak
+                       x-transition:enter="ms-anim"
+                       x-transition:enter-start="ms-anim-from"
+                       x-transition:enter-end="ms-anim-to"
+                       x-transition:leave="ms-anim-leave"
+                       x-transition:leave-start="ms-anim-to"
+                       x-transition:leave-end="ms-anim-from">
+                    <div class="ms-list scroll-thin">
+                      <template x-for="m in visibleModels" :key="m.id">
+                        <button class="ms-item" :class="{ 'on': m.id === selectedModel }" @click="chooseModel(m.id)">
+                          <div class="min-w-0">
+                            <div class="ms-item-title">
+                              <span class="truncate" x-text="m.name || shortModel(m.id)"></span>
+                              <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
+                              <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
+                            </div>
+                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
+                          </div>
+                          <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
+                            <svg viewBox="0 0 24 24">
+                              <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
+                              <circle class="ms-ring-bar" cx="12" cy="12" r="10"
+                                      :stroke="modelScoreColor(m.score)"
+                                      stroke-dasharray="62.83"
+                                      :stroke-dashoffset="modelRingOffset(m.score)"></circle>
+                            </svg>
+                            <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
+                          </span>
+                        </button>
+                      </template>
+                    </div>
+                    <button class="ms-more" x-show="modelsCollapsible" :class="{ 'on': modelsExpanded }"
+                      @click="modelsExpanded = !modelsExpanded">
+                      <span x-text="modelsExpanded ? '收起' : `展开全部（共 ${models.length} 个）`"></span>
+                      <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
+                  </div>
+                </div>
+                <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                        @click="rightMobileOpen = true" title="历史与收藏" aria-label="打开历史与收藏"
+                        x-html="icon('clock','w-5 h-5')"></button>
+              </div>
+            </div>
+
+            <!-- 对照工作区：窄屏上下分屏，≥lg 左右分栏（与识别工作区同一口径）。
+                 mascot-keepout：这一整块都是正文，兔子挂件不许压在上面 -->
+            <div class="tr-split mascot-keepout flex-1 min-h-0 flex flex-col lg:flex-row">
+              <!-- 原文栏 -->
+              <div class="tr-pane tr-pane-source" :class="{ 'is-collapsed': trSrcCollapsed }">
+                <div class="tr-pane-head">
+                  <button type="button" class="icon-btn tr-fold" style="width:2rem;height:2rem" @click="toggleTrFold()"
+                          :disabled="!output && !streaming"
+                          :title="!output && !streaming
+                            ? '还没有译文可看：先翻译，或直接在这里写原文'
+                            : (trSrcCollapsed ? '展开原文' : '折叠原文，只留译文')"
+                          :aria-label="trSrcCollapsed ? '展开原文' : '折叠原文'">
+                    <!-- 折叠方向跟着分档走：≥lg 往左收（与识别工具的折叠钮同一对箭头），
+                         窄屏是上下分屏、往上一行收，所以换成上下箭头。
+                         两套图标都渲染好，用媒体查询只留一套，不为它多加一份 JS 状态 -->
+                    <span class="tr-fold-x" x-html="icon(trSrcCollapsed ? 'chevrons-right' : 'chevrons-left','w-4 h-4')"></span>
+                    <span class="tr-fold-y" x-html="icon(trSrcCollapsed ? 'chevrons-down' : 'chevrons-up','w-4 h-4')"></span>
+                  </button>
+                  <span class="tr-pane-label">原文</span>
+                  <span class="text-[11px] text-faint tr-pane-label" x-show="input.length" x-text="input.length + ' 字'"></span>
+                  <span class="ml-auto tr-pane-acts">
+                    <!-- 上传：宽屏放在它自己要写进去的那一列里（原文栏右侧），动作与目标同一处；
+                         窄屏这一列很窄，上传跟着底栏走（见 footer），那里也是拇指的落点 -->
+                    <button type="button" class="btn-ghost tr-upload-desk"
+                            style="padding:.4rem .75rem;font-size:.8rem"
+                            @click="openUploadDialog()" title="上传文件，或用手机拍一张">
+                      <span x-html="icon('paperclip','w-4 h-4')"></span>上传
+                    </button>
+                    <!-- 清空输入与通用输入区同一个图标按钮 -->
+                    <button type="button" class="icon-btn danger" style="width:2rem;height:2rem"
+                            x-show="input || attachedFile" @click="trClearSource()"
+                            title="清空原文与译文（历史记录不受影响）"
+                            x-html="icon('eraser','w-4 h-4')"></button>
+                  </span>
+                </div>
+                <div class="tr-pane-body scroll-thin" x-ref="trSourcePane" @scroll.passive="onTrPaneScroll('source')"
+                     @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false"
+                     @drop.prevent="handleFileDrop($event)" :class="{ 'drag-over': dragOver }">
+                  <!-- 文件卡片与通用输入区同一套：读完的文件名与解析状态放在正文上方 -->
+                  <div class="file-card tr-file" x-show="attachedFile">
+                    <div class="file-card-icon"><span x-html="icon('file-text','w-6 h-6')"></span></div>
+                    <div class="file-card-info">
+                      <div class="file-card-name" x-text="attachedFile ? attachedFile.name : ''"></div>
+                      <div class="file-card-meta" x-text="parsingFile ? parsingLabel : '内容已读取，可直接翻译'"></div>
+                    </div>
+                  </div>
+                  <textarea class="tr-input" x-ref="trInput" x-model="input" @input="trGrow()"
+                            @keydown="if (($event.ctrlKey || $event.metaKey) && $event.key === 'Enter') { $event.preventDefault(); trRun(); }"
+                            spellcheck="false"
+                            placeholder="在这里粘贴原文，也可以上传 Word / PDF，或拍摄试卷、手写作文识别成文字…（Ctrl + Enter 开始翻译）"></textarea>
+                </div>
+              </div>
+
+              <!-- 译文栏。窄屏下 is-hidden = 还没按下「翻译」时整块不占地方（原文栏拿到整屏高度），
+                   按下翻译才按同一条非线性动画放出来；宽屏这条状态不起作用（规则只写在 <lg 里）。
+                   kb-folded = 输入法弹起时收成一行让位（见 scheduleTrKbFold） -->
+              <div class="tr-pane tr-pane-result"
+                   :class="{ 'is-hidden': !trResultVisible, 'kb-folded': trResultFolded }">
+                <div class="tr-pane-head">
+                  <span class="tr-chip" x-text="trTargetLabel"></span>
+                  <span class="text-[11px] text-dim tr-pane-label" x-text="trStatusText"></span>
+                  <span class="ml-auto tr-pane-acts">
+                    <button type="button" class="icon-btn" style="width:2rem;height:2rem"
+                            x-show="output && !streaming" @click="trNew()"
+                            title="新建一次翻译：下一次生成会新建一条记录（当前记录留在历史里）"
+                            x-html="icon('plus','w-4 h-4')"></button>
+                    <button type="button" class="icon-btn" style="width:2rem;height:2rem"
+                            x-show="output && !streaming" @click="copyTrText()"
+                            title="复制译文（纯文本）" x-html="icon('copy','w-4 h-4')"></button>
+                  </span>
+                </div>
+                <div class="tr-pane-body scroll-thin" x-ref="trResultPane" @scroll.passive="onTrPaneScroll('result')">
+                  <div class="tr-result-inner">
+                    <!-- 空状态只给一行：这一栏是拿来读的，不留大片占位 -->
+                    <p class="tr-hint" x-show="!output && !streaming && !errorMsg"
+                       x-text="trHasSource ? '点右下角「翻译」开始，或按 Ctrl + Enter' : '译文会显示在这里'"></p>
+                    <!-- 首 token 前：与全站同一套等待动画。推理文本一到就让位给推理盒，
+                         两个「正在思考」的指示器不同时出现 -->
+                    <div x-show="thinking && !reasoning" class="thinking-block fade-in">
+                      <div class="thinking-orb-wrap"><div class="thinking-orb"><div class="thinking-orb-inner"></div></div></div>
+                      <div class="thinking-label">
+                        <span class="thinking-dots"><span></span><span></span><span></span></span>
+                        <span class="thinking-text" x-text="'正在翻译成 ' + trTargetLabel"></span>
+                      </div>
+                    </div>
+                    <!-- 备用通道切换进度：后端真的切过通道时才出现（单 Provider 不会触发）。
+                         与其他工具同一套面板：等待时间变长时，用户得知道是在换通道而不是卡住了 -->
+                    <div x-show="fallbackInfo" x-cloak>
+                      <div class="fallback-panel">
+                        <div class="fallback-dots" aria-hidden="true">
+                          <template x-for="(dot, index) in fallbackDots" :key="index">
+                            <span class="fb-dot" :class="'fb-dot-' + dot"></span>
+                          </template>
+                        </div>
+                        <span class="fallback-text" x-text="fallbackText"></span>
+                      </div>
+                    </div>
+                    <div class="md" x-show="output" x-html="rendered"></div>
+                    <span class="tw-cursor" x-show="streaming && !!output"></span>
+                    <!-- 撞输出上限：半篇译文不能当完整结果交给用户，给一条接着译的出口。
+                         紧挨着译文放：它是关于这份译文的交代与出口 -->
+                    <div class="tr-note tr-note-warn" x-show="!streaming && trTruncated">
+                      <div>译文可能不完整：输出已经达到上限。接着译下去，或者把原文拆成两段分别翻译。</div>
+                      <button type="button" class="btn-ghost tr-note-go" @click="continueChat()"
+                              title="从断点接着往下译，已经译出的部分不变">
+                        <span x-html="icon('chevrons-right','w-3.5 h-3.5')"></span>继续翻译
+                      </button>
+                    </div>
+                    <div class="tr-note tr-note-warn" x-show="!streaming && !trTruncated && status === 'stopped' && !!output">
+                      <div>已停止翻译：这是已经译出的部分。</div>
+                      <button type="button" class="btn-ghost tr-note-go" @click="continueChat()"
+                              title="从断点接着往下译，已经译出的部分不变">
+                        <span x-html="icon('chevrons-right','w-3.5 h-3.5')"></span>继续翻译
+                      </button>
+                    </div>
+                    <!-- 思考过程：只在「正在思考」期间出现，正文一开始就整条消失 ——
+                         翻译工具的产物是译文本身，思考过程留在屏上只占阅读空间。
+                         显隐不走模板绑定（x-show）而是由 _syncReasoningBox 直接写 DOM：
+                         实测这个元素上 Alpine 会漏掉「该隐藏」的那次触发（状态已置 false，
+                         盒子还挂在屏上，实测样式变更历史里只有一次显示写入、没有隐藏写入）。
+                         初始 inline display:none 就是它的初始态。 -->
+                    <div x-ref="reasoningBox" class="reasoning-box" style="display:none"
+                         :class="{ 'collapsed': !reasoningOpen }">
+                      <button class="reasoning-head" @click="reasoningOpen = !reasoningOpen">
+                        <span class="status-dot live"></span>
+                        <span class="reasoning-title">正在思考…</span>
+                        <span class="reasoning-count" x-text="reasoningStatText"></span>
+                        <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                      </button>
+                      <div class="reasoning-body scroll-thin" x-show="reasoningOpen" x-collapse>
+                        <pre x-ref="reasoningBody" x-text="reasoning"></pre>
+                        <div class="reasoning-truncated" x-show="reasoningTruncated">内容较长，仅保留最近部分</div>
+                      </div>
+                    </div>
+                    <div class="error-card" x-show="status === 'error' && !streaming">
+                      <div class="font-semibold mb-1">这次翻译没有成功</div>
+                      <div x-text="errorMsg"></div>
+                      <div class="mt-2 text-xs opacity-80" x-show="errorLimited">这是调用频次限制（免费模型的防滥用限额或接口限速）。等一会儿再试即可，也可以换个模型再翻。</div>
+                      <div class="error-actions mt-3">
+                        <!-- 重试就是再走一遍「更新翻译」：原文与语言对不变，写回同一条记录 -->
+                        <button class="btn-primary" @click="trRun()">重试</button>
+                        <button class="btn-ghost" @click="openUploadDialog()">重新上传原文</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 底部动作条：状态在左，主操作在右（窄屏时拇指正落在它们上面）。
+                 窄屏的上传入口在这里（宽屏在原文栏右侧，见 tr-upload-desk） -->
+            <div class="tr-foot mascot-keepout">
+              <span :class="statusDotClass"></span>
+              <!-- 窄屏是「状态 + 上传 + 翻译」挤一行：状态先让步（min-w-0 才能截断） -->
+              <span class="truncate min-w-0" x-text="trStatusText"></span>
+              <span class="text-faint hidden md:inline shrink-0" x-text="'· ' + shortModel(selectedModel)'"></span>
+              <span class="ml-auto flex items-center gap-2 shrink-0">
+                <button type="button" class="btn-ghost tr-upload-foot"
+                        style="padding:.4rem .75rem;font-size:.8rem"
+                        x-show="!streaming" @click="openUploadDialog()" title="上传文件，或用手机拍一张">
+                  <span x-html="icon('paperclip','w-4 h-4')"></span>上传
+                </button>
+                <button type="button" class="btn-ghost" x-show="streaming" @click="stop()"
+                        title="停止翻译（已经译出的内容会保留）">
+                  <span x-html="icon('stop','w-4 h-4')"></span>停止
+                </button>
+                <!-- 有记录在手时按钮说「更新翻译」：文案切换走滑动淡入，不是硬跳字 -->
+                <button type="button" class="btn-primary tr-go" x-show="!streaming"
+                        :class="{ 'is-update': trUpdating }"
+                        :disabled="!trHasSource || parsingFile" @click="trRun()"
+                        :title="trUpdating
+                          ? '用左侧原文与上面的语言对重新翻译，结果写回这条历史记录（不新增）'
+                          : '开始翻译（Ctrl + Enter）'">
+                  <span x-html="icon('sparkle','w-4 h-4')"></span>
+                  <span class="tr-go-label">
+                    <!-- 占位的那一条只负责把按钮宽度定在较宽的那个文案上，不参与显示 -->
+                    <span class="tr-go-size" aria-hidden="true">更新翻译</span>
+                    <span class="tr-go-a">翻译</span>
+                    <span class="tr-go-b">更新翻译</span>
+                  </span>
+                </button>
+              </span>
+            </div>
+          </div>
+        </template>
+
         <!-- ========== 普通工具操作页 ========== -->
-        <template x-if="currentTool && !isMigrationTool && !isVocabTool && !isVisualPaperTool && !isOcrTool">
+        <template x-if="currentTool && !isMigrationTool && !isVocabTool && !isVisualPaperTool && !isOcrTool && !isTranslateTool">
           <div class="flex-1 min-h-0 flex flex-col">
 
             <!-- 工具头部 -->
@@ -2164,6 +2493,9 @@
                 <div class="side-card clickable" @click="openHistory(item)">
                   <div class="flex items-center gap-1.5">
                     <span class="chip"><span x-html="icon(item.icon,'w-3 h-3')"></span><span x-text="item.toolName"></span></span>
+                    <!-- 翻译记录：一眼看出这条是什么语言对（如「英→中」） -->
+                    <span x-show="item.trPair" class="chip neutral" x-text="item.trPair"
+                          title="这条记录的语言对"></span>
                     <span x-show="item.error" class="chip danger">生成失败</span>
                     <span x-show="item.partial && !item.error" class="chip neutral">已停止</span>
                     <!-- 多版本记录：这条有过重新生成，打开后底部可切换新旧结果 -->

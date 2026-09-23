@@ -3760,6 +3760,175 @@ mark, .vp-hl {
 }
 
 /* ============================================================
+   翻译（工具 33）：原文 / 译文对照
+   ============================================================ */
+/* 语言对：两个自研下拉夹一个交换钮。头部一行要同时放下语言对、模型与窄档入口，
+   它是这一行里最容易被挤换行的部分，所以比模型下拉收窄一档 */
+.tr-langs { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
+.tr-lang-trigger { max-width: 11rem; }
+.tr-lang-cap { flex: 0 0 auto; font-size: 0.72rem; color: var(--text-faint); }
+.tr-lang-menu { min-width: 13rem; }
+.tr-swap { flex: 0 0 auto; width: 2.25rem; height: 2.25rem; }
+
+/* 工作区分栏：窄屏上下分屏，≥lg 左右分栏。两栏对等（basis 各 50%）——宽度对等才像对照。
+   分栏方向由标记里的 flex-col lg:flex-row 决定（与识别工作区同一口径），这里只管尺寸与过渡。
+   折叠就是改 flex-basis：窄屏它是栏高，≥lg 它是栏宽，一个属性覆盖两种分档。
+   两边都是长度值（50% ↔ 3.25rem / 2.6rem），过渡才有中间态可插值。 */
+.tr-split { min-height: 0; }
+.tr-pane {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
+  flex: 1 1 50%;
+  /* 分栏线与底色一起过渡：译文栏收成 0 时不留下一条悬空的线 */
+  transition: flex-basis 0.45s var(--ease-drawer), border-top-color 0.3s ease;
+}
+.tr-pane + .tr-pane { border-top: 1px solid var(--border); }
+.tr-pane-head {
+  display: flex; align-items: center; gap: 0.5rem; flex: 0 0 auto;
+  min-height: 2.6rem; padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+/* 栏头说明：宽度不够就截断，绝不推着按钮换行 */
+.tr-pane-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-pane-acts { display: flex; align-items: center; gap: 0.25rem; flex: 0 0 auto; }
+/* 「没有译文可看」时折叠钮是禁用的：得看得出按不动，否则会被当成坏了 */
+.tr-fold:disabled { opacity: 0.35; cursor: not-allowed; }
+/* 折叠时正文淡出（不做 display:none：那会在栏还没收完时就闪一下空白） */
+.tr-pane-body { flex: 1 1 auto; min-height: 0; overflow: auto; transition: opacity 0.22s ease; }
+.tr-pane.is-collapsed .tr-pane-body { opacity: 0; pointer-events: none; }
+.tr-pane.is-collapsed .tr-pane-label,
+.tr-pane.is-collapsed .tr-pane-acts { display: none; }
+/* 折叠钮的两套箭头（见标记里的说明）：默认留着左右那对，窄屏换成上下那对 */
+.tr-fold-x { display: inline-flex; }
+.tr-fold-y { display: none; }
+
+/* 译文按阅读栏宽居中：折叠原文后它就是整块工作区的主角，行太长反而难读 */
+.tr-result-inner { max-width: 46rem; margin: 0 auto; padding: 0.9rem 1.1rem 1.6rem; }
+.tr-hint { padding: 1.8rem 0 0; text-align: center; font-size: 0.82rem; color: var(--text-faint); }
+/* 推理盒在这个栏里是排在译文之后的（理由见标记）：.reasoning-box 自带的是下边距，
+   这里补一个上边距，译文与它之间才有间隔 —— 它落在栏顶时这 1rem 也不碍事 */
+.tr-result-inner > .reasoning-box { margin-top: 1rem; }
+
+/* 原文栏就是一个没有边框的输入区，占满整栏（点空白处就能接着写）。
+   高度由 trGrow 按内容算、不设上限：要的就是「滚动发生在栏里」——
+   两栏的滚动进度可比，同步对齐才有意义；让输入框自己在内部滚，对照就散了。 */
+.tr-input {
+  display: block; width: 100%; min-height: 100%;
+  padding: 0.9rem 1.1rem 1.6rem;
+  resize: none; border: none; outline: none; background: transparent; overflow: hidden;
+  color: var(--text); font-family: var(--font); font-size: 0.925rem; line-height: 1.75;
+}
+.tr-input::placeholder { color: var(--text-faint); }
+.tr-file { margin: 0.85rem 1.1rem 0; }
+/* 拖拽：与通用输入区同一套观感（整栏都是落点，不只那个小框） */
+.tr-pane-source .tr-pane-body.drag-over {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* 译文状态（撞上限 / 被停止）：行内一条，不做成占版面的大警告卡 */
+.tr-note {
+  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  margin-top: 1rem; padding: 0.7rem 0.9rem; border-radius: 0.8rem;
+  font-size: 0.82rem; line-height: 1.7;
+}
+.tr-note-warn {
+  color: #f0c98a;
+  background: color-mix(in srgb, #b8801f 12%, transparent);
+  border: 1px solid color-mix(in srgb, #b8801f 34%, transparent);
+}
+.tr-note-go { flex: 0 0 auto; margin-left: auto; }
+
+/* 译文栏头部的目标语言小标 */
+.tr-chip {
+  flex: 0 0 auto; padding: 0.15rem 0.5rem; border-radius: 999px;
+  font-size: 0.72rem; font-weight: 650;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+/* 底部动作条：状态在左、主操作在右。窄屏时拇指正落在它上面 */
+.tr-foot {
+  display: flex; align-items: center; gap: 0.5rem; flex: 0 0 auto;
+  padding: 0.5rem 0.9rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem; color: var(--text-dim);
+}
+
+/* 主按钮的文案切换：两个文案叠在同一个位置上，靠 is-update 让其中一个滑上来。
+   宽度由那条不可见的「更新翻译」占着——文案一换按钮宽度就跳，
+   这一跳会把「滑动淡入」的意思全毁掉 */
+.tr-go-label { position: relative; display: inline-block; overflow: hidden; }
+.tr-go-size { display: block; visibility: hidden; }
+.tr-go-a, .tr-go-b {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  white-space: nowrap;
+  transition: opacity 0.26s var(--ease-out), translate 0.34s var(--ease-pop);
+}
+.tr-go-b { opacity: 0; translate: 0 1.1rem; }
+.tr-go.is-update .tr-go-a { opacity: 0; translate: 0 -1.1rem; }
+.tr-go.is-update .tr-go-b { opacity: 1; translate: 0 0; }
+
+/* ≥lg：左右分栏，原文栏可整栏收成一条细条 */
+@media (min-width: 1024px) {
+  .tr-pane + .tr-pane { border-top: 0; border-left: 1px solid var(--border); }
+  .tr-pane.is-collapsed { flex: 0 0 3.25rem; }
+  /* 3.25rem 里横排放不下任何东西：栏头改竖排，只留折叠按钮（说明与操作行已隐藏） */
+  .tr-pane.is-collapsed .tr-pane-head {
+    flex-direction: column; align-items: center; justify-content: flex-start; gap: 0.5rem;
+    min-height: 0; padding: 0.5rem 0.35rem;
+  }
+}
+
+/* 上传按钮的两个落点：宽屏在原文栏右侧（动作与目标同一处），窄屏跟底栏走（拇指落点）。
+   与折叠钮那两套箭头同一手法：两处都渲染好，用媒体查询只留一处 —— 不给它加 JS 状态 */
+.tr-upload-desk { display: none; }
+.tr-upload-foot { display: inline-flex; }
+@media (min-width: 1024px) {
+  .tr-upload-desk { display: inline-flex; }
+  .tr-upload-foot { display: none; }
+}
+
+/* <lg：上下分屏，折叠态只留一行栏头 */
+@media (max-width: 1023.98px) {
+  .tr-pane.is-collapsed { flex: 0 0 2.6rem; }
+  .tr-pane.is-collapsed .tr-pane-head { border-bottom: 0; }
+  .tr-fold-x { display: none; }
+  .tr-fold-y { display: inline-flex; }
+  /* 输入法弹起：译文栏自动让位（只留栏头那一行），高度全给正在输入的原文栏。
+     栏头照旧显示语言与状态——用户得看得出译文还在，只是暂时让开了地方。
+     与「用户折叠原文」（is-collapsed）不同，这里不隐藏栏头里的任何东西 */
+  .tr-pane-result.kb-folded { flex: 0 0 2.6rem; }
+  .tr-pane-result.kb-folded .tr-pane-body { opacity: 0; pointer-events: none; }
+  /* 还没按下「翻译」时译文栏整块不占地方：原文栏拿到几乎整屏的高度，输入与核对都宽敞；
+     按下翻译再按同一条非线性动画放出来（收放都走 .tr-pane 的 flex-basis 过渡，手感一致）。
+     这一条必须排在 kb-folded 之后：两者同权重，「藏起来」要压过「键盘让位」，
+     否则键盘一弹就会把本该藏着的译文栏顶出一行来 */
+  .tr-pane-result.is-hidden { flex: 0 0 0; border-top-color: transparent; }
+}
+
+/* 手机：把宽度让给语言名与操作，栏头与底条的按钮放到触摸下限附近 */
+@media (max-width: 640px) {
+  .tr-lang-cap { display: none; }
+  .tr-lang-trigger { max-width: 8.5rem; }
+  /* 下拉按 .ms-menu 的默认朝向（右对齐触发钮、向左展开），窄屏收窄一档：
+     360px 宽的手机上，两个语言钮的右边缘都在半屏以内，这个宽度不会再顶出屏幕 */
+  .tr-lang-menu { min-width: 9.5rem; }
+  .tr-swap { width: 2.4rem; height: 2.4rem; }
+  .tr-pane-head { min-height: 2.4rem; padding: 0.3rem 0.5rem; }
+  .tr-pane-head .icon-btn { width: 2.4rem !important; height: 2.4rem !important; }
+  .tr-pane.is-collapsed .tr-pane-head { min-height: 2.4rem; padding: 0.3rem 0.5rem; }
+  .tr-result-inner { padding: 0.7rem 0.85rem 1.2rem; }
+  .tr-input { padding: 0.7rem 0.85rem 1.2rem; }
+  .tr-file { margin: 0.7rem 0.85rem 0; }
+  .tr-foot { padding: 0.4rem 0.6rem; }
+  .tr-foot .btn-ghost, .tr-foot .btn-primary { min-height: 2.6rem; }
+  .tr-note { font-size: 0.78rem; }
+  .tr-note-go { margin-left: 0; flex: 1 1 100%; justify-content: center; }
+}
+
+/* ============================================================
    减少动效偏好
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {

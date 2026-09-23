@@ -37,6 +37,8 @@ const ICON_PATHS = {
   "lightbulb": '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
   "list-checks": '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
   "route": '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+  // 翻译（工具 33）：地球经纬线。translate 已被工具 5 占用，这里要一个能一眼区分的
+  "languages": '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3Z"/>',
 
   // —— UI 图标 ——
   "logo": '<path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2Z"/>',
@@ -204,6 +206,10 @@ const LS = {
    反而赢，2xl:hidden 这类类名会被自定义类的 display 吃掉。 */
 const WIDE_MIN = 1536;
 const WIDE_MQ = window.matchMedia(`(min-width: ${WIDE_MIN}px)`);
+/* 翻译工具的上下分屏分档：与 styles.css 的 max-width:1023.98px、
+   标记里的 lg: 前缀三方必须一致（同 WIDE_MQ 那条约定）。
+   「译文栏按需出现」只在这一档成立，宽屏两栏始终并排 */
+const TR_STACK_MQ = window.matchMedia("(max-width: 1023.98px)");
 const HISTORY_LIMIT = 100;
 // 迁移收藏单条体积可观（内嵌全部卡片输出），同样需要上限防止 localStorage 溢出
 const FAVORITES_LIMIT = 100;
@@ -234,8 +240,9 @@ const OCR_MODES = {
 // 识别类型由工具用途决定，不让用户选：会收到学生手写稿的只有「学生作文批改」，
 // 其余工具收到的都是原卷印刷稿（没有人会手抄一份试卷来拍）。要改绑定就改这张表。
 const OCR_HANDWRITTEN_TOOLS = ["10"]; // 学生作文批改
-// 只有这两处两种素材都可能来，保留手动选择：识别图片文字（通用转文字工具本身）、自由对话
-const OCR_MANUAL_MODE_TOOLS = ["25", "32"];
+// 有这几处两种素材都可能来，保留手动选择：识别图片文字、自由对话、翻译
+// （翻译收到的是别人递来的材料，印刷试卷与手写作文都可能有）
+const OCR_MANUAL_MODE_TOOLS = ["25", "32", "33"];
 function ocrModeForTool(toolId) {
   return OCR_HANDWRITTEN_TOOLS.indexOf(String(toolId == null ? "" : toolId)) >= 0 ? "handwritten" : "printed";
 }
@@ -247,14 +254,81 @@ function ocrModeMeta(mode) {
 }
 /* 识别记录在历史列表里的标题：取正文第一个像样的行的前 16 个字。
    不调 /api/chat/title——转录结果本身就是最认得出这份材料的东西，让模型再总结一遍
-   纯属多花一次调用。Markdown 前缀（#、-、>）与空白先剥掉，免得列表里全是符号。 */
-function ocrHistoryTitle(text) {
+   纯属多花一次调用。Markdown 前缀（#、-、>）与空白先剥掉，免得列表里全是符号。
+   翻译记录同理用原文的头一行当标题，所以这里是共用的。 */
+function historyTitleFromText(text) {
   const lines = String(text || "").split("\n");
   for (const raw of lines) {
     const line = raw.replace(/^[\s#>*\-+]+/, "").trim();
     if (line.length >= 2) return line.slice(0, 16);
   }
   return "";
+}
+
+/* ---------------- 翻译（工具 33）参数 ---------------- */
+// 工具 id 与后端 tools.py 的 TRANSLATE_TOOL_ID 一致
+const TRANSLATE_TOOL_ID = "33";
+const TRANSLATE_TOOL_ICON = "languages";
+/* 语言表：界面显示 label（中文名），送进提示词的是 native（母语者的写法）。
+   语言对是这份提示词里唯一无法从材料推断出来的信息，名字给错就等于译错目标，
+   所以用「简体中文」「English (US)」这类模型最认得的写法，而不是语言代码。
+   short 只用于历史列表那枚「英→中」小标签。 */
+const TR_LANGS = [
+  { id: "auto", label: "自动检测", native: "auto", short: "自动", sourceOnly: true },
+  { id: "zh-Hans", label: "简体中文", native: "简体中文", short: "中" },
+  { id: "zh-Hant", label: "繁体中文", native: "繁體中文", short: "繁" },
+  { id: "en-US", label: "英语（美式）", native: "English (US)", short: "英" },
+  { id: "en-GB", label: "英语（英式）", native: "English (UK)", short: "英" },
+  { id: "ja", label: "日语", native: "日本語", short: "日" },
+  { id: "ko", label: "韩语", native: "한국어", short: "韩" },
+  { id: "fr", label: "法语", native: "Français", short: "法" },
+  { id: "de", label: "德语", native: "Deutsch", short: "德" },
+  { id: "es", label: "西班牙语", native: "Español", short: "西" },
+  { id: "ru", label: "俄语", native: "Русский", short: "俄" },
+  { id: "it", label: "意大利语", native: "Italiano", short: "意" },
+  { id: "pt", label: "葡萄牙语", native: "Português", short: "葡" },
+  { id: "ar", label: "阿拉伯语", native: "العربية", short: "阿" },
+  { id: "th", label: "泰语", native: "ไทย", short: "泰" },
+  { id: "vi", label: "越南语", native: "Tiếng Việt", short: "越" },
+];
+const TR_DEFAULT_SOURCE = "auto";
+const TR_DEFAULT_TARGET = "zh-Hans";
+function trLangById(id) {
+  const key = String(id == null ? "" : id);
+  return TR_LANGS.find((l) => l.id === key) || null;
+}
+function trLangLabel(id) {
+  const lang = trLangById(id);
+  return lang ? lang.label : "";
+}
+function trLangNative(id) {
+  const lang = trLangById(id);
+  return lang ? lang.native : "";
+}
+function trLangShort(id) {
+  const lang = trLangById(id);
+  return lang ? lang.short : "";
+}
+/* 源语言与目标语言撞车时，目标语言换成该源语言的常用对译方向：中文→英语，其余→简体中文。
+   「原文设成简体中文时，目标语言默认为英语（美式）」就是这一条 */
+function trTargetFor(sourceId) {
+  return String(sourceId) === "zh-Hans" ? "en-US" : TR_DEFAULT_TARGET;
+}
+// 历史列表里的语言对标签（如「英→中」）；索引项也要能显示，所以存成标量
+function trPairShort(sourceId, targetId) {
+  const from = trLangShort(sourceId);
+  const to = trLangShort(targetId);
+  return from && to ? `${from}→${to}` : "";
+}
+/* 对照同步滚动：把一侧的滚动进度映射到另一侧。
+   两侧的行高与折行不可能逐行相同，能对齐的是「进度」而不是「行」，按比例映射是唯一稳的做法。
+   任一侧不可滚（内容还没对方长）时返回 null，调用方直接放弃同步——硬凑只会抖。 */
+function trSyncTargetTop(fromTop, fromMax, toMax) {
+  const f = Number(fromMax) || 0;
+  const t = Number(toMax) || 0;
+  if (f <= 0 || t <= 0) return null;
+  const ratio = Math.min(1, Math.max(0, (Number(fromTop) || 0) / f));
+  return Math.round(ratio * t);
 }
 
 /* ---- 图片编辑（转正 · 裁剪）的参数与几何 ---- */
@@ -1094,6 +1168,11 @@ function historyIndexOf(item) {
     // 回答版本数（列表角标）。正文已水合时按 versions 现算；只有索引的条目沿用
     // 索引里已有的值——直接算会把「2 版」抹成 1 版（标题更新等路径只写索引）。
     verCount: historyVerCountOf(item),
+    // 翻译记录的语言对标签（如「英→中」）：列表只读索引项，正文不在手上，
+    // 所以写作记录时就把这枚标量存进索引（与 inputHead 同一套办法）
+    trPair: item.translate
+      ? trPairShort(item.translate.source, item.translate.target)
+      : (item.trPair || ""),
   };
 }
 /* 版本数：无 versions 字段 = 单版本记录（存量数据一律如此）。
@@ -1113,6 +1192,8 @@ function historyBodyOf(item) {
   if (item.visualPaper) body.visualPaper = item.visualPaper;
   // 识别记录的元信息（类型 / 张数 / 是否截断 / 批次签名），图片字节不在这里面
   if (item.ocr) body.ocr = item.ocr;
+  // 翻译记录的语言对（存 id，显示名由 TR_LANGS 现算）
+  if (item.translate) body.translate = item.translate;
   // 回答版本（重新生成保留的历次结果，见 nbx-versions.js）。
   // item.output/model/partial/error 始终是活动版本的投影，这里只多带一份历史版本。
   // 只有一版时不写：单版本记录与版本化之前的数据形状完全一致，镜像摘要也不受影响。
@@ -1872,6 +1953,10 @@ function nbx() {
     reasoningOpen: true,
     reasoningDone: false,
     reasoningTruncated: false,
+    /* 思考过程此刻是否该占屏（翻译工具用它决定整条的显隐）。
+       刻意做成一个显式状态位，而不是在模板里写 `reasoning && !reasoningDone`：
+       复合表达式里 `&&` 会短路，右侧在那个求值里根本没被读到，也就没登记成依赖。 */
+    reasoningLive: false,
     // 思考阶段统计：首个推理 chunk → 首个正文 token，reasoningDone 后冻结
     reasoningSec: 0,
     reasoningTokens: 0,
@@ -2069,6 +2154,25 @@ function nbx() {
     _pairTimer: null,
     _pairSource: null,
     ocrPairToken: "",      // 本次识别取自扫码会话时的 token（请求改带 token，不回传图片）
+
+    /* --- 翻译（工具 33）：原文/译文对照 --- */
+    trSourceLang: TR_DEFAULT_SOURCE,   // 源语言 id（auto = 自动检测）
+    trTargetLang: TR_DEFAULT_TARGET,   // 目标语言 id
+    trSrcCollapsed: false,             // 折叠原文栏：译文独占工作区并在阅读栏宽里居中
+    trTruncated: false,                // 本次译文撞到输出上限（可「继续翻译」接着译完）
+    trHistoryId: "",                   // 译文写回的历史记录 id；空 = 下一次生成新建一条
+    trMenu: "",                        // 打开着的语言下拉："source" | "target" | ""
+    trResultVisible: false,            // 窄屏：还没按下翻译时译文栏不占地方（宽屏不起作用）
+    trResultFolded: false,             // 输入法弹起时译文栏让位（只留栏头一行），窄屏才有
+    _trSnap: null,                     // 本轮翻译的输入快照 { source, sourceId, targetId }
+    _trRenderTimer: null,
+    _trKbTimer: null,                  // 键盘开合的判定延时（键盘动画期间会连续报值）
+    _trRevealTimer: null,              // 译文栏收放动画落下后再重算高度/对齐
+    _trGrowRaf: 0,
+    _trSyncRaf: 0,
+    _trScrollSide: "",                 // 本帧要带动哪一栏（滚轮比帧密，合并成每帧一次）
+    _trDriven: null,                   // 上一次程序化写入的那一栏：它的回声不再反向带动
+    _trFollowOutput: true,             // 译文栏是否贴着底（贴底就跟流式输出走）
 
     /* --- 面板状态 --- */
     leftOpen: false,
@@ -3510,6 +3614,9 @@ function nbx() {
           try { localStorage.setItem(LS.draft, v || ""); } catch {}
         }, 400);
       });
+      // 翻译：原文栏按内容长高。上传解析、拍照识别写回走的也是 input，
+      // 统一从这里触发，不必在每个写入口各调一次
+      this.$watch("input", () => { if (this.isTranslateTool) this.trGrow(); });
 
       // 布局分档同步：跨过 2xl 分界时切换档位，并关掉已不适用的抽屉状态
       const syncCompact = () => {
@@ -3532,6 +3639,8 @@ function nbx() {
         syncCompact();
         this.repositionExportMenu();
         this.repositionMigrationExport();
+        // 翻译：分档切换会改栏宽/栏高，原文框的高度要跟着重算
+        if (this.isTranslateTool) this.trGrow();
         this.scheduleMascotCheck(80);
         this._syncKB && this._syncKB();
       });
@@ -3564,6 +3673,8 @@ function nbx() {
         const kbPx = hasKB ? Math.round(kb) + "px" : "0px";
         document.documentElement.style.setProperty("--kb", kbPx);
         document.documentElement.classList.toggle("kb-open", hasKB);
+        // 翻译：输入区不在最下方，键盘弹起时把高度让给原文栏（详见 scheduleTrKbFold）
+        if (this.isTranslateTool) this.scheduleTrKbFold(hasKB);
         // 同步给 mascot 布局重新计算
         if (hasKB) this.scheduleMascotCheck(30);
       };
@@ -3986,6 +4097,7 @@ function nbx() {
       this.resetVocab();
       this.resetVisualPaper();
       this.resetOcr();
+      this.resetTranslate();
       const el = ev && ev.currentTarget ? ev.currentTarget : null;
       if (el && this._bg) {
         const r = el.getBoundingClientRect();
@@ -3993,6 +4105,10 @@ function nbx() {
       }
       this.$nextTick(() => {
         this.autoGrow();
+        if (this.isTranslateTool) {
+          this.trGrow();
+          this.trScrollTop();
+        }
         this.scheduleMascotCheck(80);
       });
     },
@@ -4013,6 +4129,7 @@ function nbx() {
       this.activeHistoryId = null;
       this.resetReasoning();
       this.resetOcr();
+      this.resetTranslate();
       this.scheduleMascotCheck(80);
     },
 
@@ -4529,6 +4646,9 @@ function nbx() {
     /* ============ 上传来源（已有原稿 / 拍照识别） ============ */
     get isOcrTool() {
       return !!this.currentTool && this.currentTool.id === OCR_TOOL_ID;
+    },
+    get isTranslateTool() {
+      return !!this.currentTool && this.currentTool.id === TRANSLATE_TOOL_ID;
     },
     get touchPrimary() {
       // 主输入设备是触摸 = 手机/平板：桌面端（含带触摸屏的笔记本用鼠标时）不走系统相机
@@ -5609,7 +5729,7 @@ function nbx() {
         icon: "scan-text",
         input: count ? `图片 ${count} 张 · ${label}` : label,
         fileName: names.join("、").slice(0, 120),
-        title: ocrHistoryTitle(text),
+        title: historyTitleFromText(text),
         output: text,
         // 识别走的是后台配置的 OCR 模型，前端不知道是哪个，就如实留空
         // （列表里 model 为空时不显示模型位，见历史卡片）
@@ -6596,6 +6716,451 @@ function nbx() {
       });
     },
 
+    /* ============ 翻译（工具 33）：原文译文对照 ============ */
+    /* 顶部两个语言下拉：界面显示中文名，送进提示词的是母语者写法（见 TR_LANGS） */
+    get trSourceOptions() {
+      return TR_LANGS;
+    },
+    get trTargetOptions() {
+      return TR_LANGS.filter((l) => !l.sourceOnly);
+    },
+    get trSourceLabel() {
+      return trLangLabel(this.trSourceLang);
+    },
+    get trTargetLabel() {
+      return trLangLabel(this.trTargetLang);
+    },
+    /* 已经有一条记录在手时，按钮就该说「更新翻译」：再点一次改的是那条记录，不是新建 */
+    get trUpdating() {
+      return !!this.trHistoryId;
+    },
+    get trHasSource() {
+      return !!String(this.input || "").trim();
+    },
+    /* 译文栏此刻是否真的占着地方。宽屏两栏始终并排（is-hidden 那条规则只写在 <lg 里），
+       窄屏才看 trResultVisible —— 对照滚动、对齐都以它为准，别拿 trResultVisible 直接判 */
+    get trResultShown() {
+      return !TR_STACK_MQ.matches || this.trResultVisible;
+    },
+    get trStatusText() {
+      if (this.streaming) return this.status === "connecting" ? "正在连接…" : "正在翻译…";
+      if (this.status === "error") return "翻译失败";
+      if (this.status === "stopped") return `已停止 · 保留 ${this.output.length} 字`;
+      if (this.output) return `已翻译 · ${this.output.length} 字`;
+      return this.trHasSource ? "可以翻译了" : "等待原文";
+    },
+    /* 请求里的语言对。源语言选「自动检测」时送 auto，由模型自己判断；
+       其余送母语者写法（English (US) 这类），后端原样注入提示词 */
+    trLangPayload() {
+      return {
+        source_lang: this.trSourceLang === "auto" ? "auto" : trLangNative(this.trSourceLang),
+        target_lang: trLangNative(this.trTargetLang) || trLangNative(TR_DEFAULT_TARGET),
+      };
+    },
+    toggleTrMenu(which) {
+      this.trMenu = this.trMenu === which ? "" : which;
+    },
+    closeTrMenu() {
+      this.trMenu = "";
+    },
+    chooseTrSourceLang(id) {
+      this.trMenu = "";
+      if (!trLangById(id)) return;
+      // 与目标语言撞车时自动换向：原文设成简体中文 → 目标语言变英语（美式）
+      if (id !== "auto" && id === this.trTargetLang) this.trTargetLang = trTargetFor(id);
+      this.trSourceLang = id;
+    },
+    chooseTrTargetLang(id) {
+      this.trMenu = "";
+      const lang = trLangById(id);
+      if (!lang || lang.sourceOnly) return;
+      this.trTargetLang = id;
+    },
+    /* 交换语言对。源语言是「自动检测」时没有可交换的对象：
+       把目标语言提上来当源语言，再按它给一个常用对译方向（中→英 / 其余→中） */
+    swapTrLangs() {
+      this.trMenu = "";
+      if (this.trSourceLang === "auto") {
+        const target = this.trTargetLang;
+        this.trSourceLang = target;
+        this.trTargetLang = trTargetFor(target);
+        return;
+      }
+      const source = this.trSourceLang;
+      this.trSourceLang = this.trTargetLang;
+      this.trTargetLang = source;
+    },
+    /* 折叠/展开原文。窄屏上这两个状态是一件事的两面，收原文＝看译文、展原文＝回到只写原文的
+       输入态，所以收起来时才把译文栏放出来、展开时又把它收回去（宽屏两栏始终并排，不参与）。
+       没有译文可看时不折叠：那会把「隐藏原文」变成「放出一个空译文框」，屏幕上只剩个空框 */
+    toggleTrFold() {
+      const folding = !this.trSrcCollapsed;
+      if (folding && !this.output && !this.streaming) {
+        this.toast("还没有译文可看：先点「翻译」，或直接在这里写原文", "warn");
+        return;
+      }
+      this.trSrcCollapsed = folding;
+      if (TR_STACK_MQ.matches) this.revealTrResult(folding);
+      // 栏宽/栏高变了，原文框要按新的可用空间重算高度
+      this.$nextTick(() => {
+        this.trGrow();
+        this.onTrPaneScroll("source");
+      });
+    },
+    /* 对照滚动：一侧滚动就按进度比例带动另一侧，始终开着——对照阅读的价值就在两栏对齐，
+       留一个开关只会让人怀疑它到底有没有生效。三处细节都是为了「一直可用」：
+       1) 带动的那一栏自己也会派发滚动事件（回声）。不靠时间锁吞它（时间锁会吞掉连续滚动中
+          的后续事件，越滚越不同步），而是认「上一次是我写到这一栏的那个值」：命中就只更新
+          跟随状态、不反向带动。算出来的落点与当前值一致时自然收敛，两栏不会来回追。
+       2) 滚轮的节奏比帧密：合并成每帧至多写一次，并在写入那一刻取最新位置重算。
+       3) 任一侧不可滚（内容还没对方长）时不做映射——硬凑只会抖；等它长过一屏后自然恢复。 */
+    onTrPaneScroll(which) {
+      if (!this.isTranslateTool) return;
+      const a = this.$refs.trSourcePane;
+      const b = this.$refs.trResultPane;
+      if (!a || !b) return;
+      const pane = which === "source" ? a : b;
+      // 译文栏是否贴着底：贴着就跟流式输出往下走；用户往回翻过就不跟
+      if (which === "result") {
+        this._trFollowOutput = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 60;
+      }
+      const driven = this._trDriven;
+      if (driven && driven.side === which && Math.abs(pane.scrollTop - driven.top) < 2) {
+        // 回声：这一栏是被上一步带动的，不再反推回去
+        this._trDriven = null;
+        return;
+      }
+      // 事件来自另一栏 = 上一次带动已经结束，旧记录作废
+      if (driven && driven.side !== which) this._trDriven = null;
+      // 原文折叠 / 译文栏被键盘收起 / 窄屏上译文栏还没出现时，两栏都不是可对照的一对，
+      // 映射只会互相拽着跑。折叠期间译文栏仍按上面的「贴底跟随」走它的流式输出
+      if (this.trSrcCollapsed || this.trResultFolded || !this.trResultShown) {
+        this._trDriven = null;
+        return;
+      }
+      this._trScrollSide = which;
+      if (this._trSyncRaf) return;
+      this._trSyncRaf = requestAnimationFrame(() => {
+        this._trSyncRaf = 0;
+        const side = this._trScrollSide;
+        this._trScrollSide = "";
+        if (!side) return;
+        const from = side === "source" ? a : b;
+        const to = side === "source" ? b : a;
+        const top = trSyncTargetTop(
+          from.scrollTop,
+          from.scrollHeight - from.clientHeight,
+          to.scrollHeight - to.clientHeight
+        );
+        if (top == null || Math.abs(to.scrollTop - top) < 2) return;
+        this._trDriven = { side: side === "source" ? "result" : "source", top };
+        to.scrollTop = top;
+      });
+    },
+    trScrollTop() {
+      this._trFollowOutput = true;
+      this._trDriven = null;
+      [this.$refs.trSourcePane, this.$refs.trResultPane].forEach((el) => {
+        if (el) el.scrollTop = 0;
+      });
+    },
+    /* 原文框按内容长高、不设上限：滚动发生在外层栏里，同步滚动才有可映射的进度。
+       矮的时候至少铺满整栏（点空白处就能接着写，不必去够底下的输入条） */
+    trGrow() {
+      if (this._trGrowRaf) return;
+      this._trGrowRaf = requestAnimationFrame(() => {
+        this._trGrowRaf = 0;
+        const el = this.$refs.trInput;
+        if (!el) return;
+        const pane = this.$refs.trSourcePane;
+        el.style.height = "auto";
+        el.style.height = Math.max(pane ? pane.clientHeight : 0, el.scrollHeight) + "px";
+      });
+    },
+    /* 输入法弹起/收起时译文栏的让位。别的工具的输入区在最下方，键盘一弹只是整块往上收；
+       这个工具的输入区在上半屏，跟着一起收只会把「正在输入的原文栏」压到只剩两行，
+       所以窄屏下键盘弹起时把译文栏收成一行，高度全给原文栏；键盘收起再放开。
+       键盘动画期间 visualViewport 会连续报值，用一个小延时取最终态，免得译文栏一开一合。 */
+    scheduleTrKbFold(open) {
+      clearTimeout(this._trKbTimer);
+      this._trKbTimer = setTimeout(() => {
+        this._trKbTimer = null;
+        const wasFolded = this.trResultFolded;
+        this.trResultFolded = !!open && TR_STACK_MQ.matches;
+        // 让位结束（收窄或放开）后两栏高度都变了：原文框按新的可用空间重算，
+        // 等折叠动画落定再按进度重新对齐。流式生成期间不重新对齐——
+        // 那时译文栏正跟着输出往下走，把用户的视线拽回原文位置反而更糟
+        if (this.isTranslateTool && wasFolded !== this.trResultFolded) {
+          setTimeout(() => {
+            if (!this.isTranslateTool) return;
+            this.trGrow();
+            if (!this.streaming) this.onTrPaneScroll("source");
+          }, 520);
+        }
+      }, 120);
+    },
+    /* 窄屏：译文栏在按下「翻译」之前整块不占地方，原文栏就能拿到几乎整屏的高度
+       （输入与核对都宽敞），按下翻译再按同一条非线性动画把它放出来。
+       宽屏不受影响——那条规则只写在 <lg 的媒体查询里，所以这里可以放心设状态。
+       收放都会改变两栏的高度，动画落定后重算原文框高度并按进度重新对齐。 */
+    revealTrResult(visible) {
+      const next = !!visible;
+      if (this.trResultVisible === next) return;
+      this.trResultVisible = next;
+      clearTimeout(this._trRevealTimer);
+      // 宽屏没有这一出（两栏始终并排），省掉这次回算
+      if (!TR_STACK_MQ.matches) return;
+      this._trRevealTimer = setTimeout(() => {
+        this._trRevealTimer = null;
+        if (!this.isTranslateTool) return;
+        this.trGrow();
+        // 流式期间译文栏正跟着输出往下走，这时把视线拽回原文位置反而更糟
+        if (!this.streaming) this.onTrPaneScroll("source");
+      }, 520);
+    },
+    /* 清空两栏（记录留在历史里不动）。与当前记录脱钩：下一次生成新建一条 */
+    trClearSource() {
+      if (this.streaming) return;
+      this.input = "";
+      this.attachedFile = null;
+      this.inputMode = "text";
+      this.trNew();
+      this.$nextTick(() => this.trGrow());
+    },
+    /* 新建一次翻译：只与当前记录脱钩，屏上的原文留着（改一改就是另一份材料的起手式） */
+    trNew() {
+      if (this.streaming) return;
+      this.output = "";
+      this.rendered = "";
+      this.errorMsg = "";
+      this.status = "idle";
+      this.trHistoryId = "";
+      this.trTruncated = false;
+      this.activeHistoryId = null;
+      // 推理盒也要一起清：它是上一轮的产物，正文清空后单独留一条「思考过程」
+      // 挂在空栏里，看着像这一屏坏了（切工具 / 重新开跑都会清，这里是漏掉的一处）
+      this.resetReasoning();
+      // 译文清空后「只看译文」就没意义了：把原文放回来（折叠钮此时是禁用的，不然出不来）
+      this.trSrcCollapsed = false;
+      // 窄屏：也把译文栏收回去，把整屏高度还给输入（下一轮翻译再放出来）
+      this.revealTrResult(false);
+      this.trScrollTop();
+    },
+    copyTrText() {
+      if (!String(this.output || "").trim()) {
+        this.toast("还没有可复制的译文", "warn");
+        return;
+      }
+      copyToClipboard(this.output);
+      this.toast("译文已复制");
+    },
+    scheduleTrRender() {
+      if (this._trRenderTimer) return;
+      this._trRenderTimer = setTimeout(() => {
+        this._trRenderTimer = null;
+        this.rendered = renderMd(this.output);
+      }, streamRenderDelay(this.output.length, 60));
+    },
+    flushTrRender() {
+      if (this._trRenderTimer) {
+        clearTimeout(this._trRenderTimer);
+        this._trRenderTimer = null;
+      }
+      this.rendered = renderMd(this.output);
+      this.pinTrBottom();
+    },
+    /* 流式输出时把译文栏钉在底部，否则新字全写在视口下方，一屏一屏地跳。
+       用户往回翻过（_trFollowOutput 为假）就不跟了。
+       钉底刻意**不**带动原文栏：原文是静态的参照物，被拽着往下跑就失去意义了
+       —— 程序化写入会留下 _trDriven 记录，它自己派发的回声事件因此不会被反向转发。 */
+    pinTrBottom() {
+      if (!this.streaming || !this._trFollowOutput) return;
+      const el = this.$refs.trResultPane;
+      if (!el) return;
+      // 记的是浏览器会夹取到的那个值（scrollHeight - clientHeight），不是 scrollHeight：
+      // 回声事件比对的是实际 scrollTop，记错了就认不出这次回声、会把原文栏一起拽下去
+      const top = el.scrollHeight - el.clientHeight;
+      if (top <= 0 || Math.abs(el.scrollTop - top) < 2) return;
+      this._trDriven = { side: "result", top };
+      el.scrollTop = top;
+    },
+    /* 开始 / 更新翻译。不是实时翻译：改了原文也得自己按这一下。
+       已经有记录在手时写回同一条（updateId），没有才新建——历史里不会刷出一串半成品 */
+    async trRun() {
+      if (!this.isTranslateTool || this.streaming) return;
+      if (!this.ensureCanRun("当前模型需要输入使用码后才能翻译")) return;
+      const source = String(this.input || "").trim();
+      if (!source) {
+        this.toast("左侧还没有原文：粘贴、上传文件，或用拍照识别", "warn");
+        return;
+      }
+      if (this.currentTool && !this.currentTool.prompt_loaded) {
+        const ok = await this.askConfirm({
+          title: "提示词文件尚未加载",
+          message: "「翻译」的提示词文件尚未加载，生成效果可能不完整。仍要继续吗？",
+          confirmText: "仍要继续",
+        });
+        // 弹窗期间可能有第二次触发（Ctrl+Enter）已发起生成，await 之后必须复检
+        if (!ok || this.streaming) return;
+      }
+      this.output = "";
+      this.rendered = "";
+      this.errorMsg = "";
+      this.errorLimited = false;
+      this.trTruncated = false;
+      this.closeExportMenu();
+      // 窄屏：按下翻译就把译文栏放出来（与折叠同一条非线性动画），
+      // 等待动画、流式正文都落在这一栏里
+      this.revealTrResult(true);
+      // 快照：本轮翻的是这份原文与这个语言对。生成期间用户还能继续改原文，
+      // 收尾落历史必须用快照，否则记录里会写着「改了一半的原文」
+      this._trSnap = { source, sourceId: this.trSourceLang, targetId: this.trTargetLang };
+      // 「继续翻译」走通用续写入口，那里的守卫看的是 submittedInput
+      this.submittedInput = source;
+      this.submittedFileName = this.attachedFile ? this.attachedFile.name : "";
+      this.trScrollTop();
+      await this._runStream({
+        inputText: source,
+        updateId: this.trHistoryId || null,
+        onToken: () => this.scheduleTrRender(),
+        // 滚动由左右分栏自己管，不参与外层结果容器的自动滚动
+        nearBottom: false,
+      });
+    },
+    /* 译文收尾：只写这一条记录（新建或原地更新），与通用收尾的两点不同：
+       1) 不建版本、不调标题接口——「改而不增」才是这个工具要的语义；
+       2) 一个字都没译出来时不占位（原文还在左栏、错误卡就在旁边，点重试即可） */
+    finalizeTr(state, errMsg, opts = {}) {
+      const modelUsed = opts.modelUsed || this.selectedModel;
+      const updateId = opts.updateId || null;
+      const origin = updateId ? this.history.find((h) => h.id === updateId) : null;
+      // 镜像重读会把列表整份换成索引项：先读回正文，别把已有译文当成不存在
+      if (origin) this._hydrateHistory(origin);
+      // 续写零新增（模型只回了「已完整」的哨兵，或刚开跑就被停）：剥掉哨兵、保持记录原状
+      if (state !== "error" && opts.continueFrom && !this._continueProducedNew()) {
+        const saidDone = this._stripContinueSentinel();
+        this.flushTrRender();
+        this.status = this.errorMsg ? "error" : (origin && origin.partial ? "stopped" : "done");
+        if (saidDone) this.toast("原文已经全部译完，没有剩余内容");
+        else this.toast("这次没有新增内容，可稍后重试", "warn");
+        return;
+      }
+      this.flushTrRender();
+      const snap = this._trSnap || {};
+      const produced = !!String(this.output || "").trim();
+      if (state === "error") {
+        this.status = "error";
+        this.errorMsg = errMsg || "翻译失败";
+        this.toast("翻译失败：" + this.errorMsg, "error");
+      } else {
+        this.failedModel = "";
+        this.errorLimited = false;
+        this.status = state;
+        this.errorMsg = "";
+        if (state === "stopped") this.toast("已停止翻译，已经译出的部分已保留", "warn");
+      }
+      if (!produced && !origin) return;
+      const source = snap.source || this.submittedInput || "";
+      const fields = {
+        toolId: TRANSLATE_TOOL_ID,
+        toolName: "翻译",
+        icon: TRANSLATE_TOOL_ICON,
+        input: source,
+        title: historyTitleFromText(source),
+        model: state === "error" ? (this.failedModel || modelUsed) : modelUsed,
+        partial: state === "stopped",
+        error: state === "error" ? String(this.errorMsg).slice(0, 300) : "",
+        // 语言对存 id：显示名与提示词里的名字随时可由 TR_LANGS 换，记录不必跟着改
+        translate: {
+          source: snap.sourceId || TR_DEFAULT_SOURCE,
+          target: snap.targetId || TR_DEFAULT_TARGET,
+          truncated: !!this.trTruncated,
+        },
+      };
+      if (produced) fields.output = this.output;
+      if (origin) {
+        // 这次没译出内容（比如重译又失败）：保留上一次的译文，越重试越少最糟
+        if (!produced) fields.output = origin.output || "";
+        Object.assign(origin, fields);
+        this._persistHistoryItem(origin);
+        this.trHistoryId = origin.id;
+        this.activeHistoryId = origin.id;
+        return;
+      }
+      const item = this._unshiftHistory({
+        id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+        createdAt: Date.now(),
+        ...fields,
+      });
+      this.trHistoryId = item ? item.id : "";
+      this.activeHistoryId = this.trHistoryId;
+    },
+    /* 打开一条翻译记录：原文回左栏、译文回右栏，语言对一并还原。
+       记录仍归这一屏管——改原文再点「更新翻译」改的就是它（要另起一条用「新的翻译」） */
+    openTranslateHistory(item) {
+      this._hydrateHistory(item);
+      // 上一轮留在屏上的推理过程不属于这条记录，先清掉
+      this.resetReasoning();
+      // 这条记录本身就有译文，窄屏上直接放出来（别让回看时译文栏还藏着）
+      this.revealTrResult(true);
+      const tool = this.findTool(TRANSLATE_TOOL_ID) || {
+        id: TRANSLATE_TOOL_ID,
+        name: "翻译",
+        icon: TRANSLATE_TOOL_ICON,
+        description: "原文译文对照，支持试卷、作文、文档",
+        prompt_loaded: true,
+      };
+      this.currentTool = tool;
+      const meta = item.translate || {};
+      if (trLangById(meta.source)) this.trSourceLang = meta.source;
+      if (trLangById(meta.target)) this.trTargetLang = meta.target;
+      this.input = item.input || "";
+      this.attachedFile = null;
+      this.inputMode = "text";
+      this.output = item.output || "";
+      this.flushTrRender();
+      this.errorMsg = item.error || "";
+      this.trTruncated = !!meta.truncated;
+      this.status = item.error ? "error" : (item.partial ? "stopped" : "done");
+      this.failedModel = item.error ? (item.model || "") : "";
+      // 继续翻译（续写）走通用续写入口，那里的守卫看的是 submittedInput
+      this.submittedInput = item.input || "";
+      this.submittedFileName = "";
+      this.submittedExpanded = false;
+      this._trSnap = {
+        source: item.input || "",
+        sourceId: this.trSourceLang,
+        targetId: this.trTargetLang,
+      };
+      this.trHistoryId = item.id;
+      this.activeHistoryId = item.id;
+      this.rightMobileOpen = false;
+      this.$nextTick(() => {
+        this.trGrow();
+        this.trScrollTop();
+      });
+    },
+    // 切工具 / 回首页：与本条记录脱钩（与通用工具 activeHistoryId 同一个口径）
+    resetTranslate() {
+      this.trHistoryId = "";
+      this.trTruncated = false;
+      this.trMenu = "";
+      this.trResultFolded = false;
+      this.trResultVisible = false;
+      clearTimeout(this._trKbTimer);
+      this._trKbTimer = null;
+      clearTimeout(this._trRevealTimer);
+      this._trRevealTimer = null;
+      this._trSnap = null;
+      this._trDriven = null;
+      this._trScrollSide = "";
+      this._trFollowOutput = true;
+      if (this._trRenderTimer) {
+        clearTimeout(this._trRenderTimer);
+        this._trRenderTimer = null;
+      }
+    },
+
     /* ============ 流式生成（SSE） ============ */
     /* 返回值：true = 已发起生成请求；false = 守卫阶段提前返回（未发起）。
        opts.updateId 非空 = 本轮结果写回该历史记录（「直接重试」用），不新建 */
@@ -6755,6 +7320,8 @@ function nbx() {
           transfer_count: transferCount || undefined,
           // 续写：残文回传后端当上一条 assistant 消息，后端在末尾追加续写指令
           continue_from: continueFrom || undefined,
+          // 翻译：语言对每次都要发——续写/重试也走这里，模型得知道接着译成什么
+          ...(this.isTranslateTool ? this.trLangPayload() : null),
         }),
         signal: this._abortCtrl.signal,
       });
@@ -6794,6 +7361,10 @@ function nbx() {
       let sawTerminal = false;
 
       const dispatch = (ev, data) => {
+        // [CANCELLED] 必须在 ev === "done" 之前判：两者都是 done 事件，
+        // 先判 done 会把「没跑完」当成正常收尾，半截内容就悄悄变成完整结果了
+        // （识别与迁移那条链路一直是这么判的，这里补齐）
+        if (data === "[CANCELLED]") { stopped = true; sawTerminal = true; return; }
         if (ev === "done" || data === "[DONE]") { sawTerminal = true; return; }
         if (ev === "error") {
           let m = data;
@@ -6805,7 +7376,6 @@ function nbx() {
           // model 供失败归因：禁用真正失败的模型，而非此刻的 selectedModel
           throw Object.assign(new Error(m), { model });
         }
-        if (data === "[CANCELLED]") { stopped = true; sawTerminal = true; return; }
         if (ev === "fallback") {
           // 备用通道切换：{failed_index, total, next_index, reason}，只用于展示进度
           let info = null;
@@ -6838,6 +7408,12 @@ function nbx() {
             if (typeof parsed === "string") text = parsed;
           } catch {}
           if (text) onToken(text);
+          return;
+        }
+        if (ev === "truncated") {
+          // 翻译撞到输出上限：只置标记，由译文栏提示「可继续翻译」。
+          // 不接住的话它会落到下面那句兜底里，被当成正文拼进译文
+          this.trTruncated = true;
           return;
         }
         if (data) onToken(data);
@@ -6940,8 +7516,9 @@ function nbx() {
       if (this.streaming) return;
       // 版本化只覆盖通用工具面板：试卷全解、错因迁移、超标词各有自己的历史结构与入口，
       // 万一将来被误接到这里，宁可什么都不做——run() 会按工具分派到那些路径上，
-      // 那等于悄悄做了另一件事（比如新建一条记录），比不响应更糟
-      if (this.isMigrationTool || this.isVocabTool || this.isVisualPaperTool) return;
+      // 那等于悄悄做了另一件事（比如新建一条记录），比不响应更糟。
+      // 翻译同理：它要的是「改而不增」，而且 run() 会把原文栏清空（原文得留在左栏）
+      if (this.isMigrationTool || this.isVocabTool || this.isVisualPaperTool || this.isTranslateTool) return;
       if (!this.submittedInput) {
         this.toast("没有可重新生成的输入内容", "warn");
         return;
@@ -7127,6 +7704,14 @@ function nbx() {
       if (this.reasoning && !this.reasoningDone) {
         this.reasoningDone = true;
         this.reasoningOpen = false;
+        this.reasoningLive = false;
+        this.syncReasoningBox();
+      }
+      // 翻译（工具 33）有自己的历史口径（改而不增、零产出不留空记录），收尾整体交给它。
+      // 上面这套收尾（停表、停动画）是共用的，所以分流点放在这里
+      if (this.isTranslateTool) {
+        this.finalizeTr(state, errMsg, opts);
+        return;
       }
       const updateId = opts.updateId || null;
       const origin = updateId ? this.history.find(h => h.id === updateId) : null;
@@ -8234,6 +8819,8 @@ function nbx() {
       this.reasoning = "";
       this.reasoningOpen = true;
       this.reasoningDone = false;
+      this.reasoningLive = false;
+      this.syncReasoningBox();
       this.reasoningTruncated = false;
       this.reasoningSec = 0;
       this.reasoningTokens = 0;
@@ -8253,7 +8840,22 @@ function nbx() {
         this.reasoningTruncated = true;
       }
       this.reasoning = next;
+      // 还没定稿才让它上屏：定稿后（正文已开始）迟到的推理 chunk 不该把盒子又顶回来
+      if (!this.reasoningDone) {
+        this.reasoningLive = true;
+        this.syncReasoningBox();
+      }
       this.scrollReasoning();
+    },
+    /* 思考盒的显隐：直接写 DOM，不走模板绑定。
+       实测 Alpine 的 x-show 在这个元素上会漏掉「该隐藏」的那一次触发 —— 样式变更历史里
+       只有一次显示写入、从来没有隐藏写入，状态已经是 false 了盒子还挂在屏上，
+       于是每轮翻译都会留一条「正在思考…」。它是流式期间必经的元素，漏一次就看得出来。
+       显隐由 reasoningLive 决定，写入点收敛到这一个函数里；非翻译工具没有这个 ref，自动空转。 */
+    syncReasoningBox() {
+      const el = this.$refs && this.$refs.reasoningBox;
+      if (!el) return;
+      el.style.display = this.reasoningLive ? "" : "none";
     },
     finishReasoningOnToken() {
       // 正文开始即等待结束：备用通道面板收起
@@ -8264,6 +8866,8 @@ function nbx() {
       if (this.reasoning && !this.reasoningDone) {
         this.reasoningDone = true;
         this.reasoningOpen = false;
+        this.reasoningLive = false;
+        this.syncReasoningBox();
       }
     },
     scrollReasoning() {
@@ -8990,6 +9594,11 @@ function nbx() {
       // 识别记录回放到 OCR 工作区（历史不存图片，所以回来后是「只有文字」的形态）
       if (item.ocr || item.toolId === OCR_TOOL_ID) {
         this.openOcrHistory(item);
+        return;
+      }
+      // 翻译记录回放到译文工作区：原文与译文分列两栏，记录仍归这一屏管
+      if (item.translate || item.toolId === TRANSLATE_TOOL_ID) {
+        this.openTranslateHistory(item);
         return;
       }
       const tool = this.findTool(item.toolId);

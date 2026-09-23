@@ -65,6 +65,9 @@ class ChatBody(BaseModel):
     continue_from: str | None = Field(None, max_length=200000)
     images: list[str] | None = Field(None, max_length=12)
     ocr_mode: str | None = Field(None, max_length=32)
+    # 翻译（工具 33）：语言对随请求带入，与真实后端同名同义
+    source_lang: str | None = Field(None, max_length=32)
+    target_lang: str | None = Field(None, max_length=32)
     pair_token: str | None = Field(None, max_length=64)
     pair_order: list[int] | None = Field(None, max_length=12)
 

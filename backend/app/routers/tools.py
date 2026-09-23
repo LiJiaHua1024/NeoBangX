@@ -74,7 +74,18 @@ REFERENCE_TOOLS = [
         "icon": "scan-text",
         "description": "图片转文字（试卷、手写作文）",
     },
+    {
+        "id": "33",
+        "name": "翻译",
+        "icon": "languages",
+        "description": "原文译文对照，支持试卷、作文、文档",
+    },
 ]
+
+# 翻译（工具 33）：工具本身只固定「对照翻译」这件事，语言对由请求带入
+# （ChatRequest.source_lang / target_lang），与 OCR 一条工具两种模式同理。
+TRANSLATE_TOOL_ID = "33"
+TRANSLATE_TOOL_NAME = "翻译"
 
 # 图片 OCR：一条工具、两种识别模式，各自对应一份提示词文件
 OCR_TOOL_ID = "32"
@@ -128,6 +139,7 @@ def _resolve_prompt_filename(tool_id: str) -> str:
         "24": "超标词替换",
         "25": "自由对话",
         "32": OCR_MODE_PROMPTS[DEFAULT_OCR_MODE],
+        TRANSLATE_TOOL_ID: TRANSLATE_TOOL_NAME,
         MIGRATION_TOOL_ID: MIGRATION_TOOL_NAME,
     }
     return mapping.get(tool_id, "")

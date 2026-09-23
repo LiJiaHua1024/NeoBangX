@@ -1,20 +1,58 @@
 """静态资源压缩与缓存头中间件测试。
 
 覆盖：brotli/gzip 协商、Cache-Control 两档策略（版本化长缓存 / 未版本化 no-cache）、
-etag 304 透传、Range 透传、API 路径不受影响。注意 httpx 会按 Content-Encoding
-自动解码，故断言压缩效果时看响应头，断言内容时直接读正文。
+etag 304 透传、Range 透传、API 路径不受影响、HTML 里的本地资源不带版本串。
+注意 httpx 会按 Content-Encoding 自动解码，故断言压缩效果时看响应头，断言内容时直接读正文。
 """
+
+import re
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.admin_main import app as admin_app
+from app.config import settings
 from app.main import app as main_app
 
 
 @pytest.fixture(params=["main", "admin"])
 def client(request):
     return TestClient(main_app if request.param == "main" else admin_app)
+
+
+def test_local_assets_are_never_versioned():
+    """HTML 里的本地静态资源不许带 ?v= 版本串。
+
+    带 query 会被中间件当成「版本化资源」下发 immutable 长缓存：改了文件却忘了改
+    版本串时浏览器会一直用旧代码，而 HTML 每次重验证 → 「新 HTML + 旧 JS/CSS」
+    界面直接错乱，且手机端无法强退出缓存刷新（只能干等缓存过期）。不带版本串走
+    no-cache + etag：文件变了下一次加载自动就是新的，没变则 304，几乎零成本。
+    这条测试就是防它被谁加回来。
+    """
+    pages = [
+        Path(settings.static_dir) / "index.html",
+        Path(settings.static_dir) / "bridge.html",
+        Path(settings.admin_static_dir) / "index.html",
+    ]
+    for page in pages:
+        html = page.read_text(encoding="utf-8")
+        assert not re.search(r"/static/[^\"\s>]+\?v=", html), f"{page} 的本地资源带了版本串"
+
+
+def test_bridge_mirror_scripts_share_index_urls():
+    """桥接页与主站必须引用同一份镜像模块 URL。
+
+    两个页面用不同 URL（比如一边带 ?v=、一边不带）时浏览器会各缓存一份，更新后
+    桥接页可能仍在跑旧版本，而镜像协议版本不匹配是**静默失效**（消息被忽略、没有报错）。
+    两边都不带版本串，才能真正保证是同一份代码。
+    """
+    main_html = (Path(settings.static_dir) / "index.html").read_text(encoding="utf-8")
+    bridge_html = (Path(settings.static_dir) / "bridge.html").read_text(encoding="utf-8")
+    for name in ("nbx-mirror.js", "nbx-mirror-store.js", "nbx-mirror-peer.js"):
+        main_ref = re.findall(rf'src="([^"]*{re.escape(name)}[^"]*)"', main_html)
+        bridge_ref = re.findall(rf'src="([^"]*{re.escape(name)}[^"]*)"', bridge_html)
+        assert main_ref == bridge_ref == [f"/static/{name}"]
 
 
 def test_static_versioned_asset_is_immutable_and_compressed(client):

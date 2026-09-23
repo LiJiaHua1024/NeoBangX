@@ -24,6 +24,7 @@ from app.routers.tools import (
     OCR_MODES,
     OCR_TOOL_ID,
     OCR_TOOL_NAME,
+    TRANSLATE_TOOL_ID,
     _resolve_continue_prompt_filename,
     _resolve_prompt_filename,
     get_prompt_loader,
@@ -534,6 +535,16 @@ class ChatRequest(BaseModel):
         max_length=32,
         description="图片识别模式：printed=印刷试卷 / handwritten=手写作文（前端按所在工具决定，见 API 契约 8.2）",
     )
+    source_lang: Optional[str] = Field(
+        None,
+        max_length=32,
+        description="翻译（工具 33）：源语言名，auto 表示自动检测；渲染进提示词的 {{source_lang}}",
+    )
+    target_lang: Optional[str] = Field(
+        None,
+        max_length=32,
+        description="翻译（工具 33）：目标语言名，渲染进提示词的 {{target_lang}}",
+    )
     pair_token: Optional[str] = Field(
         None, max_length=64, description="图片识别：扫码配对会话 token，图片由服务器内存直接读取"
     )
@@ -581,6 +592,12 @@ class ChatPreviewRequest(BaseModel):
     input: str = Field(..., min_length=1, max_length=50000)
     transfer_count: Optional[int] = Field(
         None, ge=1, le=5, description="试卷可视化全解：每道笔试题的迁移训练题量（默认 1）"
+    )
+    source_lang: Optional[str] = Field(
+        None, max_length=32, description="翻译（工具 33）：源语言名，auto 表示自动检测"
+    )
+    target_lang: Optional[str] = Field(
+        None, max_length=32, description="翻译（工具 33）：目标语言名"
     )
     continue_from: Optional[str] = Field(
         None, max_length=200000, description="预览续写请求时传入被中断的正文"
@@ -902,7 +919,14 @@ async def preview_prompt(
         raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")
 
     prompt = loader.render(
-        prompt_filename, req.input, {"transfer_count": req.transfer_count}
+        prompt_filename,
+        req.input,
+        {
+            "transfer_count": req.transfer_count,
+            # 翻译（工具 33）：语言对是这份提示词里唯一无法从材料推断出来的信息
+            "source_lang": req.source_lang,
+            "target_lang": req.target_lang,
+        },
     )
     if prompt is None:
         raise HTTPException(
@@ -945,6 +969,7 @@ async def chat_stream(
     图片识别（工具 32）单独一条链路：需有效使用码、始终不扣次数、只按身份限流。
     """
     is_ocr = req.tool_id == OCR_TOOL_ID
+    is_translate = req.tool_id == TRANSLATE_TOOL_ID
     if is_ocr:
         # 识别需要有效使用码：扫码拍照同样走这道闸，不是匿名入口。
         # 准入与限流放在最前面，不合法或超频的请求不会走到取图那一步。
@@ -964,7 +989,14 @@ async def chat_stream(
         raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")
 
     prompt = loader.render(
-        prompt_filename, req.input, {"transfer_count": req.transfer_count}
+        prompt_filename,
+        req.input,
+        {
+            "transfer_count": req.transfer_count,
+            # 翻译（工具 33）：语言对是这份提示词里唯一无法从材料推断出来的信息
+            "source_lang": req.source_lang,
+            "target_lang": req.target_lang,
+        },
     )
     if prompt is None:
         raise HTTPException(
@@ -1198,11 +1230,17 @@ async def chat_stream(
                 # 免费额度内 quota_units=0 不扣，命中限额转按次计费时扣 1 次，OCR 恒为 0。
                 if client_disconnected or stop_event.is_set():
                     status = STATUS_CANCELLED
-                # 整卷转录很容易撞输出上限：撞上了要明说，别让人拿着半份试卷往下走
-                if is_ocr and _hit_output_cap(usage, cfg["ocr_max_tokens"]):
+                # 整卷转录、整卷翻译都很容易撞输出上限：撞上了要明说，
+                # 别让人拿着半份试卷（或半篇译文）往下走
+                if (is_ocr and _hit_output_cap(usage, cfg["ocr_max_tokens"])) or (
+                    is_translate and _hit_output_cap(usage, cfg["max_tokens"])
+                ):
                     yield {
                         "event": "truncated",
-                        "data": json.dumps({"limit": cfg["ocr_max_tokens"]}, ensure_ascii=False),
+                        "data": json.dumps(
+                            {"limit": cfg["ocr_max_tokens"] if is_ocr else cfg["max_tokens"]},
+                            ensure_ascii=False,
+                        ),
                     }
                 if not charged:
                     units = await asyncio.to_thread(

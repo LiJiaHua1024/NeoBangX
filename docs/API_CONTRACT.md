@@ -434,6 +434,8 @@
 | `ocr_mode` | string | 否 | **工具 32**：`printed`（印刷试卷，默认）/ `handwritten`（手写作文），决定用哪份提示词。前端按**当前所在工具**决定：作文批改（10）→ `handwritten`，其余工具（含试卷类 12 / 13 / 14 / 23）→ `printed`；只有识别图片文字（32）与自由对话（25）两种素材都可能出现，由用户在界面里选 |
 | `pair_token` | string | 否 | **工具 32**：扫码配对会话 token，图片由服务端内存直读、不再回传；与 `images` 二选一 |
 | `pair_order` | integer[] | 否 | **工具 32**：扫码照片按哪个顺序送进模型（会话内下标序列）。电脑端排序、删除后只传这个序列，图片字节不重传；不传即按手机上传顺序。仅 `pair_token` 来源可用 |
+| `source_lang` | string | 否 | **工具 33**：源语言名，`auto` 表示自动检测；渲染进提示词的 `{{source_lang}}`。前端送的是语言名（`简体中文` / `English (US)`）而不是语言代码，模型解析更稳 |
+| `target_lang` | string | 否 | **工具 33**：目标语言名，渲染进提示词的 `{{target_lang}}`；缺省回落到 `简体中文`。续写/重试同样要带上，模型才知道接着译成什么 |
 
 **响应：** SSE 事件流（`Content-Type: text/event-stream`）
 
@@ -458,7 +460,7 @@ data: [DONE]
 | `token` | 文本片段 | LLM 生成的内容片段 |
 | `reasoning` | 推理片段（与 token 同样 JSON 编码） | 模型的思考过程，仅用于展示，不计入正文、不写日志；不支持推理的模型不发送该事件，前端回退到原有等待动画 |
 | `fallback` | JSON 字符串 `{"failed_index": 1, "total": 3, "next_index": 2, "reason": "timeout"}` | 当前 Provider 失败、正在切换下一优先级（按优先级链顺序尝试）。`reason` 取值：`timeout`（首块等待超时）/ `empty`（上游未返回任何正文）/ `unavailable`（其余失败）。只用于向前端展示进度，不含 Provider 名称；单 Provider 或切换后无下一家时不发送 |
-| `truncated` | JSON 字符串 `{"limit": 8192}` | **仅工具 32**：本次输出撞到了 `ocr_max_tokens` 上限，结果可能不完整。前端据此提示减少张数或调大上限，不静默交付半份转录 |
+| `truncated` | JSON 字符串 `{"limit": 8192}` | **工具 32 / 33**：本次输出撞到了上限（32 是 `ocr_max_tokens`，33 是全局 `max_tokens`），结果可能不完整。前端据此提示减少张数、调大上限，或「继续翻译」把译文接着译完，不静默交付半份内容 |
 | `done` | `[DONE]` / `[CANCELLED]` | 生成结束；`[CANCELLED]` 表示用户停止或客户端断开 |
 | `error` | JSON 字符串 `{"message": "...", "model": "..."}` | 生成过程中发生错误（含全部 Provider 均失败）；`model` 供前端失败归因 |
 
@@ -1072,7 +1074,8 @@ data: [DONE]
 | 24 | 超标词排查+替换 | `超标词替换.md`（仅替换；排查由机械接口完成） |
 | 25 | 自由对话 | `自由对话.md` |
 | 26 | 智能错题迁移 | `智能错题迁移.md` |
-| 32 | 识别图片文字 | `识别图片文字-印刷试卷.md`（`ocr_mode=printed`，默认）/ `识别图片文字-手写作文.md`（`ocr_mode=handwritten`）。用哪一份由前端按所在工具定（见 8.2），界面只在工具 32 与 25 里给选择 |
+| 32 | 识别图片文字 | `识别图片文字-印刷试卷.md`（`ocr_mode=printed`，默认）/ `识别图片文字-手写作文.md`（`ocr_mode=handwritten`）。用哪一份由前端按所在工具定（见 8.2），界面只在工具 32、25 与 33 里给选择 |
+| 33 | 翻译 | `翻译.md`（续写指令为 `翻译续写.md`）；语言对随请求带入，见 8 的 `source_lang` / `target_lang` |
 
 ### 12.1 试卷可视化全解输出格式（工具 13）
 
@@ -1142,3 +1145,4 @@ openrouter/deepseek/deepseek-chat
 | 1.11.0 | 2026-09-18 | 试卷可视化全解（工具 13）输出格式 v2：语篇改为「`@@PASSAGE_DEF@@` 声明一次 + `@@PASSAGE_REF@@` 逐题按编号引用」，同一篇正文不再逐题重复（典型整卷省约 1 万输出 token）；解析改两趟，编号悬空时标记 `passageUnresolved` 并在左栏告警；旧内联 `@@PASSAGE@@` 与历史记录继续兼容，详见 12.1 |
 | 1.12.0 | 2026-09-21 | 图片识别（工具 32「识别图片文字」）：新增 `/api/chat/stream` 的 `images` / `ocr_mode` / `pair_token` 字段与 OCR 链路（须有效使用码、始终不计费仅限流、用后台配置的 `ocr_model`、撞输出上限发 `truncated` 事件），`input` 改为对非 OCR 工具必填；`ocr_mode` 由前端按所在工具决定（作文批改用手写规则、其余用印刷规则，只有工具 32 与 25 给用户选）；模型用途改为能力位 `user_usable` / `ocr_usable` / `chores_usable`（`chores_only` 废弃但读取时自动迁移），新增配置键 `ocr_model` / `ocr_max_tokens`；新增扫码配对接口 `/api/ocr/pair*` 与手机拍照页 `/m/upload`（手机页配色跟随电脑端当前主题，见 8.3） |
 | 1.13.0 | 2026-09-21 | 模型用途迁移的可用性修正：管理端「禁用模型」开关改为「启用模型」（标签此前与正向的 `enabled` 字段相反，打开开关即启用却写着"禁用"）；旧单 URL 配置迁移改为直读环境配置与库中旧键（此前从 `get_config_map` 取已被移出白名单的 `llm_base_url` / `llm_api_key`，恒为空），并会在启动时补齐已存在的空地址 Provider；静态资源改为「未版本化一律每次重验证」，避免升级后浏览器继续用旧 script.js（管理端 index.html 的资源版本串同步提升） |
+| 1.14.0 | 2026-09-23 | 新增翻译工具（33「翻译」）：`/api/chat/stream` 与 `/api/chat/preview` 新增 `source_lang` / `target_lang`（渲染进 `翻译.md`，缺省回落 `auto` / `简体中文`）；`truncated` 事件的适用范围放宽到工具 33（撞全局 `max_tokens` 时前端给出「继续翻译」出口）；`ocr_mode` 的手动选择名单增加工具 33（印刷试卷与手写作文都可能来）；工具 33 走普通工具链路：须正文、按模型计费、用用户所选模型。同批：本地静态资源不再带 `?v=` 版本串（改走 `no-cache` + `etag`，升级后无需强刷即可拿到新代码），`bridge.html` 与 `index.html` 引用镜像模块的 URL 必须一致 |

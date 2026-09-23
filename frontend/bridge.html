@@ -25,15 +25,15 @@
      由浏览器填写、页面无法伪造，所以只要白名单是自家配置的那几条线路，
      任何第三方页面都无法借这个桥往我们的存储里写东西。
 
-     ⚠️ 下面三个 script 的 ?v= 必须与 index.html 里引用同名文件时保持一致。
-     两者若用了不同的 URL，浏览器会各缓存一份；部署更新后桥接页可能仍在跑旧版本，
-     而两侧的消息协议版本（NbxMirrorPeer.PROTO）一旦不一致，镜像会**静默失效**
-     （协议版本不匹配时消息被直接忽略，没有任何报错）。改动这三个模块时，
-     两个文件的 ?v= 一起改。
+     ⚠️ 下面三个 script 必须与 index.html 用同一个 URL（都不带 ?v=）。
+     两侧若用了不同的 URL，浏览器会各缓存一份；带 ?v= 的那份会被当成版本化资源
+     长缓存，部署更新后桥接页可能仍在跑旧版本，而两侧的消息协议版本
+     （NbxMirrorPeer.PROTO）一旦不一致，镜像会**静默失效**（协议版本不匹配时
+     消息被直接忽略，没有任何报错）。不带版本串走 no-cache + etag，两边永远同一份。
      ============================================================ -->
-<script src="/static/nbx-mirror.js?v=mirror4"></script>
-<script src="/static/nbx-mirror-store.js?v=mirror4"></script>
-<script src="/static/nbx-mirror-peer.js?v=mirror4"></script>
+<script src="/static/nbx-mirror.js"></script>
+<script src="/static/nbx-mirror-store.js"></script>
+<script src="/static/nbx-mirror-peer.js"></script>
 <script>
 (function () {
   "use strict";
