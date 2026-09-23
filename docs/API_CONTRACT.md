@@ -215,7 +215,7 @@
   "groups": [
     {
       "id": "teaching",
-      "title": "辅助教学功能",
+      "title": "备课与教学",
       "collapsed": false,
       "tools": [
         {

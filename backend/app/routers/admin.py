@@ -2090,9 +2090,9 @@ async def list_admin_tools():
     return {
         "groups": [
             {"id": "exclusive", "title": "独家功能", "tools": EXCLUSIVE_TOOLS},
-            {"id": "teaching", "title": "辅助教学功能", "tools": TEACHING_TOOLS},
-            {"id": "proposition", "title": "辅助命题功能", "tools": PROPOSITION_TOOLS},
-            {"id": "reference", "title": "参考技能", "tools": REFERENCE_TOOLS},
+            {"id": "teaching", "title": "备课与教学", "tools": TEACHING_TOOLS},
+            {"id": "proposition", "title": "命题与试题分析", "tools": PROPOSITION_TOOLS},
+            {"id": "reference", "title": "通用工具", "tools": REFERENCE_TOOLS},
         ],
     }
 

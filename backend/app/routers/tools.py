@@ -189,19 +189,19 @@ async def list_tools(
         },
         {
             "id": "teaching",
-            "title": "辅助教学功能",
+            "title": "备课与教学",
             "collapsed": False,
             "tools": enrich(TEACHING_TOOLS),
         },
         {
             "id": "proposition",
-            "title": "辅助命题功能",
+            "title": "命题与试题分析",
             "collapsed": False,
             "tools": enrich(PROPOSITION_TOOLS),
         },
         {
             "id": "reference",
-            "title": "参考技能",
+            "title": "通用工具",
             "collapsed": False,
             "tools": enrich(REFERENCE_TOOLS),
         },

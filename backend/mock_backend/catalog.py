@@ -26,7 +26,7 @@ TOOL_GROUPS: list[dict] = [
     },
     {
         "id": "teaching",
-        "title": "辅助教学功能",
+        "title": "备课与教学",
         "collapsed": False,
         "tools": [
             {"id": "1", "name": "语篇深度分析", "icon": "document-magnifier", "description": "主题/文体/语言特点/观点分析", "prompt_filename": "语篇深度分析.md"},
@@ -54,7 +54,7 @@ TOOL_GROUPS: list[dict] = [
     },
     {
         "id": "proposition",
-        "title": "辅助命题功能",
+        "title": "命题与试题分析",
         "collapsed": False,
         "tools": [
             {"id": "17", "name": "阅读文本改编", "icon": "edit-1", "description": "改写为高考阅读文本", "prompt_filename": "阅读文本改编.md"},
@@ -69,7 +69,7 @@ TOOL_GROUPS: list[dict] = [
     },
     {
         "id": "reference",
-        "title": "参考技能",
+        "title": "通用工具",
         "collapsed": False,
         "tools": [
             {"id": "25", "name": "自由对话", "icon": "chat", "description": "通用 LLM 对话，提示词调试用", "prompt_filename": "自由对话.md"},
