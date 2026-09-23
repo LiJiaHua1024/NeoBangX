@@ -16,6 +16,7 @@
 mtime+size 派生），条件请求 304 语义不变；304 与 206 也会补上缓存头。
 """
 
+import asyncio
 import gzip
 import os
 import threading
@@ -51,7 +52,7 @@ _COMPRESSIBLE_TYPES = frozenset(
 _CACHE_MAX_ENTRIES = 64
 
 
-def _pick_encoding(headers) -> str:
+def _pick_encoding(headers, *, brotli: bool = True) -> str:
     """从 ASGI headers 中读 Accept-Encoding 并挑选首选编码（br 优先、gzip 次之）。"""
     header = ""
     for k, v in headers:
@@ -60,6 +61,7 @@ def _pick_encoding(headers) -> str:
             break
     if not header:
         return ""
+    accepted = {}
     for part in header.split(","):
         fields = part.split(";")
         coding = fields[0].strip().lower()
@@ -73,13 +75,13 @@ def _pick_encoding(headers) -> str:
                     q = float(param[2:])
                 except ValueError:
                     q = 0.0
-        if q <= 0:
-            continue
-        if coding == "br" and _brotli is not None:
-            return "br"  # 客户端明确接受 br 且库可用
-        if coding == "gzip":
-            return "gzip"
-    return ""
+        if 0 < q <= 1:
+            accepted[coding] = q
+    # 按客户端权重选择，同权重优先 br，不依赖请求头中的排列顺序。
+    available = ("br", "gzip") if brotli and _brotli is not None else ("gzip",)
+    return max(available, key=lambda coding: accepted.get(coding, 0)) if any(
+        coding in accepted for coding in available
+    ) else ""
 
 
 def _compress(body: bytes, encoding: str) -> bytes:
@@ -200,9 +202,7 @@ class StaticCacheMiddleware:
 
         encoding = ""
         if self.compress and method != "HEAD":
-            encoding = _pick_encoding(scope.get("headers", []))
-            if encoding == "br" and not self.brotli:
-                encoding = "gzip"
+            encoding = _pick_encoding(scope.get("headers", []), brotli=self.brotli)
 
         # 需要在 send_wrapper 闭包间共享的状态
         state = {
@@ -276,7 +276,8 @@ class StaticCacheMiddleware:
                 if full is not None:
                     try:
                         st = os.stat(full)
-                        key = (path, st.st_mtime_ns, st.st_size, encoding)
+                        # 与 _prewarm 共用相对路径键；/ 与 /static/index.html 也复用。
+                        key = (os.path.relpath(full, self.static_dir).replace(os.sep, "/"), st.st_mtime_ns, st.st_size, encoding)
                     except OSError:
                         key = None
                 if key is not None:
@@ -310,7 +311,8 @@ class StaticCacheMiddleware:
                     headers, key, enc, ctype = state["start"]
                     raw = b"".join(state["chunks"])
                     state["chunks"] = []
-                    compressed = _compress(raw, enc)
+                    # 冷资源或文件更新后的压缩也不阻塞 API / SSE 所在事件循环。
+                    compressed = await asyncio.to_thread(_compress, raw, enc)
                     if key is not None:
                         self._cache_put(key, compressed)
                     headers.append((b"content-encoding", enc.encode("latin-1")))

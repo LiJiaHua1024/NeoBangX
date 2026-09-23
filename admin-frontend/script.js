@@ -61,7 +61,11 @@ function createBackground(canvas) {
   let meteorGap = 360 + Math.random() * 540;
 
   const parse = (s) => (s || "0,0,0").split(",").map((n) => parseFloat(n) || 0);
-  const lerp3 = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+  const lerp3 = (a, b, k) => {
+    a[0] += (b[0] - a[0]) * k;
+    a[1] += (b[1] - a[1]) * k;
+    a[2] += (b[2] - a[2]) * k;
+  };
   const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
 
   function readTheme() {
@@ -80,8 +84,8 @@ function createBackground(canvas) {
       boost: parseFloat(cs.getPropertyValue("--c-glow-boost")) || 1,
     };
   }
-  let cur = readTheme();
-  let tgt = cur;
+  const cur = readTheme();
+  let tgt = readTheme(); // 独立目标值，插值原地更新 cur，避免逐帧分配数组
 
   function wanderer(speed) {
     return {
@@ -106,11 +110,16 @@ function createBackground(canvas) {
     }
   }
 
+  let canvasDpr = 0;
   function resize() {
     const dpr = Math.min(devicePixelRatio || 1, 2);
-    canvas.width = innerWidth * dpr;
-    canvas.height = innerHeight * dpr;
+    const width = Math.floor(innerWidth * dpr), height = Math.floor(innerHeight * dpr);
+    if (canvas.width === width && canvas.height === height && canvasDpr === dpr) return false;
+    canvasDpr = dpr;
+    canvas.width = width;
+    canvas.height = height;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return true;
   }
   resize();
 
@@ -136,7 +145,18 @@ function createBackground(canvas) {
   }
   spawn();
 
-  window.addEventListener("resize", () => { resize(); spawn(); });
+  let resizeRaf = null;
+  window.addEventListener("resize", () => {
+    if (resizeRaf) return;
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = null;
+      if (resize()) {
+        spawn();
+        // 减少动态效果模式没有帧循环，改变画布尺寸后必须补画。
+        if (reduced) frame(true);
+      }
+    });
+  }, { passive: true });
   window.addEventListener("mousemove", (e) => {
     mouse.x = e.clientX; mouse.y = e.clientY;
     halo.tx = e.clientX; halo.ty = e.clientY;
@@ -145,7 +165,7 @@ function createBackground(canvas) {
      期间的程序性暂停（pauseBackgroundForFlush），互不覆盖；循环在任一开关
      置位后的下一跳自行退出（不依赖 cancelAnimationFrame 的可靠性），两者
      都清除后才由对应路径重新拉起。 */
-  let hiddenPause = false;
+  let hiddenPause = document.hidden;
   let flushPause = false;
 
   function loop() {
@@ -205,10 +225,14 @@ function createBackground(canvas) {
   }
 
   function glowSpot(x, y, r, color, alpha) {
+    // 只跳过完全离开画布的贴图，运动状态仍照常更新。
+    if (x + r <= 0 || y + r <= 0 || x - r >= innerWidth || y - r >= innerHeight) return;
     const r0 = color[0] | 0, g0 = color[1] | 0, b0 = color[2] | 0;
     const key = r0 * 65536 + g0 * 256 + b0;
     const sprite = glowCache.get(key);
     if (sprite) {
+      glowCache.delete(key);
+      glowCache.set(key, sprite); // LRU：常用颜色留在缓存
       ctx.globalAlpha = alpha;
       ctx.drawImage(sprite, x - r, y - r, r * 2, r * 2);
       ctx.globalAlpha = 1;
@@ -216,9 +240,11 @@ function createBackground(canvas) {
     }
     const seen = glowSeen.get(key);
     if (seen !== undefined && seen !== frameNo) {
-      // 连续帧同色：烘焙精灵，此后该颜色永久走贴图
+      // 跨帧同色：烘焙精灵，此后在缓存有效期内走贴图
       const s = bakeGlowSprite(r0, g0, b0);
       glowCache.set(key, s);
+      // 每张 RGBA 纹理约 256 KiB，最多 64 张，长期切主题也不会无限增长。
+      if (glowCache.size > 64) glowCache.delete(glowCache.keys().next().value);
       glowSeen.delete(key);
       ctx.globalAlpha = alpha;
       ctx.drawImage(s, x - r, y - r, r * 2, r * 2);
@@ -358,17 +384,18 @@ function createBackground(canvas) {
   function frame(staticOnly) {
     frameNo += 1;
     const W = innerWidth, H = innerHeight;
-    cur = {
-      g1: lerp3(cur.g1, tgt.g1, 0.06), g2: lerp3(cur.g2, tgt.g2, 0.06),
-      gm: lerp3(cur.gm, tgt.gm, 0.06), p: lerp3(cur.p, tgt.p, 0.06),
-      blend: tgt.blend,
-      sky: cur.sky + (tgt.sky - cur.sky) * 0.06,
-      rays: cur.rays + (tgt.rays - cur.rays) * 0.06,
-      stars: cur.stars + (tgt.stars - cur.stars) * 0.06,
-      birds: cur.birds + (tgt.birds - cur.birds) * 0.06,
-      bird: lerp3(cur.bird, tgt.bird, 0.06),
-      boost: cur.boost + (tgt.boost - cur.boost) * 0.06,
-    };
+    // 保持原插值公式与每帧步长，只复用对象和颜色数组。
+    lerp3(cur.g1, tgt.g1, 0.06);
+    lerp3(cur.g2, tgt.g2, 0.06);
+    lerp3(cur.gm, tgt.gm, 0.06);
+    lerp3(cur.p, tgt.p, 0.06);
+    lerp3(cur.bird, tgt.bird, 0.06);
+    cur.blend = tgt.blend;
+    cur.sky += (tgt.sky - cur.sky) * 0.06;
+    cur.rays += (tgt.rays - cur.rays) * 0.06;
+    cur.stars += (tgt.stars - cur.stars) * 0.06;
+    cur.birds += (tgt.birds - cur.birds) * 0.06;
+    cur.boost += (tgt.boost - cur.boost) * 0.06;
     ctx.clearRect(0, 0, W, H);
     ctx.globalCompositeOperation = cur.blend === "lighter" ? "lighter" : "source-over";
 

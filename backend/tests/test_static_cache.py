@@ -128,3 +128,67 @@ def settings_static_dir() -> str:
     from app.config import settings
 
     return str(settings.static_dir)
+
+
+@pytest.mark.parametrize("header,enabled,expected", [
+    ("gzip, deflate, br", True, "br"),
+    ("gzip;q=1, br;q=0.5", True, "gzip"),
+    ("gzip;q=0, br", False, ""),
+    ("br", False, ""),
+    ("gzip, br;q=0", True, "gzip"),
+    ("identity", True, ""),
+])
+def test_encoding_preferences(header, enabled, expected, monkeypatch):
+    from app import middleware
+
+    monkeypatch.setattr(middleware, "_brotli", object())
+    assert middleware._pick_encoding(
+        [(b"accept-encoding", header.encode())], brotli=enabled,
+    ) == expected
+
+
+def test_prewarm_is_reused_and_changed_files_invalidate(tmp_path, monkeypatch):
+    import threading
+    from fastapi import FastAPI
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+    from app import middleware
+
+    # 同步预热，避免测试与后台线程竞争；之后每次压缩都被计数。
+    monkeypatch.setattr(threading.Thread, "start", lambda self: None)
+    raw = b"/* cached asset */\n" * 100
+    asset = tmp_path / "index.html"
+    asset.write_bytes(raw)
+    app = FastAPI()
+    app.mount("/static", StaticFiles(directory=tmp_path))
+
+    @app.get("/")
+    def index():
+        return FileResponse(asset)
+
+    wrapped = middleware.StaticCacheMiddleware(app, tmp_path, brotli=False)
+    wrapped._prewarm()
+    # TestClient 需要创建自己的线程，预热完成后恢复 start。
+    monkeypatch.undo()
+    original_compress = middleware._compress
+    calls = []
+
+    def compress(body, encoding):
+        calls.append(body)
+        return original_compress(body, encoding)
+
+    monkeypatch.setattr(middleware, "_compress", compress)
+    with TestClient(wrapped) as local_client:
+        for url in ("/", "/static/index.html", "/static/index.html?v=test"):
+            response = local_client.get(url, headers={"accept-encoding": "gzip"})
+            assert response.content == raw
+            assert response.headers["content-encoding"] == "gzip"
+        assert calls == [], "首请求必须复用预热字节，不能重新压缩"
+
+        updated = raw + b"updated"
+        asset.write_bytes(updated)
+        response = local_client.get("/static/index.html", headers={"accept-encoding": "gzip"})
+        assert response.content == updated
+        assert calls == [updated]
+        assert local_client.get("/", headers={"accept-encoding": "gzip"}).content == updated
+        assert calls == [updated]

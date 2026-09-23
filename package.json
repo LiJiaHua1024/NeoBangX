@@ -1,0 +1,12 @@
+{
+  "name": "neobangx-frontend-assets",
+  "private": true,
+  "scripts": {
+    "build:css": "tailwindcss -i tools/styles/frontend.css -o frontend/tailwind.css --minify && tailwindcss -i tools/styles/admin.css -o admin-frontend/tailwind.css --minify",
+    "test": "node --test frontend/tests/*.test.js"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "tailwindcss": "4.3.3"
+  }
+}

@@ -31,7 +31,7 @@ NeoBangX —— 面向中学英语教师的 AI 辅助教学平台。
 | LLM 统一层 | LiteLLM |
 | 数据库 | SQLite |
 | 前端 JS | Alpine.js |
-| 前端 CSS | Tailwind CSS v4（浏览器端编译） |
+| 前端 CSS | Tailwind CSS v4（预编译静态 CSS，浏览器无编译开销） |
 | 容器 | Docker + Supervisor |
 
 ---
@@ -253,7 +253,13 @@ docker-compose down
 **只能由环境变量提供**（管理后台里没有对应输入框）。首次启动若 `llm_providers` 表为空，
 会按它们生成首个 Provider 并绑定全部模型；已存在但地址为空的自动迁移 Provider 也会被补齐。
 
-**静态资源不用手改版本串，也别加回去**：`frontend/` 与 `admin-frontend/` 无构建步骤、文件名不带
+**修改 Tailwind 工具类后重新构建**：在项目根目录执行 `npm ci`，再执行 `npm run build:css`。
+两端的 HTML 和 JS 都纳入扫描，包含 Alpine 条件分支与动态模板中的完整类名；不要拼接 Tailwind
+类名片段，新增动态工具类时写出完整名称。两个 `tailwind.css` 产物应随源码一起保存，部署仍是纯静态文件，
+服务器和 Docker 镜像无需安装 Node。仅改自定义 `styles.css` 无需构建。版本由 `package-lock.json` 锁定，
+不会因 CDN 更新而改变样式。采用 [Tailwind 官方的静态扫描方式](https://tailwindcss.com/docs/detecting-classes-in-source-files)。
+
+**静态资源不用手改版本串，也别加回去**：`frontend/` 与 `admin-frontend/` 的文件名不带
 内容哈希，而 `index.html` 里的本地资源（JS / CSS / 图片）一律**不带** `?v=` 查询串。带 query 的资源
 会被缓存中间件当成「版本化资源」下发 immutable 长缓存，于是「改了文件但忘了改版本串」时浏览器会一直
 跑旧代码，升级后出现「新 HTML + 旧 JS/CSS」的错配（管理端曾因此让三个用途勾选框全部显示为未勾选，
