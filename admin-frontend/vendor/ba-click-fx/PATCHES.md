@@ -5,7 +5,7 @@
 
 - 上游基线：v1.3.3，原文件 md5 `800dd880...`（git tag/提交 `30537ac` 引入时的版本）
 - 本文件与库同目录存放；`frontend/` 与 `admin-frontend/` 两份拷贝**逐字节相同**，升级任一端时必须同步两端
-- 升级上游新版本时的流程：替换库文件 → 对照下表逐条重放补丁（改动均为局部、幂等）→ 同步两端 → 提升 `click-fx.js` 里的 `?v=fxlib133p1` 版本号 → 重跑 `.tmp-shots/fx-smoke.mjs` 冒烟测试
+- 升级上游新版本时的流程：替换库文件 → 对照下表逐条重放补丁（改动均为局部、幂等）→ 同步两端 → 提升 `click-fx.js` 里的版本号（当前 `?v=fxlib133p2`）→ 运行 `node --test frontend/tests/click-fx-performance.test.js`，并检查渲染路径
 - 每处补丁在代码内均有 `[NBX-PERF-x]` 中文注释标记，与本表编号对应
 
 ## 无损性总则
@@ -95,7 +95,35 @@ Set 化（改变合并顺序可能改变区域矩形）、跨类别 draw call �
   该 clear 本就是 no-op；而混合路径（GPU 失败回退 Canvas2D 后再恢复）里 2D canvas
   依然可见，这个 clear 是防止残影的承重墙。结论：无收益且风险实在，保持原样。
 
-## 验证记录
+### H. WebGPU uniform 暂存区复用（Tier 1）
+
+- 位置：`ai._createPassUniform`、`ai._writeGeometryUniform`。
+- 改动：每个 renderer 分别复用 96 字节 pass 与 32 字节 geometry 暂存区及其 typed array 视图。
+- 无损依据：每次写入覆盖所有已用字段，geometry 对齐填充保持初始零值；所有调用方在下一次复用前立即调用 `queue.writeBuffer`。
+  [WebGPU 规范](https://gpuweb.github.io/gpuweb/#dom-gpuqueue-writebuffer)规定在 content timeline 复制源数据，后续复用不会修改已提交内容。
+- 升级注意：若增加字段或调用方开始跨调用保留返回缓冲，必须重新检查覆盖范围和暂存区寿命。
+
+### I. WebGPU bind group 与 geometry texture view 复用（Tier 2）
+
+- 位置：`ai._nbxBindGroupSlot`、`_createGeometryBindGroup`、`_createFullscreenBindGroup`、`_deleteTargets`。
+- 键：pipeline / uniform 对象分桶，设备、sampler 与全部纹理或视图引用逐一比较；uniform 内容变化无需重建绑定。
+- 每个分桶只保留最新一组 geometry / fullscreen 绑定，WeakMap 不永久保留旧 pipeline 和 uniform；释放目标时清空所有缓存。
+- resize、后端切换、销毁沿原 `_deleteTargets` 路径释放引用；替换设备或任一绑定资源都会重新创建。
+- 不缓存每帧的 swapchain 输出视图，不改变 pass 顺序、draw call、shader 或采样参数。
+
+### J. 幂等 resize 与接入层重复调用消除（Tier 1）
+
+- 位置：`Xo._resize`；两端 `click-fx.js` 的 `restorePristine` 与 maxDpr 降级分支。
+- 仅当逻辑尺寸、DPR、主画布和对比画布实际像素尺寸均一致时跳过画布重置；外部修改尺寸仍会恢复。
+- `updateConfig({maxDpr})` 本身已调用 `_resize`，接入层移除其后的第二次 `resize()`；缩放和降级数值不变。
+
+## p2 验证
+
+- `frontend/tests/click-fx-performance.test.js` 覆盖 uniform 原始字节布局与默认值恢复、绑定键各维度失效、资源释放、尺寸/DPR 变化及两端文件同步。
+- 稳定资源连续调用 1000 次只创建一次 bind group / geometry texture view；这衡量 API 调用消除，不等价于实际 FPS 提升比例。
+- GPU 像素级实测未执行；收益主要是 CPU 分配与驱动对象创建开销，不宣称降低 shader 像素工作量。
+
+## 历史验证记录（p1）
 
 - `node --check` 两份库：通过
 - 无头冒烟测试 `.tmp-shots/fx-smoke.mjs`（Node + DOM 打桩，Canvas2D 全路径跑帧）：

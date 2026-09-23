@@ -63,7 +63,7 @@
   var LS_OFF = "nbx_fx_off";        // 永久开关（将来设置窗口用的就是这把钥匙）
   var LS_PERF = "nbx_fx_perf";      // 本机性能记录（设备数据，不入线路镜像）
   var SS_OFFERED = "nbx_fx_offered"; // 本会话是否已弹过询问卡
-  var VENDOR = "/static/vendor/ba-click-fx/ba-click-fx.js?v=fxlib133p1";
+  var VENDOR = "/static/vendor/ba-click-fx/ba-click-fx.js?v=fxlib133p2";
 
   /* ---------------- 调试开关（沿用 #sky=night&moon=full 的既有约定） ---------------- */
   var hash = new URLSearchParams(location.hash.replace(/^#/, ""));
@@ -271,7 +271,7 @@
         effectBackend: pristine.effectBackend,
         bloomBackend: pristine.bloomBackend,
       });
-      fx.resize();
+      // updateConfig(maxDpr) 已调用 resize，避免重复重置画布。
     } catch (e) { /* 忽略 */ }
   }
 
@@ -284,7 +284,7 @@
         setFx("bloom.intensity", pristine.bloomIntensity * 0.8);
       },
     },
-    { why: "画布像素密度", apply: function () { try { fx.updateConfig({ maxDpr: 1 }); fx.resize(); } catch (e) { /* 忽略 */ } } },
+    { why: "画布像素密度", apply: function () { try { fx.updateConfig({ maxDpr: 1 }); } catch (e) { /* 忽略 */ } } },
     {
       why: "拖尾改为按住时显示",
       apply: function () { try { fx.updateConfig({ trailAlways: false }); } catch (e) { /* 忽略 */ } },

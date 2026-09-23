@@ -3722,7 +3722,12 @@ var Zr = Xr(Fr, [
 		};
 	}
 	_createPassUniform(e = {}) {
-		let t = /* @__PURE__ */ new ArrayBuffer(zr), n = new Float32Array(t), r = new Uint32Array(t);
+		// [NBX-PERF-H] 调用方在下一次复用前立即 writeBuffer；该 API 同步复制源字节。
+		if (!this._nbxPassScratch) {
+			let buffer = new ArrayBuffer(zr);
+			this._nbxPassScratch = { buffer, floats: new Float32Array(buffer), uints: new Uint32Array(buffer) };
+		}
+		let { buffer: t, floats: n, uints: r } = this._nbxPassScratch;
 		return n[0] = e.texelX ?? 1, n[1] = e.texelY ?? 1, n[2] = e.backgroundScaleX ?? 1, n[3] = e.backgroundScaleY ?? 1, n[4] = e.sampleScale ?? 1, n[5] = e.threshold ?? 0, n[6] = e.softKnee ?? 0, n[7] = e.clampMax ?? 65504, n[8] = e.intensity ?? 0, n[9] = e.overlayAlphaLimit ?? 1, n[10] = e.opacity ?? 1, r[11] = +!!e.hasScene, r[12] = +!!e.hasBackground, r[13] = +!!e.transparentOverlay, r[14] = +!!e.visualMaxAlpha, r[15] = +!!e.brightUnknownBackground, r[16] = +!!e.hostAdditive, r[17] = +!!e.extendedOutput, n[18] = e.hdrPeak ?? f.peak, n[19] = e.hdrWhiteCore ?? f.whiteCore, n[20] = e.hdrWhiteStart ?? f.whiteStart, n[21] = e.hdrWhiteEnd ?? f.whiteEnd, n[22] = e.hdrBrightness ?? f.brightness, n[23] = e.hdrColorPreservation ?? f.colorPreservation, t;
 	}
 	_getBackgroundUvScale() {
@@ -3731,7 +3736,12 @@ var Zr = Xr(Fr, [
 		return e > t ? [t / e, 1] : [1, e / t];
 	}
 	_writeGeometryUniform(e, t, n = {}) {
-		let r = /* @__PURE__ */ new ArrayBuffer(Br), i = new Float32Array(r), a = new Uint32Array(r);
+		// [NBX-PERF-H] 每个已使用字段都覆盖，未使用的对齐填充始终为零。
+		if (!this._nbxGeometryScratch) {
+			let buffer = new ArrayBuffer(Br);
+			this._nbxGeometryScratch = { buffer, floats: new Float32Array(buffer), uints: new Uint32Array(buffer) };
+		}
+		let { buffer: r, floats: i, uints: a } = this._nbxGeometryScratch;
 		i[0] = this.displayWidth, i[1] = this.displayHeight, i[2] = Math.max(0, n.disk ?? 1), i[3] = Math.max(0, n.ring ?? 1), a[4] = +!!t, this.device.queue.writeBuffer(e, 0, r);
 	}
 	_ensureVertexBuffer(e, t, n, r) {
@@ -3751,7 +3761,18 @@ var Zr = Xr(Fr, [
 		}
 		return this.device.queue.writeBuffer(a.buffer, 0, t.buffer, t.byteOffset, i), a.buffer;
 	}
+	// [NBX-PERF-I] pipeline + uniform 分桶，设备/采样器/贴图引用全部一致才复用。
+	_nbxBindGroupSlot(pipeline, uniform) {
+		this._nbxBindGroups ??= new WeakMap();
+		let uniforms = this._nbxBindGroups.get(pipeline);
+		if (!uniforms) this._nbxBindGroups.set(pipeline, uniforms = new WeakMap());
+		let key = uniform ?? this.sampler, slot = uniforms.get(key);
+		if (!slot) uniforms.set(key, slot = {});
+		return slot;
+	}
 	_createGeometryBindGroup(e, t, n = null) {
+		let slot = this._nbxBindGroupSlot(e, t), cached = slot.geometry;
+		if (cached && cached.device === this.device && cached.sampler === this.sampler && cached.texture === n) return cached.group;
 		let r = [{
 			binding: 0,
 			resource: { buffer: t }
@@ -3762,10 +3783,10 @@ var Zr = Xr(Fr, [
 		}, {
 			binding: 2,
 			resource: this.sampler
-		}), this.device.createBindGroup({
+		}), slot.geometry = { device: this.device, sampler: this.sampler, texture: n, group: this.device.createBindGroup({
 			layout: e.getBindGroupLayout(0),
 			entries: r
-		});
+		}) }, slot.geometry.group;
 	}
 	_drawBatch(e, t, n, r, i, a, o, s = null) {
 		let c = this._ensureVertexBuffer(r, i, a, o);
@@ -3775,6 +3796,8 @@ var Zr = Xr(Fr, [
 		this._writeGeometryUniform(t, n, r), this._drawBatch(e, this.pipelines.disk, t, "disk", this.sceneDiskVertexData, this.sceneDiskVertexCount, Ir, this.textures.circle), this._drawBatch(e, n ? this.pipelines.trailOverlay : this.pipelines.trailScene, t, "trail", this.trailVertexData, this.trailVertexCount, Rr, this.textures.trail), this._drawBatch(e, n ? this.pipelines.genericOverlay : this.pipelines.genericScene, t, "generic", this.vertexData, this.vertexCount, Fr), this._drawBatch(e, n ? this.pipelines.ringOverlay : this.pipelines.ringScene, t, "ring", this.ringVertexData, this.ringVertexCount, Lr, this.textures.ring), this._drawBatch(e, n ? this.pipelines.triangleOverlay : this.pipelines.triangleScene, t, "triangle", this.triangleVertexData, this.triangleVertexCount, Rr, n ? this.textures.triangleOverlay : this.textures.triangle);
 	}
 	_createFullscreenBindGroup(e, t, n, r = null, i = null, a = null) {
+		let slot = this._nbxBindGroupSlot(e, t), cached = slot.fullscreen;
+		if (cached && cached.device === this.device && cached.sampler === this.sampler && cached.n === n && cached.r === r && cached.i === i && cached.a === a) return cached.group;
 		let o = [{
 			binding: 1,
 			resource: this.sampler
@@ -3792,10 +3815,10 @@ var Zr = Xr(Fr, [
 			binding: e + 2,
 			resource: s[e]
 		});
-		return this.device.createBindGroup({
+		return slot.fullscreen = { device: this.device, sampler: this.sampler, n, r, i, a, group: this.device.createBindGroup({
 			layout: e.getBindGroupLayout(0),
 			entries: o
-		});
+		}) }, slot.fullscreen.group;
 	}
 	_drawFullscreen(e, t, n, r, i, a) {
 		let o = e.beginRenderPass({
@@ -3841,6 +3864,7 @@ var Zr = Xr(Fr, [
 	}
 	_deleteTargets() {
 		qr(this.sourceTarget), qr(this.bloomSourceTarget), qr(this.sceneOverlayTarget);
+		this._nbxBindGroups = null; // [NBX-PERF-I] resize / 释放 / 销毁同步释放绑定引用。
 		for (let e of this.levels) qr(e.down), qr(e.up), e.downUniform?.destroy?.(), e.upUniform?.destroy?.();
 		this.sourceTarget = null, this.bloomSourceTarget = null, this.sceneOverlayTarget = null, this.levels = [];
 	}
@@ -6082,6 +6106,8 @@ var Xo = class {
 	_resize(e, t, n) {
 		if (this.destroyed) return;
 		let r = this._getCanvasRect(), i = typeof window < "u" ? window.innerWidth : this.canvas?.width, a = typeof window < "u" ? window.innerHeight : this.canvas?.height, o = typeof window < "u" ? window.devicePixelRatio : 1, s = Ui(r.width, Ui(i, 1)), c = Ui(r.height, Ui(a, 1)), l = Ui(e, s), u = Ui(t, c), d = Math.min(Ui(n, Ui(o, 1)), this.config.maxDpr);
+		// [NBX-PERF-J] 同尺寸不重置 backing store；外部画布被调整时仍正确恢复。
+		if (this.width === l && this.height === u && this.dpr === d && this.canvas.width === Math.round(l * d) && this.canvas.height === Math.round(u * d) && (!this.contrastCanvas || this.contrastCanvas.width === this.canvas.width && this.contrastCanvas.height === this.canvas.height)) return;
 		this.width = l, this.height = u, this.dpr = d, this.canvas.width = Math.round(l * d), this.canvas.height = Math.round(u * d), this.context && this.context.setTransform(d, 0, 0, d, 0, 0), this.contrastCanvas && this.contrastContext && (this.contrastCanvas.width = this.canvas.width, this.contrastCanvas.height = this.canvas.height, this.contrastContext.setTransform(d, 0, 0, d, 0, 0)), this._requestRender();
 	}
 	_getCanvasRect() {
