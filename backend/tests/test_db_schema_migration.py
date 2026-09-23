@@ -96,6 +96,7 @@ def test_ensure_indexes_backfills_composite_indexes_on_legacy_db():
         "ix_usage_logs_code_model_created": ("usage_logs", ["code_id", "model", "created_at"]),
         "ix_usage_logs_fp_model_created": ("usage_logs", ["fingerprint", "model", "created_at"]),
         "ix_usage_logs_ip_model_created": ("usage_logs", ["ip", "model", "created_at"]),
+        "ix_usage_logs_tool_id_id": ("usage_logs", ["tool_id", "id"]),
         "ix_devices_last_seen_at": ("devices", ["last_seen_at"]),
     }
     with engine.begin() as conn:

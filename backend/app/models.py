@@ -154,6 +154,8 @@ class UsageLog(Base):
         Index("ix_usage_logs_code_model_created", "code_id", "model", "created_at"),
         Index("ix_usage_logs_fp_model_created", "fingerprint", "model", "created_at"),
         Index("ix_usage_logs_ip_model_created", "ip", "model", "created_at"),
+        # 管理端按工具筛选并按 ID 倒序分页；旧库由 _ensure_indexes 自动补建。
+        Index("ix_usage_logs_tool_id_id", "tool_id", "id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

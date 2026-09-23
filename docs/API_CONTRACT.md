@@ -719,6 +719,7 @@ data: [DONE]
 | `device` | 按设备筛选：短码 / 备注 / 自动昵称 / 全哈希模糊匹配；纯数字按设备 ID 精确匹配 |
 | `page` | 页码，默认 1 |
 | `page_size` | 每页数量，默认 30，最大 100 |
+| `include_summary` | 默认 `false`；设为 `true` 时额外返回 `summary`（结构同 `/logs/summary`），列表总数复用汇总计数，避免重复扫描 |
 
 **响应：**
 

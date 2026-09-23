@@ -822,6 +822,44 @@ def _seed_admin_logs(suffix):
     return code.code, ok, bad
 
 
+def test_admin_logs_combined_summary_matches_separate_requests(admin_client):
+    code, ok_id, bad_id = _seed_admin_logs("PERF")
+    for filters in ({}, {"status": "error"}, {"tool_id": "25"}, {"model": "missing"}):
+        params = {"code": code, "page_size": 1, **filters}
+        summary = admin_client.get("/api/admin/logs/summary", params=params).json()
+        for page in (1, 2, 3):
+            old = admin_client.get("/api/admin/logs", params={**params, "page": page}).json()
+            combined = admin_client.get("/api/admin/logs", params={**params, "page": page, "include_summary": True}).json()
+            assert combined.pop("summary") == summary
+            assert combined == old
+            assert combined["total"] == summary["total"]
+            assert all("payload" not in item for item in combined["items"])
+    first = admin_client.get("/api/admin/logs", params={"code": code, "page_size": 1}).json()
+    assert [item["id"] for item in first["items"]] == [bad_id]
+    second = admin_client.get("/api/admin/logs", params={"code": code, "page_size": 1, "page": 2}).json()
+    assert [item["id"] for item in second["items"]] == [ok_id]
+
+
+def test_admin_logs_combined_avoids_duplicate_count(admin_client):
+    from sqlalchemy import event
+    from app.database import engine
+
+    code, _, _ = _seed_admin_logs("PERFCOUNT")
+    queries = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT") and "usage_logs" in statement:
+            queries.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        response = admin_client.get("/api/admin/logs", params={"code": code, "include_summary": True})
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert response.status_code == 200
+    assert len(queries) == 2  # 一次聚合，一次页内数据；没有第三次独立 count
+
+
 def test_admin_logs_list_and_filters(admin_client):
     code, ok_id, bad_id = _seed_admin_logs("D001")
 

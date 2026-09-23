@@ -1078,7 +1078,7 @@ def _filter_by_device(query, device: str, db: Optional[Session]):
 # 注意：/logs/summary 与 /logs/purge 必须先于 /logs/{log_id} 声明，
 # 否则会被路径参数吞掉。
 @router.get("/logs/summary")
-async def logs_summary(
+def logs_summary(
     db: Annotated[Session, Depends(get_db)],
     code: str = Query("", description="按使用码筛选"),
     tool_id: str = Query("", description="按工具 ID 筛选"),
@@ -1094,6 +1094,11 @@ async def logs_summary(
         code=code, tool_id=tool_id, model=model, status=status, start=start, end=end, provider=provider,
         device=device, db=db,
     )
+    return _log_summary(query)
+
+
+def _log_summary(query) -> dict:
+    """同一筛选范围只聚合一次，列表同时请求汇总时复用 total。"""
     row = query.with_entities(
         func.count(UsageLog.id).label("total"),
         func.coalesce(func.sum(case((status_matches("success"), 1), else_=0)), 0).label("success"),
@@ -1131,7 +1136,7 @@ async def purge_logs(
 
 
 @router.get("/logs")
-async def list_logs(
+def list_logs(
     db: Annotated[Session, Depends(get_db)],
     code: str = Query("", description="按使用码筛选"),
     tool_id: str = Query("", description="按工具 ID 筛选"),
@@ -1143,6 +1148,7 @@ async def list_logs(
     device: str = Query("", description="按设备筛选（短码/备注/昵称/指纹模糊，数字按设备 ID）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
+    include_summary: bool = Query(False, description="同时返回汇总，复用汇总计数避免重复扫描"),
 ):
     query = _apply_log_filters(
         db.query(UsageLog),
@@ -1150,21 +1156,31 @@ async def list_logs(
         device=device, db=db,
     )
 
-    total = query.count()
-    rows = (
-        query.order_by(desc(UsageLog.id))
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
+    # 同步路由由 FastAPI 在线程池运行，大日志查询不占用事件循环。
+    summary = _log_summary(query) if include_summary else None
+    total = summary["total"] if summary is not None else query.with_entities(func.count(UsageLog.id)).scalar()
+    offset = (page - 1) * page_size
+    if tool_id:
+        # 工具索引可覆盖 ID 分页，再只读取本页的完整元数据。
+        page_ids = (
+            query.with_entities(UsageLog.id).order_by(desc(UsageLog.id))
+            .offset(offset).limit(page_size).subquery()
+        )
+        rows = db.query(UsageLog).join(page_ids, UsageLog.id == page_ids.c.id).order_by(desc(UsageLog.id)).all()
+    else:
+        # 未按工具筛选时避免额外 join，保留直接分页的短路径。
+        rows = query.order_by(desc(UsageLog.id)).offset(offset).limit(page_size).all()
     items = [r.to_dict() for r in rows]
     _attach_devices(db, items)
-    return {
+    result = {
         "total": total,
         "page": page,
         "page_size": page_size,
         "items": items,
     }
+    if summary is not None:
+        result["summary"] = summary
+    return result
 
 
 def _attach_devices(db: Session, items: list[dict]) -> None:

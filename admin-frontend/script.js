@@ -523,6 +523,9 @@ function anaMemoized(self, key, fn) {
 }
 
 function adminApp() {
+  // 请求句柄不进入 Alpine 深层代理；只有最后一次查询可以更新列表与汇总。
+  let logsRequest = 0;
+  let logsAbort = null;
   return {
     version: "1.2.0",
     theme: "paper",
@@ -1046,9 +1049,10 @@ function adminApp() {
           headers: { "Content-Type": "application/json", ...(options.headers || {}) },
           ...options,
         });
-      } catch {
+      } catch (e) {
         // 网络层失败：浏览器只给英文的 Failed to fetch / network error，
         // 换成人话再抛，避免原始报文直接出现在 toast 里
+        if (e.name === "AbortError") throw e;
         throw new Error("无法连接后端服务，请确认服务已启动、网络正常后重试");
       }
       let data = null;
@@ -1556,31 +1560,46 @@ function adminApp() {
     },
 
     async loadLogs() {
+      const request = ++logsRequest;
+      if (logsAbort) logsAbort.abort();
+      const controller = new AbortController();
+      logsAbort = controller;
       try {
         const params = this._logFilterParams();
         params.set("page", String(this.logsPage));
         params.set("page_size", String(this.logsPageSize));
-        const data = await this.api(`/api/admin/logs?${params}`);
-        this.logs = data.items || [];
-        this.logsTotal = data.total || 0;
+        params.set("include_summary", "true");
+        const data = await this.api(`/api/admin/logs?${params}`, { signal: controller.signal });
+        if (request !== logsRequest) return;
         // 清理后当前页可能已超出末页（返回空列表但 total 正常），收敛页码重查
-        const maxPage = Math.max(1, Math.ceil(this.logsTotal / this.logsPageSize));
+        const maxPage = Math.max(1, Math.ceil((data.total || 0) / this.logsPageSize));
         if (this.logsPage > maxPage) {
           this.logsPage = maxPage;
           return this.loadLogs();
         }
+        let summary = data.summary;
+        // 静态文件已更新但旧后端尚未重启时，仍能显示汇总；新版后端无需此请求。
+        if (!summary) {
+          params.delete("page");
+          params.delete("page_size");
+          params.delete("include_summary");
+          try {
+            summary = await this.api(`/api/admin/logs/summary?${params}`, { signal: controller.signal });
+          } catch (e) {
+            if (e.name === "AbortError") return;
+            summary = {};
+          }
+          if (request !== logsRequest) return;
+        }
+        // 同一次查询结果一起提交，避免先刷空表再渲染、列表与统计筛选不一致。
+        this.logs = data.items || [];
+        this.logsTotal = data.total || 0;
+        this.logSummary = summary;
       } catch (e) {
+        if (request !== logsRequest || e.name === "AbortError") return;
         this.toast(e.message || "加载日志失败", "error");
-      }
-      await this.loadLogSummary();
-    },
-
-    async loadLogSummary() {
-      try {
-        const params = this._logFilterParams();
-        this.logSummary = await this.api(`/api/admin/logs/summary?${params}`);
-      } catch (e) {
-        this.logSummary = {};
+      } finally {
+        if (request === logsRequest) logsAbort = null;
       }
     },
 
