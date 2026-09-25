@@ -20,6 +20,7 @@ from app.services.request_log import (
     record_usage_log,
 )
 from app.services.runtime_config import seed_config_from_env
+from app.services.title_jobs import run_title_job_worker
 from app.services.usage_code import apply_jwt_secret_override, ensure_bootstrap_code
 
 logging.basicConfig(
@@ -43,6 +44,18 @@ async def _log_retention_loop() -> None:
             raise
         except Exception:
             logger.exception("每日日志保留清理任务失败")
+
+
+async def _title_worker_supervisor() -> None:
+    """标题 worker 遇到瞬时数据库/I/O 故障时自动拉起，不让队列永久停摆。"""
+    while True:
+        try:
+            await run_title_job_worker(chat.execute_title_job)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("标题 worker 意外退出，1 秒后恢复")
+            await asyncio.sleep(1)
 
 
 def _current_retention_days() -> int:
@@ -86,6 +99,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("启动时执行日志保留清理失败")
     retention_task = asyncio.create_task(_log_retention_loop())
+    title_worker_task = asyncio.create_task(_title_worker_supervisor())
 
     logger.info(f"Prompts dir: {settings.prompts_dir.resolve()}")
     logger.info(f"Static dir: {settings.static_dir.resolve()}")
@@ -105,6 +119,8 @@ async def lifespan(app: FastAPI):
         )
     yield
     retention_task.cancel()
+    title_worker_task.cancel()
+    await asyncio.gather(retention_task, title_worker_task, return_exceptions=True)
     logger.info("NeoBangX backend shutting down...")
 
 

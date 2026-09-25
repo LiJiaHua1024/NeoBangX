@@ -37,7 +37,7 @@ from app.services.free_access import (
     register_free_use,
 )
 from app.services.llm import LLMService, count_text_tokens
-from app.services.llm_router import DEFAULT_FIRST_TOKEN_TIMEOUT, LLMRouter
+from app.services.llm_router import DEFAULT_FIRST_TOKEN_TIMEOUT, EmptyResponseError, LLMRouter
 from app.services.migration import (
     MIGRATION_ANALYSIS_PROMPT_NAME,
     MIGRATION_MORE_ANALYSIS_PROMPT_NAME,
@@ -62,6 +62,16 @@ from app.services.runtime_config import (
     find_model_entry,
     find_tool_reasoning_rule,
     resolve_llm_settings,
+)
+from app.services.title_jobs import (
+    TitleJobConflictError,
+    TitleJobPermanentError,
+    TitleJobWork,
+    enqueue_title_job,
+    find_title_job,
+    get_title_job_statuses,
+    title_payload_hash,
+    wake_title_job_worker,
 )
 from app.services.usage_code import consume_quota
 from app.services.vocab_check import check_over_words
@@ -613,6 +623,27 @@ class TitleRequest(BaseModel):
     input: str = Field(..., min_length=1, max_length=20000, description="用户输入文本")
     output: str = Field(default="", max_length=40000, description="模型已生成的输出，用于辅助生成更准确的标题")
     model: Optional[str] = Field(None, max_length=128, description="Chores AI 模型 ID，为空则使用后端配置")
+
+
+class TitleJobRequest(BaseModel):
+    job_id: str = Field(
+        ...,
+        min_length=8,
+        max_length=96,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+        description="客户端生成的幂等任务 ID",
+    )
+    history_id: str = Field(..., min_length=1, max_length=96, description="浏览器本地历史记录 ID")
+    tool_id: str = Field(..., max_length=64, description="工具 ID")
+    input: str = Field(..., min_length=1, max_length=20000, description="用户输入文本")
+    output: str = Field(default="", max_length=40000, description="模型已生成的输出摘要")
+    model: Optional[str] = Field(None, max_length=128, description="Chores AI 模型 ID，为空则使用后端配置")
+
+
+class TitleJobStatusRequest(BaseModel):
+    job_ids: list[
+        Annotated[str, StringConstraints(min_length=1, max_length=96)]
+    ] = Field(..., min_length=1, max_length=100, description="待对账的标题任务 ID")
 
 
 TITLE_SYSTEM_PROMPT = (
@@ -1385,38 +1416,39 @@ async def stop_stream(
     return {"status": "not_found", "request_id": req.request_id}
 
 
-@router.post("/title")
-async def generate_title(
-    req: TitleRequest,
-    request: Request,
-    code: Annotated[UsageCode, Depends(get_current_code)],
-):
-    """为一次生成结果生成简短标题。不扣减额度，仅登录用户可用。"""
-    enforce_rate_limit(f"code:{code.id}", "title")
-    tool_name = _resolve_prompt_filename(req.tool_id)
+def _title_user_prompt(tool_id: str, input_text: str, output_text: str) -> str:
+    tool_name = _resolve_prompt_filename(tool_id)
     if not tool_name:
-        raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")
-
-    user_prompt = (
+        raise HTTPException(status_code=404, detail=f"Tool {tool_id} not found")
+    return (
         f"工具：{tool_name}\n\n"
-        f"用户输入：{req.input[:600]}\n\n"
-        f"模型输出摘要：{req.output[:800]}\n\n"
+        f"用户输入：{input_text[:600]}\n\n"
+        f"模型输出摘要：{output_text[:800]}\n\n"
         "请生成标题："
     )
 
-    cfg = await asyncio.to_thread(_load_cfg)
-    _validate_model(cfg, req.model)
-    llm = _build_llm(cfg, model=req.model, chores=True)
-    model_used = req.model or cfg["chores_model"]
-    _mark_usage_context(
-        request,
-        code=code,
-        tool_id="title",
-        tool_name="标题生成",
-        model=model_used,
-    )
-    client_ip, user_agent = get_client_info(request)
-    fp_hash, fp_summary = get_fingerprint_info(request)
+
+def _clean_title(raw: str) -> str:
+    return raw.strip().strip('"').strip("'").split("\n")[0][:40]
+
+
+async def _generate_title_once(
+    *,
+    code: UsageCode,
+    tool_id: str,
+    input_text: str,
+    output_text: str,
+    model: Optional[str],
+    cfg: dict,
+    request_id: str = "",
+    client: tuple[str, str] = ("", ""),
+    fingerprint: str = "",
+    device_summary: str = "",
+) -> str:
+    """执行一次标题 LLM 调用并按现有口径留痕；重试由持久任务 worker 负责。"""
+    user_prompt = _title_user_prompt(tool_id, input_text, output_text)
+    llm = _build_llm(cfg, model=model, chores=True)
+    model_used = model or cfg["chores_model"]
     started = monotonic()
     usage: dict = {}
     log_payload_enabled = bool(cfg.get("log_payload"))
@@ -1429,35 +1461,179 @@ async def generate_title(
             tool_id="title",
             tool_name="标题生成",
             model=model_used,
+            request_id=request_id,
             status=status,
             started=started,
             usage=usage,
-            client=(client_ip, user_agent),
+            client=client,
             log_payload=log_payload_enabled,
             error_message=_final_error_message(llm, status, error_message),
-            input_text=req.input,
+            input_text=input_text,
             rendered_prompt=user_prompt,
             output_text=output_text,
             provider_id=prov_id,
             provider_name=prov_name,
             fallback_attempts=attempts,
-            fingerprint=fp_hash,
-            device_summary=fp_summary,
+            fingerprint=fingerprint,
+            device_summary=device_summary,
         )
 
     try:
         raw = await llm.chat(
             system_prompt=TITLE_SYSTEM_PROMPT,
             user_prompt=user_prompt,
-            model=req.model,
+            model=model,
             max_tokens=64,
             usage_out=usage,
         )
-    except Exception as e:
-        logger.error(f"Title generation error: {e}")
-        await _record(STATUS_ERROR, "", str(e))
-        raise HTTPException(status_code=500, detail="标题生成失败，请稍后重试")
+    except Exception as exc:
+        logger.error("Title generation error: %s", exc)
+        await _record(STATUS_ERROR, "", str(exc))
+        raise
 
-    title = raw.strip().strip('"').strip("'").split("\n")[0][:40]
+    title = _clean_title(raw)
+    if not title:
+        exc = EmptyResponseError("标题模型未返回可用标题")
+        await _record(STATUS_ERROR, raw, str(exc))
+        raise exc
     await _record(STATUS_SUCCESS, raw)
+    return title
+
+
+async def execute_title_job(work: TitleJobWork) -> str:
+    """持久任务 worker 的执行入口。"""
+    with SessionLocal() as db:
+        code = db.get(UsageCode, work.code_id)
+        if code is None:
+            raise TitleJobPermanentError("标题任务所属使用码不存在")
+        code_snapshot = UsageCode(
+            id=code.id,
+            code=code.code,
+            quota=code.quota,
+            used_count=code.used_count,
+            is_enabled=code.is_enabled,
+            note=code.note,
+            created_at=code.created_at,
+        )
+    try:
+        cfg = await asyncio.to_thread(_load_cfg)
+        _validate_model(cfg, work.model or None)
+        return await _generate_title_once(
+            code=code_snapshot,
+            tool_id=work.tool_id,
+            input_text=work.input_text,
+            output_text=work.output_text,
+            model=work.model or None,
+            cfg=cfg,
+            request_id=work.client_job_id,
+            client=(work.ip, work.user_agent),
+            fingerprint=work.fingerprint,
+            device_summary=work.device_summary,
+        )
+    except HTTPException as exc:
+        raise TitleJobPermanentError(str(exc.detail)) from exc
+
+
+@router.post("/title-jobs", status_code=202)
+async def create_title_job(
+    req: TitleJobRequest,
+    request: Request,
+    code: Annotated[UsageCode, Depends(get_current_code)],
+):
+    """幂等创建持久标题任务。数据库接受后，生成不再依赖浏览器存活。"""
+    model = req.model or ""
+    payload_hash = title_payload_hash(
+        history_id=req.history_id,
+        tool_id=req.tool_id,
+        input_text=req.input,
+        output_text=req.output,
+        model=model,
+    )
+    try:
+        existing = await asyncio.to_thread(
+            find_title_job,
+            code_id=code.id,
+            client_job_id=req.job_id,
+            payload_hash=payload_hash,
+        )
+    except TitleJobConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if existing is not None:
+        return {**existing, "created": False}
+
+    # 限流与当前配置只约束新任务；已接受任务的幂等重投必须总能拿回原状态。
+    enforce_rate_limit(f"code:{code.id}", "title")
+    if not _resolve_prompt_filename(req.tool_id):
+        raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")
+    cfg = await asyncio.to_thread(_load_cfg)
+    _validate_model(cfg, req.model)
+
+    client_ip, user_agent = get_client_info(request)
+    fingerprint, device_summary = get_fingerprint_info(request)
+    try:
+        status, created = await asyncio.to_thread(
+            enqueue_title_job,
+            code_id=code.id,
+            client_job_id=req.job_id,
+            history_id=req.history_id,
+            tool_id=req.tool_id,
+            input_text=req.input,
+            output_text=req.output,
+            model=model,
+            ip=client_ip,
+            user_agent=user_agent,
+            fingerprint=fingerprint,
+            device_summary=device_summary,
+        )
+    except TitleJobConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    wake_title_job_worker()
+    return {**status, "created": created}
+
+
+@router.post("/title-jobs/status")
+async def title_job_status(
+    req: TitleJobStatusRequest,
+    _code: Annotated[UsageCode, Depends(get_current_code)],
+):
+    """批量对账当前使用码下的标题任务。"""
+    jobs = await asyncio.to_thread(get_title_job_statuses, _code.id, req.job_ids)
+    return {"jobs": jobs}
+
+
+@router.post("/title")
+async def generate_title(
+    req: TitleRequest,
+    request: Request,
+    code: Annotated[UsageCode, Depends(get_current_code)],
+):
+    """兼容旧客户端的同步标题接口；新前端使用持久任务接口。"""
+    enforce_rate_limit(f"code:{code.id}", "title")
+    cfg = await asyncio.to_thread(_load_cfg)
+    _validate_model(cfg, req.model)
+    _mark_usage_context(
+        request,
+        code=code,
+        tool_id="title",
+        tool_name="标题生成",
+        model=req.model or cfg["chores_model"],
+    )
+    client_ip, user_agent = get_client_info(request)
+    fingerprint, device_summary = get_fingerprint_info(request)
+    try:
+        title = await _generate_title_once(
+            code=code,
+            tool_id=req.tool_id,
+            input_text=req.input,
+            output_text=req.output,
+            model=req.model,
+            cfg=cfg,
+            client=(client_ip, user_agent),
+            fingerprint=fingerprint,
+            device_summary=device_summary,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="标题生成失败，请稍后重试") from exc
     return {"title": title}

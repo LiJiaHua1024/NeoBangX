@@ -270,6 +270,8 @@ class LLMRouter:
             try:
                 response = await acompletion(**kwargs)
                 content = response.choices[0].message.content or ""
+                if not str(content).strip():
+                    raise EmptyResponseError(f"{self._provider_label(provider)} 返回空响应")
                 if usage_out is not None:
                     extract_usage(getattr(response, "usage", None), usage_out)
                     estimate_missing_usage(request_messages, content, kwargs["model"], usage_out)

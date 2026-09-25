@@ -376,6 +376,19 @@ def test_chat_falls_back_on_permission_denied(monkeypatch):
     assert router.attempts == 2
 
 
+def test_chat_falls_back_on_empty_non_stream_response(monkeypatch):
+    """非流式空正文必须切备用 Provider，不能把空字符串当标题成功。"""
+    fake = _install(monkeypatch, [_NonStreamResponse(""), _NonStreamResponse("备用标题")])
+    router = _router(count=2)
+
+    result = anyio.run(lambda: router.chat(user_prompt="标题", model="test-model"))
+
+    assert result == "备用标题"
+    assert len(fake.calls) == 2
+    assert router.provider_used["id"] == "prov_2"
+    assert router.attempts == 2
+
+
 def test_empty_response_error_is_retryable():
     """空响应异常本身必须被判为可切换，否则等于静默交付空答案。"""
     assert is_retryable(EmptyResponseError("空响应")) is True

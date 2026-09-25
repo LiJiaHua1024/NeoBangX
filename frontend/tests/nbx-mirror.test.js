@@ -70,6 +70,27 @@ test("sanitizeIndex：verCount 有则透传（位置固定在 hasPaper 与 updat
   assert.strictEqual(M.sanitizeIndex({ id: "h1", verCount: "x" }).verCount, 1, "非法值退化为 1");
 });
 
+test("sanitizeIndex：标题任务字段有则透传，老数据不补默认字段", () => {
+  const oldIdx = M.sanitizeIndex({ id: "h-old", createdAt: 1 });
+  assert.strictEqual(oldIdx.titleJobId, undefined);
+  assert.strictEqual(oldIdx.titlePending, undefined);
+
+  const jobId = "t".repeat(96);
+  const idx = M.sanitizeIndex({
+    id: "h-new", createdAt: 2, titleJobId: jobId, titlePending: true,
+    titleContentKey: "12345678", titlePayloadHash: "a".repeat(64),
+  });
+  assert.strictEqual(idx.titleJobId, jobId, "job ID 上限必须与后端一致，不能截成 64");
+  assert.strictEqual(idx.titlePending, true);
+  assert.strictEqual(idx.titleContentKey, "12345678");
+  assert.strictEqual(idx.titlePayloadHash, "a".repeat(64));
+  assert.deepStrictEqual(M.sanitizeIndex(idx), idx, "标题任务字段归一必须幂等");
+
+  const noJob = M.sanitizeIndex({ id: "h-bad", titlePending: true, titleContentKey: "12345678" });
+  assert.strictEqual(noJob.titlePending, undefined, "没有 job ID 时不能留下永久 Shimmer 状态");
+  assert.strictEqual(noJob.titleJobId, undefined);
+});
+
 test("sanitizeBody：versions 逐项归一，键序固定，activeVersionId 一起走", () => {
   const body = M.sanitizeBody({
     input: "i", output: "o2", fileName: "",

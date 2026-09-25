@@ -2370,6 +2370,21 @@ mark, .vp-hl {
 .side-card.clickable:hover { box-shadow: 0 8px 22px -10px rgba(0, 0, 0, 0.3); }
 .side-card.clickable:active { transform: scale(0.98); transition-duration: 0.08s; }
 
+.title-shimmer {
+  color: var(--text-dim);
+  background-image: linear-gradient(100deg, var(--text-dim) 36%, var(--text) 50%, var(--text-dim) 64%);
+  background-size: 220% 100%;
+  background-position: 110% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: title-shimmer 1.55s ease-in-out infinite;
+}
+@keyframes title-shimmer {
+  from { background-position: 110% 0; }
+  to { background-position: -10% 0; }
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

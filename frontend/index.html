@@ -2506,10 +2506,13 @@
                             @click.stop="removeHistory(item.id)" title="删除这条记录"
                             x-html="icon('trash','w-3.5 h-3.5')"></button>
                   </div>
-                  <p class="mt-1.5 leading-snug" style="font-size:.82rem">
+                  <p class="mt-1.5 leading-snug" style="font-size:.82rem"
+                     :aria-busy="item.titlePending && isAuthenticated && !_titlePollBlocked ? 'true' : 'false'">
                     <span x-show="item.title" class="font-medium" x-text="item.title"></span>
                     <!-- 索引项只带 inputHead（正文摘要），列表不读正文 -->
-                    <span x-show="!item.title" x-text="item.inputHead || excerpt(item.input)"></span>
+                    <span x-show="!item.title"
+                          :class="{ 'title-shimmer': item.titlePending && isAuthenticated && !_titlePollBlocked }"
+                          x-text="item.inputHead || excerpt(item.input)"></span>
                   </p>
                   <div class="flex items-center gap-1.5 mt-1.5 text-[11px] text-faint">
                     <span x-text="fmtTime(item.createdAt)"></span>

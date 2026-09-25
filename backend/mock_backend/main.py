@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import sys
@@ -46,6 +47,9 @@ DEFAULT_PDF_MODE = "ok"
 
 # 进行中的 SSE 流：request_id -> stop event（真实后端同样是进程内协调）
 _STREAMS: dict[str, asyncio.Event] = {}
+
+# 标题任务：(Bearer, job_id) -> 状态。假后端只模拟接口语义，不做持久化。
+_TITLE_JOBS: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 # ---------------------------------------------------------------- 请求模型
@@ -507,6 +511,108 @@ def create_app(
         text = str(body.get("input") or "").strip()
         head = text.replace("\n", " ")[:15] or "未命名"
         return {"title": head}
+
+    @app.post("/api/chat/title-jobs", status_code=202)
+    async def create_title_job(request: Request) -> Any:
+        owner = _bearer(request)
+        if not owner:
+            raise HTTPException(status_code=401, detail="请先输入使用码")
+        body = await _json_body(request)
+        job_id = str(body.get("job_id") or "").strip()
+        history_id = str(body.get("history_id") or "").strip()
+        tool_id = str(body.get("tool_id") or "").strip()
+        input_text = str(body.get("input") or "")
+        output_text = str(body.get("output") or "")
+        model = str(body.get("model") or "")
+        if not job_id or not history_id or not tool_id or not input_text.strip():
+            raise HTTPException(status_code=422, detail="标题任务参数不完整")
+
+        key = (owner, job_id)
+        signature = json.dumps(
+            [history_id, tool_id, input_text, output_text, model],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        payload_hash = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+        existing = _TITLE_JOBS.get(key)
+        if existing is not None:
+            if existing["signature"] != signature:
+                raise HTTPException(status_code=409, detail="同一标题任务 ID 不能提交不同内容")
+            return {
+                "job_id": job_id,
+                "history_id": history_id,
+                "status": existing["status"],
+                "title": existing.get("title", ""),
+                "payload_hash": existing.get("payload_hash", ""),
+                "created": False,
+            }
+        if tool_id not in catalog.PROMPT_FILENAMES:
+            raise HTTPException(status_code=404, detail=f"Tool {tool_id} not found")
+
+        head = input_text.strip().replace("\n", " ")[:15] or "未命名"
+        job = {
+            "signature": signature,
+            "job_id": job_id,
+            "history_id": history_id,
+            "status": "pending",
+            "title": "",
+            "payload_hash": payload_hash,
+        }
+        _TITLE_JOBS[key] = job
+
+        async def _complete() -> None:
+            await asyncio.sleep(0.35)
+            current = _TITLE_JOBS.get(key)
+            if current is not None and current.get("status") == "pending":
+                current["status"] = "succeeded"
+                current["title"] = head
+
+        asyncio.create_task(_complete())
+        STATE.record(
+            ts=time.time(), method="POST", path="/api/chat/title-jobs",
+            authorization=True, fingerprint=_fingerprint(request),
+            body={"job_id": job_id, "history_id": history_id, "tool_id": tool_id},
+            summary="title job queued",
+        )
+        return {
+            "job_id": job_id,
+            "history_id": history_id,
+            "status": "pending",
+            "title": "",
+            "payload_hash": payload_hash,
+            "created": True,
+        }
+
+    @app.post("/api/chat/title-jobs/status")
+    async def title_job_status(request: Request) -> Any:
+        owner = _bearer(request)
+        if not owner:
+            raise HTTPException(status_code=401, detail="请先输入使用码")
+        body = await _json_body(request)
+        ids = body.get("job_ids")
+        if not isinstance(ids, list):
+            raise HTTPException(status_code=422, detail="job_ids 必须是数组")
+        jobs = []
+        for raw_id in ids[:100]:
+            job_id = str(raw_id or "")
+            job = _TITLE_JOBS.get((owner, job_id))
+            if job is None:
+                jobs.append({
+                    "job_id": job_id,
+                    "history_id": "",
+                    "status": "missing",
+                    "title": "",
+                    "payload_hash": "",
+                })
+            else:
+                jobs.append({
+                    "job_id": job_id,
+                    "history_id": job["history_id"],
+                    "status": job["status"],
+                    "title": job.get("title", ""),
+                    "payload_hash": job.get("payload_hash", ""),
+                })
+        return {"jobs": jobs}
 
     # ---- 流式生成 ----
     @app.post("/api/chat/stream")

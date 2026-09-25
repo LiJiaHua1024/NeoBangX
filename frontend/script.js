@@ -189,6 +189,7 @@ function copyRichTextToClipboard(html, plain) {
 const LS = {
   theme: "nbx_theme",
   history: "nbx_history",
+  titleJobs: "nbx_title_jobs",
   favorites: "nbx_favorites",
   ui: "nbx_ui",
   draft: "nbx_draft",
@@ -1116,7 +1117,11 @@ function storageFullWarn(evicted) {
    停顿随之消失），配额不足时也只牵连单条。旧格式（整个数组含正文）在启动时一次性
    拆分，拆分失败则本次会话退回整份写入，旧数据原样保留。 */
 const HISTORY_BODY_PREFIX = "nbx_h:";
-const HISTORY_INDEX_VERSION = 3;
+const HISTORY_INDEX_VERSION = 4;
+const TITLE_JOB_SUBMIT_ATTEMPTS = 3;
+const TITLE_JOB_SUBMIT_TIMEOUT_MS = 4000;
+const TITLE_JOB_POLL_MS = 1000;
+const TITLE_JOB_POLL_HIDDEN_MS = 5000;
 // 索引里保留的输入摘要长度：够卡片在无标题时展示（模板用 excerpt 的默认 46 字）
 const HISTORY_HEAD_CHARS = 60;
 // 删除墓碑（线路镜像用）：合并是集合求并，没有墓碑的话，一端删掉的记录会被另一端
@@ -1182,6 +1187,10 @@ function historyIndexOf(item) {
     toolName: item.toolName,
     icon: item.icon,
     title: item.title || "",
+    titleJobId: item.titleJobId || "",
+    titlePending: !!item.titlePending,
+    titleContentKey: item.titleContentKey || "",
+    titlePayloadHash: item.titlePayloadHash || "",
     error: item.error || "",
     partial: !!item.partial,
     createdAt: item.createdAt,
@@ -2216,6 +2225,10 @@ function nbx() {
     history: [],
     // 旧格式迁移失败时置真：本次会话退回整份历史写入，不破坏尚未拆分的旧数据
     _historyLegacy: false,
+    _titlePollTimer: null,
+    _titlePollInFlight: false,
+    _titlePollFailures: 0,
+    _titlePollBlocked: false,
     favorites: [],
     favModal: false,
     editingFav: { id: null, title: "", content: "" },
@@ -3525,8 +3538,7 @@ function nbx() {
             partial: false,
             createdAt: Date.now(),
           };
-          this._unshiftHistory(item);
-          this.generateTitle(item);
+          this.commitHistoryWithTitle(item);
         }
       } catch (e) {
         if (e && e.name === "AbortError") {
@@ -3598,6 +3610,7 @@ function nbx() {
           // 本页开着但没被看着时，对端推来的偏好只落在 nbx_prefs 上，页面收不到通知；
           // 回到前台对账一次。LWW 保证本页更晚的选择不会被对端旧值顶掉。
           this._mirrorApplyPrefs();
+          this.resumeTitleJobs();
         }
       });
 
@@ -3765,6 +3778,8 @@ function nbx() {
       this.auth.user = user;
       this.isAuthenticated = !!token && !!user;
       this.authUser = user;
+      if (this.isAuthenticated) this.resumeTitleJobs();
+      else this.stopTitlePolling();
       if (user && user.code) {
         const c = user.code;
         const segs = c.split("-");
@@ -6316,7 +6331,6 @@ function nbx() {
             : `${failed.length}/${state.results.length} 张卡片生成失败`)
           : "";
         const item = this.pushMigrationHistory(partial, errText);
-        if (item && this.migrationHasOutput) this.generateTitle(item);
         if (!partial) this.verifyAuth();
         if (partial) this.toast("部分迁移卡片未完成，请检查后重试", "warn");
         else this.toast(`已完成 ${state.results.length} 张迁移卡片`);
@@ -6732,7 +6746,7 @@ function nbx() {
       };
       // 失败走统一入口：同样是「同输入连续失败合并一条」，整批失败时输入也不会丢
       if (error) return this.pushFailedHistory(error, fields);
-      return this._unshiftHistory({
+      const item = {
         id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
         toolId: this.currentTool.id,
         toolName: this.currentTool.name,
@@ -6740,7 +6754,9 @@ function nbx() {
         title: "",
         createdAt: Date.now(),
         ...fields,
-      });
+      };
+      if (this.migrationHasOutput) this.generateTitle(item);
+      return this._unshiftHistory(item);
     },
 
     /* ============ 翻译（工具 33）：原文译文对照 ============ */
@@ -7662,6 +7678,7 @@ function nbx() {
       const v = NbxVersions.switchTo(item, delta);
       if (!v) return null;
       this._persistHistoryItem(item);
+      if (!item.title) this.generateTitle(item);
       this._showVersion(item, v);
       return v;
     },
@@ -7839,7 +7856,6 @@ function nbx() {
           } else {
             const item = this.pushHistory(state === "stopped");
             this.activeHistoryId = item ? item.id : null;
-            this.generateTitle(item);
           }
         }
         if (state === "stopped") this.toast("已停止生成", "warn");
@@ -8017,7 +8033,6 @@ function nbx() {
               this._persistHistoryItem(item);
             }
             if (this.visualPaper) this.visualPaper.historyId = item.id;
-            this.generateTitle(item);
           }
         }
         if (state === "stopped") this.toast("已停止生成", "warn");
@@ -9422,6 +9437,7 @@ function nbx() {
         if (!victim || victim.id === keepId) continue;
         this.history.splice(i, 1);
         lsRemove(HISTORY_BODY_PREFIX + victim.id);
+        if (victim.titleJobId) this._removeTitleJournal(victim.titleJobId);
         if (write()) return true;
       }
       return write();
@@ -9505,13 +9521,16 @@ function nbx() {
       this.history.unshift(item);
       while (this.history.length > HISTORY_LIMIT) {
         const dropped = this.history.pop();
-        if (dropped) lsRemove(HISTORY_BODY_PREFIX + dropped.id);
+        if (dropped) {
+          lsRemove(HISTORY_BODY_PREFIX + dropped.id);
+          if (dropped.titleJobId) this._removeTitleJournal(dropped.titleJobId);
+        }
       }
       this._persistHistoryItem(item);
       return item;
     },
     pushHistory(partial) {
-      return this._unshiftHistory({
+      return this.commitHistoryWithTitle({
         id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
         toolId: this.currentTool.id,
         toolName: this.currentTool.name,
@@ -9567,33 +9586,377 @@ function nbx() {
       });
     },
 
-    async generateTitle(item) {
-      if (!item || !item.input || !this.isAuthenticated) return;
+    _titleItemTracked(item) {
+      return !!(item && item.id && this.history.some((entry) => entry.id === item.id));
+    },
+    _persistTitleMeta(item) {
+      if (!this._titleItemTracked(item)) return;
+      item.updatedAt = Date.now();
+      this._persistHistoryIndex(item.id);
+      this._mirrorChanged("h", item.id, false, item.updatedAt);
+    },
+    _newTitleJobId() {
+      return `title_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    },
+    _titleOwnerKey() {
+      const user = this.authUser || {};
+      return String(user.id || user.code || "");
+    },
+    _titleContentKey(item) {
+      const source = [
+        String(item.toolId || ""),
+        String(item.input || "").slice(0, 1200),
+        String(item.output || "").slice(0, 1200),
+      ].join("\u0000");
+      let hash = 2166136261;
+      const bytes = typeof TextEncoder !== "undefined"
+        ? new TextEncoder().encode(source)
+        : Array.from(source, (ch) => ch.charCodeAt(0) & 255);
+      for (const byte of bytes) {
+        hash ^= byte;
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16).padStart(8, "0");
+    },
+    _readTitleJournal() {
+      const journal = lsGet(LS.titleJobs, {});
+      return journal && typeof journal === "object" && !Array.isArray(journal) ? journal : {};
+    },
+    _writeTitleJournal(jobId, item, contentKey) {
+      const journal = this._readTitleJournal();
+      journal[jobId] = {
+        jobId,
+        historyId: item.id,
+        toolId: item.toolId,
+        input: String(item.input || "").slice(0, 1200),
+        output: String(item.output || "").slice(0, 1200),
+        contentKey,
+        ownerKey: this._titleOwnerKey(),
+        createdAt: Date.now(),
+      };
+      const keys = Object.keys(journal);
+      if (keys.length > 200) {
+        keys
+          .sort((a, b) => Number(journal[a]?.createdAt || 0) - Number(journal[b]?.createdAt || 0))
+          .slice(0, keys.length - 200)
+          .forEach((key) => { delete journal[key]; });
+      }
+      if (!lsWrite(LS.titleJobs, JSON.stringify(journal))) {
+        storageFullWarn(false);
+        return false;
+      }
+      return true;
+    },
+    _removeTitleJournal(jobId) {
+      if (!jobId) return;
+      const journal = this._readTitleJournal();
+      if (!journal[jobId]) return;
+      delete journal[jobId];
+      lsWrite(LS.titleJobs, JSON.stringify(journal));
+    },
+    _titleJournalEntry(jobId) {
+      const entry = this._readTitleJournal()[jobId];
+      return entry && typeof entry === "object" ? entry : null;
+    },
+    async _titleFetch(url, options = {}, timeoutMs = TITLE_JOB_SUBMIT_TIMEOUT_MS) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
-        const res = await fetch("/api/chat/title", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...this.authHeaders(),
+        return await fetch(url, { ...options, signal: ctrl.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    _titleRetryStatus(status) {
+      return status === 408 || status === 425 || status === 429 || status >= 500;
+    },
+    async _titleDelay(ms) {
+      if (ms > 0) await new Promise((resolve) => setTimeout(resolve, ms));
+    },
+    async _submitTitleJob(item, jobId, requestToken = this.auth.token) {
+      const body = JSON.stringify({
+        job_id: jobId,
+        history_id: item.id,
+        tool_id: item.toolId,
+        input: String(item.input || "").slice(0, 1200),
+        output: String(item.output || "").slice(0, 1200),
+      });
+      for (let attempt = 1; attempt <= TITLE_JOB_SUBMIT_ATTEMPTS; attempt += 1) {
+        if (requestToken !== this.auth.token) {
+          return { ok: false, retryable: false, stale: true };
+        }
+        let res;
+        try {
+          res = await this._titleFetch("/api/chat/title-jobs", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...this.authHeaders(),
+            },
+            body,
+            keepalive: true,
+          });
+        } catch {
+          if (requestToken !== this.auth.token) {
+            return { ok: false, retryable: false, stale: true };
+          }
+          if (attempt < TITLE_JOB_SUBMIT_ATTEMPTS) {
+            await this._titleDelay(250 * attempt);
+            continue;
+          }
+          return { ok: false, retryable: true, stale: false };
+        }
+        if (requestToken !== this.auth.token) {
+          return { ok: false, retryable: false, stale: true };
+        }
+        if (res.ok) {
+          let data = null;
+          try { data = await res.json(); } catch {}
+          if (data && data.status === "failed") {
+            return { ok: false, retryable: false, stale: false, title: "" };
+          }
+          return {
+            ok: true,
+            retryable: false,
+            stale: false,
+            title: data && data.status === "succeeded" ? String(data.title || "") : "",
+            payloadHash: data && data.payload_hash ? String(data.payload_hash) : "",
+          };
+        }
+        if (this._titleRetryStatus(res.status) && attempt < TITLE_JOB_SUBMIT_ATTEMPTS) {
+          await this._titleDelay(250 * attempt);
+          continue;
+        }
+        return {
+          ok: false,
+          retryable: this._titleRetryStatus(res.status),
+          stale: res.status === 401 || res.status === 403,
+        };
+      }
+      return { ok: false, retryable: true, stale: false };
+    },
+    _clearTitleJob(item) {
+      if (!item) return;
+      this._removeTitleJournal(item.titleJobId);
+      item.titlePending = false;
+      item.titleJobId = "";
+      item.titleContentKey = "";
+      item.titlePayloadHash = "";
+      this._persistTitleMeta(item);
+    },
+    _applyTitleJobResult(item, title) {
+      if (!item || !title) return;
+      if (!item.title) item.title = String(title);
+      this._removeTitleJournal(item.titleJobId);
+      item.titlePending = false;
+      item.titleJobId = "";
+      item.titleContentKey = "";
+      item.titlePayloadHash = "";
+      item.updatedAt = Date.now();
+      this._persistHistoryIndex(item.id);
+      this._mirrorChanged("h", item.id, false, item.updatedAt);
+    },
+    async generateTitle(item) {
+      if (!item || item.title || !this.isAuthenticated) return false;
+      if (item.input === undefined) this._hydrateHistory(item);
+      if (!String(item.input || "").trim()) return false;
+      const contentKey = this._titleContentKey(item);
+      if (item.titleJobId) {
+        const journal = this._titleJournalEntry(item.titleJobId);
+        if (!journal || journal.historyId !== item.id || journal.ownerKey !== this._titleOwnerKey()) {
+          if (item.titlePending) this._clearTitleJob(item);
+          return false;
+        }
+      }
+      if (item.titlePending && item.titleJobId && item.titleContentKey === contentKey) {
+        this._titlePollBlocked = false;
+        this.scheduleTitlePoll(true);
+        return true;
+      }
+
+      const tracked = this._titleItemTracked(item);
+      const jobId = this._newTitleJobId();
+      if (item.titleJobId) this._removeTitleJournal(item.titleJobId);
+      item.titleJobId = jobId;
+      item.titlePending = true;
+      item.titleContentKey = contentKey;
+      item.titlePayloadHash = "";
+      this._titlePollBlocked = false;
+      // 本地任务日志先于网络请求落盘：即使关页时 POST 尚未送达，下次打开仍能幂等补交。
+      if (!this._writeTitleJournal(jobId, item, contentKey)) {
+        item.titleJobId = "";
+        item.titlePending = false;
+        item.titleContentKey = "";
+        if (tracked) this._persistTitleMeta(item);
+        return false;
+      }
+      if (tracked) this._persistTitleMeta(item);
+
+      const requestToken = this.auth.token;
+      const result = await this._submitTitleJob(item, jobId, requestToken);
+      if (item.titleJobId !== jobId) return false;
+      if (!this._titleItemTracked(item)) {
+        this._removeTitleJournal(jobId);
+        return false;
+      }
+      if (!result.ok) {
+        this._clearTitleJob(item);
+        return false;
+      }
+      if (result.payloadHash) item.titlePayloadHash = result.payloadHash;
+      if (result.title) item.title = result.title;
+      if (item.title) {
+        this._clearTitleJob(item);
+        return false;
+      }
+      if (tracked) this._persistTitleMeta(item);
+      this.scheduleTitlePoll(true);
+      return true;
+    },
+    commitHistoryWithTitle(item) {
+      // generateTitle 在第一次 await 前已写好 pending + 本地任务日志；正文历史不等待网络。
+      this.generateTitle(item);
+      return this._unshiftHistory(item);
+    },
+    stopTitlePolling() {
+      if (this._titlePollTimer) {
+        clearTimeout(this._titlePollTimer);
+        this._titlePollTimer = null;
+      }
+    },
+    scheduleTitlePoll(immediate = false) {
+      this.stopTitlePolling();
+      if (!this.isAuthenticated || this._titlePollBlocked) return;
+      const hasPending = this.history.some((item) => item.titlePending && item.titleJobId);
+      if (!hasPending) return;
+      const hidden = typeof document !== "undefined" && !!document.hidden;
+      const base = immediate ? 0 : (hidden ? TITLE_JOB_POLL_HIDDEN_MS : TITLE_JOB_POLL_MS);
+      const backoff = Math.min(30000, base * Math.pow(2, this._titlePollFailures || 0));
+      this._titlePollTimer = setTimeout(() => {
+        this._titlePollTimer = null;
+        this.reconcileTitleJobs();
+      }, backoff);
+    },
+    resumeTitleJobs() {
+      if (!this.isAuthenticated) {
+        this.stopTitlePolling();
+        return;
+      }
+      this._titlePollBlocked = false;
+      this._titlePollFailures = 0;
+      this.scheduleTitlePoll(true);
+    },
+    async _resubmitMissingTitleJob(item, jobId) {
+      if (item.titleJobId !== jobId) return;
+      if (item.title) {
+        this._clearTitleJob(item);
+        return;
+      }
+      if (item.input === undefined) this._hydrateHistory(item);
+      const entry = this._titleJournalEntry(jobId);
+      const ownerKey = this._titleOwnerKey();
+      if (!entry || entry.historyId !== item.id || entry.ownerKey !== ownerKey) {
+        // 导入/镜像里的 pending 字段不是本机任务凭据，绝不据此触发外部 LLM 调用。
+        this._clearTitleJob(item);
+        return;
+      }
+      if (!String(item.input || "").trim() || !this.isAuthenticated) {
+        this._clearTitleJob(item);
+        return;
+      }
+      const contentKey = this._titleContentKey(item);
+      if (contentKey !== item.titleContentKey) {
+        this.generateTitle(item);
+        return;
+      }
+
+      const requestToken = this.auth.token;
+      const result = await this._submitTitleJob(item, jobId, requestToken);
+      if (item.titleJobId !== jobId) return;
+      if (result.stale) {
+        this._clearTitleJob(item);
+        return;
+      }
+      if (result.ok) {
+        if (result.payloadHash) item.titlePayloadHash = result.payloadHash;
+        if (result.title) this._applyTitleJobResult(item, result.title);
+        else this.scheduleTitlePoll(true);
+      } else if (result.retryable) {
+        this._titlePollFailures = Math.min(5, (this._titlePollFailures || 0) + 1);
+      } else {
+        this._clearTitleJob(item);
+      }
+    },
+    async reconcileTitleJobs() {
+      if (this._titlePollInFlight) return;
+      if (!this.isAuthenticated || this._titlePollBlocked) return;
+      const pending = this.history.filter((item) => item.titlePending && item.titleJobId);
+      if (!pending.length) return;
+
+      const requestToken = this.auth.token;
+      const requestOwner = this._titleOwnerKey();
+      this._titlePollInFlight = true;
+      this.stopTitlePolling();
+      try {
+        const res = await this._titleFetch(
+          "/api/chat/title-jobs/status",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...this.authHeaders(),
+            },
+            body: JSON.stringify({ job_ids: pending.map((item) => item.titleJobId) }),
           },
-          body: JSON.stringify({
-            tool_id: item.toolId,
-            input: item.input.slice(0, 1200),
-            output: item.output.slice(0, 1200),
-          }),
-        });
-        if (!res.ok) return;
+          Math.max(TITLE_JOB_SUBMIT_TIMEOUT_MS, 8000)
+        );
+        if (res.status === 401 || res.status === 403) {
+          this._titlePollBlocked = true;
+          this.stopTitlePolling();
+          return;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (data.title) {
-          item.title = data.title;
-          // 标题只存在索引里，写索引即可（迁移失败的会话内部仍写整份数组）
-          // 标题也是一次真实改动，刷新时间戳，否则镜像合并时会被对端的旧版本盖掉
-          item.updatedAt = Date.now();
-          this._persistHistoryIndex(item.id);
-          this._mirrorChanged("h", item.id, false, item.updatedAt);
+        if (requestToken !== this.auth.token || requestOwner !== this._titleOwnerKey()) return;
+        const jobs = Array.isArray(data && data.jobs) ? data.jobs : [];
+        this._titlePollFailures = 0;
+        for (const job of jobs) {
+          const item = this.history.find((entry) => entry.id === job.history_id)
+            || this.history.find((entry) => entry.titleJobId === job.job_id);
+          if (!item || item.titleJobId !== job.job_id) continue;
+          if (item.title) {
+            this._clearTitleJob(item);
+            continue;
+          }
+          const journal = this._titleJournalEntry(job.job_id);
+          if (!journal || journal.historyId !== item.id || journal.ownerKey !== requestOwner) {
+            this._clearTitleJob(item);
+            continue;
+          }
+          const currentContentKey = item.input !== undefined
+            ? this._titleContentKey(item)
+            : item.titleContentKey;
+          const contentChanged = currentContentKey && item.titleContentKey
+            && currentContentKey !== item.titleContentKey;
+          const payloadChanged = job.payload_hash && item.titlePayloadHash
+            && job.payload_hash !== item.titlePayloadHash;
+          if (contentChanged || payloadChanged) {
+            this.generateTitle(item);
+            continue;
+          }
+          if (job.status === "succeeded" && job.title) {
+            this._applyTitleJobResult(item, job.title);
+          } else if (job.status === "failed") {
+            this._clearTitleJob(item);
+          } else if (job.status === "missing") {
+            await this._resubmitMissingTitleJob(item, job.job_id);
+          }
         }
       } catch {
-        // 标题生成失败静默处理
+        this._titlePollFailures = Math.min(5, (this._titlePollFailures || 0) + 1);
+      } finally {
+        this._titlePollInFlight = false;
+        this.scheduleTitlePoll(false);
       }
     },
     async openHistory(item) {
@@ -9610,6 +9973,7 @@ function nbx() {
       }
       // 列表里持有的是索引项，正文在打开时才读回来（本地同步读，开销可忽略）
       this._hydrateHistory(item);
+      if (!item.title && item.titleJobId) this.generateTitle(item);
       if (item.migration || item.hasMigration) {
         this.openMigrationHistory(item);
         return;
@@ -9895,6 +10259,8 @@ function nbx() {
       });
     },
     removeHistory(id) {
+      const removed = this.history.find((h) => h.id === id);
+      if (removed && removed.titleJobId) this._removeTitleJournal(removed.titleJobId);
       this.history = this.history.filter((h) => h.id !== id);
       // 删掉的正是屏幕上这条结果对应的记录：续写/重试改为收尾时新建，别再指向已删的 id
       if (this.activeHistoryId === id) this.activeHistoryId = null;
@@ -9913,7 +10279,10 @@ function nbx() {
         danger: true,
       });
       if (!ok) return;
-      for (const item of this.history) lsRemove(HISTORY_BODY_PREFIX + item.id);
+      for (const item of this.history) {
+        lsRemove(HISTORY_BODY_PREFIX + item.id);
+        if (item.titleJobId) this._removeTitleJournal(item.titleJobId);
+      }
       this._addTombstones("history", this.history.map((h) => h.id));
       this.history = [];
       lsWrite(LS.history, "[]");

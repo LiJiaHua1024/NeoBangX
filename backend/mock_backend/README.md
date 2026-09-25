@@ -139,7 +139,7 @@ http://127.0.0.1:8000/__mock__/
 | `migration-analyze` / `migration-more` | 错因分析返回 3 条 / 继续分析再追加 3 条 |
 | `migration-quota-short` | 错因数超过额度 → 迁移批次 403 |
 | `vocab` | 超标词替换流（超标词排查本身走真实 3500 词表，见 `/api/chat/vocab/check`） |
-| `title` | 标题生成 |
+| `title` | 标题生成正文场景；`/api/chat/title-jobs` 另会在内存中异步完成标题，便于查看 Shimmer 与刷新对账 |
 
 ### PDF 解析
 

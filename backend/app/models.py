@@ -305,6 +305,48 @@ class LlmModelProvider(Base):
     provider_model_id: Mapped[str] = mapped_column(String(256), nullable=False, default="")
 
 
+class TitleJob(Base):
+    """持久化标题任务。
+
+    标题生成由后端 worker 独立推进；浏览器只负责幂等入队与查询结果。
+    终态会立即清空输入/输出正文，只保留短期状态元数据供页面恢复对账。
+    """
+
+    __tablename__ = "title_jobs"
+    __table_args__ = (
+        UniqueConstraint("code_id", "client_job_id", name="uq_title_jobs_code_client"),
+        Index("ix_title_jobs_status_next_attempt", "status", "next_attempt_at"),
+        Index("ix_title_jobs_code_history", "code_id", "history_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code_id: Mapped[int] = mapped_column(
+        ForeignKey("usage_codes.id", ondelete="CASCADE"), nullable=False
+    )
+    client_job_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    history_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    tool_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    output_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    model: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    user_agent: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    device_summary: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    # pending | running | succeeded | failed
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(UTCDateTime(timezone=True), default=utcnow)
+    title: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    error_message: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(timezone=True), nullable=True)
+
+
 class AppConfig(Base):
     """运行时配置（键值对，由管理后台维护）。"""
 

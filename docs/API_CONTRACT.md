@@ -38,7 +38,9 @@
 | POST | `/api/chat/migration/quota` | 预检查智能错题迁移额度（不扣费） | 可选 |
 | POST | `/api/chat/stream` | 流式调用工具（SSE） | 可选（无码需免费+无码可用模型）；**工具 32（图片识别）必须携带有效使用码** |
 | POST | `/api/chat/stop` | 中止流式生成（含免码的免费模型调用） | 可选 |
-| POST | `/api/chat/title` | 为生成结果生成标题 | 是 |
+| POST | `/api/chat/title-jobs` | 幂等创建持久标题任务（最多尝试 3 次） | 是 |
+| POST | `/api/chat/title-jobs/status` | 批量对账标题任务 | 是 |
+| POST | `/api/chat/title` | 同步标题生成（旧客户端兼容） | 是 |
 | POST | `/api/ocr/pair` | 建立手机扫码配对会话（返回 token 与手机页路径；请求体可选带电脑端主题 `theme` / `sky`） | 是（需有效使用码） |
 | POST | `/api/ocr/pair/{token}/hello` | 手机页报到（电脑端据此显示「手机已连接」；回传 `theme` / `sky` 供手机页定色） | token 即凭证 |
 | GET | `/api/ocr/pair/{token}/events` | 电脑端 SSE：等待扫码 → 已连接 → 已收到 N 张（只推状态，无终态，收尾只有过期） | token 即凭证 |
@@ -548,9 +550,11 @@ data: [DONE]
 
 ## 10. 标题生成
 
-### POST `/api/chat/title`
+标题生成使用持久任务接口。任务一经数据库接受，便由后端 worker 独立执行；浏览器刷新、关闭或切换线路不会中止任务。
 
-使用 Chores AI 为一次生成结果生成简短中文标题。
+### POST `/api/chat/title-jobs`
+
+幂等创建标题任务。`job_id` 由客户端生成，同一使用码下重复提交相同内容会返回原任务，不会重复调用模型；同一 ID 提交不同内容返回 409。
 
 **请求头：** `Authorization: Bearer <token>`
 
@@ -558,9 +562,40 @@ data: [DONE]
 
 ```json
 {
+  "job_id": "title_1750000000_ab12cd34",
+  "history_id": "1750000000_ab12cd",
   "tool_id": "1",
   "input": "用户输入的英语语篇",
-  "output": "模型生成的结果摘要"
+  "output": "模型生成的结果摘要",
+  "model": null
+}
+```
+
+**响应（HTTP 202）：**
+
+```json
+{
+  "job_id": "title_1750000000_ab12cd34",
+  "history_id": "1750000000_ab12cd",
+  "status": "pending",
+  "title": "",
+  "created": true
+}
+```
+
+任务最多执行 3 次（包含第一次）。网络错误、超时、429、5xx 和空标题会按退避策略重试；认证、参数、模型配置、上下文超限和内容审核等错误不重试。终态失败不返回错误提示，客户端继续显示原文摘要即可。
+
+客户端会先把生成正文和本机补交日志（`nbx_title_jobs`）落盘，再异步调用本接口；因此关页时即使请求尚未送达，下次打开也会用同一 ID 补交。该本机日志不参与导入或线路镜像，镜像/导入数据中的 pending 字段不能触发新的 LLM 任务。服务端先查询已接受的同 ID 任务，再执行限流与当前配置校验，因此响应丢失后的幂等重投不受配置变化或限流影响。
+
+### POST `/api/chat/title-jobs/status`
+
+批量查询当前使用码下的标题任务，单次最多 100 个 ID。页面刷新后用本地持久化的 job ID 对账。
+
+**请求体：**
+
+```json
+{
+  "job_ids": ["title_1750000000_ab12cd34"]
 }
 ```
 
@@ -568,9 +603,23 @@ data: [DONE]
 
 ```json
 {
-  "title": "语篇深度分析"
+  "jobs": [
+    {
+      "job_id": "title_1750000000_ab12cd34",
+      "history_id": "1750000000_ab12cd",
+      "status": "succeeded",
+      "title": "语篇深度分析",
+      "payload_hash": "服务端内容指纹"
+    }
+  ]
 }
 ```
+
+`status` 可能为 `pending`、`running`、`succeeded`、`failed` 或 `missing`。
+
+### POST `/api/chat/title`（兼容旧客户端）
+
+旧同步接口继续保留，直接返回 `{"title": "..."}`。新前端不使用该接口。
 
 ---
 
@@ -1147,3 +1196,4 @@ openrouter/deepseek/deepseek-chat
 | 1.12.0 | 2026-09-21 | 图片识别（工具 32「识别图片文字」）：新增 `/api/chat/stream` 的 `images` / `ocr_mode` / `pair_token` 字段与 OCR 链路（须有效使用码、始终不计费仅限流、用后台配置的 `ocr_model`、撞输出上限发 `truncated` 事件），`input` 改为对非 OCR 工具必填；`ocr_mode` 由前端按所在工具决定（作文批改用手写规则、其余用印刷规则，只有工具 32 与 25 给用户选）；模型用途改为能力位 `user_usable` / `ocr_usable` / `chores_usable`（`chores_only` 废弃但读取时自动迁移），新增配置键 `ocr_model` / `ocr_max_tokens`；新增扫码配对接口 `/api/ocr/pair*` 与手机拍照页 `/m/upload`（手机页配色跟随电脑端当前主题，见 8.3） |
 | 1.13.0 | 2026-09-21 | 模型用途迁移的可用性修正：管理端「禁用模型」开关改为「启用模型」（标签此前与正向的 `enabled` 字段相反，打开开关即启用却写着"禁用"）；旧单 URL 配置迁移改为直读环境配置与库中旧键（此前从 `get_config_map` 取已被移出白名单的 `llm_base_url` / `llm_api_key`，恒为空），并会在启动时补齐已存在的空地址 Provider；静态资源改为「未版本化一律每次重验证」，避免升级后浏览器继续用旧 script.js（管理端 index.html 的资源版本串同步提升） |
 | 1.14.0 | 2026-09-23 | 新增翻译工具（33「翻译」）：`/api/chat/stream` 与 `/api/chat/preview` 新增 `source_lang` / `target_lang`（渲染进 `翻译.md`，缺省回落 `auto` / `简体中文`）；`truncated` 事件的适用范围放宽到工具 33（撞全局 `max_tokens` 时前端给出「继续翻译」出口）；`ocr_mode` 的手动选择名单增加工具 33（印刷试卷与手写作文都可能来）；工具 33 走普通工具链路：须正文、按模型计费、用用户所选模型。同批：本地静态资源不再带 `?v=` 版本串（改走 `no-cache` + `etag`，升级后无需强刷即可拿到新代码），`bridge.html` 与 `index.html` 引用镜像模块的 URL 必须一致 |
+| 1.15.0 | 2026-09-25 | 标题生成改为后端持久任务：新增 `title_jobs` 与 `/api/chat/title-jobs`、`/api/chat/title-jobs/status`；任务最多尝试 3 次，浏览器关闭或刷新不影响 worker；历史标题待生成时显示原文摘要 Shimmer，终态失败静默回退原文 |

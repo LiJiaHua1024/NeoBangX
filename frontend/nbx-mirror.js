@@ -58,6 +58,9 @@
     toolId: 32,
     fileName: 256,
     id: 64,
+    titleJobId: 96,
+    titleContentKey: 16,
+    titlePayloadHash: 64,
   };
 
   // 墓碑保留策略：只按数量裁剪，不过期。早年设过 90 天过期，代价是「过期后
@@ -251,11 +254,26 @@
     // 否则用户手里已有的备份文件会因为「重算摘要多出一个默认字段」被判为损坏而拒收。
     // 与 buildEnvelope 里 prefs 只在非空时输出的道理完全一样。
     if (raw.verCount !== null && raw.verCount !== undefined) out.verCount = num(raw.verCount, 1);
+    var titleJobId = raw.titleJobId === null || raw.titleJobId === undefined
+      ? ""
+      : str(raw.titleJobId, MAX_FIELD.titleJobId);
+    if (titleJobId) {
+      out.titleJobId = titleJobId;
+      if (raw.titlePending !== null && raw.titlePending !== undefined) {
+        out.titlePending = !!raw.titlePending;
+      }
+      if (raw.titleContentKey !== null && raw.titleContentKey !== undefined) {
+        out.titleContentKey = str(raw.titleContentKey, MAX_FIELD.titleContentKey);
+      }
+      if (raw.titlePayloadHash !== null && raw.titlePayloadHash !== undefined) {
+        out.titlePayloadHash = str(raw.titlePayloadHash, MAX_FIELD.titlePayloadHash);
+      }
+    }
     out.updatedAt = updatedAtOf(raw);
     var known = {
       v: 1, id: 1, toolId: 1, toolName: 1, icon: 1, title: 1, error: 1, partial: 1,
       createdAt: 1, model: 1, inputHead: 1, hasMigration: 1, hasPaper: 1, updatedAt: 1,
-      verCount: 1,
+      verCount: 1, titleJobId: 1, titlePending: 1, titleContentKey: 1, titlePayloadHash: 1,
       _bodyLoaded: 1,
     };
     var keys = Object.keys(raw);
