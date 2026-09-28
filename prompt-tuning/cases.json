@@ -1,0 +1,44 @@
+{
+  "c1_reading_inference": {
+    "name": "阅读理解·推理判断",
+    "question": "阅读下面短文，回答第 34 题。\n\nWhen Maria first opened her little bakery, she refused to sell anything online. \"Bread is about smell and touch,\" she told a local reporter. Yet last month, her website quietly began taking orders for weekend delivery boxes, and her suppliers now receive weekly orders twice the size of last year's. \"My regulars were moving away,\" she explains. \"I could follow them, or I could watch my ovens go cold.\"\n\n34. What can be inferred about Maria from the text?\nA. She cares more about tradition than about profit.\nB. She changed her way of selling out of practical necessity.\nC. She regrets allowing strangers to buy her bread.\nD. She plans to close the shop and bake at home only.",
+    "standard_answer": "B",
+    "student_answers": "多数学生选 A（约一半），部分选 D；正确率约 35%",
+    "cause": "学生把开头引用的人物原话（\"Bread is about smell and touch\"）直接当成人物的真实立场，忽略了后文 Yet 转折后的行为证据和人物自己的解释，没有把\"说过的话\"和\"最终做出的决定\"分开比对，于是选了与开头态度一致但与全文行为相矛盾的选项。"
+  },
+  "c2_cloze_verb": {
+    "name": "完形填空·动词辨析",
+    "question": "阅读下面短文，掌握其大意，从每题所给的 A、B、C、D 四个选项中选出最佳选项。\n\nThe night before the city speech contest, Ling stood before the mirror and 　41　 her opening line one more time. Her hands were cold, but her voice stayed steady.\n\n41. A. practiced　B. repeated　C. copied　D. recorded",
+    "standard_answer": "A",
+    "student_answers": "选 B 的占多数，少数选 D",
+    "cause": "学生按中文近义词义直接代入（\"再说一遍\"≈repeat），没有检查动词与语境逻辑的搭配关系：practical 上她是在为比赛做练习（practiced），而不是机械地重复说过的话；学生缺少\"先判断语境要表达什么动作、再选词\"的步骤，只做了中英词义比对。"
+  },
+  "c3_grammar_nonfinite": {
+    "name": "语法填空·非谓语动词",
+    "question": "阅读下面短文，在空白处填入 1 个适当的单词或括号内单词的正确形式。\n\n　56　 (face) with a difficult choice, the young man turned to his grandfather for advice.",
+    "standard_answer": "Faced",
+    "student_answers": "大多数学生填了 Facing",
+    "cause": "学生判断非谓语动词主动被动时，只凭\"句中动词后面有没有宾语\"的直觉，而没有先找出逻辑主语（the young man）并核对它与动词 face 的惯用关系（be faced with 表示\"面临\"，习惯上用过去分词），导致主动被动判断错误。"
+  },
+  "c4_sevenchoosefive": {
+    "name": "七选五·语篇衔接",
+    "question": "根据短文内容，从短文后的选项中选出能填入空白处的最佳选项。选项中有两项为多余选项。\n\nHow to Keep a Conversation Going\n\nMany people worry that they will run out of things to say. In fact, keeping a conversation alive is a skill you can learn. 　36　 \n\n　37　 Instead of asking \"Do you like your job?\", try \"What surprised you most about your work this week?\" Open questions invite stories, and stories give you material to build on.\n\nSecond, listen for the detail behind the words. If your friend mentions that her brother just moved to a new city, don't jump to your own story. 　38　 \n\nThird, share something small about yourself. A short, honest detail — even a failure — makes you easier to talk to. 　39　 \n\nFinally, accept the pauses. Silence of a few seconds is normal, not a sign of failure. 　40　 \n\nA. First, ask questions that cannot be answered with yes or no.\nB. Then ask a follow-up question about that brother and the move.\nC. Here are four simple habits that help.\nD. People often fill silence with phones, which only widens the distance.\nE. With time, you will find your own rhythm.\nF. Remember, conversation is a game of catch, not a performance.\nG. Besides, humor is always the best tool in every situation.",
+    "standard_answer": "36-C 37-A 38-B 39-F 40-E",
+    "student_answers": "36 题很多学生误选 G（因为看到 habits/tools 相关词汇），38 题不少学生误选 D（看到 silence 词汇复现）",
+    "cause": "学生做七选五时靠选项与上下文的词汇重复来配对（看到空白前后有 silence 就选含 silence 的 D，看到 tool 相关词就选 G），没有先判断空白处应承担的逻辑功能（总起/并列/例证/承接），也没有核对代词和顺序词（First/Second/Finally）的呼应，导致被原词复现陷阱吸引。"
+  },
+  "c5_reading_vocab": {
+    "name": "阅读理解·词义猜测",
+    "question": "阅读下面短文，回答第 30 题。\n\nThe old iron bridge had been closed to traffic for years, yet every morning Mr. Hobbs walked to the middle of it and simply stood there, coat buttoned to the chin, in rain or snow. When the town finally voted to pull it down, he wrote to the council a letter that was, for Mr. Hobbs, remarkably fervent — four full pages, in a hand that shook.\n\n30. What does the underlined word \"fervent\" in the last paragraph most probably mean?\nA. calmly polite\nB. strongly emotional\nC. officially required\nD. unusually short",
+    "standard_answer": "B",
+    "student_answers": "选 A 的最多，其次选 C",
+    "cause": "学生遇到生词时用日常场景联想硬套（letter→公文→calmly polite / officially required），没有去利用上下文中的证据链（四整页、写字的手在抖、每天风雨无阻去桥上站着、remarkably 表示\"反常地\"）来反推词义，即缺少\"找线索→推断→检验\"的猜测步骤，直接凭最常见的语域印象选答案。"
+  },
+  "c6_grammar_tense": {
+    "name": "语法填空·动词时态",
+    "question": "阅读下面短文，在空白处填入 1 个适当的单词或括号内单词的正确形式。\n\nBy the time the rescue team finally reached the village, the families there 　63　 (wait) for nearly two hours in the freezing wind.",
+    "standard_answer": "had waited / had been waiting",
+    "student_answers": "绝大多数学生填了 waited",
+    "cause": "学生一看到全句是过去背景就默认填一般过去时，没有先做\"时间轴核对\"这一步：by the time 引导的过去时间点之前已经完成的动作要用过去完成时，学生没有比较\"救援队到达\"和\"等待\"两个动作的先后顺序，只做了\"过去→过去式\"的机械映射。"
+  }
+}

@@ -1,0 +1,15 @@
+# 调优工具区：密钥与虚拟环境不入库
+api_config.json
+.venv/
+__pycache__/
+
+# 生成产物与原始评审结果：体积大且可复现，不入库
+outputs/
+work/*.json
+work/ab/
+work/judge_v*/
+
+# 例外：文档随工具入库（失败样例库、评审 rubric），是未来 verifier 阶段的输入
+!work/failure_library.md
+!work/judges/
+!work/judges/**
