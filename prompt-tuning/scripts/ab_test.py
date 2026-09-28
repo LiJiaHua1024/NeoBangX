@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import paths
 import argparse
 import json
 import random
@@ -33,7 +34,7 @@ PROMPT = """你是高中英语命题教研员。下面有同一款出题工具�
 
 
 def load_config() -> dict:
-    return json.loads((HERE / "api_config.json").read_text(encoding="utf-8"))
+    return json.loads(paths.config_file("api_config.json").read_text(encoding="utf-8"))
 
 
 def call_llm(cfg: dict, model: str, prompt: str, max_tokens: int) -> str:
@@ -79,7 +80,7 @@ def slim(path: Path, cause: str) -> str:
 
 def run_pair(cfg: dict, case_id: str, count: int, fa: Path, fb: Path, out: Path) -> dict:
     import json as _json
-    cause = _json.loads((HERE / "cases.json").read_text(encoding="utf-8"))[case_id]["cause"]
+    cause = _json.loads(paths.cases_file().read_text(encoding="utf-8"))[case_id]["cause"]
     a = slim(fa, cause)
     b = slim(fb, cause)
     swapped = random.random() < 0.5
@@ -106,19 +107,21 @@ def main() -> None:
     ap.add_argument("--cases", default="all")
     ap.add_argument("--tag", default="", help="输出子目录名，用于区分不同对比")
     ap.add_argument("--reps", type=int, default=1, help="每对独立评委数（不同模型/顺序）")
+    paths.add_suite_arg(ap)
     args = ap.parse_args()
+    paths.init(args.suite)
     cfg = load_config()
-    cases = json.loads((HERE / "cases.json").read_text(encoding="utf-8"))
+    cases = json.loads(paths.cases_file().read_text(encoding="utf-8"))
     case_ids = list(cases) if args.cases == "all" else [c.strip() for c in args.cases.split(",")]
     counts = [int(c) for c in args.counts.split(",")]
-    out_dir = HERE / "work" / "ab" / (args.tag or f"{args.round_a}-vs-{args.round_b}")
+    out_dir = paths.work_dir() / "ab" / (args.tag or f"{args.round_a}-vs-{args.round_b}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     jobs = []
     for cid in case_ids:
         for n in counts:
-            fa = HERE / "outputs" / args.round_a / f"{cid}_q{n:02d}.md"
-            fb = HERE / "outputs" / args.round_b / f"{cid}_q{n:02d}.md"
+            fa = paths.outputs_dir() / args.round_a / f"{cid}_q{n:02d}.md"
+            fb = paths.outputs_dir() / args.round_b / f"{cid}_q{n:02d}.md"
             if not (fa.exists() and fb.exists()):
                 continue
             for rep in range(args.reps):

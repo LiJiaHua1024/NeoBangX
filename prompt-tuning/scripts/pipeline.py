@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import paths
 import argparse
 import json
 import re
@@ -27,7 +28,7 @@ LETTERS = "ABCDEFG"
 
 
 def load_config(path: str = "") -> dict:
-    return json.loads((HERE / (path or "scorer_config.json")).read_text(encoding="utf-8"))
+    return json.loads(paths.config_file(path or "scorer_config.json").read_text(encoding="utf-8"))
 
 
 def ask(cfg: dict, state: str, questions: dict) -> dict:
@@ -65,7 +66,7 @@ def get(answers: dict, key: str) -> float | None:
 def process_question(cfg: dict, round_name: str, stem: str, num: int,
                      q_block: str, a_block: str, original: str) -> dict:
     tag = "pipe" if cfg["model"].startswith("respan") else "pipe_jev"
-    out_dir = HERE / "work" / tag / round_name
+    out_dir = paths.work_dir() / tag / round_name
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{stem}.q{num:02d}.json"
     if out.exists():
@@ -156,13 +157,15 @@ def main() -> None:
     ap.add_argument("--cases", default="all")
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--config", default="")
+    paths.add_suite_arg(ap)
     args = ap.parse_args()
+    paths.init(args.suite)
     cfg = load_config(args.config)
-    cases = json.loads((HERE / "cases.json").read_text(encoding="utf-8"))
+    cases = json.loads(paths.cases_file().read_text(encoding="utf-8"))
     case_ids = list(cases) if args.cases == "all" else [c.strip() for c in args.cases.split(",")]
 
     for round_name in [r.strip() for r in args.rounds.split(",") if r.strip()]:
-        d = HERE / "outputs" / round_name
+        d = paths.outputs_dir() / round_name
         if not d.exists():
             print(f"{round_name}: 无输出"); continue
         jobs = []
@@ -197,7 +200,7 @@ def main() -> None:
     print("\n== 聚合（v = noul 均值；filler 数为每题均值；fit>1 = 多个选项都能填通）==")
     for round_name in [r.strip() for r in args.rounds.split(",") if r.strip()]:
         tag = "pipe" if cfg["model"].startswith("respan") else "pipe_jev"
-        dd = HERE / "work" / tag / round_name
+        dd = paths.work_dir() / tag / round_name
         files = sorted(dd.glob("*.json"))
         if not files:
             continue

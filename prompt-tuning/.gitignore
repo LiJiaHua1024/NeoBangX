@@ -1,21 +1,16 @@
-# 调优工具区：密钥与虚拟环境不入库
-api_config.json
-scorer_config.json
-jev_config.json
+# ============ 调优工作台 ============
+# 真实模型配置（含 API key）：只入库 *.example.json 模板
+/config/*.json
+!/config/*.example.json
+
+# 原始产物：生成结果、评分/盲评/检测结果（体积大且可复跑）
+/runs/
+
+# 私人笔记（模型/API 规则与个人偏好）：只在本机
+LOCAL-NOTES.md
+
+# 环境与缓存
 .venv/
 __pycache__/
 
-# 生成产物与原始评审结果：体积大且可复现，不入库
-outputs/
-work/*.json
-work/ab/
-work/judge_v*/
-work/score*/
-work/pipe*/
-work/student/
-work/abaspect/
-
-# 例外：文档随工具入库（失败样例库、评审 rubric），是未来 verifier 阶段的输入
-!work/failure_library.md
-!work/judges/
-!work/judges/**
+# 说明：suites/ 下的内容全部入库（案例库、prompt 版本记录、失败样例库、报告）

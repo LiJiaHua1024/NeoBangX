@@ -1,0 +1,9 @@
+{
+  "base_url": "https://api.commandcode.ai/provider/v1",
+  "api_key": "<你的 Command Code API key>",
+  "model": "<生成用模型，如 deepseek/deepseek-v4.1-flash>",
+  "max_tokens": 65536,
+  "judge_model": "<评审用模型（不同家族，防自我偏好）>",
+  "judge_max_tokens": 32768,
+  "judge_pool": ["<模型A>", "<模型B>", "<模型C>"]
+}

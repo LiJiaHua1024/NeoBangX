@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import paths
 import argparse
 import json
 import re
@@ -27,9 +28,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--round", required=True)
     ap.add_argument("--n", type=int, default=3)
+    paths.add_suite_arg(ap)
     args = ap.parse_args()
-    cases = json.loads((HERE / "cases.json").read_text(encoding="utf-8"))
-    files = sorted((HERE / "outputs" / args.round).glob("*.md"))
+    paths.init(args.suite)
+    cases = json.loads(paths.cases_file().read_text(encoding="utf-8"))
+    files = sorted((paths.outputs_dir() / args.round).glob("*.md"))
     print(f"{'文件':<34}{'方法论gram':>8}{'题面gram':>8}{'泄漏':>6}{'泄漏举例'}")
     total_leak = 0
     for f in files:

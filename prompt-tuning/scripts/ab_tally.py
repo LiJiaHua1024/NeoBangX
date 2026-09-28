@@ -1,11 +1,19 @@
 """从 work/ab/*.json 汇总 A/B 盲评结果。"""
+import paths
 import json
 import sys
 from pathlib import Path
 
+if len(sys.argv) < 3 or sys.argv[1] in ("-h", "--help"):
+    raise SystemExit("用法: uv run python scripts/ab_tally.py <A版本> <B版本> [对比标签] [suite]
+"
+                     "例:   uv run python scripts/ab_tally.py v17 v11 v17-vs-v11")
 round_a, round_b = sys.argv[1], sys.argv[2]
 tag = sys.argv[3] if len(sys.argv) > 3 else f"{round_a}-vs-{round_b}"
-files = sorted(Path("work/ab").glob(f"{tag}/*.json"))
+import paths
+if len(sys.argv) > 4:
+    paths.init(sys.argv[4])
+files = sorted((paths.work_dir() / "ab" / tag).glob("*.json"))
 tally = {d: {"A": 0, "B": 0, "tie": 0} for d in ("transfer", "deception", "answers", "overall")}
 n = 0
 for f in files:

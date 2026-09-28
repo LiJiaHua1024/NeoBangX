@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>错题迁移 Prompt 调优报告 · v0 → v17</title>
+<style>
+  :root{
+    --ink:#0A0A0A; --paper:#F7F3E8; --yellow:#FFE81A; --cyan:#3DE3FF;
+    --magenta:#FF4FD8; --lime:#8CFF5A; --orange:#FF6A2B; --grey:#B9B3A4;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-snap-type:y proximity}
+  .page{scroll-snap-align:start}
+  @media print{.page{box-shadow:none;margin:0}}
+  body{
+    overflow-x:hidden; background:#2B2B2B; font-family:"Arial Black","Helvetica Neue",system-ui,sans-serif;
+    color:var(--ink); padding:28px 0;
+  }
+  .page{
+    width:1280px; height:800px; background:var(--paper); margin:0 auto 34px;
+    border:5px solid var(--ink); box-shadow:14px 14px 0 var(--ink);
+    padding:38px 44px; position:relative; overflow:hidden; break-after:page;
+  }
+  .page:last-child{break-after:auto}
+  .tag{
+    position:absolute; top:0; right:0; background:var(--ink); color:var(--paper);
+    font-size:14px; letter-spacing:.14em; padding:7px 16px;
+  }
+  .kicker{
+    display:inline-block; background:var(--ink); color:var(--yellow);
+    font-size:14px; letter-spacing:.16em; padding:6px 12px; margin-bottom:16px;
+  }
+  h1{font-size:72px; line-height:.98; letter-spacing:-.02em; text-transform:uppercase}
+  h2{font-size:40px; line-height:1.05; text-transform:uppercase; margin-bottom:6px}
+  h2 .sub{display:block; font-size:17px; font-weight:400; letter-spacing:.02em;
+    text-transform:none; font-family:"Helvetica Neue",system-ui,sans-serif; margin-top:8px; color:#3a3a3a}
+  .rule{height:5px; background:var(--ink); margin:16px 0 20px}
+  table{width:100%; border-collapse:collapse; font-size:16px}
+  th,td{border:3px solid var(--ink); padding:8px 10px; text-align:left; vertical-align:top}
+  th{background:var(--ink); color:var(--paper); font-size:14px; letter-spacing:.06em; text-transform:uppercase}
+  td.num{font-family:"IBM Plex Mono",Consolas,monospace; font-weight:700; white-space:nowrap}
+  tr.hi td{background:var(--yellow)}
+  tr.hi2 td{background:var(--cyan)}
+  .cards{display:grid; gap:16px}
+  .cards.c3{grid-template-columns:repeat(3,1fr)}
+  .cards.c2{grid-template-columns:repeat(2,1fr)}
+  .card{border:4px solid var(--ink); box-shadow:8px 8px 0 var(--ink); padding:16px 18px; background:#fff}
+  .card.y{background:var(--yellow)} .card.c{background:var(--cyan)}
+  .card.m{background:var(--magenta)} .card.l{background:var(--lime)} .card.o{background:var(--orange)}
+  .card .big{font-family:"IBM Plex Mono",Consolas,monospace; font-size:40px; font-weight:700; line-height:1}
+  .card .big.sm{font-size:30px; line-height:1.15}
+  .card .lab{font-size:14px; letter-spacing:.04em; margin-top:8px; line-height:1.35}
+  .note{font-family:"Helvetica Neue",system-ui,sans-serif; font-size:15px; line-height:1.5}
+  .foot{position:absolute; left:44px; bottom:26px; right:44px; display:flex;
+    justify-content:space-between; align-items:center; font-size:14px; letter-spacing:.1em;
+    border-top:4px solid var(--ink); padding-top:10px}
+  ul{font-family:"Helvetica Neue",system-ui,sans-serif; font-size:16px; line-height:1.55; padding-left:22px}
+  li{margin-bottom:7px}
+  .mono{font-family:"IBM Plex Mono",Consolas,monospace; font-weight:700}
+  .pill{display:inline-block; border:3px solid var(--ink); padding:2px 9px; font-size:13px; margin-right:6px; background:#fff}
+  .p-good{background:var(--lime)} .p-bad{background:var(--orange)} .p-flat{background:var(--grey)}
+  .lead{font-size:20px; line-height:1.4; font-family:"Helvetica Neue",system-ui,sans-serif}
+  .two{display:grid; grid-template-columns:1.35fr 1fr; gap:22px}
+</style>
+</head>
+<body>
+
+<!-- ============ P1 封面 ============ -->
+<section class="page">
+  <div class="tag">P1 / 10 · 封面</div>
+  <span class="kicker">NEOBRUTALIST TUNING REPORT</span>
+  <h1>错题迁移<br>Prompt 调优<br>v0 → v17</h1>
+  <div class="rule"></div>
+  <p class="lead">从"原题换皮 + 一眼看穿"到"真迁移 + 半对干扰 + 无可归纳捷径"：<br>
+  用两个 Jev 类决策模型的 <span class="mono">3,000+</span> 次判定、<span class="mono">288</span> 次单维度盲评、
+  <span class="mono">341</span> 道题的盲测解题与七类机械检测，逐项验证。</p>
+  <div class="cards c3" style="margin-top:26px">
+    <div class="card y"><div class="big sm">94% · 100% · 78%</div><div class="lab">盲评胜率（迁移真实性 / 迷惑性 / 整体，对比原版，p&lt;0.001 / p&lt;0.001 / p=0.011）</div></div>
+    <div class="card c"><div class="big">62 → 17</div><div class="lab">迁移题与原题的最大重叠字符数（换皮指纹）</div></div>
+    <div class="card l"><div class="big">11/111 → 1/121</div><div class="lab">盲测解题与所附答案不一致的题数</div></div>
+  </div>
+  <div class="foot"><span>为教学产品「智能错题迁移」而做</span><span>按页截图 · 每页 1280×800</span></div>
+</section>
+
+<!-- ============ P2 方法 ============ -->
+<section class="page">
+  <div class="tag">P2 / 10 · 方法</div>
+  <h2>怎么测的<span class="sub">三类证据，两个独立仪器，全部可复跑</span></h2>
+  <div class="rule"></div>
+  <div class="two">
+    <div>
+      <table>
+        <tr><th style="width:34%">证据类型</th><th>做法</th></tr>
+        <tr><td><b>决策模型评分</b></td><td>把"这道题好不好"拆成 7–14 个窄二值问题（Jev 的 noul/choice/score），逐题逐选项判定；每版 ~110 题</td></tr>
+        <tr class="hi"><td><b>单维度盲评</b></td><td>两份匿名输出，只就一个方面问"哪份更好"；同一对正反顺序各问一次，只认一致票</td></tr>
+        <tr><td><b>机械检测</b></td><td>不依赖模型，直接统计：词族角色、选项长度、字母/槽位分布、方法论泄漏、结构完整性</td></tr>
+      </table>
+      <h3 style="margin:22px 0 8px;font-size:20px">两个仪器（互相校验）</h3>
+      <table>
+        <tr><th>仪器</th><th>位置</th><th>类型</th><th>用量</th></tr>
+        <tr><td class="mono">respan/span-01-lite</td><td>OpenRouter</td><td>仅 noul</td><td>免费不限量</td></tr>
+        <tr><td class="mono">typesafe/jev</td><td>Command Code</td><td>noul / choice / score</td><td>$0.04per M 输入</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3 style="font-size:20px;margin-bottom:10px">统计口径</h3>
+      <ul style="font-size:15px">
+        <li><b>问题率</b>：判定阈值下的不合格比例（反向指标取 &gt;0.5 为不合格）</li>
+        <li><b>Wilson 95% CI</b>：比例型指标的置信区间，报告里随 n 一并给出</li>
+        <li><b>符号检验</b>：盲评胜负是否为偶然（p 值双侧）</li>
+        <li><b>顺序对调</b>：位置偏差控制；两次矛盾记为无效票</li>
+        <li><b>题级配对相关</b>（Pearson r）：证明两仪器的读数可靠，而不是噪声</li>
+      </ul>
+    </div>
+  </div>
+  <div class="foot"><span>样本：v0 109 题 · v11 104 题 · v17 116 题</span><span>P2 / 10</span></div>
+</section>
+
+<!-- ============ P3 总览 ============ -->
+<section class="page">
+  <div class="tag">P3 / 10 · 总览</div>
+  <h2>八个维度：问题率对比<span class="sub">两个仪器分别评分；括号内为 Wilson 95% 置信区间，n 见页脚</span></h2>
+  <div class="rule"></div>
+  <table>
+    <tr>
+      <th style="width:24%">维度（问题率，越低越好）</th>
+      <th>原版 v0<br><span style="font-weight:400">respan / jev</span></th>
+      <th>精简版 v11<br><span style="font-weight:400">respan / jev</span></th>
+      <th>终版 v17<br><span style="font-weight:400">respan / jev</span></th>
+      <th style="width:22%">结论</th>
+    </tr>
+    <tr class="hi">
+      <td><b>干扰项具体性</b><br><span class="note">每个干扰项都有具体错误点</span></td>
+      <td class="num">30% (22-39)<br>16% (10-24)</td>
+      <td class="num">13% (8-21)<br>0% (0-4)</td>
+      <td class="num">13% (8-20)<br>1% (0-5)</td>
+      <td><span class="pill p-good">显著改善</span></td>
+    </tr>
+    <tr class="hi">
+      <td><b>陷阱吸引力</b><br><span class="note">半对机制：干扰项需要动脑排除</span></td>
+      <td class="num">14% (9-21)<br>20% (14-29)</td>
+      <td class="num">0% (0-4)<br>0% (0-4)</td>
+      <td class="num">0% (0-3)<br>0% (0-3)</td>
+      <td><span class="pill p-good">显著改善</span></td>
+    </tr>
+    <tr>
+      <td><b>语境换皮</b><br><span class="note">迁移题与原题情境重合</span></td>
+      <td class="num">10% (6-17)<br>19% (13-28)</td>
+      <td class="num">0% (0-4)<br>8% (4-14)</td>
+      <td class="num">1% (0-5)<br>5% (2-11)</td>
+      <td><span class="pill p-good">显著改善</span></td>
+    </tr>
+    <tr>
+      <td><b>形状可猜</b><br><span class="note">只看选项外观能猜出答案</span></td>
+      <td class="num">1% (0-5)<br>9% (5-16)</td>
+      <td class="num">0% (0-4)<br>0% (0-4)</td>
+      <td class="num">0% (0-3)<br>3% (1-9)</td>
+      <td><span class="pill p-good">改善</span></td>
+    </tr>
+    <tr>
+      <td><b>答案唯一性</b><br><span class="note">存在双解或合理争议</span></td>
+      <td class="num">6% (3-11)<br>5% (2-10)</td>
+      <td class="num">1% (0-5)<br>3% (1-8)</td>
+      <td class="num">4% (2-10)<br>3% (1-7)</td>
+      <td><span class="pill p-flat">持平（均 &lt;6%）</span></td>
+    </tr>
+    <tr>
+      <td><b>解析一致性</b><br><span class="note">排除理由与题面相符</span></td>
+      <td class="num">2% (1-6)<br>2% (1-6)</td>
+      <td class="num">1% (0-5)<br>0% (0-4)</td>
+      <td class="num">3% (1-7)<br>0% (0-3)</td>
+      <td><span class="pill p-flat">持平（均 ≤3%）</span></td>
+    </tr>
+    <tr>
+      <td><b>难度来源</b><br><span class="note">靠生词/长句/陌生背景制造难度</span></td>
+      <td class="num">0% (0-3)<br>0% (0-3)</td>
+      <td class="num">0% (0-4)<br>0% (0-4)</td>
+      <td class="num">1% (0-5)<br>0% (0-3)</td>
+      <td><span class="pill p-flat">持平（红线守住）</span></td>
+    </tr>
+  </table>
+  <p class="note" style="margin-top:14px">读法：问题率是"有多少比例的题被判为不合格"。两个仪器绝对水平不同（读数习惯差异），因此只做<b>同仪器内的版本对比</b>。</p>
+  <div class="foot"><span>v0 109 题 · v11 104 题 · v17 116 题；配对题级样本 329</span><span>P3 / 10</span></div>
+</section>
+
+<!-- ============ P4 迁移真实性 ============ -->
+<section class="page">
+  <div class="tag">P4 / 10 · 迁移真实性</div>
+  <h2>投诉①：迁移是假的<span class="sub">原题换皮、设错点雷同 —— 已解决</span></h2>
+  <div class="rule"></div>
+  <div class="cards c2" style="margin-bottom:22px">
+    <div class="card y">
+      <div class="big">16 : 1</div>
+      <div class="lab">单维度盲评（对比原版）：胜率 94%，符号检验 <b>p&lt;0.001</b>，n=17 组有效票（72 组中顺序一致者）</div>
+    </div>
+    <div class="card c">
+      <div class="big">50 → 17</div>
+      <div class="lab">迁移题与原题的<b>最大连续重叠字符数</b>：原版 50（近迁移几乎逐句对应），终版 17（仅剩错因必需的辨析词）</div>
+    </div>
+  </div>
+  <table>
+    <tr><th style="width:40%">检查项</th><th>v0</th><th>v11</th><th>v17</th><th>说明</th></tr>
+    <tr class="hi"><td>语境与原题重合（jev 判定）</td><td class="num">19%</td><td class="num">8%</td><td class="num">5%</td><td>Wilson CI 上界从 28% 收窄到 11%</td></tr>
+    <tr><td>语境与原题重合（respan 判定）</td><td class="num">10%</td><td class="num">0%</td><td class="num">1%</td><td>两仪器方向一致</td></tr>
+    <tr class="hi2"><td>结构完整性（题数/题号/答案/选项）</td><td class="num">17/24</td><td class="num">24/24</td><td class="num">30/30</td><td>原版有题号重复、梯度标签印进题面等故障</td></tr>
+    <tr><td>方法论与题干泄漏（3-gram 重合）</td><td class="num">20</td><td class="num">0</td><td class="num">0</td><td>机械查重，含原题豁免</td></tr>
+  </table>
+  <p class="lead" style="margin-top:18px">做法：<b>原题指纹禁令</b>（人物/场景实词、情境短语、标志句式、选项组四类）+ <b>命题骨架轮换</b>（三拍骨架 ≤2 次、≥2 题不给本人解释、≥1 题多段落长文）+ <b>方法论先写锁定</b>（写完不许回头改，杜绝事后照题写方法论）。</p>
+  <div class="foot"><span>v0 109 题 · v11 104 题 · v17 116 题</span><span>P4 / 10</span></div>
+</section>
+
+<!-- ============ P5 迷惑性 ============ -->
+<section class="page">
+  <div class="tag">P5 / 10 · 迷惑性</div>
+  <h2>投诉②：对的太对，错的太错<span class="sub">半对机制 —— 已建立</span></h2>
+  <div class="rule"></div>
+  <div class="cards c3" style="margin-bottom:20px">
+    <div class="card m"><div class="big">23 : 0</div><div class="lab">盲评迷惑性（对比原版）胜率 <b>100%</b>，p&lt;0.001</div></div>
+    <div class="card y"><div class="big">20% → 0%</div><div class="lab">"干扰项一眼可排除"的问题率（jev），CI 上界 29% → 3%</div></div>
+    <div class="card c"><div class="big">16% → 1%</div><div class="lab">"干扰项缺少具体错误点"的问题率（jev）</div></div>
+  </div>
+  <table>
+    <tr><th style="width:34%">机制</th><th>原版 v0</th><th>终版 v17</th></tr>
+    <tr><td>每个干扰项的钓鱼路径</td><td class="num">配方化："复现原话 + 夸大 + 编造动机"三件套</td><td class="num">逐项写出"读到哪个词→什么联想→哪步偏离"，写不出即作废</td></tr>
+    <tr class="hi"><td>正确项表面特征</td><td class="num">45% 的题正确项是唯一最长项</td><td class="num">25%（随机水平）</td></tr>
+    <tr class="hi"><td>绝对化词（all/never/only）</td><td class="num">正确 2 : 干扰 25 → "见绝对化就排除"稳赚</td><td class="num">正确 9 : 干扰 35 → 该线索失效（按它排除会亏分）</td></tr>
+    <tr><td>正确答案位置</td><td class="num">B 占 43%（可蒙）、C 仅 13%</td><td class="num">A18 / B26 / C25 / D18，均衡</td></tr>
+    <tr><td>部分正确（需权衡）干扰项</td><td class="num">问题率 14–20%</td><td class="num">0–1%（≥5 题时强制至少 2 题需权衡）</td></tr>
+  </table>
+  <p class="note" style="margin-top:14px">注：上表"正确项表面特征 / 绝对化词 / 位置"三项为机械统计（不依赖模型），不受评审偏好影响。</p>
+  <div class="foot"><span>n = 109 / 104 / 116 题</span><span>P5 / 10</span></div>
+</section>
+
+<!-- ============ P6 邪修 ============ -->
+<section class="page">
+  <div class="tag">P6 / 10 · 邪修捷径</div>
+  <h2>你不懂的也能做对？<span class="sub">可归纳捷径（"邪修"）专项治理</span></h2>
+  <div class="rule"></div>
+  <p class="note" style="margin-bottom:14px">用一个"明确不读懂题目、只找规律"的测试人格把可背诵配方挖出来——它在原版上能通杀，在终版上只能靠语义阅读。</p>
+  <table>
+    <tr><th style="width:30%">可作弊规律</th><th>v0 原版</th><th>v11</th><th>v17 终版</th></tr>
+    <tr class="hi"><td><b>词族角色固化</b><br><span class="note">某个词永远只当干扰项→"见了就排除"</span></td>
+      <td class="num">1/24 文件<br>copy 3 次全错</td><td class="num">1/24 文件<br>review 3 次全错</td><td class="num">1/30 文件<br>repeat 7 次全错（残留）</td></tr>
+    <tr class="hi"><td><b>正确项常为唯一最长项</b></td><td class="num">45%</td><td class="num">39%</td><td class="num">25%（低于随机 25% 判线）</td></tr>
+    <tr class="hi2"><td><b>字母/槽位分工固定</b></td><td class="num">B 占 43%；"复述旧立场"陷阱 50% 在 A</td><td class="num">"复述旧立场"陷阱 <b>82%</b> 挤在 A</td><td class="num">A18/B26/C25/D18；陷阱 A 位降到 44%</td></tr>
+    <tr><td><b>考点词反复登场</b></td><td class="num">三拍模板换名词</td><td class="num">3 个词族占 17/22 选项位</td><td class="num">同一辨析换 7–8 组词对，任一词≤3 次且角色双向</td></tr>
+    <tr><td><b>语境指纹复用</b></td><td class="num">最大重叠 50 字符</td><td class="num">26 字符</td><td class="num">17 字符</td></tr>
+  </table>
+  <div class="cards c2" style="margin-top:18px">
+    <div class="card o"><div class="lab"><b>残留（如实报告）</b>：终版仍有 1/30 文件出现"某词 7 次全错"，且该文件同时被检出两题选项组相同——这类"数一遍"式的定量自查有约 3–5% 的抽样失败率。</div></div>
+    <div class="card l"><div class="lab"><b>对策</b>：机械检测脚本（hack/cue/slot/leak）已交付，可直接作为生成后的质量门禁；更深的自查交给下一阶段的 verifier agent。</div></div>
+  </div>
+  <div class="foot"><span>机械检测，不依赖 LLM 评审</span><span>P6 / 10</span></div>
+</section>
+
+<!-- ============ P7 答案与难度 ============ -->
+<section class="page">
+  <div class="tag">P7 / 10 · 答案与红线</div>
+  <h2>答案站得住，难度来自考点<span class="sub">不能为了难而让学生"读不懂"</span></h2>
+  <div class="rule"></div>
+  <div class="cards c3" style="margin-bottom:20px">
+    <div class="card c"><div class="big">1 / 121</div><div class="lab">终版盲测解题与答案不一致的题数（原版 11/111）</div></div>
+    <div class="card y"><div class="big">3%</div><div class="lab">答案存在双解/争议的比例（CI 1–7%），与原版 5–6% 持平</div></div>
+    <div class="card l"><div class="big">0%</div><div class="lab">"靠生词/长句/陌生背景制造难度"的问题率（两仪器一致）</div></div>
+  </div>
+  <table>
+    <tr><th style="width:40%">质量项</th><th>v0</th><th>v11</th><th>v17</th></tr>
+    <tr><td>解析的排除理由与题面一致（jev）</td><td class="num">2% (1-6)</td><td class="num">0% (0-4)</td><td class="num">0% (0-3)</td></tr>
+    <tr><td>解析的排除理由与题面一致（respan）</td><td class="num">2% (1-6)</td><td class="num">1% (0-5)</td><td class="num">3% (1-7)</td></tr>
+    <tr class="hi2"><td>超纲词处理（考点必需则加中文注释）</td><td class="num">无注释概念</td><td class="num">已建立</td><td class="num">每题注释 ≤2 处，超出即换场景</td></tr>
+    <tr class="hi2"><td>语法题"双解"风险</td><td class="num">had done / had been doing 两可</td><td class="num">已加时间唯一性</td><td class="num">完成式与一般式两可的语境必须钉死</td></tr>
+    <tr><td>答案词形分布（主动/被动之辨）</td><td class="num">十题全过去分词，"见 -ed 就选"可满分</td><td class="num">混词形</td><td class="num">主动侧 ≥3 题，且语法同形优先</td></tr>
+  </table>
+  <div class="foot"><span>盲测解题由强模型交叉验证 · 评分由两个 Jev 类模型完成</span><span>P7 / 10</span></div>
+</section>
+
+<!-- ============ P8 回归 ============ -->
+<section class="page">
+  <div class="tag">P8 / 10 · 回归检查</div>
+  <h2>终版 vs 精简版：打平，无退化<span class="sub">v12–v17 的邪修治理没有牺牲任何已达标的能力</span></h2>
+  <div class="rule"></div>
+  <table style="margin-bottom:18px">
+    <tr><th style="width:26%">单维度盲评（v17 vs v11）</th><th>v17 胜</th><th>v11 胜</th><th>顺序矛盾</th><th>符号检验</th></tr>
+    <tr><td>迁移真实性</td><td class="num">2</td><td class="num">3</td><td class="num">19 / 24</td><td class="num">p = 1.000</td></tr>
+    <tr><td>迷惑性</td><td class="num">8</td><td class="num">9</td><td class="num">7 / 24</td><td class="num">p = 1.000</td></tr>
+    <tr><td>整体可用性</td><td class="num">6</td><td class="num">11</td><td class="num">7 / 24</td><td class="num">p = 0.332</td></tr>
+  </table>
+  <table>
+    <tr><th style="width:34%">决策模型评分（问题率差 Δ = v17 − v11）</th><th>respan</th><th>jev</th><th>判读</th></tr>
+    <tr><td>干扰项具体性</td><td class="num">+0.01</td><td class="num">−0.03</td><td>噪声</td></tr>
+    <tr><td>陷阱吸引力</td><td class="num">+0.02</td><td class="num">+0.01</td><td>噪声</td></tr>
+    <tr><td>答案唯一性 / 解析一致性 / 难度来源</td><td class="num">±0.01</td><td class="num">±0.01</td><td>噪声</td></tr>
+  </table>
+  <div class="card y" style="margin-top:20px">
+    <div class="lead"><b>为什么 LLM 盲评测不出邪修改善？</b><br>
+    评审模型会认真读题，不会用"见了 repeat 就排除"这种策略；而这类规律恰恰只对<b>真实弱学生</b>有效。所以邪修治理的收益只体现在机械检测上（P6 页），LLM 盲评自然显示为"打平"。</div>
+  </div>
+  <div class="foot"><span>顺序矛盾率高 = 两版过于接近，评审反复摇摆</span><span>P8 / 10</span></div>
+</section>
+
+<!-- ============ P9 可信度 ============ -->
+<section class="page">
+  <div class="tag">P9 / 10 · 可信度与局限</div>
+  <h2>数据可信度<span class="sub">两仪器交叉验证 + 明确说明局限</span></h2>
+  <div class="rule"></div>
+  <div class="two">
+    <div>
+      <h3 style="font-size:19px;margin-bottom:8px">两仪器题级一致性（n=329 道配对）</h3>
+      <table>
+        <tr><th>检查项</th><th>Pearson r</th><th>可用性</th></tr>
+        <tr class="hi"><td>干扰项具体性</td><td class="num">0.80</td><td>强</td></tr>
+        <tr><td>语境换皮</td><td class="num">0.68</td><td>较强</td></tr>
+        <tr class="hi"><td>陷阱吸引力</td><td class="num">0.54</td><td>中等</td></tr>
+        <tr><td>答案唯一性 / 形状可猜</td><td class="num">0.49</td><td>中等</td></tr>
+        <tr><td>解析一致性 / 难度来源</td><td class="num">0.47 / 0.40</td><td>中等</td></tr>
+      </table>
+      <p class="note" style="margin-top:10px">r ≥ 0.5 表示两个独立模型对同一道题的判断高度相关 → 版本对比可信；绝对水平随仪器不同，只做同仪器内比较。</p>
+    </div>
+    <div>
+      <h3 style="font-size:19px;margin-bottom:8px">局限（如实列出）</h3>
+      <ul style="font-size:15px">
+        <li><b>仪器绝对水平不一致</b>：如"凑数项"一项两仪器相差 14 倍，属措辞读数差异</li>
+        <li><b>样本量</b>：每版 ~110 题，问题率型指标 CI 约 ±5–10 个百分点</li>
+        <li><b>盲评顺序矛盾率</b>：版本接近时高达 10–79%，此时结论只能记"打平"</li>
+        <li><b>决策模型不擅长多步推理</b>：涉及推理的判定已拆成窄问题，但仍有个别噪声</li>
+        <li><b>跨轮词库复用</b>：无状态 prompt 记不住上一轮出过什么（做过 cool/reserved 的复现）</li>
+        <li><b>残留 1/30 文件</b>有词族角色固化（P6）</li>
+      </ul>
+    </div>
+  </div>
+  <div class="foot"><span>统计由 prompt-tuning/scripts 下的脚本产出，可复跑</span><span>P9 / 10</span></div>
+</section>
+
+<!-- ============ P10 结论 ============ -->
+<section class="page">
+  <div class="tag">P10 / 10 · 结论</div>
+  <h2>结论<span class="sub">v0 → v17：三件事从"不能用"变成"可用且有据"</span></h2>
+  <div class="rule"></div>
+  <div class="cards c3" style="margin-bottom:20px">
+    <div class="card y"><div class="lab"><b>① 真迁移</b><br>换皮指纹 50→17 字符；盲评胜率 94%（p&lt;0.001）；结构完整性 17/24→30/30</div></div>
+    <div class="card m"><div class="lab"><b>② 真迷惑</b><br>陷阱吸引力问题率 14-20%→0%；盲评胜率 100%（p&lt;0.001）；半对机制与钓鱼路径成为硬要求</div></div>
+    <div class="card c"><div class="lab"><b>③ 无捷径</b><br>长度线索 45%→25%、绝对化词偏置 2:25→9:35、字母/槽位打散、词族角色双向</div></div>
+  </div>
+  <table style="margin-bottom:18px">
+    <tr><th style="width:36%">阶段结论</th><th>证据</th></tr>
+    <tr class="hi"><td>调优确实有效</td><td>单维度盲评 3 维度全部显著（p&lt;0.001 / p&lt;0.001 / p=0.011）；两仪器评分方向一致</td></tr>
+    <tr class="hi"><td>邪修治理没有伤到已有能力</td><td>v17 vs v11 全部维度 |Δ| ≤0.03，盲评不显著（打平）</td></tr>
+    <tr><td>答案质量始终可靠</td><td>盲测不一致 1/121；双解率 3%；解析一致性 97–100%</td></tr>
+  </table>
+  <div class="card l">
+    <div class="lead"><b>下一步（按优先级）</b><br>
+    1. 生产配置 <span class="mono">max_tokens ≥ 32768</span>（当前 4096 会让推理模型输出空正文）<br>
+    2. 把四个机械检测脚本接成生成后的质量门禁（泄漏/捷径/长度/槽位）<br>
+    3. 残留的定量自查交给下一阶段的 verifier agent（"数一遍"式规则本身不可靠）</div>
+  </div>
+  <div class="foot"><span>数据与脚本：prompt-tuning/scripts/（可复跑）</span><span>P10 / 10</span></div>
+</section>
+
+</body>
+</html>

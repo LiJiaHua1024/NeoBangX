@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import paths
 import argparse
 import json
 import re
@@ -90,7 +91,7 @@ def parse_answer(spec_type: str, ans: dict) -> float | None:
 
 
 def load_config(path: str = "") -> dict:
-    p = HERE / (path or "scorer_config.json")
+    p = paths.config_file(path or "scorer_config.json")
     if not p.exists():
         raise SystemExit(f"缺少配置 {p.name}（base_url / api_key / model）")
     return json.loads(p.read_text(encoding="utf-8"))
@@ -138,8 +139,8 @@ def question_units(md: str) -> list[tuple[int, str, str]]:
 
 
 def score_file(cfg: dict, round_name: str, stem: str, original: str) -> list[dict]:
-    md = (HERE / "outputs" / round_name / f"{stem}.md").read_text(encoding="utf-8")
-    out_dir = HERE / "work" / ("score" if cfg["model"].startswith("respan") else "score_jev") / round_name
+    md = (paths.outputs_dir() / round_name / f"{stem}.md").read_text(encoding="utf-8")
+    out_dir = paths.work_dir() / ("score" if cfg["model"].startswith("respan") else "score_jev") / round_name
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for num, q_block, a_block in question_units(md):
@@ -168,16 +169,18 @@ def main() -> None:
     ap.add_argument("--files", default="", help="逗号分隔文件名（不带 .md），默认全量")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--config", default="", help="评分器配置文件名（默认 scorer_config.json，可换 jev_config.json）")
+    paths.add_suite_arg(ap)
     args = ap.parse_args()
+    paths.init(args.suite)
     rounds = [r.strip() for r in (args.rounds or args.round).split(",") if r.strip()]
     if not rounds:
         raise SystemExit("需要 --round 或 --rounds")
     cfg = load_config(args.config)
-    cases = json.loads((HERE / "cases.json").read_text(encoding="utf-8"))
+    cases = json.loads(paths.cases_file().read_text(encoding="utf-8"))
     print(f"评分器：model={cfg['model']} 轮次={rounds}")
 
     for round_name in rounds:
-        d = HERE / "outputs" / round_name
+        d = paths.outputs_dir() / round_name
         if not d.exists():
             print(f"{round_name}: 无输出目录"); continue
         stems = ([s.strip() for s in args.files.split(",")] if args.files
@@ -205,7 +208,7 @@ def main() -> None:
     # 汇总
     print("\n== 汇总（noul 均值，越高越符合；shape_guessable/context_reuse 越低越好）==")
     for round_name in rounds:
-        d = HERE / "work" / ("score" if cfg["model"].startswith("respan") else "score_jev") / round_name
+        d = paths.work_dir() / ("score" if cfg["model"].startswith("respan") else "score_jev") / round_name
         files = sorted(d.glob("*.json"))
         if not files:
             continue

@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import paths
 import argparse
 import json
 import random
@@ -19,7 +20,7 @@ from pathlib import Path
 import httpx
 
 HERE = Path(__file__).parent
-JUDGE_DIR = HERE / "work" / "judges"
+JUDGE_DIR = paths.work_dir() / "judges"
 
 PERSONAS = {
     "struggler": {
@@ -41,7 +42,7 @@ PERSONAS = {
 
 
 def load_config() -> dict:
-    return json.loads((HERE / "api_config.json").read_text(encoding="utf-8"))
+    return json.loads(paths.config_file("api_config.json").read_text(encoding="utf-8"))
 
 
 def call_llm(cfg: dict, model: str, prompt: str, max_tokens: int) -> tuple[str, str]:
@@ -131,16 +132,18 @@ def main() -> None:
     ap.add_argument("--teacher", action="store_true")
     ap.add_argument("--students", action="store_true")
     ap.add_argument("--student-counts", default="", help="人设评审只跑这些题量档位，如 01,05,10；空=全部")
+    paths.add_suite_arg(ap)
     args = ap.parse_args()
+    paths.init(args.suite)
     if not (args.teacher or args.students):
         sys.exit("至少指定 --teacher 或 --students")
 
     cfg = load_config()
-    out_dir = HERE / "outputs" / args.round
+    out_dir = paths.outputs_dir() / args.round
     blind_dir = out_dir / "blind"
-    cases = json.loads((HERE / "cases.json").read_text(encoding="utf-8"))
+    cases = json.loads(paths.cases_file().read_text(encoding="utf-8"))
     case_ids = list(cases) if args.cases == "all" else [c.strip() for c in args.cases.split(",")]
-    result_dir = HERE / "work" / f"judge_{args.round}"
+    result_dir = paths.work_dir() / f"judge_{args.round}"
     result_dir.mkdir(parents=True, exist_ok=True)
 
     jobs = []

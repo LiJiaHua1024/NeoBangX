@@ -1,0 +1,7 @@
+{
+  "base_url": "https://openrouter.ai/api/alpha/decisions",
+  "api_key": "<OpenRouter key>",
+  "model": "respan/span-01-lite",
+  "referer": "https://localhost",
+  "title": "prompt tuning"
+}

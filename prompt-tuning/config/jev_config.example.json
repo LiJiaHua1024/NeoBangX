@@ -1,0 +1,7 @@
+{
+  "base_url": "https://api.commandcode.ai/provider/v1/systemone",
+  "api_key": "<Command Code key>",
+  "model": "typesafe/jev",
+  "referer": "",
+  "title": ""
+}

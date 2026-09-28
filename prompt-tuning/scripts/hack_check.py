@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import paths
 import argparse
 import re
 from collections import defaultdict
@@ -119,8 +120,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--round", required=True)
     ap.add_argument("--min-occ", type=int, default=3)
+    paths.add_suite_arg(ap)
     args = ap.parse_args()
-    files = sorted((HERE / "outputs" / args.round).glob("*.md"))
+    paths.init(args.suite)
+    files = sorted((paths.outputs_dir() / args.round).glob("*.md"))
     flagged = 0
     total = 0
     for f in files:
