@@ -4,7 +4,8 @@ import sys
 from pathlib import Path
 
 round_a, round_b = sys.argv[1], sys.argv[2]
-files = sorted(Path("work/ab").glob("*.json"))
+tag = sys.argv[3] if len(sys.argv) > 3 else f"{round_a}-vs-{round_b}"
+files = sorted(Path("work/ab").glob(f"{tag}/*.json"))
 tally = {d: {"A": 0, "B": 0, "tie": 0} for d in ("transfer", "deception", "answers", "overall")}
 n = 0
 for f in files:

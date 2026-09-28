@@ -1,5 +1,7 @@
 # 调优工具区：密钥与虚拟环境不入库
 api_config.json
+scorer_config.json
+jev_config.json
 .venv/
 __pycache__/
 
@@ -8,6 +10,10 @@ outputs/
 work/*.json
 work/ab/
 work/judge_v*/
+work/score*/
+work/pipe*/
+work/student/
+work/abaspect/
 
 # 例外：文档随工具入库（失败样例库、评审 rubric），是未来 verifier 阶段的输入
 !work/failure_library.md

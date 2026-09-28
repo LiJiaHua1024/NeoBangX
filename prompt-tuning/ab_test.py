@@ -69,9 +69,19 @@ def extract_json(text: str) -> dict | None:
         return None
 
 
+def slim(path: Path, cause: str) -> str:
+    """盲评载荷瘦身：错因一句话 + 迁移题 + 答案解析（去掉错因展开与方法论）。"""
+    md = path.read_text(encoding="utf-8")
+    i = md.find("## 三、迁移题")
+    body = md[i:] if i > 0 else md
+    return "（本题组针对的本质错因：" + cause + "）\n\n" + body
+
+
 def run_pair(cfg: dict, case_id: str, count: int, fa: Path, fb: Path, out: Path) -> dict:
-    a = fa.read_text(encoding="utf-8")
-    b = fb.read_text(encoding="utf-8")
+    import json as _json
+    cause = _json.loads((HERE / "cases.json").read_text(encoding="utf-8"))[case_id]["cause"]
+    a = slim(fa, cause)
+    b = slim(fb, cause)
     swapped = random.random() < 0.5
     text_a, text_b = (b, a) if swapped else (a, b)
     raw = call_llm(cfg, random.choice(cfg["judge_pool"]),
@@ -94,12 +104,14 @@ def main() -> None:
     ap.add_argument("--round-b", required=True)
     ap.add_argument("--counts", default="5,10")
     ap.add_argument("--cases", default="all")
+    ap.add_argument("--tag", default="", help="输出子目录名，用于区分不同对比")
+    ap.add_argument("--reps", type=int, default=1, help="每对独立评委数（不同模型/顺序）")
     args = ap.parse_args()
     cfg = load_config()
     cases = json.loads((HERE / "cases.json").read_text(encoding="utf-8"))
     case_ids = list(cases) if args.cases == "all" else [c.strip() for c in args.cases.split(",")]
     counts = [int(c) for c in args.counts.split(",")]
-    out_dir = HERE / "work" / "ab"
+    out_dir = HERE / "work" / "ab" / (args.tag or f"{args.round_a}-vs-{args.round_b}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     jobs = []
@@ -107,9 +119,12 @@ def main() -> None:
         for n in counts:
             fa = HERE / "outputs" / args.round_a / f"{cid}_q{n:02d}.md"
             fb = HERE / "outputs" / args.round_b / f"{cid}_q{n:02d}.md"
-            out = out_dir / f"{cid}_q{n:02d}.json"
-            if fa.exists() and fb.exists() and not out.exists():
-                jobs.append((cid, n, fa, fb, out))
+            if not (fa.exists() and fb.exists()):
+                continue
+            for rep in range(args.reps):
+                out = out_dir / f"{cid}_q{n:02d}.r{rep}.json"
+                if not out.exists():
+                    jobs.append((cid, n, fa, fb, out))
     print(f"A/B 对比任务：{len(jobs)} 组（{args.round_a} vs {args.round_b}）")
     results = []
     with ThreadPoolExecutor(max_workers=2) as pool:
