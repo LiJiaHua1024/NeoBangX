@@ -49,8 +49,19 @@ def compose_user_input(case: dict, count: int) -> str:
     ])
 
 
-def render_prompt(template: str, user_input: str) -> str:
-    return template.replace("{{user_input}}", user_input)
+def case_user_input(case: dict, count: int) -> str:
+    """案例输入：有 material 字段的（整卷类 prompt）直接原文喂入；否则走错题迁移拼装。"""
+    if case.get("material"):
+        return case["material"].strip()
+    return compose_user_input(case, count)
+
+
+def render_prompt(template: str, user_input: str, count: int | None = None) -> str:
+    """替换 {{user_input}}；若模板含 {{transfer_count}} 一并替换（整卷类 prompt 用它控迁移块数）。"""
+    out = template.replace("{{user_input}}", user_input)
+    if count is not None:
+        out = out.replace("{{transfer_count}}", str(count))
+    return out
 
 
 def call_llm(cfg: dict, prompt: str) -> tuple[str, dict]:
@@ -76,12 +87,19 @@ def call_llm(cfg: dict, prompt: str) -> tuple[str, dict]:
                 resp.raise_for_status()
                 data = resp.json()
                 choice = data["choices"][0]
+                content = choice["message"]["content"] or ""
                 meta = {
                     "finish_reason": choice.get("finish_reason"),
                     "usage": data.get("usage"),
                     "model": data.get("model"),
                 }
-                return choice["message"]["content"], meta
+                if not content.strip():
+                    # 偶发：推理模型把预算烧在 reasoning 上、正文为空（finish_reason 仍是 stop）。
+                    # 当失败重试，绝不能让 0 字节结果落盘（否则断点续跑会直接跳过）。
+                    last_err = f"空正文（finish={meta['finish_reason']}, usage={meta['usage']}）"
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                return content, meta
         except (httpx.TimeoutException, httpx.TransportError) as e:
             last_err = f"{type(e).__name__}: {e}"
             time.sleep(3 * (attempt + 1))
@@ -101,7 +119,7 @@ def run_one(cfg: dict, prompt_file: Path, case_id: str, case: dict, count: int, 
         return {"stem": stem, "skipped": True}
 
     template = prompt_file.read_text(encoding="utf-8")
-    prompt = render_prompt(template, compose_user_input(case, count))
+    prompt = render_prompt(template, case_user_input(case, count), count)
     t0 = time.time()
     output, meta = call_llm(cfg, prompt)
     meta.update({"case": case_id, "count": count, "elapsed_s": round(time.time() - t0, 1),

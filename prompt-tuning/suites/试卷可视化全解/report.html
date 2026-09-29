@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>试卷可视化全解 Prompt 调优报告 · v0 → v3</title>
+<style>
+  :root{
+    --ink:#0A0A0A; --paper:#F7F3E8; --yellow:#FFE81A; --cyan:#3DE3FF;
+    --magenta:#FF4FD8; --lime:#8CFF5A; --orange:#FF6A2B; --grey:#B9B3A4;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-snap-type:y proximity}
+  .page{scroll-snap-align:start}
+  @media print{.page{box-shadow:none;margin:0}}
+  body{
+    overflow-x:hidden; background:#2B2B2B; font-family:"Arial Black","Helvetica Neue",system-ui,sans-serif;
+    color:var(--ink); padding:28px 0;
+  }
+  .page{
+    width:1280px; height:800px; background:var(--paper); margin:0 auto 34px;
+    border:5px solid var(--ink); box-shadow:14px 14px 0 var(--ink);
+    padding:34px 42px; position:relative; overflow:hidden; break-after:page;
+  }
+  .page:last-child{break-after:auto}
+  .tag{
+    position:absolute; top:0; right:0; background:var(--ink); color:var(--paper);
+    font-size:14px; letter-spacing:.14em; padding:7px 16px;
+  }
+  .kicker{
+    display:inline-block; background:var(--ink); color:var(--yellow);
+    font-size:14px; letter-spacing:.16em; padding:6px 12px; margin-bottom:14px;
+  }
+  h1{font-size:64px; line-height:.98; letter-spacing:-.02em; text-transform:uppercase}
+  h2{font-size:34px; line-height:1.05; text-transform:uppercase; margin-bottom:4px}
+  h2 .sub{display:block; font-size:16px; font-weight:400; letter-spacing:.02em;
+    text-transform:none; font-family:"Helvetica Neue",system-ui,sans-serif; margin-top:7px; color:#3a3a3a}
+  .rule{height:5px; background:var(--ink); margin:14px 0 16px}
+  table{width:100%; border-collapse:collapse; font-size:15px}
+  th,td{border:3px solid var(--ink); padding:6px 9px; text-align:left; vertical-align:top}
+  th{background:var(--ink); color:var(--paper); font-size:13px; letter-spacing:.06em; text-transform:uppercase}
+  td.num{font-family:"IBM Plex Mono",Consolas,monospace; font-weight:700; white-space:nowrap}
+  tr.hi td{background:var(--yellow)}
+  tr.hi2 td{background:var(--cyan)}
+  tr.bad td{background:var(--orange)}
+  .cards{display:grid; gap:14px}
+  .cards.c3{grid-template-columns:repeat(3,1fr)}
+  .cards.c2{grid-template-columns:repeat(2,1fr)}
+  .cards.c4{grid-template-columns:repeat(4,1fr)}
+  .card{border:4px solid var(--ink); box-shadow:8px 8px 0 var(--ink); padding:14px 16px; background:#fff}
+  .card.y{background:var(--yellow)} .card.c{background:var(--cyan)}
+  .card.m{background:var(--magenta)} .card.l{background:var(--lime)} .card.o{background:var(--orange)}
+  .card .big{font-family:"IBM Plex Mono",Consolas,monospace; font-size:34px; font-weight:700; line-height:1}
+  .card .big.sm{font-size:25px; line-height:1.15}
+  .card .lab{font-size:13px; letter-spacing:.02em; margin-top:7px; line-height:1.35}
+  .note{font-family:"Helvetica Neue",system-ui,sans-serif; font-size:15px; line-height:1.5}
+  .foot{position:absolute; left:42px; bottom:22px; right:42px; display:flex;
+    justify-content:space-between; align-items:center; font-size:13px; letter-spacing:.1em;
+    border-top:4px solid var(--ink); padding-top:8px}
+  ul{font-family:"Helvetica Neue",system-ui,sans-serif; font-size:15px; line-height:1.5; padding-left:20px}
+  li{margin-bottom:6px}
+  .mono{font-family:"IBM Plex Mono",Consolas,monospace; font-weight:700}
+  .pill{display:inline-block; border:3px solid var(--ink); padding:1px 8px; font-size:12px; margin-right:5px; background:#fff}
+  .p-good{background:var(--lime)} .p-bad{background:var(--orange)} .p-flat{background:var(--grey)}
+  .lead{font-size:19px; line-height:1.45; font-family:"Helvetica Neue",system-ui,sans-serif}
+  code{font-family:"IBM Plex Mono",Consolas,monospace; font-size:13px; background:#fff; border:2px solid var(--ink); padding:0 4px}
+</style>
+</head>
+<body>
+
+<!-- ============ P1 封面 ============ -->
+<section class="page">
+  <div class="tag">P1 / 10 · 封面</div>
+  <span class="kicker">NEOBRUTALIST TUNING REPORT</span>
+  <h1>试卷可视化全解<br>Prompt 调优<br>v0 → v3</h1>
+  <div class="rule"></div>
+  <p class="lead">把「智能错题迁移」已经验证过的迁移题机制整段移植到这份 prompt 上：<br>
+  迁移真实性从 <span class="mono">69% 换皮</span> 降到 <span class="mono">21%</span>，迷惑性不足从
+  <span class="mono">92%</span> 降到 <span class="mono">60%</span>，机械问题从 <span class="mono">25 项</span>
+  降到 <span class="mono">3 项</span>。</p>
+  <div class="cards c3" style="margin-top:22px">
+    <div class="card y"><div class="big sm">5 : 0 · 5 : 0</div><div class="lab">单维度盲评「迁移真实性」两轮独立复现全胜（正反双顺序，p=0.062）</div></div>
+    <div class="card c"><div class="big">25 → 3</div><div class="lab">机械检查问题数（9 文件 / 42 个迁移块，同基）</div></div>
+    <div class="card o"><div class="big sm">−13 pt</div><div class="lab">代价：范式可套用性下降（0% → 13%，合并 p≈0.01）</div></div>
+  </div>
+  <div class="cards c4" style="margin-top:14px">
+    <div class="card"><div class="big sm">7 切片</div><div class="lab">真题案例（2022 全国甲卷，含答案）</div></div>
+    <div class="card"><div class="big sm">456 次</div><div class="lab">决策模型窄判定</div></div>
+    <div class="card"><div class="big sm">140 次</div><div class="lab">单维度盲评（70 组 × 正反）</div></div>
+    <div class="card"><div class="big sm">±10 pt</div><div class="lab">实测噪声底（同 prompt 两轮）</div></div>
+  </div>
+  <div class="foot"><span>为教学产品「试卷可视化全解」而做</span><span>按页截图 · 每页 1280×800</span></div>
+</section>
+
+<!-- ============ P2 基线问题 ============ -->
+<section class="page">
+  <div class="tag">P2 / 10 · 基线</div>
+  <h2>v0 的病：讲解很好，迁移是假的<span class="sub">决策模型 42 个迁移块 × 6 类判定 + 机械检查 22 类 + 逐条回原文核对</span></h2>
+  <div class="rule"></div>
+  <table>
+    <tr><th>检查项</th><th>v0 实测</th><th>证据</th></tr>
+    <tr class="bad"><td>迁移题换皮／复述</td><td class="num">69%</td>
+      <td>原题"鹦鹉用工具取坚果"→迁移"大象用竹棍取水果"，同一脚本换名词</td></tr>
+    <tr class="bad"><td>干扰项没有真实吸引力</td><td class="num">92%</td>
+      <td>正确项是叙事的透明转述，另三项与文本无关，一眼可排除</td></tr>
+    <tr class="bad"><td>七选五迁移退化成四选一</td><td class="num">5 / 5</td>
+      <td>原题型最难的"5 空 7 选跨空排除"被整个丢掉</td></tr>
+    <tr class="bad"><td>迁移答案全落同一字母</td><td class="num">2 个案例</td>
+      <td>4 道迁移全选 A；另一案例 8 块里 6 块是 B</td></tr>
+    <tr class="bad"><td>迁移语篇不足 80 词</td><td class="num">12 处</td><td>最短 54 词（要求 80–120）</td></tr>
+    <tr class="bad"><td>证据跨句拼接</td><td class="num">1 处</td><td>跳过中间那句，教师按证据回原文找不到连续段落</td></tr>
+    <tr class="hi"><td>原题四维（答案／证据／易错点／范式／推理）</td><td class="num">0%</td>
+      <td>六项问题率全部为 0%——讲解部分本来就很好</td></tr>
+  </table>
+  <div class="cards c2" style="margin-top:16px">
+    <div class="card m"><div class="lab" style="font-size:14px">实锤 1 · 框句照抄<br>
+      <span class="mono">原题</span> As a first step 61 (journey) the Belt and Road route<br>
+      <span class="mono">迁移</span> As a first step ___ (test) her idea</div></div>
+    <div class="card m"><div class="lab" style="font-size:14px">实锤 2 · 范式把答案写死<br>
+      <span class="mono">范式</span> 定位空前的名词短语信号：a first step / way / chance 等<br>
+      → 迁移题于是照着这个信号词写，范式成了换皮的路线图</div></div>
+  </div>
+  <div class="foot"><span>结论：短板只在迁移题，修复沿用已验证机制</span><span>P2 / 10</span></div>
+</section>
+
+<!-- ============ P3 方法与噪声底 ============ -->
+<section class="page">
+  <div class="tag">P3 / 10 · 方法</div>
+  <h2>评测基础设施：新写四件仪器<span class="sub">输出是 @@TAG@@ 行协议 + 流式逐题渲染，与"错题迁移"的四固定标题完全不同，仪器必须重做</span></h2>
+  <div class="rule"></div>
+  <table>
+    <tr><th>仪器</th><th>问什么</th><th>规模</th></tr>
+    <tr><td><code>vp_check.py</code> + <code>vp_parse.py</code></td>
+        <td>协议合规（22 类：标签格式、取值位置、顺序、题数、题型、语篇引用、迁移块数、题号）、照录保真、迁移质量、范式泄题</td><td class="num">秒级·免费</td></tr>
+    <tr><td><code>vp_scorer.py</code></td>
+        <td>15 个窄判定：原题四维 6 项 + 迁移块分型（选择题问迷惑性，填空题问答案唯一与考点单一）</td><td class="num">456 次</td></tr>
+    <tr><td><code>vp_aspect.py</code></td><td>一次只问一个方面，正反双顺序，只认一致票</td><td class="num">140 次</td></tr>
+    <tr><td><code>vp_report.py</code></td><td>从原始 JSON 现算，附 Wilson 区间与符号检验</td><td class="num">秒级</td></tr>
+  </table>
+  <p class="note" style="margin-top:14px"><b>案例 = 7 份真题切片</b>（2022 年全国甲卷，含参考答案），覆盖该 prompt 的全部结构分支：
+  含听力的阅读 B（测跳过听力 + 题号不重排）、阅读 C（词义/推断/态度/主旨）、七选五（7 共享池）、
+  完形多空、语法填空（无选项）、书面表达（写作分支）、材料未附答案（NOTICE 声明）。</p>
+  <div class="cards c2" style="margin-top:16px">
+    <div class="card y"><div class="big sm">± 10 个百分点</div>
+      <div class="lab">实测噪声底：同一份 prompt（v3）重跑一轮，换皮 21% vs 31%、迷惑性 60% vs 68%、机械问题 3 vs 5。<br>
+      <b>所以：小于 10pt 的版本差异不能当结论。</b></div></div>
+    <div class="card"><div class="lab" style="font-size:14px"><b>为什么必须先量噪声</b><br>
+      每个案例起初只跑 1 份输出，v2 一度看起来"比 v1 差很多"；做了同 prompt 复现轮才发现那只是抽样波动。
+      本次所有结论都经过复现轮交叉。<br><br>
+      <b>顺带修掉一个工具缺陷：</b>生成器曾把 0 字节输出当成功落盘（推理模型把预算烧在 reasoning 上、正文为空），
+      重跑还会跳过——已改为当失败重试。</div></div>
+  </div>
+  <div class="foot"><span>方法与噪声底</span><span>P3 / 10</span></div>
+</section>
+
+<!-- ============ P4 移植映射 ============ -->
+<section class="page">
+  <div class="tag">P4 / 10 · 移植</div>
+  <h2>v17 的机制 → 这份 prompt<span class="sub">不是重新发明：逐条搬运"智能错题迁移"已验证的机制，再补两条本 prompt 特有的</span></h2>
+  <div class="rule"></div>
+  <table style="font-size:14px">
+    <tr><th>「智能错题迁移」v17 的机制</th><th>移植后的形态</th></tr>
+    <tr><td>先写方法论并锁定，再出题</td><td>先写 <code>PATTERN_NAME</code>/<code>PATTERN_STEPS</code> 再出题</td></tr>
+    <tr><td>方法论写到"第一步看什么"的颗粒度</td><td><b>范式必须不依赖原题具体内容</b>（v1 实测：写成"先读小标题 Chopstick Rules"就套不上迁移题）</td></tr>
+    <tr><td>学生"错误直觉"清单 → 干扰项取材</td><td>原样（长选项更对／绝对化必错／原词复现是答案／排除最荒谬的）</td></tr>
+    <tr><td>干扰项套路分配表（五种错法轮换、同种 ≤2 次）</td><td>原样，带"迁移块总数 ≥5 时"守卫</td></tr>
+    <tr><td>命题骨架分配表（≥3 种骨架、三拍骨架 ≤2 次）</td><td>原样（含无解释反推题、多段落语篇各 ≥1 题）</td></tr>
+    <tr class="hi"><td><b>原题指纹禁令</b>（实词／场景／句式／选项）</td><td>原样，并补一条本 prompt 特有的辨析：<b>考点语法结构要保真，框句必须重新设计</b></td></tr>
+    <tr><td>远迁移"去路标"</td><td>原样（隐去转折词／时间状语／本人引语，改写成需推理的形式）</td></tr>
+    <tr><td>半对干扰项、正确项隔一步推理、定义句不算证据</td><td>原样</td></tr>
+    <tr><td>双通道验证（凭应试直觉必须错或犹豫）</td><td>原样</td></tr>
+    <tr><td>可归纳性审查（防"邪修"）：辨析词角色双向、正确项原型轮换、字母机会均等、长度均衡</td><td>原样（角色双向按"同一份输出内的迁移题之间"执行）</td></tr>
+    <tr><td>题量守卫（"至少 N 题"在极小样本下可定义）</td><td>新增定义：迁移块总数＝题数 × <code>{{transfer_count}}</code>，配额一律带"≥5 时"</td></tr>
+    <tr><td>方法论泄题禁令</td><td>移植为「范式不泄题」＋新增机械检查 <code>pattern_leak</code></td></tr>
+    <tr class="hi2"><td>—（v17 没有这类问题）</td><td>本 prompt 特有两条：<b>选项池形式必须与原题一致</b>、<b>EVIDENCE 必须是连续原文</b></td></tr>
+  </table>
+  <div class="foot"><span>移植而非重写</span><span>P4 / 10</span></div>
+</section>
+
+<!-- ============ P5 结果：迁移真实性 ============ -->
+<section class="page">
+  <div class="tag">P5 / 10 · 结果</div>
+  <h2>迁移真实性：两台仪器、两轮复现，都是赢<span class="sub">这是本次最稳的一条结论</span></h2>
+  <div class="rule"></div>
+  <table>
+    <tr><th>证据</th><th>v0</th><th>v1</th><th>v2</th><th>v2 复现</th><th>v3</th><th>v3 复现</th></tr>
+    <tr class="hi"><td>换皮／复述率（n=42 块）</td><td class="num">69%</td><td class="num">24%</td><td class="num">24%</td><td class="num">26%</td><td class="num">21%</td><td class="num">31%</td></tr>
+    <tr><td>考查机制漂移率</td><td class="num">0%</td><td class="num">5%</td><td class="num">5%</td><td class="num">10%</td><td class="num">2%</td><td class="num">7%</td></tr>
+    <tr><td>同型失败率</td><td class="num">10%</td><td class="num">0%</td><td class="num">2%</td><td class="num">2%</td><td class="num">5%</td><td class="num">0%</td></tr>
+    <tr class="hi2"><td>盲评「迁移真实性」胜率</td><td class="num">—</td><td class="num">5:0</td><td class="num">—</td><td class="num">—</td><td class="num">5:0</td><td class="num">—</td></tr>
+  </table>
+  <p class="note" style="margin-top:12px">盲评为单维度、正反双顺序、只认两次一致的票：两轮独立得到 <b>5 胜 0 负</b>（胜率 100%，
+  Wilson 95% 区间 57%–100%，符号检验 p=0.062）。评分器与盲评在同一条上方向一致。</p>
+  <h2 style="margin-top:18px;font-size:26px">迷惑性：评分器说改善，盲评说看不出<span class="sub">分歧必须如实说明</span></h2>
+  <div class="rule"></div>
+  <table>
+    <tr><th>证据</th><th>v0</th><th>v1</th><th>v2 / 复现</th><th>v3 / 复现</th></tr>
+    <tr class="hi"><td>干扰项无真实吸引力（n=37 选择题块）</td><td class="num">92%</td><td class="num">65%</td><td class="num">65% / 62%</td><td class="num">60% / 68%</td></tr>
+    <tr><td>盲评「迷惑性」胜率</td><td class="num">—</td><td class="num">4:2（含 1 平）</td><td class="num">—</td><td class="num">3:2（含 1 平 1 矛盾）</td></tr>
+  </table>
+  <p class="note" style="margin-top:12px"><b>为什么分歧：</b>评分器逐块问"半懂的学生会不会被这些干扰项钓到"；
+  盲评是通读整份课件的整体印象，而整份输出里还有大量照录的原题讲解（两版的四维质量都很好），会把印象拉平。
+  <b>对外表述应为：迷惑性改善由评分器支持（92%→60%，远超 ±10pt 噪声），盲评未能复现。</b></p>
+  <div class="foot"><span>换皮与迷惑性</span><span>P5 / 10</span></div>
+</section>
+
+<!-- ============ P6 机械检查逐类 ============ -->
+<section class="page">
+  <div class="tag">P6 / 10 · 机械</div>
+  <h2>机械检查：25 → 3<span class="sub">同一检查器、同一批 9 份文件 / 42 个迁移块</span></h2>
+  <div class="rule"></div>
+  <table>
+    <tr><th>问题类型</th><th>v0</th><th>v1</th><th>v2</th><th>v2 复现</th><th>v3</th><th>v3 复现</th></tr>
+    <tr class="hi"><td>合计</td><td class="num">25</td><td class="num">3</td><td class="num">11</td><td class="num">13</td><td class="num">3</td><td class="num">5</td></tr>
+    <tr class="bad"><td>七选五选项池失真</td><td class="num">5</td><td class="num">0</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr class="bad"><td>语法填空迁移多空漂移</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">5</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr><td>迁移语篇 &lt;80 词</td><td class="num">12</td><td class="num">1</td><td class="num">2</td><td class="num">2</td><td class="num">1</td><td class="num">4</td></tr>
+    <tr><td>答案字母集中</td><td class="num">4</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr><td>正确项是最长项（超 50%）</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="num">4</td><td class="num">2</td><td class="num">1</td></tr>
+    <tr><td>证据跨句拼接</td><td class="num">1</td><td class="num">0</td><td class="num">1</td><td class="num">2</td><td class="num">0</td><td class="num">0</td></tr>
+  </table>
+  <div class="cards c3" style="margin-top:16px">
+    <div class="card l"><div class="big sm">已根治</div><div class="lab">选项池失真、语法填空多空漂移、答案字母集中 —— v3 两轮均为 0</div></div>
+    <div class="card y"><div class="big sm">大幅减少</div><div class="lab">迁移语篇词数不足：12 → 1–4 处（要求 80–120 词）</div></div>
+    <div class="card o"><div class="big sm">未改善</div><div class="lab">"正确项是最长项" 50% → 50%/41%；证据拼接 0–2 处 —— 属自查不可靠类，建议改为生成后门禁</div></div>
+  </div>
+  <p class="note" style="margin-top:14px"><b>协议与照录本身一直很稳：</b>标签格式、取值位置（单行值／多行内容／<code>PASSAGE_DEF</code> 混合写法）、
+  题数＝题块数、题号照录、<code>QTYPE</code> 与选项一致、语篇"只声明一次 + 按编号引用"、迁移块数、写作题分支，
+  以及听力跳过且题号不重排（首题 24 不是 1）——9 份文件全部 0 问题；26 道选择题的答案与材料所附答案逐题一致。</p>
+  <div class="foot"><span>机械检查逐类</span><span>P6 / 10</span></div>
+</section>
+
+<!-- ============ P7 代价 ============ -->
+<section class="page">
+  <div class="tag">P7 / 10 · 代价</div>
+  <h2>代价一：范式可套用性下降<span class="sub">这是真实回归，不是噪声</span></h2>
+  <div class="rule"></div>
+  <table>
+    <tr><th>版本</th><th>v0</th><th>v1</th><th>v2</th><th>v2 复现</th><th>v3</th><th>v3 复现</th></tr>
+    <tr class="bad"><td>范式套不上迁移题的单元数</td><td class="num">0 / 34</td><td class="num">6 / 34</td><td class="num">3 / 34</td><td class="num">7 / 34</td><td class="num">4 / 34</td><td class="num">5 / 34</td></tr>
+  </table>
+  <p class="note" style="margin-top:12px">v0 为 <b>0/34</b>，移植后五轮合并 <b>25/170 ≈ 14.7%</b>（单侧 p≈0.005，显著）。
+  <b>机制清楚</b>：迁移题被推得更远（换域、去路标、共享池），一道三步范式就不再机械等价于答案。
+  反过来说，v0 那个漂亮的"范式 100% 可套用"，有相当一部分来自<b>迁移题离原题太近</b>——也就是换皮。
+  这是设计取舍：不能既要迁移远，又要范式一贴就灵。v2/v3 对范式措辞的修补把差距从 18% 压到 12–15%。</p>
+  <h2 style="margin-top:20px">代价二：整体观感仍偏向原版<span class="sub">唯一没赢的方面，方向一致但样本量小</span></h2>
+  <div class="rule"></div>
+  <table>
+    <tr><th>盲评方面</th><th>v1 vs v0</th><th>v3 vs v0</th><th>合并</th></tr>
+    <tr class="hi"><td>迁移真实性</td><td class="num">5 : 0</td><td class="num">5 : 0</td><td class="num">10 : 0</td></tr>
+    <tr><td>范式质量</td><td class="num">1 : 3</td><td class="num">4 : 3</td><td class="num">5 : 6</td></tr>
+    <tr><td>照录与格式</td><td class="num">0 : 2</td><td class="num">1 : 1</td><td class="num">1 : 3</td></tr>
+    <tr class="bad"><td>整体可用性</td><td class="num">1 : 4</td><td class="num">1 : 3</td><td class="num">2 : 7</td></tr>
+  </table>
+  <p class="note" style="margin-top:12px">整体可用性合并 2:7（n=9，符号检验 p≈0.18，<b>未达显著但方向一致</b>）。
+  最可能的原因是<b>体积</b>：prompt 从 16.8KB 涨到 26.6KB，附加的配额表与可归纳性审查让输出更"按表填空"，
+  通读者会觉得不如原版干净。范式质量从 1:3 回到 4:3，说明针对范式的措辞修补确实起了作用。</p>
+  <div class="foot"><span>两处代价，都如实披露</span><span>P7 / 10</span></div>
+</section>
+
+<!-- ============ P8 边界漂移 ============ -->
+<section class="page">
+  <div class="tag">P8 / 10 · 边界</div>
+  <h2>复现轮抓到的两处边界漂移<span class="sub">只有一个样本时会被误判成"v2 比 v1 差"；加一轮复现后定位到具体规则歧义</span></h2>
+  <div class="rule"></div>
+  <table>
+    <tr><th>漂移</th><th>实际发生</th><th>根因</th><th>v3 修法</th></tr>
+    <tr class="bad"><td>七选五迁移把选项池从 7 项缩成 5 项</td>
+      <td>v2 轮 5/5 块；v2 复现轮 0/5</td>
+      <td>"同规模共享选项池"的"同规模"有歧义</td>
+      <td>精确化为"与原题项数相同，多余项数也一致"；v3 两轮均为 0</td></tr>
+    <tr class="bad"><td>语法填空迁移挖成 3 个空</td>
+      <td>v2 复现轮 5/5 块（第 3 空考的是定语从句 <code>who</code>，考点漂了）</td>
+      <td>"共享池要保真"被过度泛化到无选项题型</td>
+      <td>精确化为"blank 只挖一个空；多空共享池规则只适用于原题本身带共享池的题"；v3 两轮均为 0</td></tr>
+  </table>
+  <div class="cards c2" style="margin-top:16px">
+    <div class="card c"><div class="big sm">两次都是"规则歧义"</div>
+      <div class="lab">不是"规则不够多"。v3 只做了两处<b>精确化</b>，没有新增任何规则——这也解释了为什么 v3 的机械问题回到 3–5 项而没有继续恶化。</div></div>
+    <div class="card y"><div class="big sm">耀斑信号的处理</div>
+      <div class="lab">当 v2 看起来"修好迁移、坏了格式"时，第一反应不是继续加规则，而是先量噪声底、再做复现轮，最后才动手修。避免了规则通胀。</div></div>
+  </div>
+  <p class="note" style="margin-top:14px"><b>另外修掉一个仪器缺陷：</b>评分器最初对<b>语法填空题</b>的迁移问"错误选项有没有吸引力"——
+  该题型根本没有选项，问题本身不成立（v0/v1 那 5 个单元的该项数据因此作废）。
+  现改为分型提问并用 <code>SCHEMA</code> 后缀隔离旧缓存。</p>
+  <div class="foot"><span>边界漂移与耀斑处理</span><span>P8 / 10</span></div>
+</section>
+
+<!-- ============ P9 建议 ============ -->
+<section class="page">
+  <div class="tag">P9 / 10 · 建议</div>
+  <h2>下一步该做什么（与不该做什么）<span class="sub">结论全部来自实测，不来自推测</span></h2>
+  <div class="rule"></div>
+  <table>
+    <tr><th>事项</th><th>证据</th><th>建议</th></tr>
+    <tr><td>整体观感吃亏</td><td>盲评合并 2:7（方向一致、未显著）；prompt 16.8KB → 26.6KB</td>
+      <td><b>不要再往这份 prompt 加规则。</b>若要继续提升，把细则外移到生成后门禁</td></tr>
+    <tr class="hi"><td>三处"自查不可靠"残留</td>
+      <td>迁移语篇 &lt;80 词（1–4 处）、正确项是最长项（50%→50%/41%，未改善）、证据跨句拼接（0–2 处）</td>
+      <td>做成<b>生成后门禁</b>：<code>vp_check.py</code> 已能逐条检出，可直接接后端做重生成或修标签。
+      这类"数一数"式自查在 prompt 里反复失败，与"错题迁移"那次的结论一致</td></tr>
+    <tr><td>范式可套用性下降</td><td>0/34 → 25/170（p≈0.005），机制是迁移变远</td>
+      <td>接受为设计取舍；若要缓解，方向是让范式写成"逐空通用的判断流程"，而不是让迁移题变近</td></tr>
+    <tr><td>整卷一次性生成未验证</td><td>30+ 题超出单次调用预算（"基本一次跑不完"是已知现象）</td>
+      <td>本次全部用切片输入，<code>@@END_Q@@</code> 的"截断不丢已完成题"语义属未测区域</td></tr>
+    <tr><td>体积红线的根本解法</td><td>prompt 里约 8KB 是 <code>@@TAG@@</code> 输出契约，是前端解析器的接口</td>
+      <td>不能靠删。唯一正确方向是<b>把契约移到服务端格式化层</b>（模型输出结构化字段、后端拼标签）——属工程改动</td></tr>
+  </table>
+  <p class="note" style="margin-top:14px"><b>交付物：</b>生产 prompt 已更新为 v3（<code>prompts/试卷可视化全解.md</code>），
+  版本记录 <code>suites/试卷可视化全解/prompt/v0…v3.md</code>，失败样例库 <code>notes.md</code>，
+  复现命令见 <code>report.md</code> 第八节。所有原始数据在 <code>runs/试卷可视化全解/</code>（不入库）。</p>
+  <div class="foot"><span>建议</span><span>P9 / 10</span></div>
+</section>
+
+<!-- ============ P10 结语 ============ -->
+<section class="page">
+  <div class="tag">P10 / 10 · 结语</div>
+  <h2>一句话总结</h2>
+  <div class="rule"></div>
+  <p class="lead">你抱怨的两件事——<b>迁移是假的</b>、<b>选项太明显</b>——这次是真的修掉了：
+  换皮率 69% → 21%，迷惑性不足率 92% → 60%，机械问题 25 → 3，
+  迁移真实性在单维度盲评里两轮独立拿到 5:0。<br><br>
+  做法不是重新造一套，而是把「智能错题迁移」已经验证过的机制<b>逐条搬过来</b>（先写范式、两张分配表、指纹禁令、去路标、双通道、可归纳性审查），
+  再补两条这份 prompt 特有的（选项池形式保真、证据必须连续）。<br><br>
+  代价也如实说：范式可套用性掉了约 13 个百分点（迁移变远的必然结果，p≈0.01），
+  整体观感仍然偏向原版（2:7，未显著），这三处"自查不可靠"的残留建议交给后端门禁而不是继续加规则。</p>
+  <div class="cards c3" style="margin-top:20px">
+    <div class="card l"><div class="big sm">该赢的赢了</div><div class="lab">换皮、迷惑性、选项池保真、字母机会均等、语法填空考点单一</div></div>
+    <div class="card o"><div class="big sm">该认的认了</div><div class="lab">范式可套用性下降、整体观感未胜出、长度线索未改善</div></div>
+    <div class="card c"><div class="big sm">该停的停了</div><div class="lab">v3 只做两处精确化、不新增规则；残留问题转为门禁清单</div></div>
+  </div>
+  <div class="foot"><span>v0 → v3 · 全部结论均可复现</span><span>P10 / 10</span></div>
+</section>
+
+</body>
+</html>

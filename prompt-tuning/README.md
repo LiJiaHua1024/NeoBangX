@@ -43,12 +43,16 @@ prompt-tuning/
 ├─ rubrics/                     通用评审 rubric（teacher_judge.md / student_judge.md）
 ├─ suites/                      每个被调优的 prompt 一个子目录（**全部入库**）
 │   ├─ _template/cases.json      新 suite 起手模板
-│   └─ 智能错题迁移/
-│       ├─ cases.json            案例库（原题 + 答案 + 学生错答 + 已确认错因）
-│       ├─ prompt/               版本记录 v0..v17（当前生产版在仓库根 prompts/ 下）
-│       ├─ notes.md              失败样例库（v0-v17 全部实锤问题与修复对应）
-│       ├─ report.md             调优报告（数据、结论、遗留问题）
-│       └─ report.html           面向用户的分页报告（新粗野主义，每页 1280×800）
+│   ├─ 智能错题迁移/             四固定标题类（v0→v17）
+│   │   ├─ cases.json            案例库（原题 + 答案 + 学生错答 + 已确认错因）
+│   │   ├─ prompt/               版本记录 v0..v17（当前生产版在仓库根 prompts/ 下）
+│   │   ├─ notes.md              失败样例库（v0-v17 全部实锤问题与修复对应）
+│   │   ├─ report.md             调优报告（数据、结论、遗留问题）
+│   │   └─ report.html           面向用户的分页报告（新粗野主义，每页 1280×800）
+│   └─ 试卷可视化全解/           @@TAG@@ 行协议类（v0→v3，从上面那套移植机制）
+│       ├─ cases.json            7 份真题切片（2022 全国甲卷，含参考答案）
+│       ├─ prompt/               版本记录 v0..v3
+│       ├─ notes.md / report.md / report.html
 └─ runs/                        原始产物（**忽略**）
     └─ <suite>/{outputs/, work/}  生成结果、评分/盲评/检测结果
 ```
@@ -151,6 +155,10 @@ uv run python scripts/judge.py --round v2 --teacher --students --student-counts 
 16. **推理模型的 max_tokens**：reasoning token 计入预算，4096 会让输出为空。生成用 ≥32768（我们测试用 65536）。
 17. **密钥**：`config/*.json` 全部 gitignore，只入库 `.example.json`。提交前扫一遍 `git log --all -p | grep <key片段>` 确认历史干净。
 18. **内置浏览器截图**：`clip` 参数会产生平铺伪影，用 `setViewportSize` + 视口截图。要做分页报告就用固定尺寸的 `.page`（每页一个截图单元）。
+19. **先移植，再发明**。改一个新 prompt 前，先找仓库里已经调优过的同类 prompt，把验证过的机制**整段搬过来**，再做证据驱动的微调。我们踩过：给"试卷可视化全解"从零按当下证据推导规则，结果漏掉"原题指纹禁令"，换皮率只降到 24%；补上移植后才是 21% 且顺带修好了范式过拟合。移植映射表要写进 notes.md，方便下次复用。
+20. **单样本对比会骗人**。同一份 prompt 重跑一轮，n=42 的指标就波动 ±10 个百分点（我们实测换皮 21% vs 31%）。判定版本优劣前，先用**同 prompt 复现轮**量出噪声底，否则会把抽样波动当成"v2 比 v1 差"而白改一轮。复现轮还有个副作用好处：它会暴露只在那一次采样里出现的规则歧义（我们就靠它抓到"选项池规模"与"语法填空挖几个空"两处歧义）。
+21. **"数一数"式自查要继续外移**。迁移语篇词数、正确项是否最长、证据是否连续段落——这三类在 6 轮里反复出现（正确项最长率甚至从 50% 到 50%/41%，完全没改善）。机械脚本能 100% 检出，就该做**生成后门禁**，不要写成 prompt 自查规则。这与第 13 条同源，但这次拿到了"规则写了也不管用"的直接数据。
+22. **prompt 体积是有上限的接口约束**。行协议类 prompt 里，输出契约（标签格式 + 示例）常占一半以上，且是前端解析器的接口，不能靠删。要瘦身只能把契约移到服务端格式化层——那是工程改动，别指望在 prompt 里省字。
 
 ---
 
@@ -172,6 +180,11 @@ uv run python scripts/judge.py --round v2 --teacher --students --student-counts 
 | `judge.py` | 教师 + 学生人设多视角评审 | `--teacher --students --student-counts` | 慢 |
 | `blind_student.py` | 多模型盲做统计 | `--round --files` | 中 |
 | `paths.py` | 路径解析（被其他脚本 import） | `--suite` | — |
+| `vp_parse.py` | **整卷类**：`@@TAG@@` 协议解析库（含格式/顺序违规检测） | 被 import | — |
+| `vp_check.py` | **整卷类**：协议合规 + 照录保真 + 迁移质量机械检查 | `--round` | 秒级 |
+| `vp_scorer.py` | **整卷类**：15 项窄问题评分（原题四维 6 项 + 迁移块分型 4-6 项） | `--rounds --config` | 快 |
+| `vp_aspect.py` | **整卷类**：单维度盲评（正反双顺序） | `--round-a --round-b --aspects` | 中 |
+| `vp_report.py` | **整卷类**：汇总机械+评分+盲评为报告表（含 CI/符号检验） | `--rounds --pairs` | 秒级 |
 
 ---
 
@@ -180,7 +193,8 @@ uv run python scripts/judge.py --round v2 --teacher --students --student-counts 
 | Prompt | 状态 | 说明 |
 |---|---|---|
 | 智能错题迁移 | ✅ 已调优（v0→v17） | 生产文件 `prompts/智能错题迁移.md`；细节见 `suites/智能错题迁移/{notes,report}.md` |
-| 其他 prompt | ⬜ 待开始 | 仓库 `prompts/` 下还有 30+ 个（试卷可视化全解、错题错因分析、作文批改、各类教学设计等） |
+| 试卷可视化全解 | ✅ 已调优（v0→v3，移植 v17 机制） | 生产文件 `prompts/试卷可视化全解.md`；细节见 `suites/试卷可视化全解/{notes,report}.md`。已知代价：范式可套用性 ↓13pt、整体观感未胜出；<br>残留三类"自查不可靠"缺陷建议改做生成后门禁 |
+| 其他 prompt | ⬜ 待开始 | 仓库 `prompts/` 下还有 30+ 个（错因分析、作文批改、各类教学设计等）。**动手前先看第 19 条：优先从上面两个 suite 移植机制** |
 
 ### 已知待办（与调优无关但相关）
 - 生产后端 `config.py` 默认 `max_tokens=4096`：对推理模型会导致空输出，建议 ≥32768。
