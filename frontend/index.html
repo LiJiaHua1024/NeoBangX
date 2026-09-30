@@ -338,7 +338,7 @@
                               <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
                               <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                             </div>
-                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
+                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description" :title="m.description"></div>
                           </div>
                           <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
                             <svg viewBox="0 0 24 24">
@@ -612,7 +612,7 @@
                               <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
                               <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                             </div>
-                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
+                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description" :title="m.description"></div>
                           </div>
                           <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
                             <svg viewBox="0 0 24 24">
@@ -803,7 +803,7 @@
                               <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
                               <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                             </div>
-                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
+                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description" :title="m.description"></div>
                           </div>
                           <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
                             <svg viewBox="0 0 24 24">
@@ -1838,7 +1838,7 @@
                               <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
                               <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                             </div>
-                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
+                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description" :title="m.description"></div>
                           </div>
                           <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
                             <svg viewBox="0 0 24 24">
@@ -2095,7 +2095,7 @@
                               <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
                               <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                             </div>
-                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
+                            <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description" :title="m.description"></div>
                           </div>
                           <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
                             <svg viewBox="0 0 24 24">
@@ -2720,7 +2720,7 @@
                     <span class="ms-free" x-show="m.is_free" title="免费模型：调用不消耗使用码次数">免费</span>
                     <span class="ms-nocode" x-show="m.free_no_code" title="免码模型：无需输入使用码即可调用">免码</span>
                   </div>
-                  <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description"></div>
+                  <div class="ms-item-sub truncate" x-show="m.description && m.description.trim()" x-text="m.description" :title="m.description"></div>
                   <div class="ms-item-sub ms-item-failed" x-show="retryModelMode !== 'regen' && m.id === failedModel">刚才失败</div>
                   <div class="ms-item-sub" x-show="retryModelMode === 'regen' && m.id === currentVersionModel">当前这一版</div>
                   <div class="ms-item-sub" x-show="m.id === selectedModel && (retryModelMode === 'regen' || m.id !== failedModel)">当前使用中</div>

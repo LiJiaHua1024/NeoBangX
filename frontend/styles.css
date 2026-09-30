@@ -964,6 +964,10 @@ html[data-theme="sora"] .mascot-peeking {
   top: calc(100% + 0.5rem);
   right: 0;
   min-width: 15.5rem;
+  /* 宽度上限必须压住内容：模型描述是 nowrap 文本，会把按内容撑宽的面板拉到
+     整行文字宽，右锚定下只能向左伸、窄屏上顶出屏幕左缘；有了上限 .truncate
+     的省略号才真正生效 */
+  max-width: min(24rem, calc(100vw - 1.5rem));
   padding: 0.35rem;
   border-radius: 0.9rem;
   z-index: 70;
@@ -1011,6 +1015,25 @@ html[data-theme="sora"] .mascot-peeking {
 .ms-anim-from { opacity: 0; transform: scale(0.9) translateY(-10px); }
 .ms-anim-to { opacity: 1; transform: scale(1) translateY(0); }
 .ms-anim-leave { transition: transform 0.16s ease-in, opacity 0.14s ease-in; }
+
+/* 手机档：右锚定兜不住左缘（触发钮右侧还排着历史入口，右缘距屏幕约 64px，
+   面板加宽后仍会向左伸出屏幕），由 JS 落位（positionModelMenu，仿
+   positionVpSettings）。落位坐标相对 mainPanel 玻璃面板——把 .ms-wrap 放平，
+   菜单的包含块就是面板（relative + overflow:hidden）。不能挂视口 fixed：
+   面板带 backdrop-filter，会把 fixed 后代劫持成自己的包含块，坐标整体偏移、
+   右缘再被面板 overflow 裁掉。left/top 只是开屏前一瞬的兜底值，落位后由内联
+   样式接管；right 必须放开成 auto，否则 left/right 同时生效会把面板拉满全宽 */
+@media (max-width: 640px) {
+  .ms-wrap { position: static; }
+  .ms-menu {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: auto;
+    /* 百分比相对新包含块（面板 padding box），不是视口 */
+    max-width: calc(100% - 1rem);
+  }
+}
 
 /* ============================================================
    解析设置（试卷可视化全解）：只有「每题迁移题量」一项。

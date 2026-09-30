@@ -3602,6 +3602,9 @@ function nbx() {
         if (d && d.msg) this.toast(d.msg, d.type || "warn");
       });
 
+      // 手机档模型下拉走 fixed 落位：转屏、软键盘弹出等都会触发 resize，开着时重算落位
+      window.addEventListener("resize", () => this.positionModelMenu());
+
       // 悠空 · 两时段天空：每分钟校准一次，回到前台时立即校准
       this._skyTimer = setInterval(() => this.updateSkyPeriod(), 60000);
       document.addEventListener("visibilitychange", () => {
@@ -4283,10 +4286,38 @@ function nbx() {
     toggleModelMenu() {
       this.modelMenuOpen = !this.modelMenuOpen;
       if (!this.modelMenuOpen) this.modelsExpanded = false;
+      else this.$nextTick(() => this.positionModelMenu());
     },
     closeModelMenu() {
       this.modelMenuOpen = false;
       this.modelsExpanded = false;
+    },
+    /* 手机档浮层落位（≤640px 时 CSS 放平 .ms-wrap，.ms-menu 的包含块变成
+       mainPanel 玻璃面板，仿 positionVpSettings）：与触发器右对齐、下方 8px，
+       左右各留 8px 在面板内夹取，底部放不下就上移。坐标必须按面板算而不是
+       视口——面板带 backdrop-filter + overflow:hidden，视口坐标会整体偏移、
+       右缘被裁。桌面档保持 CSS 右锚定，内联 left/top 要清掉，免得手机上开过
+       一次、转屏到宽屏后残留的内联样式污染绝对定位。
+       x-if 模板保证同一时刻 DOM 里只有当前工具那份 .ms-menu。 */
+    positionModelMenu() {
+      const menu = document.querySelector(".ms-menu");
+      if (!menu) return;
+      if (!this.modelMenuOpen || !window.matchMedia("(max-width: 640px)").matches) {
+        menu.style.left = "";
+        menu.style.top = "";
+        return;
+      }
+      const panel = this.$refs.mainPanel;
+      const wrap = menu.closest(".ms-wrap");
+      const trigger = wrap && wrap.querySelector(".ms-trigger");
+      if (!panel || !trigger) return;
+      const pr = panel.getBoundingClientRect();
+      const r = trigger.getBoundingClientRect();
+      const w = menu.offsetWidth || 248;
+      const h = menu.offsetHeight || 320;
+      // 包含块是面板的 padding box，border box 差 1px 边框，忽略不计
+      menu.style.left = Math.round(Math.max(8, Math.min(r.right - pr.left - w, pr.width - w - 8))) + "px";
+      menu.style.top = Math.round(Math.max(8, Math.min(r.bottom - pr.top + 8, pr.height - h - 8))) + "px";
     },
 
     /* ============ UI 持久化 ============ */
