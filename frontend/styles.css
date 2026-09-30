@@ -34,6 +34,17 @@ html[data-theme="sora"][data-sky="night"] {
   --glass-blur-deep: 20px;
 }
 
+/* 手机档深色主题：小屏上光斑相对占比大，亮度透过玻璃冲淡白字；
+   只压漫游光斑 / 触点光晕 / 云絮的强度（背景引擎按 --c-glow-scale 缩放），
+   流星等瞬态效果不动。面板通透度维持原样。 */
+@media (max-width: 640px) {
+  html[data-theme="obsidian"],
+  html[data-theme="jade"],
+  html[data-theme="sora"][data-sky="night"] {
+    --c-glow-scale: 0.5;
+  }
+}
+
 html, body { height: 100%; }
 
 /* 键盘高度：JS 写入 --kb，现代 Chrome 写入 env(keyboard-inset-height) */
@@ -1034,6 +1045,14 @@ html[data-theme="sora"] .mascot-peeking {
     max-width: calc(100% - 1rem);
   }
 }
+
+/* 深色主题：下拉是直接压在正文上的文字浮层（无遮罩），底色提到近实心保证可读。
+   只在 .ms-menu 元素上局部覆盖 --panel-strong，.glass-deep 的共享定义与
+   其余深色玻璃面（弹窗等刻意做透的观感）都不动。6 处模型下拉 + 2 处翻译
+   语言下拉都挂 ms-menu 类，一条覆盖全部。 */
+html[data-theme="obsidian"] .ms-menu { --panel-strong: color-mix(in srgb, #16100c 92%, transparent); }
+html[data-theme="jade"] .ms-menu { --panel-strong: color-mix(in srgb, #0e1a13 92%, transparent); }
+html[data-theme="sora"][data-sky="night"] .ms-menu { --panel-strong: color-mix(in srgb, #0e1a30 92%, transparent); }
 
 /* ============================================================
    解析设置（试卷可视化全解）：只有「每题迁移题量」一项。

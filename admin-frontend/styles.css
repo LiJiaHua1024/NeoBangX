@@ -26,6 +26,17 @@ html[data-theme="sora"][data-sky="night"] {
   --glass-blur-deep: 20px;
 }
 
+/* 手机档深色主题：小屏上光斑相对占比大，亮度透过玻璃冲淡白字；
+   只压漫游光斑 / 触点光晕 / 云絮的强度（背景引擎按 --c-glow-scale 缩放），
+   流星等瞬态效果不动。面板通透度维持原样。 */
+@media (max-width: 640px) {
+  html[data-theme="obsidian"],
+  html[data-theme="jade"],
+  html[data-theme="sora"][data-sky="night"] {
+    --c-glow-scale: 0.5;
+  }
+}
+
 /* 默认：宣纸（亮色） */
 html[data-theme="paper"] {
   color-scheme: light;

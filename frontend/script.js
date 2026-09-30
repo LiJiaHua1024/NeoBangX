@@ -657,6 +657,7 @@ function createBackground(canvas) {
       birds: parseFloat(cs.getPropertyValue("--c-sky-birds")) || 0,
       bird: parse(cs.getPropertyValue("--c-sky-bird")),
       boost: parseFloat(cs.getPropertyValue("--c-glow-boost")) || 1,
+      scale: parseFloat(cs.getPropertyValue("--c-glow-scale")) || 1,
     };
   }
   const cur = readTheme();
@@ -727,6 +728,8 @@ function createBackground(canvas) {
       resizeRaf = null;
       if (resize()) {
         spawn();
+        // 画布尺寸变了，媒体查询断点（如手机档的 --c-glow-scale）可能翻转，重读目标值
+        tgt = readTheme();
         // 减少动态效果模式没有帧循环，改变画布尺寸后必须补画。
         if (reduced) frame(true);
       }
@@ -954,21 +957,22 @@ function createBackground(canvas) {
     cur.stars += (tgt.stars - cur.stars) * 0.06;
     cur.birds += (tgt.birds - cur.birds) * 0.06;
     cur.boost += (tgt.boost - cur.boost) * 0.06;
+    cur.scale += (tgt.scale - cur.scale) * 0.06;
     ctx.clearRect(0, 0, W, H);
     ctx.globalCompositeOperation = cur.blend === "lighter" ? "lighter" : "source-over";
 
     if (!staticOnly) stepLights();
     const m = Math.max(W, H);
-    glowSpot(lights[0].x, lights[0].y, m * 0.5, cur.g1, 0.09 * cur.boost);
-    glowSpot(lights[1].x, lights[1].y, m * 0.46, cur.g2, 0.085 * cur.boost);
-    glowSpot(lights[2].x, lights[2].y, m * 0.38, cur.gm, 0.05 * cur.boost);
+    glowSpot(lights[0].x, lights[0].y, m * 0.5, cur.g1, 0.09 * cur.boost * cur.scale);
+    glowSpot(lights[1].x, lights[1].y, m * 0.46, cur.g2, 0.085 * cur.boost * cur.scale);
+    glowSpot(lights[2].x, lights[2].y, m * 0.38, cur.gm, 0.05 * cur.boost * cur.scale);
 
     if (!staticOnly) {
       halo.x += (halo.tx - halo.x) * 0.07;
       halo.y += (halo.ty - halo.y) * 0.07;
     }
-    glowSpot(halo.x, halo.y, 380 + 60 * (cur.boost - 1), cur.gm, 0.12 * cur.boost);
-    glowSpot(halo.x, halo.y, 150, cur.gm, 0.06 * cur.boost);
+    glowSpot(halo.x, halo.y, 380 + 60 * (cur.boost - 1), cur.gm, 0.12 * cur.boost * cur.scale);
+    glowSpot(halo.x, halo.y, 150, cur.gm, 0.06 * cur.boost * cur.scale);
 
     for (let i = pulses.length - 1; i >= 0; i--) {
       const pu = pulses[i];
@@ -1026,7 +1030,7 @@ function createBackground(canvas) {
         // 云飘到光晕附近时被阳光照亮
         const hx = px - halo.x, hy = py - halo.y;
         const lit = Math.max(0, 1 - Math.sqrt(hx * hx + hy * hy) / 320);
-        drawCloud(px, py, c.s, cur.p, Math.min(0.55, c.a * cur.sky * (1 + lit * 0.7)));
+        drawCloud(px, py, c.s, cur.p, Math.min(0.55, c.a * cur.sky * (1 + lit * 0.7) * cur.scale));
       }
       if (cur.birds > 0.02) {
         for (const b of birds) {
