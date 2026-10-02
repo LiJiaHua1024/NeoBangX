@@ -721,8 +721,9 @@ def test_migration_batch_logs_one_row_per_card(stream):
     assert len(rows) == 2  # 每张卡各留一条，不再有批次级汇总行
     assert [r.tool_id for r in rows] == [MIGRATION_TOOL_ID] * 2
     assert [r.tool_name for r in rows] == [MIGRATION_TOOL_NAME] * 2
-    # 扣费集中在整批最后一卡：2 张卡 → 1 次额度
-    assert [r.units for r in rows] == [0, 1]
+    # 整批价按已交付卡片数摊分：2 张卡值 1 次，摊到第 1 张已按下限保底扣满，
+    # 第 2 张不再重复扣 —— 两行相加仍等于整批价 1 次
+    assert [r.units for r in rows] == [1, 0]
 
     db = SessionLocal()
     try:

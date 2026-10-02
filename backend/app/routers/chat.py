@@ -289,11 +289,16 @@ class _MigrationBatch:
     charge_units: int
     created_at: float = field(default_factory=monotonic)
     completed: set[int] = field(default_factory=set)
-    failed: bool = False
+    # 已交付（正文已产出并推给前端）的卡片序号。内容交付了收不回来，
+    # 停止或失败都不能让它变免费，否则前端写进历史的卡片就是白送的。
+    delivered: set[int] = field(default_factory=set)
+    # 本批已累计扣减的次数，用于把整批价按交付比例摊到各次扣减上
+    charged: int = 0
 
 
-# 批量迁移请求需要在全部卡片成功后才扣费。主站当前为单进程部署，
-# 这里沿用停止事件的进程内协调方式；额度实际扣减仍在独立数据库会话中完成。
+# 迁移批次按已交付卡片数等比结算：每张卡片交付时立刻扣掉自己那份增量，
+# 整批收齐时累计正好等于整批价。主站当前为单进程部署，这里沿用停止事件的
+# 进程内协调方式；额度实际扣减仍在独立数据库会话中完成。
 _migration_batches: dict[str, _MigrationBatch] = {}
 _migration_reserved: dict[int, int] = {}
 _MIGRATION_BATCH_TTL = 30 * 60
@@ -665,16 +670,37 @@ def _cleanup_migration_batches() -> None:
         _release_migration_reservation(batch)
 
 
-def _release_migration_reservation(batch: _MigrationBatch) -> None:
-    # 免费模型批次不占额度（charge_units=0），不能走减法：
-    # 否则会把同一属主其它批次的预留一起清掉
-    if batch.charge_units <= 0:
+def _consume_migration_reservation(batch: _MigrationBatch, units: int) -> None:
+    """实际扣掉 units 次额度时，同步扣减本属主的预留。
+
+    预留是并发准入闸门：预扣整批价是为了不让两个并发的批次各自都以为额度够。
+    真正扣费发生时就该把这部分预留划掉，否则同一份额度被重复计入可用量，
+    并发批次会被自己的历史扣减挡住。
+    """
+    if units <= 0:
         return
-    reserved = _migration_reserved.get(batch.owner_id, 0) - batch.charge_units
+    reserved = _migration_reserved.get(batch.owner_id, 0) - units
     if reserved > 0:
         _migration_reserved[batch.owner_id] = reserved
     else:
         _migration_reserved.pop(batch.owner_id, None)
+
+
+def _release_migration_reservation(batch: _MigrationBatch) -> None:
+    """归还批次尚未扣减的预留额度。
+
+    预留跟着实际扣减走：每扣一次就减一分，所以这里只释放 charge_units
+    里尚未被 charged 吃掉的那部分 —— 用户停在一半时，未交付部分对应的预留
+    当场还回去，不会占着额度直到 TTL。
+    """
+    # 免费模型批次不占额度（charge_units=0），不能走减法：
+    # 否则会把同一属主其它批次的预留一起清掉
+    if batch.charge_units <= 0:
+        return
+    outstanding = batch.charge_units - batch.charged
+    if outstanding <= 0:
+        return
+    _consume_migration_reservation(batch, outstanding)
 
 
 def _register_migration_batch(
@@ -751,26 +777,41 @@ def _finish_migration_stream(
     batch_id: str,
     batch_index: int,
     owner_id: int,
-    success: bool,
-) -> bool:
-    """标记一张卡片完成，返回是否应由当前请求完成整批扣费。"""
+    delivered: bool,
+) -> int:
+    """标记一张卡片收尾，返回本次需要立即扣减的额度次数。
+
+    整批价按已交付卡片数等比摊分：每张卡片交付时把「摊到它为止的累计值」
+    与「已扣值」的差额补上，整批收齐时累计正好等于整批价。中途停止或失败
+    只是不再累加，已经交付的部分照扣 —— 正文已经推给前端、写进了历史，
+    收不回来，但必须计费而不是静默吞掉。
+    """
     batch = _migration_batches.get(batch_id)
     if not batch or batch.owner_id != owner_id:
-        return False
+        return 0
 
-    if not success:
-        batch.failed = True
+    if delivered:
+        batch.delivered.add(batch_index)
     batch.completed.add(batch_index)
-    if batch.failed:
+
+    if batch.charge_units <= 0 or not batch.delivered:
+        # 免费批不占额度；一张都没交付就没有内容可计。
+        # 批次就此收尾：未交付部分的预留当场还回去，不占着额度等 TTL。
+        if len(batch.completed) >= batch.expected:
+            _migration_batches.pop(batch_id, None)
+            _release_migration_reservation(batch)
+        return 0
+
+    target = max(1, batch.charge_units * len(batch.delivered) // batch.expected)
+    delta = target - batch.charged
+    if delta > 0:
+        batch.charged = target
+        # 这次要真扣额度了，先把对应的预留划掉
+        _consume_migration_reservation(batch, delta)
+    if len(batch.completed) >= batch.expected:
         _migration_batches.pop(batch_id, None)
         _release_migration_reservation(batch)
-        return False
-    if len(batch.completed) < batch.expected:
-        return False
-
-    _migration_batches.pop(batch_id, None)
-    _release_migration_reservation(batch)
-    return True
+    return delta
 
 
 def _migration_prompt_input(req: MigrationAnalyzeRequest) -> str:
@@ -1233,28 +1274,29 @@ async def chat_stream(
                 yield {"event": "token", "data": json.dumps(token, ensure_ascii=False)}
 
             if migration_batch:
-                # 智能错题迁移只有整批卡片全部自然完成才扣费；手动停止或断开不扣费。
-                success = not client_disconnected and not stop_event.is_set()
-                should_charge = _finish_migration_stream(
+                # 智能错题迁移按已交付卡片数等比扣费：整批价摊到各卡，
+                # 每张交付时立刻扣掉摊到自己头上的那份增量。停止或失败只是
+                # 不再累加，已经产出正文的那部分照扣。
+                completed = not client_disconnected and not stop_event.is_set()
+                charge_units = _finish_migration_stream(
                     batch_id=req.batch_id or "",
                     batch_index=req.batch_index or 0,
                     owner_id=owner_id,
-                    success=success,
+                    delivered=bool("".join(output_parts).strip()),
                 )
                 migration_finished = True
-                # 额度在整批最后一卡完成时一次性扣减；单卡日志不扣费（units=0）
-                if should_charge and success:
+                if charge_units > 0:
                     units = await asyncio.to_thread(
                         _charge_usage,
                         code_id=owner_id,
-                        units=migration_batch.charge_units,
+                        units=charge_units,
                         request_id=req.batch_id or request_id,
                     )
-                if not success:
+                if not completed:
                     status = STATUS_CANCELLED
                 yield {
                     "event": "done",
-                    "data": "[DONE]" if success else "[CANCELLED]",
+                    "data": "[DONE]" if completed else "[CANCELLED]",
                 }
             else:
                 # 保持现有工具的计费行为：流正常收尾（包括用户停止/断开）后扣 1 次；
@@ -1287,13 +1329,21 @@ async def chat_stream(
             status = STATUS_CANCELLED
             if migration_batch:
                 if not migration_finished:
-                    _finish_migration_stream(
+                    # 已产出正文的卡片照扣：内容已经推给前端并写进了历史
+                    charge_units = _finish_migration_stream(
                         batch_id=req.batch_id or "",
                         batch_index=req.batch_index or 0,
                         owner_id=owner_id,
-                        success=False,
+                        delivered=bool("".join(output_parts).strip()),
                     )
                     migration_finished = True
+                    if charge_units > 0:
+                        units = await asyncio.to_thread(
+                            _charge_usage,
+                            code_id=owner_id,
+                            units=charge_units,
+                            request_id=req.batch_id or request_id,
+                        )
                 yield {"event": "done", "data": "[CANCELLED]"}
             else:
                 if not charged:
@@ -1320,11 +1370,13 @@ async def chat_stream(
             }
         finally:
             if migration_batch and not migration_finished:
+                # 走到这里说明卡片没经过任何结算点（异常中断）。异常一律不扣费，
+                # 与普通工具的既有口径一致 —— 用户拿到的是失败提示而非可用产出。
                 _finish_migration_stream(
                     batch_id=req.batch_id or "",
                     batch_index=req.batch_index or 0,
                     owner_id=owner_id,
-                    success=False,
+                    delivered=False,
                 )
             _stop_events.pop(request_id, None)
             # 释放免费模型的在途占位（重复调用安全）
