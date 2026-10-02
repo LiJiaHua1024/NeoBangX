@@ -477,17 +477,41 @@ function nbxFpHeaders() {
     return {};
   }
 }
+/* GPU 渲染器。ThumbmarkJS 的 webgl 组件只回 {commonPixelsHash}，没有 renderer；
+   显卡串在 hardware.videocard 里，而它只在被遮蔽值为空时才填 rendererUnmasked ——
+   Chrome 的 VENDOR/RENDERER 恒非空，所以那里通常只有无用的 "WebKit WebGL"。
+   因此先自己探一次 WEBGL_debug_renderer_info 拿未遮蔽串，探不到再退回组件值。 */
+function nbxFpGpu(components) {
+  const c = components || {};
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+    if (gl) {
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : "";
+      if (name) return String(name).trim();
+    }
+  } catch { /* 拿不到就退回组件值 */ }
+  const vc = (c.hardware && c.hardware.videocard) || null;
+  const raw = vc ? String(vc.rendererUnmasked || vc.renderer || "") : "";
+  return raw.trim();
+}
+
 function nbxFpSummarize(components, uach) {
   // 精简设备摘要：优先用 ThumbmarkJS components，缺字段时用 navigator 兜底；
   // uach 为 userAgentData.getHighEntropyValues 结果（仅 Chromium），用于型号与系统版本
   try {
     const c = components || {};
     const u = uach || {};
-    const plat = (c.system && (c.system.platform || c.system.os)) || c.platform
+    const plat = (c.system && c.system.platform) || c.platform
       || (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
-    const lang = (c.locales && (c.locales.language || c.locales[0])) || navigator.language || "";
-    const w = (c.screen && (c.screen.width || c.screen.w)) || window.screen.width || "";
-    const h = (c.screen && (c.screen.height || c.screen.h)) || window.screen.height || "";
+    // ThumbmarkJS 的 locales 组件键名是复数 languages，值是单个字符串（"zh-CN"）
+    const lang = (c.locales && c.locales.languages) || navigator.language || "";
+    // screen 组件没有 width/height（只有 colorDepth / maxTouchPoints / mediaMatches，
+    // 而 resolution 只在非 iPad 触屏移动端才赋值）——尺寸只能读 window.screen，
+    // 换成 resolution 会让桌面 Windows / macOS 的尺寸查表全部失效
+    const w = window.screen.width || "";
+    const h = window.screen.height || "";
     const dpr = window.devicePixelRatio || 1;
     const cores = navigator.hardwareConcurrency || "";
     const tz = (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone || "";
@@ -508,12 +532,15 @@ function nbxFpSummarize(components, uach) {
     if (arch) data.arch = arch.slice(0, 16);
     const bit = String(u.bitness || "").trim();
     if (bit) data.bit = bit.slice(0, 8);
-    // GPU 渲染器（webgl 组件已采集，此前被丢弃）；纯哈希值没有可读性，跳过
-    const wg = c.webgl && typeof c.webgl === "object" ? c.webgl : {};
-    const gpu = String(wg.rendererUnmasked || wg.renderer || "").trim();
+    const gpu = nbxFpGpu(c);
+    // 纯哈希值没有可读性，跳过
     if (gpu && !/^[0-9a-f]{16,}$/i.test(gpu)) data.gpu = gpu.slice(0, 160);
+    // 电池：采集侧（collectExtra）已经写好 u.bat，这里之前从没读过，
+    // 于是「有电池」这个 Windows 机型识别的最高优先级信号恒为空
+    if (u.bat) data.bat = 1;
     data.touch = navigator.maxTouchPoints || 0;
-    const mem = Number(navigator.deviceMemory || (c.device && c.device.deviceMemory) || 0);
+    // 没有 device 组件，deviceMemory 在 hardware 下且是字符串
+    const mem = Number(navigator.deviceMemory || (c.hardware && c.hardware.deviceMemory) || 0);
     if (mem > 0) data.mem = mem;
     const cd = (window.screen && window.screen.colorDepth) || 0;
     if (cd) data.cd = cd;
