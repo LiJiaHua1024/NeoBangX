@@ -651,7 +651,7 @@
                     <span class="font-semibold text-sm">待排查文本</span>
                     <span class="text-[11px] text-faint">机器分词 + 课标词表匹配，毫秒级返回，不消耗额度</span>
                   </div>
-                  <textarea x-model="vocab.text" spellcheck="false" class="flex-1 min-h-0 w-full"
+                  <textarea x-model="vocab.text" @input="vocabTextChanged($event.target.value)" spellcheck="false" class="flex-1 min-h-0 w-full"
                             placeholder="粘贴英语文本（改编文本 / 试题 / 学生作文）…"></textarea>
                   <div class="flex items-center gap-2 mt-2 shrink-0">
                     <button class="btn-primary" @click="checkVocab()"
@@ -759,7 +759,7 @@
 
             <div class="px-4 sm:px-5 py-1.5 flex items-center gap-2 text-xs text-dim border-t shrink-0" style="border-color:var(--border)">
               <span class="status-dot" :class="{ 'live': vocab.replacing, 'ok': vocab.checked && vocab.status === 'done' }"></span>
-              <span x-text="!vocab.checked ? '机器排查 → AI 替换' : (vocab.replacing ? 'AI 替换中…' : (vocab.status === 'done' ? '已完成替换' : (vocab.status === 'error' ? '替换失败' : '排查完成'))"></span>
+              <span x-text="!vocab.checked ? '机器排查 → AI 替换' : (vocab.replacing ? 'AI 替换中…' : (vocab.status === 'done' ? '已完成替换' : (vocab.status === 'stopped' ? '已停止替换' : (vocab.status === 'error' ? '替换失败' : '排查完成')))"></span>
             </div>
           </div>
         </template>

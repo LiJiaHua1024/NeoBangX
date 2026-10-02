@@ -2370,6 +2370,8 @@ function nbx() {
         checking: false,
         checkError: "",
         checked: false,
+        // 排查那一刻的原文快照。正文改动后清单即作废（见 vocabTextChanged）
+        checkedText: "",
         replacing: false,
         stopRequested: false,
         thinking: false,
@@ -3490,6 +3492,9 @@ function nbx() {
         const data = await res.json();
         this.vocab.result = data;
         this.vocab.checked = true;
+        // 记下排查时的原文：正文一改，清单里的词频、词性、例句就全部过期，
+        // 而 buildReplacementInput 会把新正文拼到旧词表后面 —— 替换必然漏。
+        this.vocab.checkedText = this.vocab.text;
         if (!data.over_words || !data.over_words.length) {
           this.toast("未发现超标词，词汇均在课标范围内", "ok");
         } else {
@@ -3503,6 +3508,22 @@ function nbx() {
       } finally {
         this.vocab.checking = false;
       }
+    },
+    /* 正文一改，排查清单就作废：词频、词性、例句全都对不上新正文了，
+       继续拿旧清单去替换必然漏词。直接清掉清单并提示重新排查，
+       别让用户对着一个看起来正常的表格点「全部替换」然后什么都没改到。
+
+       取 $event.target.value 而不是读 this.vocab.text：x-model 与 @input
+       都挂在同一个 textarea 上，谁先执行取决于监听器注册顺序，读属性可能
+       拿到旧值。 */
+    vocabTextChanged(value) {
+      if (!this.vocab || !this.vocab.checked) return;
+      if (value === this.vocab.checkedText) return;
+      const had = this.vocab.result && (this.vocab.result.over_words || []).length;
+      this.vocab.result = null;
+      this.vocab.checked = false;
+      this.vocab.status = "";
+      if (had) this.toast("原文已修改，请重新排查后再替换", "warn");
     },
     buildReplacementInput() {
       const over = (this.vocab.result && this.vocab.result.over_words) || [];
@@ -3557,9 +3578,10 @@ function nbx() {
           },
         });
         this.vocab.status = state === "stopped" ? "stopped" : "done";
-        if (state === "stopped") {
-          this.toast("已停止生成", "warn");
-        } else if (this.vocab.output.trim()) {
+        // 与 OCR / 翻译 / 通用工具同一口径：停止时已流式产出的正文要留档。
+        // 原来这里只弹 toast，正文既不进历史也不提示，下一次 replaceVocab
+        // 开头的 output = "" 直接抹掉 —— 用户点了停止就等于白跑一场。
+        if (this.vocab.output.trim()) {
           const item = {
             id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
             toolId: this.currentTool.id,
@@ -3570,10 +3592,16 @@ function nbx() {
             fileName: "",
             output: this.vocab.output,
             model: this.selectedModel,
-            partial: false,
+            partial: state === "stopped",
             createdAt: Date.now(),
           };
           this.commitHistoryWithTitle(item);
+        }
+        if (state === "stopped") {
+          this.toast(
+            this.vocab.output.trim() ? "已停止替换，已经替换出的内容已保留" : "已停止生成",
+            "warn"
+          );
         }
       } catch (e) {
         if (e && e.name === "AbortError") {
