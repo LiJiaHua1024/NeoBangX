@@ -430,9 +430,15 @@
     var m = payload.answerMap;
     var keys = m && typeof m === "object" ? Object.keys(m) : [];
     if (keys.length) return m;
+    // 兜底现推：写作题的 answer 为空（答案在范文里），速查表仍要给一条指引，
+    // 与主应用、后端 visual_paper 和 vp-standalone 的口径一致。少了这条分支，
+    // 没有 answerMap 的旧文件里写作题会在答案速查中整行消失。
     var out = {};
     (payload.groups || []).forEach(function (g) {
-      (g.questions || []).forEach(function (q) { if (has(q.answer)) out[str(q.no)] = detag(q.answer); });
+      (g.questions || []).forEach(function (q) {
+        if (has(q.answer)) out[str(q.no)] = detag(q.answer);
+        else if (q.writingGuide != null && q.writingGuide !== "") out[str(q.no)] = "见范文";
+      });
     });
     return out;
   }
@@ -693,7 +699,8 @@
       var qs = g.questions || [];
       if (!qs.length) return;
       var gh = groupTitle(g, gi);
-      out.push(itemHtml("group", groupHeadHtml(g, gi, false), { header: gh, keepWith: mm(26), headLike: true }));
+      out.push(itemHtml("group", groupHeadHtml(g, gi, false),
+      { header: gh, pageBreak: !!o.groupBreak && gi > 0, keepWith: mm(26), headLike: true }));
       qs.forEach(function (q) {
         /* 先攒这题在本册里要印的所有小块，再看要不要印「第 N 题」这个题头：
            一条都印不出来的题目整条跳过，否则纸上会出现一行光秃秃的题号。 */

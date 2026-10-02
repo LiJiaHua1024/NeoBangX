@@ -301,8 +301,14 @@
     t.host[t.key] = value;
   }
   function deriveAnswerMap() {
+    // 写作题的 answer 为空（答案在范文里），但速查表仍要给一个指引，
+    // 与主应用和后端 visual_paper 的口径一致 —— 少了这条分支，写作题
+    // 在讲台与打印件的答案速查里会整行消失。
     var m = {};
-    FLAT.forEach(function (it) { if (has(it.q.answer)) m[str(it.q.no)] = it.q.answer; });
+    FLAT.forEach(function (it) {
+      if (has(it.q.answer)) m[str(it.q.no)] = it.q.answer;
+      else if (it.q.writingGuide != null && it.q.writingGuide !== "") m[str(it.q.no)] = "见范文";
+    });
     return m;
   }
 
