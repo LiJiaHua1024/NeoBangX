@@ -2945,10 +2945,12 @@ function nbx() {
     },
     vpSelectQuestion(gIdx, qIdx) {
       if (!this.visualPaper) return;
+      // 回写必须在挪指针之前：q.* 路径是靠当前题解析的，指针一动，
+      // 旧题留在 DOM 里的编辑内容就会写进新题的字段
+      this.vpEditBeforeLeave();
       this.visualPaper.currentGroupIdx = gIdx;
       this.visualPaper.currentQIdx = qIdx;
       this.vpActiveTab = "reference";
-      this.vpEditBeforeLeave();
       // 若全屏，保持全屏；否则滚动到顶部
       this.$nextTick(() => {
         const el = this.$refs.vpRightPane;
@@ -3041,6 +3043,8 @@ function nbx() {
     },
     vpNextQuestion() {
       if (!this.visualPaper || !this.vpCurrentGroup) return;
+      // 先回写再动指针，理由同 vpSelectQuestion
+      this.vpEditBeforeLeave();
       const g = this.vpCurrentGroup;
       if (this.visualPaper.currentQIdx + 1 < (g.questions || []).length) {
         this.visualPaper.currentQIdx += 1;
@@ -3058,7 +3062,6 @@ function nbx() {
         if (ng >= this.visualPaper.groups.length) return;
       }
       this.vpActiveTab = "reference";
-      this.vpEditBeforeLeave();
       this.$nextTick(() => {
         const el = this.$refs.vpRightPane;
         if (el) el.scrollTop = 0;
@@ -3067,6 +3070,8 @@ function nbx() {
     },
     vpPrevQuestion() {
       if (!this.visualPaper || !this.vpCurrentGroup) return;
+      // 先回写再动指针，理由同 vpSelectQuestion
+      this.vpEditBeforeLeave();
       if (this.visualPaper.currentQIdx > 0) {
         this.visualPaper.currentQIdx -= 1;
       } else {
@@ -3083,7 +3088,6 @@ function nbx() {
         if (ng < 0) return;
       }
       this.vpActiveTab = "reference";
-      this.vpEditBeforeLeave();
       this.$nextTick(() => {
         const el = this.$refs.vpRightPane;
         if (el) el.scrollTop = 0;
