@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import Response
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
@@ -689,7 +691,126 @@ def test_stream_records_error_status_without_charging(stream):
         db.close()
 
 
-# ---------------- 迁移批次：每卡一条日志，整批只扣一次 ----------------
+# ---------------- GeneratorExit：流被 aclose 关掉时按取消记账 ----------------
+
+# 截下 event_generator 本体，交由测试自己推进与关闭：TestClient 会把响应读到
+# 底，fake 模型几个 token 就跑完了，触发不了关闭路径
+_captured: dict = {}
+
+
+def _capture_generator(content, **_kwargs):
+    _captured["agen"] = content
+    return Response(status_code=204)
+
+
+class _InfiniteStreamLLM:
+    """永不自然结束的流：确保测试总能在中途把生成器关掉。"""
+
+    async def chat_stream_with_stop(self, *, usage_out=None, **_kwargs):
+        while True:
+            yield "字"
+
+    async def chat(self, **_kwargs):
+        return ""
+
+
+async def _never_disconnected(self):
+    return False
+
+
+@pytest.fixture
+def unclaimed_stream(stream, monkeypatch):
+    """让 request.is_disconnected() 恒为 False 的流式环境。
+
+    TestClient 一收到响应就把请求标记为已断开，于是生成器在 token 循环里
+    直接 break，走的是「客户端断开」的正常收尾分支 —— 那条路径本来就记
+    cancelled，测不到 GeneratorExit。要复现目标路径必须掐断这个信号，
+    让生成器一直活到测试主动 aclose 它。
+    """
+    client, harness = stream
+    harness.llm = _InfiniteStreamLLM()
+    monkeypatch.setattr(Request, "is_disconnected", _never_disconnected)
+    monkeypatch.setattr(chat_router, "EventSourceResponse", _capture_generator)
+    return client, harness
+
+
+def _new_code(suffix, quota=100):
+    db = SessionLocal()
+    try:
+        return _make_code(db, f"NBXU-LOG-{suffix}", quota=quota)
+    finally:
+        db.close()
+
+
+def test_generator_exit_is_logged_as_cancelled_and_charged(unclaimed_stream):
+    """流被 aclose 关掉时不得留下 success + units=0 的幽灵行。
+
+    GeneratorExit 继承 BaseException，不走 CancelledError / Exception 两个
+    handler，直接落到 finally —— status 停在默认的 success、units 停在 0，
+    而后台对账按 success 统计次数，这条会让「成功次数」凭空多出一条。
+
+    客户端断开时 sse-starlette 取消的是外层 task，生成器是被 GC 的 finalizer
+    以 aclose 关闭的，yield 点上抛进来的正是 GeneratorExit。
+    """
+    client, harness = unclaimed_stream
+    code = _new_code("G001-0010")
+    harness.code = code
+
+    assert _post_stream(client, input_text="半途断开").status_code == 204
+
+    async def scenario():
+        agen = _captured["agen"]
+        # 推进到第一个 token 已经 yield 出去，然后按生产路径关闭生成器
+        await agen.__anext__()
+        await agen.aclose()
+
+    asyncio.run(scenario())
+
+    rows = _logs_for(code.id)
+    assert len(rows) == 1
+    assert rows[0].status == "cancelled"
+    assert rows[0].units == 1
+
+    db = SessionLocal()
+    try:
+        assert db.get(UsageCode, code.id).used_count == 1
+    finally:
+        db.close()
+
+
+def test_generator_exit_survives_a_failing_usage_log(stream, monkeypatch):
+    """收尾日志写库失败时只记日志，不能把异常抛回正在关闭的流。
+
+    usage_logged 已经置位，全局异常处理器不会补记；这里抛出去只会盖掉
+    GeneratorExit，让整条日志连同计费结果一起丢掉。
+    """
+    client, harness = stream
+    harness.llm = _InfiniteStreamLLM()
+    db = SessionLocal()
+    try:
+        code = _make_code(db, "NBXU-LOG-G002-0011")
+    finally:
+        db.close()
+    harness.code = code
+
+    def _boom(**_kwargs):
+        raise RuntimeError("写库炸了")
+
+    monkeypatch.setattr(chat_router, "_log_llm_call", _boom)
+    monkeypatch.setattr(chat_router, "EventSourceResponse", _capture_generator)
+
+    assert _post_stream(client, input_text="日志写失败").status_code == 204
+
+    async def scenario():
+        agen = _captured["agen"]
+        await agen.__anext__()
+        # 收尾日志写失败也不抛：aclose 正常返回即说明异常被兜住了
+        await agen.aclose()
+
+    asyncio.run(scenario())
+
+
+# ---------------- 迁移批次：每卡一条日志，按交付卡片数摊分 ----------------
 
 def test_migration_batch_logs_one_row_per_card(stream):
     client, harness = stream

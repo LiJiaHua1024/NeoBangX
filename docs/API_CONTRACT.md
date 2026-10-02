@@ -805,12 +805,12 @@ data: [DONE]
 
 | 字段 | 说明 |
 |------|------|
-| `status` | `success` 正常完成 / `cancelled` 用户停止或客户端断开 / `error` 上游或内部异常 |
+| `status` | `success` 正常完成 / `cancelled` 用户停止、客户端断开，或流被 `aclose` 关闭 / `error` 上游或内部异常 |
 | `error_message` | 异常摘要，最长 500 字（超出截断）；正常为空串 |
 | `duration_ms` | 从发起到流结束的墙钟耗时；旧数据为 `null` |
 | `prompt_tokens` 等 | 供应商回传的 token 用量；未开启流式 usage 或供应商不支持时为 `null` |
 | `ip` | 客户端 IP，反代后按 `X-Real-IP` > `X-Forwarded-For` 首跳 > 直连地址取值 |
-| `units` | 本次请求**实际扣减**的额度次数。普通工具成功/停止 = 1（免费模型限额内为 0，限额命中转按次计费为 1）；标题生成、错因分析、迁移单卡 = 0；迁移整批的最后一卡 = 整批次数（免费批升级付费批后为整批付费次数） |
+| `units` | 本次请求**实际扣减**的额度次数。普通工具成功/停止 = 1（免费模型限额内为 0，限额命中转按次计费为 1）；标题生成、错因分析 = 0；智能错题迁移单卡 = 该卡摊到的增量（摊分未跨过整数档位时为 0，整批累计等于整批价）。**不变量：`status=success` 必然已扣费**，不会出现「成功却记 0 次」的幽灵行 |
 | `device_id` / `fingerprint` | 浏览器设备指纹（仅用于识别共享，不做拦截依据）。`device_id` 为 `null` 表示当时无指纹（旧数据/上报失败）；`fingerprint` 为 ThumbmarkJS 全哈希冗余。列表与详情额外挂载 `device` 对象（含短码/昵称/备注/颜色/摘要），缺失时为 `null` |
 | `device` | 挂载的设备摘要：`{ id, fingerprint, short_code(FP-XXXX-XXXX), auto_name, display_name(备注优先), note, color, device_summary, first_seen_at, last_seen_at, seen_count }` |
 

@@ -1324,6 +1324,30 @@ async def chat_stream(
                     )
                     charged = True
                 yield {"event": "done", "data": "[DONE]"}
+        except GeneratorExit:
+            # 流被 aclose 关掉时走这里：GeneratorExit 继承 BaseException，
+            # 不走下面两个 except，于是 status 停在默认的 success、units 停在 0，
+            # finally 照常写日志 —— 留下一条「成功却没扣费」的幽灵行，
+            # 破坏「成功必扣 1 次」的对账不变量。按用户停止同口径记 cancelled
+            # 并照常计费。此处不能 yield：GeneratorExit 后再让出控制会抛
+            # RuntimeError（async generator ignored GeneratorExit）。
+            logger.info(f"Stream closed by client: {request_id}")
+            status = STATUS_CANCELLED
+            if migration_batch:
+                if not migration_finished:
+                    # 已产出正文的卡片照扣：内容已经推给前端并写进了历史
+                    charge_units = _finish_migration_stream(
+                        batch_id=req.batch_id or "",
+                        batch_index=req.batch_index or 0,
+                        owner_id=owner_id,
+                        delivered=bool("".join(output_parts).strip()),
+                    )
+                    migration_finished = True
+                    if charge_units > 0:
+                        units = await _charge_guarded(owner_id, charge_units, req.batch_id or request_id)
+            elif not charged:
+                charged = True
+                units = await _charge_guarded(owner_id, quota_units, request_id)
         except asyncio.CancelledError:
             logger.info(f"Stream cancelled: {request_id}")
             status = STATUS_CANCELLED
@@ -1386,30 +1410,37 @@ async def chat_stream(
             # 先置位再落库：to_thread 会同步把写库任务提交进线程池，
             # 全局异常处理器据此跳过，避免同一次请求被记两条
             request.state.usage_logged = True
-            await asyncio.to_thread(
-                _log_llm_call,
-                code=code,
-                tool_id=req.tool_id,
-                tool_name=tool_name,
-                model=model_used,
-                request_id=request_id,
-                status=status,
-                started=started,
-                usage=usage,
-                client=(client_ip, user_agent),
-                log_payload=log_payload_enabled,
-                error_message=_final_error_message(llm, status, error_message),
-                units=units,
-                # OCR 的输入是图片：正文留空，日志里记张数，便于核对视觉调用量
-                input_text=req.input if not is_ocr else f"[图片 {len(ocr_images)} 张]",
-                rendered_prompt=prompt,
-                output_text="".join(output_parts),
-                provider_id=prov_id,
-                provider_name=prov_name,
-                fallback_attempts=attempts,
-                fingerprint=fp_hash,
-                device_summary=fp_summary,
-            )
+            # 收尾日志必须写出来：这一步的 await 在流被 aclose 关掉时可能撞上
+            # 事件循环关闭而抛错，异常会盖掉 GeneratorExit、把整条日志丢掉
+            try:
+                await asyncio.to_thread(
+                    _log_llm_call,
+                    code=code,
+                    tool_id=req.tool_id,
+                    tool_name=tool_name,
+                    model=model_used,
+                    request_id=request_id,
+                    status=status,
+                    started=started,
+                    usage=usage,
+                    client=(client_ip, user_agent),
+                    log_payload=log_payload_enabled,
+                    error_message=_final_error_message(llm, status, error_message),
+                    units=units,
+                    # OCR 的输入是图片：正文留空，日志里记张数，便于核对视觉调用量
+                    input_text=req.input if not is_ocr else f"[图片 {len(ocr_images)} 张]",
+                    rendered_prompt=prompt,
+                    output_text="".join(output_parts),
+                    provider_id=prov_id,
+                    provider_name=prov_name,
+                    fallback_attempts=attempts,
+                    fingerprint=fp_hash,
+                    device_summary=fp_summary,
+                )
+            except Exception as e:
+                # usage_logged 已置位，全局处理器不会补记；这里至少别把异常
+                # 抛回给正在收尾的流（GeneratorExit 尤其不能被它盖掉）
+                logger.error(f"Usage log write failed ({request_id}): {e}")
             # 批次缓存只在注册新批次时被动清理，若此后再无迁移请求，过期批次与
             # 额度预留会一直留在内存里；每次生成收尾顺手扫一遍，代价可忽略
             _cleanup_migration_batches()
@@ -1420,6 +1451,24 @@ async def chat_stream(
         # sse-starlette 的 ping 单位是「秒」；配置值为毫秒，需换算
         ping=max(1, settings.sse_retry_timeout // 1000),
     )
+
+
+async def _charge_guarded(code_id: int, units: int, request_id: str) -> int:
+    """在流收尾的异常路径上扣费，失败只记日志不外抛。
+
+    GeneratorExit 的 await 可能撞上事件循环关闭（shutdown_asyncgens），
+    此时抛出的 RuntimeError 会盖掉 GeneratorExit 本身、把整条日志冲掉。
+    扣费失败与 _charge_usage 的既有口径一致：记 0，显式留痕而非静默吞掉。
+    """
+    if units <= 0:
+        return 0
+    try:
+        return await asyncio.to_thread(
+            _charge_usage, code_id=code_id, units=units, request_id=request_id
+        )
+    except Exception as e:
+        logger.warning(f"Charge failed during stream teardown ({request_id}): {e}")
+        return 0
 
 
 def _charge_usage(*, code_id: int, units: int = 1, request_id: str = "") -> int:
