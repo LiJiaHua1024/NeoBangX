@@ -14,8 +14,9 @@ import pytest
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import AppConfig, LlmModelProvider, LlmProvider
-from app.services.runtime_config import _seed_providers_from_legacy
+from app.models import AppConfig, LlmModelProvider, LlmProvider, UsageCode
+from app.services import runtime_config
+from app.services.runtime_config import _seed_providers_from_legacy, seed_config_from_env
 
 PROV_ID = "prov_migrated_main"
 LEGACY_ROWS = ("llm_base_url", "llm_api_key")
@@ -197,3 +198,62 @@ def test_boot_migration_falls_back_to_env_when_db_keys_absent(isolated_providers
     prov = db.get(LlmProvider, PROV_ID)
     assert prov is not None
     assert prov.base_url == "https://env.example.com"
+
+
+# ---------------- 失败必须回滚，否则启动崩溃循环 ----------------
+
+def test_seed_providers_rolls_back_so_session_stays_usable(isolated_providers, monkeypatch):
+    """迁移中途失败后 session 仍要能用。
+
+    回归：函数体内有 add/flush/commit，失败时 session 停在失败的事务状态，
+    而调用方只记日志不回滚 —— 紧接着 lifespan 的 ensure_bootstrap_code
+    一查询就抛 PendingRollbackError，启动中断；supervisord 两个 program
+    都是 autorestart=true，于是每次重启同样失败，变成永久崩溃循环。
+    """
+    db = isolated_providers
+    _seed_legacy_rows(db, {"llm_base_url": "https://legacy.example.com", "llm_api_key": "sk-legacy-db"})
+    row = db.get(AppConfig, "models")
+    if row is None:
+        db.add(AppConfig(key="models", value=LEGACY_MODELS))
+    else:
+        row.value = LEGACY_MODELS
+    db.commit()
+
+    # 必须打在事务已经开启之后：commit 失败（并发锁库、绑定行主键冲突）
+    # 才是真实故障形态。打在 parse_models 上时事务还没开始，回滚与否都
+    # 看不出差别，测不到这个缺陷。
+    real_commit = db.commit
+    calls = {"n": 0}
+
+    def _boom_commit():
+        calls["n"] += 1
+        raise RuntimeError("模拟提交时锁库")
+
+    db.commit = _boom_commit
+    try:
+        with pytest.raises(RuntimeError):
+            _seed_providers_from_legacy(db)
+    finally:
+        db.commit = real_commit
+
+    assert calls["n"] > 0, "故障必须打在事务开启之后，否则测不到回滚"
+    # session 必须还能查询 —— 这正是崩溃循环的触发点
+    assert db.query(LlmProvider).count() == 0
+    assert db.get(AppConfig, "llm_base_url").value == "https://legacy.example.com"
+
+
+def test_seed_config_from_env_survives_a_failing_provider_migration(isolated_providers, monkeypatch):
+    """整条启动链路：迁移失败只记日志，session 仍可继续给后续步骤用。"""
+    db = isolated_providers
+    _seed_legacy_rows(db, {"llm_base_url": "https://legacy.example.com", "llm_api_key": "sk-legacy-db"})
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("模拟迁移失败")
+
+    monkeypatch.setattr(runtime_config, "_seed_providers_from_legacy", _boom)
+    # 不抛异常就是关键：seed_config_from_env 必须把失败降级成一条 warning
+    runtime_config.seed_config_from_env(db)
+
+    # 崩溃循环的真正触发点：lifespan 里紧接着的 ensure_bootstrap_code
+    assert db.query(UsageCode).count() >= 0
+    assert db.get(AppConfig, "llm_base_url").value == "https://legacy.example.com"

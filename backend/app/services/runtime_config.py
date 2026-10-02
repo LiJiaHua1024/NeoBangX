@@ -486,6 +486,12 @@ def seed_config_from_env(db: Session) -> None:
         except IntegrityError:
             # 另一进程抢先插入了部分键，回滚后重查剩余缺失项
             db.rollback()
+        except Exception:
+            # 其它异常（锁库、磁盘满）同样要让 session 回到可用状态：
+            # 不回滚的话，下一轮重试的第一步查询就撞 PendingRollbackError，
+            # 三次重试全废，异常还会一路抛到 lifespan 把启动打断
+            db.rollback()
+            raise
     else:
         logger.warning("seed_config_from_env 多次遇到并发冲突，剩余键将由另一进程完成种入")
 
@@ -493,6 +499,11 @@ def seed_config_from_env(db: Session) -> None:
     try:
         _seed_providers_from_legacy(db)
     except Exception as e:
+        # 必须回滚：迁移里任何一步失败都会把 session 留在失败的事务状态，
+        # 紧接着 lifespan 的 ensure_bootstrap_code 一查询就抛 PendingRollbackError，
+        # 启动直接中断；supervisord 两个 program 都是 autorestart=true，
+        # 于是每次重启同样失败，变成永久崩溃循环。
+        db.rollback()
         logger.warning("seed providers from legacy failed: %s", e)
 
 
@@ -516,7 +527,18 @@ def _seed_providers_from_legacy(db: Session) -> None:
     对已存在但地址/密钥为空的 prov_migrated_main 做一次补齐：旧版的迁移读的是
     白名单外的键，必定落成空 Provider，且「已有 Provider 就不再种入」的守卫让它
     永远得不到修正 —— 这里只在字段为空时补，绝不覆盖后台手填的值。
+
+    中途失败一律先回滚再抛：函数体内有 flush/commit，失败时 session 会停在失败
+    的事务状态，调用方若只记日志不清理，后续任何查询都抛 PendingRollbackError。
     """
+    try:
+        _seed_providers_from_legacy_inner(db)
+    except BaseException:
+        db.rollback()
+        raise
+
+
+def _seed_providers_from_legacy_inner(db: Session) -> None:
     from app.models import LlmModelProvider, LlmProvider
 
     prov_id = "prov_migrated_main"
