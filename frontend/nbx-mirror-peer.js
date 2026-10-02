@@ -18,7 +18,9 @@
          而自己有数据就推全量快照、交换墓碑表
    ops    双向：一批变更（分块发送，块间让出主线程）
    tomb   双向：整份墓碑表（只在握手时交换；增量删除走 ops 里的 del 标记）
-   ack    双向：已处理的 at 上界 + 本轮拒收的 id（拒收的不能从对端队列里清掉）
+   ack    双向：done = 已消费的队列项清单（"kind|id"）+ keep = 本轮没能消费的 id。
+         keep 不能从对端队列里清掉。at 是兼容旧版本的 at 上界，新逻辑不依赖它 ——
+         at 是条目自身的 updatedAt 而非队列序号，按上界出队会误清未送达的条目。
 
    op 形状
    -------
@@ -28,7 +30,8 @@
    {k:"f", id, at, del:true}    收藏删除
    {k:"p", id:"theme"|"model", at, v}  偏好（主题/选中模型），v2 起
 
-   合并判据（取新、墓碑判死、上限拒收）全在 nbx-mirror-store.js，本文件只管搬运。 */
+   合并判据（取新、墓碑判死、满时淘汰最旧）全在 nbx-mirror-store.js，
+   本文件只管搬运。 */
 
 (function (global) {
   "use strict";
@@ -132,7 +135,11 @@
       }
       if (data.t === "ops") {
         var ops = Array.isArray(data.ops) ? data.ops : [];
-        if (ops.length > MAX_INCOMING_OPS) ops = ops.slice(0, MAX_INCOMING_OPS);
+        if (ops.length > MAX_INCOMING_OPS) {
+          // 超量的尾巴本轮没处理，不能算作已送达 —— 回执只报实际处理过的，
+          // 否则它们会被对端从队列里清掉，这条更新就永远送不过来了
+          ops = ops.slice(0, MAX_INCOMING_OPS);
+        }
         var res = S.applyOps(ops);
         if (data.tombstones) {
           if (S.applyTombstones(data.tombstones)) res.changed += 1;
@@ -141,14 +148,15 @@
         if (res.changed || swept.historyIds.length || swept.favorites) {
           onApplied(res, swept);
         }
-        // 只对「成功处理」的部分回执：被拒收的（本地已满）那个 id 单独回报，
-        // 让对端保留在队列里等下次机会，而不是就此丢掉这条更新
-        var maxAt = 0;
-        for (var i = 0; i < ops.length; i += 1) {
-          var at = Number(ops[i] && ops[i].at) || 0;
-          if (at > maxAt) maxAt = at;
-        }
-        post({ t: "ack", at: maxAt, keep: res.rejectedIds || [] });
+        // 精确回执：只报真正消费掉的队列项（applied），没消费的把 id 退回 keep。
+        // 落盘失败（配额满）时 applyOps 会把它们一并退回 keep，不会谎报送达。
+        // at 上界只为兼容旧版本对端而保留。
+        post({
+          t: "ack",
+          done: res.applied || [],
+          keep: res.rejectedIds || [],
+          at: maxAtOf(ops),
+        });
         return true;
       }
       if (data.t === "tomb") {
@@ -159,10 +167,20 @@
         return true;
       }
       if (data.t === "ack") {
-        S.outboxTrim(Number(data.at) || 0, data.keep);
+        S.outboxTrim(data.done, data.keep, Number(data.at) || 0);
         return true;
       }
       return false;
+    }
+
+    /* 兼容旧格式回执：只报一个 at 上界 */
+    function maxAtOf(ops) {
+      var maxAt = 0;
+      for (var i = 0; i < ops.length; i += 1) {
+        var at = Number(ops[i] && ops[i].at) || 0;
+        if (at > maxAt) maxAt = at;
+      }
+      return maxAt;
     }
 
     return {

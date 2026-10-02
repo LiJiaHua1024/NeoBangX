@@ -87,11 +87,12 @@ test("outboxAdd 删除标记可覆盖，且不同 id 各占一条", () => {
   assert.strictEqual(byId.b.k, "f");
 });
 
-test("outboxTrim 只清掉已确认的部分", () => {
+test("outboxTrim 按 done 清单精确出队，不动未送达的", () => {
   freshStorage();
   Store.outboxAdd("h", "old", T - 10 * MIN, false);
   Store.outboxAdd("h", "new", T - 1 * MIN, false);
-  Store.outboxTrim(T - 5 * MIN);
+  // 只确认了 old：new 必须留在队列里等下次
+  Store.outboxTrim(["h|old"], [], 0);
   const ids = Store.outboxList().map((o) => o.id);
   assert.deepStrictEqual(ids, ["new"]);
 });
@@ -100,9 +101,27 @@ test("outboxTrim 尊重 keep：被拒收的条目不能被清掉", () => {
   freshStorage();
   Store.outboxAdd("h", "rejected", T - 10 * MIN, false);
   Store.outboxAdd("h", "ok", T - 10 * MIN, false);
-  Store.outboxTrim(T, ["rejected"]);
+  Store.outboxTrim(["h|rejected", "h|ok"], ["rejected"], 0);
   const ids = Store.outboxList().map((o) => o.id).sort();
   assert.deepStrictEqual(ids, ["rejected"], "被拒收的留下等对端腾出空间，已送达的清掉");
+});
+
+test("outboxTrim 没有 done 清单时退回 at 上界（兼容旧版本对端）", () => {
+  freshStorage();
+  Store.outboxAdd("h", "old", T - 10 * MIN, false);
+  Store.outboxAdd("h", "new", T - 1 * MIN, false);
+  Store.outboxTrim(undefined, [], T - 5 * MIN);
+  assert.deepStrictEqual(Store.outboxList().map((o) => o.id), ["new"]);
+});
+
+test("outboxTrim 不按 at 上界误清未送达的条目", () => {
+  // 回归：两条无关的 op 共享同一个 at（seedOutboxOnce 会用存量条目的旧时间戳播种），
+  // 按 at <= 上界出队会把没送达的那条一起清掉，这条更新就永远送不过来了
+  freshStorage();
+  Store.outboxAdd("h", "sent", T, false);
+  Store.outboxAdd("h", "unsent", T, false);
+  Store.outboxTrim(["h|sent"], [], T);
+  assert.deepStrictEqual(Store.outboxList().map((o) => o.id), ["unsent"]);
 });
 
 test("outboxOps 的 op.at 取自队列而非条目自身（回执才能对上，队列才清得干净）", () => {
@@ -243,17 +262,46 @@ test("applyOps 不复活已被墓碑判死的条目", () => {
   assert.strictEqual(Store.readHistoryIndex().length, 0);
 });
 
-test("applyOps 本地历史已满时拒绝写入，不挤掉本机数据", () => {
+test("applyOps 本地历史已满时挤掉最旧的一条，为对端腾位置", () => {
+  // 回归：原来满时只拒收，从不淘汰 —— 两端各满 100 条后新增内容永久不落地，
+  // 发件箱无限增长，镜像彻底死锁
   const s = freshStorage();
   const full = [];
   for (let i = 0; i < 100; i += 1) full.push({ index: { id: "h" + i, createdAt: T - i * MIN, updatedAt: T - i * MIN }, body: null });
   seedHistory(s, full);
   const res = Store.applyOps([histOp("overflow", T)]);
-  assert.strictEqual(res.changed, 0);
-  assert.strictEqual(res.rejected, 1);
+  assert.strictEqual(res.rejected, 0, "能腾出位置就不该拒收");
   const index = Store.readHistoryIndex();
-  assert.strictEqual(index.length, 100);
-  assert.ok(!index.some((i) => i.id === "overflow"));
+  assert.strictEqual(index.length, 100, "总数仍受上限约束");
+  assert.ok(index.some((i) => i.id === "overflow"), "对端的新条目进来了");
+  assert.ok(!index.some((i) => i.id === "h99"), "被挤掉的是最旧的一条");
+});
+
+test("applyOps 淘汰本机条目时写墓碑，让对端也跟着删", () => {
+  const s = freshStorage();
+  const full = [];
+  for (let i = 0; i < 100; i += 1) full.push({ index: { id: "h" + i, createdAt: T - i * MIN, updatedAt: T - i * MIN }, body: null });
+  seedHistory(s, full);
+  Store.applyOps([histOp("overflow", T)]);
+  const tomb = Store.readTombstones().history;
+  assert.ok(tomb.some((t) => t.id === "h99"), "最旧那条要有墓碑，两端才能收敛");
+  assert.strictEqual(tomb.find((t) => t.id === "h99").at, T - 99 * MIN, "墓碑取被淘汰条目自身的时间戳");
+});
+
+test("applyOps 落盘失败时把已处理项退回 keep，不谎报送达", () => {
+  // 回归：writeHistoryIndex 的返回值原来被直接丢弃，配额满（setItem 抛
+  // QuotaExceededError）时照样回 ack，发件端清掉队列，这条更新就永远送不过来了
+  const s = freshStorage();
+  seedHistory(s, [{ index: { id: "a", createdAt: T - 10 * MIN, updatedAt: T - 10 * MIN }, body: null }]);
+  const realSet = s.setItem.bind(s);
+  s.setItem = (k, v) => {
+    if (k === KEYS.history) throw new Error("QuotaExceededError");
+    return realSet(k, v);
+  };
+  const res = Store.applyOps([histOp("b", T)]);
+  s.setItem = realSet;
+  assert.ok(!res.applied.some((k) => k === "h|b"), "没落盘成功就不能算已处理");
+  assert.ok(res.rejectedIds.includes("b"), "要退回 keep 让发件端留在队列里");
 });
 
 test("applyOps 收藏走同一套取新 + 删除规则", () => {

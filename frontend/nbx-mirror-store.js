@@ -175,25 +175,39 @@
     writeOutbox(box);
   }
 
-  /* 对端确认收到 at <= upto 的变更后，把它们从队列里删掉。
-     keep 是本轮被拒收的 id（见 applyOps 的 rejectedIds）：本地已满时我们拒收，
-     对端并没有「送达失败」，但这条也不能就此从队列里消失 —— 否则对端一腾出空间
-     就再也收不到它了。 */
-  function outboxTrim(upto, keep) {
+  /* 对端确认处理完 done 里的队列项后，把它们从队列里删掉。
+     done 是精确清单（"kind|id"），不是时间上界：at 是条目自身的 updatedAt 而非
+     队列序号，seedOutboxOnce 还会用存量条目的旧时间戳播种，多条无关 op 会共享
+     同一个 at —— 按 at <= 上界出队会把「没送达的那几条」一起清掉，那条更新就
+     永远送不过来了。keep 是本轮没能消费的 id（本地已满、落盘失败等），必须留在
+     队列里。
+
+     done 缺席时退回旧的 at 上界口径：对端可能是旧版本，仍在发老格式回执。 */
+  function outboxTrim(done, keep, uptoAt) {
     if (!ready()) return;
-    var box = readOutbox();
+    var doneSet = null;
+    if (Array.isArray(done)) {
+      doneSet = Object.create(null);
+      for (var i = 0; i < done.length; i += 1) doneSet[String(done[i])] = true;
+    }
     var keepSet = null;
     if (Array.isArray(keep) && keep.length) {
       keepSet = Object.create(null);
       for (var k = 0; k < keep.length; k += 1) keepSet[keep[k]] = true;
     }
+    var upto = Number(uptoAt) || 0;
+    var box = readOutbox();
     var keys = Object.keys(box.ops);
     var dropped = 0;
-    for (var i = 0; i < keys.length; i += 1) {
-      if (box.ops[keys[i]].at > upto) continue;
-      var id = keys[i].slice(keys[i].indexOf("|") + 1);
+    for (var j = 0; j < keys.length; j += 1) {
+      var id = keys[j].slice(keys[j].indexOf("|") + 1);
       if (keepSet && keepSet[id]) continue;
-      delete box.ops[keys[i]];
+      if (doneSet) {
+        if (!doneSet[keys[j]]) continue;
+      } else if (box.ops[keys[j]].at > upto) {
+        continue;
+      }
+      delete box.ops[keys[j]];
       dropped += 1;
     }
     if (dropped) writeOutbox(box);
@@ -369,14 +383,20 @@
 
   /* ---------------- 应用对方的 op ---------------- */
 
-  /* 返回 {changed, historyTouched, favoritesTouched}。
+  /* 返回 {changed, history, favorites, rejected, rejectedIds, applied, prefs}。
+     applied 是「真正消费掉」的队列项（"kind|id"），发件端据此精确出队；
+     rejectedIds 是没能消费的，它必须留在发件端队列里等下次机会。
      只按 at 取新，与 nbx-mirror 的合并规则同源（updatedAtOf）；删除走墓碑，
-     且「墓碑比内容新」才生效 —— 与纯函数层保持同一判据，两处不能各说各话。 */
+     且「墓碑比内容新」才生效 —— 与纯函数层保持同一判据，两处不能各说各话。
+
+     注意 applied 不是「收到的 id 清单」：因本地更新或墓碑而判定无需动作的，
+     同样算已处理（对端不必再发一次），但落盘失败的必须退回 rejectedIds。 */
   function applyOps(ops) {
-    var result = { changed: 0, history: false, favorites: false, rejected: 0, rejectedIds: [], prefs: {} };
+    var result = { changed: 0, history: false, favorites: false, rejected: 0, rejectedIds: [], applied: [], prefs: {} };
     if (!ready() || !Array.isArray(ops) || !ops.length) return result;
-    // 拒收的 id 要回报给对端：它不能把这条从发送队列里清掉，否则本地腾出空间后
-    // 这条更新就永远送不过来了
+    /* 拒收一条 op。id 要回报给对端：它不能把这条从发送队列里清掉，否则本地腾出
+       空间后这条更新就永远送不过来了。id 为空（畸形 op）时只计数不回报 ——
+       对端按 id 认不出是哪条，回报空 id 反而会污染 keep 名单。 */
     var reject = function (id) {
       result.rejected += 1;
       if (id) result.rejectedIds.push(String(id));
@@ -395,11 +415,14 @@
     var tomb = readTombstones();
     var tombDirty = false;
     var limit = mx().DEFAULT_LIMITS;
+    var applied = [];
 
     for (var n = 0; n < ops.length; n += 1) {
       var raw = ops[n];
+      // 先取 id 再判形态：原来这里在 var id 声明之前读它，var 提升拿到的是上一轮
+      // 的残留值，畸形 op 会把「上一条的 id」写进 keep 名单，害对端永远留着它
+      var id = raw && typeof raw === "object" ? raw.id : null;
       if (!raw || typeof raw !== "object") { reject(id); continue; }
-      var id = raw.id;
       var at = Number(raw.at) || 0;
       if (!id || (raw.k !== "h" && raw.k !== "f" && raw.k !== "p")) { reject(id); continue; }
 
@@ -411,12 +434,13 @@
         if (!val || val.length > PREF_VAL_CAP || at <= 0) { reject(id); continue; }
         var prefs = readPrefs();
         var cur = prefs[id];
-        if (cur && cur.at > at) continue;
-        if (cur && cur.at === at && cur.v === val) continue;
+        if (cur && cur.at > at) { applied.push("p|" + id); continue; }
+        if (cur && cur.at === at && cur.v === val) { applied.push("p|" + id); continue; }
         prefs[id] = { v: val, at: at };
         writePrefs(prefs);
         result.prefs[id] = val;
         result.changed += 1;
+        applied.push("p|" + id);
         continue;
       }
 
@@ -441,31 +465,42 @@
             }
           }
           if (mergeTombstone(tomb.history, id, at)) tombDirty = true;
+          applied.push("h|" + id);
           continue;
         }
         var cleanIndex = mx().sanitizeIndex(raw.idx);
         if (!cleanIndex) { reject(id); continue; }
         // 对方说这条更新，但本地墓碑更晚 → 是删过的，不复活
-        if (isTombstoned(tomb, id, at)) continue;
+        if (isTombstoned(tomb, id, at)) { applied.push("h|" + id); continue; }
         var cleanBody = mx().sanitizeBody(raw.body) || { input: "", output: "", fileName: "" };
         var at_ = mx().updatedAtOf(cleanIndex);
         var existing = indexById[id];
         if (existing === undefined) {
-          if (index.length >= limit.history) {
-            // 本地已满：不腾位置，拒绝写入 —— 绝不让对方的数据挤掉本机历史
-            reject(id);
-            continue;
+          // 本地已满：挤掉最旧的一条腾位置，而不是拒收。
+          // 只拒收不淘汰会让两端各满 100 条后镜像彻底死锁 —— 新增内容永远
+          // 送不过去，对端也永远腾不出空间。淘汰时按被淘汰条目自身的
+          // updatedAt 写墓碑：若对端持有更新版本，墓碑拦不住它，LWW 自然收敛。
+          while (index.length >= limit.history) {
+            if (!evictOldest(index, indexById, tomb, "history")) break;
+            tombDirty = true;
+            result.history = true;
           }
+          if (index.length >= limit.history) { reject(id); continue; }
           index.push(cleanIndex);
           indexById[id] = index.length - 1;
+          result.changed += 1;
+          result.history = true;
         } else if (at_ > mx().updatedAtOf(index[existing])) {
           index[existing] = cleanIndex;
+          result.changed += 1;
+          result.history = true;
         } else {
-          continue; // 本地更新（或时间戳相同）→ 保留本地，避免两端来回翻转
+          // 本地更新（或时间戳相同）→ 保留本地，避免两端来回翻转
+          applied.push("h|" + id);
+          continue;
         }
         writeBody(id, cleanBody);
-        result.changed += 1;
-        result.history = true;
+        applied.push("h|" + id);
         continue;
       }
 
@@ -486,37 +521,88 @@
           }
         }
         if (mergeTombstone(tomb.favorites, id, at)) tombDirty = true;
+        applied.push("f|" + id);
         continue;
       }
       var cleanFav = mx().sanitizeFavorite(raw.fav);
       if (!cleanFav) { reject(id); continue; }
-      if (isTombstonedFav(tomb, id, at)) continue;
+      if (isTombstonedFav(tomb, id, at)) { applied.push("f|" + id); continue; }
       var fat = mx().updatedAtOf(cleanFav);
       var fexisting = favById[id];
       if (fexisting === undefined) {
+        while (favs.length >= limit.favorites) {
+          if (!evictOldest(favs, favById, tomb, "favorites")) break;
+          tombDirty = true;
+          result.favorites = true;
+        }
         if (favs.length >= limit.favorites) { reject(id); continue; }
         favs.push(cleanFav);
         favById[id] = favs.length - 1;
+        result.changed += 1;
+        result.favorites = true;
       } else if (fat > mx().updatedAtOf(favs[fexisting])) {
         favs[fexisting] = cleanFav;
+        result.changed += 1;
+        result.favorites = true;
       } else {
+        applied.push("f|" + id);
         continue;
       }
-      result.changed += 1;
-      result.favorites = true;
+      applied.push("f|" + id);
     }
 
+    // 落盘失败（配额满）时不能回报「已处理」：发件端据此把队列清掉，这条更新
+    // 就永远送不过来了。退回 keep 让它留在队列里等下次机会。
     if (result.history) {
       // 与本地一致的时间倒序，列表渲染依赖这个顺序
       index.sort(function (a, b) { return mx().updatedAtOf(b) - mx().updatedAtOf(a); });
-      writeHistoryIndex(index);
+      if (!writeHistoryIndex(index)) {
+        keepAll(result, applied, "h|");
+        applied = applied.filter(function (k) { return k.slice(0, 2) !== "h|"; });
+        result.changed = 0;
+        result.history = false;
+      }
     }
     if (result.favorites) {
       favs.sort(function (a, b) { return mx().updatedAtOf(b) - mx().updatedAtOf(a); });
-      writeFavorites(favs);
+      if (!writeFavorites(favs)) {
+        keepAll(result, applied, "f|");
+        applied = applied.filter(function (k) { return k.slice(0, 2) !== "f|"; });
+        result.favorites = false;
+      }
     }
     if (tombDirty) writeTombstones(tomb);
+    result.applied = applied;
     return result;
+  }
+
+  /* 淘汰列表里最旧的一条：删正文键 + 按它自身的时间戳写墓碑，让对端也跟着删。
+     返回是否真的淘汰掉了一条（墓碑无条件置脏：重复写一次无害，writeTombstones
+     会按上限裁剪，但不能因为「墓碑已存在」就中断淘汰循环）。 */
+  function evictOldest(list, byId, tomb, kind) {
+    var oldestAt = Infinity;
+    var oldestIdx = -1;
+    for (var i = 0; i < list.length; i += 1) {
+      if (!list[i] || !list[i].id) continue;
+      var at = mx().updatedAtOf(list[i]);
+      if (at < oldestAt) { oldestAt = at; oldestIdx = i; }
+    }
+    if (oldestIdx < 0) return false;
+    var victim = list[oldestIdx];
+    list.splice(oldestIdx, 1);
+    delete byId[victim.id];
+    removeRaw(KEYS.bodyPrefix + victim.id);
+    mergeTombstone(tomb[kind], victim.id, oldestAt);
+    return true;
+  }
+
+  /* 把某一类的已处理项全部退回拒收名单（写盘失败时用） */
+  function keepAll(result, applied, prefix) {
+    for (var i = 0; i < applied.length; i += 1) {
+      if (applied[i].slice(0, 2) !== prefix) continue;
+      var id = applied[i].slice(2);
+      if (id) result.rejectedIds.push(String(id));
+    }
   }
 
   function isTombstoned(tomb, id, at) {

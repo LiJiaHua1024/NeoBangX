@@ -6755,7 +6755,7 @@ function nbx() {
       };
       this.favorites.unshift(favorite);
       if (this.favorites.length > FAVORITES_LIMIT) this.favorites.length = FAVORITES_LIMIT;
-      lsSet(LS.favorites, this.favorites);
+      this._persistFavorites();
       this._mirrorChanged("f", favorite.id, false, favorite.createdAt);
       this.toast("已收藏整条迁移记录");
     },
@@ -9486,7 +9486,50 @@ function nbx() {
       return JSON.stringify(this._historyLegacy ? this.history : this.history.map(historyIndexOf));
     },
     _persistHistoryIndex(keepId = "") {
+      this._mirrorMergeBeforeWrite("history");
       return this._evictOldestUntil(() => lsWrite(LS.history, this._historyIndexPayload()), keepId);
+    },
+    /* 写索引/收藏之前，先把桥刚并进来的行吸收进内存。
+
+       桥直接写本 origin 的 localStorage，通知应用刷新有 400ms 去抖、且生成
+       过程中会一直推迟（_mirrorFlushReload）。在这个窗口里应用侧任何一次改动
+       都是拿内存里的整份数组覆盖回去，把桥刚落的行抹掉。两条线路同时开着时，
+       标题编辑、收藏、落盘新记录都会踩到。
+
+       按 updatedAt 做 LWW 合并；同 id 就地改现有对象而不是替换 —— finalize
+       正持有某个条目的引用（_persistHistoryItem(origin)），换对象会让引用游离、
+       这次的产出落不进索引。 */
+    _mirrorMergeBeforeWrite(kind) {
+      if (!_mirror.started) return;
+      if (typeof NbxMirrorStore === "undefined" || !NbxMirrorStore.ready()) return;
+      try {
+        if (!kind || kind === "history") this._mirrorMergeList(this.history, LS.history);
+        if (!kind || kind === "favorites") this._mirrorMergeList(this.favorites, LS.favorites);
+      } catch (e) { /* 合并失败就按原样写，绝不因此中断本次落盘 */ }
+    },
+    /* 按 updatedAt 做 LWW 把存储里的行并进内存列表；同 id 就地改现有对象而不是
+       替换 —— finalize 正持有某个条目的引用（_persistHistoryItem(origin)），
+       换对象会让引用游离、这次的产出落不进索引。 */
+    _mirrorMergeList(list, lsKey) {
+      const stored = lsGet(lsKey, []);
+      if (!Array.isArray(stored) || !stored.length) return;
+      const byId = new Map();
+      for (const it of list) if (it && it.id) byId.set(it.id, it);
+      for (const it of stored) {
+        if (!it || !it.id) continue;
+        const mine = byId.get(it.id);
+        // 内存里没有 → 桥刚新增的行，补进来（排序交给各写入点自己处理）
+        if (!mine) {
+          list.push(it);
+          continue;
+        }
+        if ((Number(it.updatedAt) || 0) > (Number(mine.updatedAt) || 0)) Object.assign(mine, it);
+      }
+    },
+    /* 收藏落盘统一入口：先吸收桥写入再写回，避免把对端刚并进来的收藏抹掉 */
+    _persistFavorites() {
+      this._mirrorMergeBeforeWrite("favorites");
+      return lsSet(LS.favorites, this.favorites);
     },
     /* 落盘一条记录：正文单独写、索引单独写。返回是否成功。 */
     _persistHistoryItem(item) {
@@ -10347,7 +10390,7 @@ function nbx() {
       };
       this.favorites.unshift(fav);
       if (this.favorites.length > FAVORITES_LIMIT) this.favorites.length = FAVORITES_LIMIT;
-      lsSet(LS.favorites, this.favorites);
+      this._persistFavorites();
       this._mirrorChanged("f", fav.id, false, fav.createdAt);
       this.toast("已收藏到笔记本");
     },
@@ -10377,7 +10420,7 @@ function nbx() {
         f.content = this.editingFav.content;
         // 编辑是一次真实改动：刷新时间戳，否则镜像合并时会被对端的旧版本盖掉
         f.updatedAt = Date.now();
-        lsSet(LS.favorites, this.favorites);
+        this._persistFavorites();
         this._mirrorChanged("f", f.id, false, f.updatedAt);
         this.toast("收藏已更新");
       }
@@ -10386,7 +10429,7 @@ function nbx() {
     removeFavorite(id) {
       this.favorites = this.favorites.filter((f) => f.id !== id);
       this._addTombstones("favorites", [id]);
-      lsSet(LS.favorites, this.favorites);
+      this._persistFavorites();
       this.toast("已删除该收藏");
     },
 

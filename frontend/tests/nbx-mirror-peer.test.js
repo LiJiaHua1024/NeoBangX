@@ -310,7 +310,9 @@ test("两端改同一条：取 updatedAt 更新的一版", async () => {
   assert.strictEqual(Store.readBody("a1").output, "A-newer", "A 不该被更旧的版本覆盖");
 });
 
-test("对端已满：拒收并从回执里回报，发送方保留在队列里等下次", async () => {
+test("对端已满：挤掉最旧的一条收下新数据，镜像不会就此死锁", async () => {
+  // 回归：原来满时只拒收、从不淘汰 —— 两端各满 100 条后新增内容永久不落地，
+  // 发件箱无限增长，镜像彻底死锁
   const { A, B } = makePair();
   seed(A, [entry("a-new", T)]);
   const full = [];
@@ -324,10 +326,38 @@ test("对端已满：拒收并从回执里回报，发送方保留在队列里�
   B.post({ nbx: Peer.PROTO, t: "ready", summary: Store.localSummary() });
   await pump();
 
-  assert.strictEqual(ids(B).length, 100, "B 保持满额，不该被顶掉任何一条");
-  assert.ok(!ids(B).includes("a-new"), "溢出的条目应被拒收");
+  assert.strictEqual(ids(B).length, 100, "总数仍受上限约束");
+  assert.ok(ids(B).includes("a-new"), "对端的新条目要能落地");
+  assert.ok(!ids(B).includes("b99"), "被挤掉的是最旧的一条");
+  assert.ok(
+    Store.readTombstones().history.some((t) => t.id === "b99"),
+    "淘汰要写墓碑，两端才能收敛到同一份"
+  );
   useSide(A);
-  assert.ok(Store.outboxCount() > 0, "被拒收的条目要留在 A 的队列里，不能当成已送达");
+  assert.strictEqual(Store.outboxCount(), 0, "真的收下了就应当从队列出队");
+});
+
+test("对端写盘失败的条目留在发送方队列里，不当成已送达", async () => {
+  const { A, B } = makePair();
+  seed(A, [entry("a-1", T), entry("a-2", T - MIN)]);
+  seed(B, []);
+  // B 侧存储写不进去（配额满），两条都收不下
+  useSide(A);
+  Store.outboxAdd("h", "a-1", T, false);
+  Store.outboxAdd("h", "a-2", T - MIN, false);
+  const realSet = B.storage.setItem.bind(B.storage);
+  B.storage.setItem = (k, v) => {
+    if (k === "nbx_history") throw new Error("QuotaExceededError");
+    return realSet(k, v);
+  };
+
+  useSide(B);
+  B.post({ nbx: Peer.PROTO, t: "ready", summary: Store.localSummary() });
+  await pump();
+  B.storage.setItem = realSet;
+
+  useSide(A);
+  assert.strictEqual(Store.outboxCount(), 2, "写盘失败的条目必须留在队列里等下次机会");
 });
 
 test("偏好同步：A 换主题与模型，B 收到并落进偏好存储", async () => {
