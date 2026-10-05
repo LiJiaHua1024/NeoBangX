@@ -2487,6 +2487,11 @@ function nbx() {
           return;
         }
         if (currentQ === null) return;
+        // 迁移块里的标签漂移：模型会把迁移题的选项/答案写成主题的 @@OPTIONS@@/@@ANSWER@@
+        // （实测两类模型都漂），照原路由会把原题的选项、答案、证据逐块覆盖掉，迁移块自己
+        // 的 options 却永远空着。草稿已开且有内容时，这些主题标签一律改道进当前草稿
+        const draft = currentQ._transfer_draft;
+        const inTransfer = !!(draft && Object.values(draft).some(Boolean));
         if (cf === "PASSAGE") {
           // 旧内联格式（历史记录）：正文写在本题里。空值或「同上」等占位沿用同组上一题的正文，
           // 但标记为「继承」——收尾解析时若本题另有 @@PASSAGE_REF@@ 编号，以编号引用为准
@@ -2512,12 +2517,19 @@ function nbx() {
             if (m) opts.push({label: m[1].toUpperCase(), text: m[2].trim()});
             else opts.push({label: "", text: line});
           }
-          currentQ._raw_options = opts;
-        } else if (cf === "ANSWER") currentQ._answer_raw = content.trim();
-        else if (cf === "EVIDENCE") currentQ._evidence_raw = content.trim();
-        else if (cf === "REASON") currentQ._reason_raw = content.trim();
-        else if (cf === "DISTRACTOR") currentQ._distractor_raw = content.trim();
-        else if (cf === "PITFALLS") {
+          if (inTransfer) draft.options = opts;
+          else currentQ._raw_options = opts;
+        } else if (cf === "ANSWER") {
+          if (inTransfer) draft.answer = content.trim();
+          else currentQ._answer_raw = content.trim();
+        } else if (cf === "EVIDENCE") {
+          if (!inTransfer) currentQ._evidence_raw = content.trim();
+        } else if (cf === "REASON") {
+          if (!inTransfer) currentQ._reason_raw = content.trim();
+        } else if (cf === "DISTRACTOR") {
+          if (!inTransfer) currentQ._distractor_raw = content.trim();
+        } else if (cf === "PITFALLS") {
+          if (inTransfer) return;
           const pits = [];
           for (const l of content.split("\n")) {
             let line = l.trim();
@@ -2533,8 +2545,10 @@ function nbx() {
             } else pits.push({title: line, desc: ""});
           }
           currentQ._pitfalls_raw = pits;
-        } else if (cf === "PATTERN_NAME") currentQ._pattern_name_raw = content.trim();
-        else if (cf === "PATTERN_STEPS") {
+        } else if (cf === "PATTERN_NAME") {
+          if (!inTransfer) currentQ._pattern_name_raw = content.trim();
+        } else if (cf === "PATTERN_STEPS") {
+          if (inTransfer) return;
           const steps = content.split("\n").map(s=>s.trim()).filter(Boolean).map(s=>s.replace(/^[\d\.\、\)\）\s]+/, ""));
           currentQ._pattern_steps_raw = steps;
         } else if (cf === "TRANSFER_PASSAGE") beginTransferField("passage").passage = content;

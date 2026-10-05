@@ -151,6 +151,11 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
             return
         if current_q is None:
             return
+        # 迁移块里的标签漂移：模型会把迁移题的选项/答案写成主题的 @@OPTIONS@@/@@ANSWER@@
+        # （实测多类模型都漂），照原路由会把原题的选项、答案、证据逐块覆盖掉，迁移块自己
+        # 的 options 却永远空着。草稿已开且有内容时，这些主题标签一律改道进当前草稿
+        draft = current_q.get("_transfer_draft")
+        in_transfer = bool(draft and any(draft.values()))
         # 将内容写入 current_q 的对应键
         if cf == "PASSAGE":
             # 旧内联格式（历史记录）：正文写在本题里。空值或「同上」等占位沿用同组上一题的正文，
@@ -195,16 +200,27 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 else:
                     # 若无法匹配，作为纯文本选项（兼容）
                     opts.append({"label": "", "text": line})
-            current_q["_raw_options"] = opts  # 暂存，后面转为 options
+            if in_transfer:
+                draft["options"] = opts
+            else:
+                current_q["_raw_options"] = opts  # 暂存，后面转为 options
         elif cf == "ANSWER":
-            current_q["_answer_raw"] = content.strip()
+            if in_transfer:
+                draft["answer"] = content.strip()
+            else:
+                current_q["_answer_raw"] = content.strip()
         elif cf == "EVIDENCE":
-            current_q["_evidence_raw"] = content.strip()
+            if not in_transfer:
+                current_q["_evidence_raw"] = content.strip()
         elif cf == "REASON":
-            current_q["_reason_raw"] = content.strip()
+            if not in_transfer:
+                current_q["_reason_raw"] = content.strip()
         elif cf == "DISTRACTOR":
-            current_q["_distractor_raw"] = content.strip()
+            if not in_transfer:
+                current_q["_distractor_raw"] = content.strip()
         elif cf == "PITFALLS":
+            if in_transfer:
+                return
             pits = []
             for line in content.splitlines():
                 line = line.strip()
@@ -226,8 +242,11 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     pits.append({"title": line, "desc": ""})
             current_q["_pitfalls_raw"] = pits
         elif cf == "PATTERN_NAME":
-            current_q["_pattern_name_raw"] = content.strip()
+            if not in_transfer:
+                current_q["_pattern_name_raw"] = content.strip()
         elif cf == "PATTERN_STEPS":
+            if in_transfer:
+                return
             steps = [l.strip() for l in content.splitlines() if l.strip()]
             # 去除序号
             cleaned = []

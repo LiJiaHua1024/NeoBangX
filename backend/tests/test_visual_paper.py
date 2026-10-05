@@ -103,6 +103,37 @@ def test_parse_single_transfer_block_unchanged():
     assert q["transfers"][0]["explanation"] == "解析 1"
 
 
+def test_parse_drifted_main_tags_inside_transfer_block():
+    """迁移块里的标签漂移：模型把迁移选项/答案/证据写成主题的 @@OPTIONS@@/@@ANSWER@@/@@EVIDENCE@@
+    （实测多类模型都漂）。这些内容要改道进当前迁移草稿，原题已收的选项/答案/证据不得被覆盖。"""
+    blocks = (
+        "@@TRANSFER_PASSAGE@@\nTransfer passage 1.\n"
+        "@@TRANSFER_STEM@@\nDrifted stem 1?\n"
+        "@@OPTIONS@@\nA. drift-a1\nB. drift-b1\nC. drift-c1\nD. drift-d1\n"
+        "@@ANSWER@@\nC\n"
+        "@@EVIDENCE@@\nTransfer passage 1.\n"
+        "@@TRANSFER_EXPL@@\n解析 1\n"
+        "@@TRANSFER_PASSAGE@@\nTransfer passage 2.\n"
+        "@@TRANSFER_STEM@@\nDrifted stem 2?\n"
+        "@@OPTIONS@@\nA. drift-a2\nB. drift-b2\nC. drift-c2\nD. drift-d2\n"
+        "@@ANSWER@@\nA\n"
+        "@@TRANSFER_EXPL@@\n解析 2\n"
+    )
+    q = parse_custom_visual_paper(_raw(blocks))["groups"][0]["questions"][0]
+    # 原题四维保持原值，不被任何迁移块顶掉
+    assert [o["text"] for o in q["options"]] == ["One", "Two", "Three", "Four"]
+    assert q["answer"] == "B"
+    assert q["reference"]["evidence"] == "Para 1: Some English passage."
+    # 漂移内容各自落进对应的迁移块
+    assert [t["answer"] for t in q["transfers"]] == ["C", "A"]
+    assert [t["options"][0]["text"] for t in q["transfers"]] == ["drift-a1", "drift-a2"]
+    assert [len(t["options"]) for t in q["transfers"]] == [4, 4]
+    assert [t["explanation"] for t in q["transfers"]] == ["解析 1", "解析 2"]
+    data = parse_custom_visual_paper(_raw(blocks))
+    ok, errors = validate_visual_paper(data)
+    assert ok, errors
+
+
 def test_parse_without_transfer_and_truncated_question():
     """没输出迁移块时为空数组；无 @@END_Q@@ 的残片整题丢弃（组壳保留）。"""
     data = parse_custom_visual_paper(_raw())
