@@ -215,10 +215,29 @@ class LLMService:
         if effective_base_url:
             kwargs["api_base"] = effective_base_url
         # thinking 控制：显式预算优先，其次统一推理强度；都为空则交由供应商默认
+        actual_model_str = str(kwargs.get("model") or "").lower()
+        effective_base_url_str = str(effective_base_url or "").lower()
+        is_anthropic = "anthropic" in actual_model_str or "anthropic" in effective_base_url_str
+
+        extra_body = kwargs.setdefault("extra_body", {})
+
         if thinking_budget and thinking_budget > 0:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+            extra_body["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+            extra_body.setdefault("reasoning", {})["max_tokens"] = thinking_budget
         elif reasoning_effort:
-            kwargs["reasoning_effort"] = reasoning_effort
+            # 统一通过 extra_body 穿透传递：LiteLLM 对 extra_body 完全免检，不会触发任何白名单丢弃或映射报错
+            extra_body["reasoning_effort"] = reasoning_effort
+            extra_body.setdefault("reasoning", {})["effort"] = reasoning_effort
+            if reasoning_effort == "none":
+                extra_body["thinking"] = {"type": "disabled"}
+
+            # 非 Anthropic 渠道下同时保留顶层参数与放行标记（避免 LiteLLM Anthropic 驱动报 Unmapped 异常）
+            if not is_anthropic:
+                kwargs["reasoning_effort"] = reasoning_effort
+                allowed = kwargs.setdefault("allowed_openai_params", [])
+                if "reasoning_effort" not in allowed:
+                    allowed.append("reasoning_effort")
         if stream:
             # 请求供应商在流末尾返回 token 用量；不支持的供应商由
             # litellm.drop_params 自动丢弃该参数，不会引发报错
@@ -235,6 +254,8 @@ class LLMService:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
+        thinking_budget: Optional[int] = None,
         messages: Optional[list[dict]] = None,
         usage_out: Optional[dict] = None,
         response_format: Optional[dict] = None,
@@ -243,6 +264,7 @@ class LLMService:
         request_messages = messages or self._get_messages(system_prompt, user_prompt)
         kwargs = self._build_kwargs(
             model, request_messages, api_key, base_url, max_tokens, stream=False,
+            reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
             response_format=response_format,
         )
 

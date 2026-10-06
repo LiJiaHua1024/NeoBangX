@@ -1772,7 +1772,8 @@ async def _generate_title_once(
             system_prompt=TITLE_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             model=model,
-            max_tokens=64,
+            max_tokens=256,
+            reasoning_effort="none",
             usage_out=usage,
         )
     except Exception as exc:

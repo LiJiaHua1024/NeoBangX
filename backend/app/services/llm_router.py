@@ -177,10 +177,29 @@ class LLMRouter:
         base_url = (provider.get("base_url") or "").strip()
         if base_url:
             kwargs["api_base"] = base_url
+        actual_model_str = str(kwargs.get("model") or "").lower()
+        effective_base_url_str = str(base_url or "").lower()
+        is_anthropic = "anthropic" in actual_model_str or "anthropic" in effective_base_url_str
+
+        extra_body = kwargs.setdefault("extra_body", {})
+
         if thinking_budget and thinking_budget > 0:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+            extra_body["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+            extra_body.setdefault("reasoning", {})["max_tokens"] = thinking_budget
         elif reasoning_effort:
-            kwargs["reasoning_effort"] = reasoning_effort
+            # 统一通过 extra_body 穿透传递：LiteLLM 对 extra_body 完全免检，不会触发任何白名单丢弃或映射报错
+            extra_body["reasoning_effort"] = reasoning_effort
+            extra_body.setdefault("reasoning", {})["effort"] = reasoning_effort
+            if reasoning_effort == "none":
+                extra_body["thinking"] = {"type": "disabled"}
+
+            # 非 Anthropic 渠道下同时保留顶层参数与放行标记（避免 LiteLLM Anthropic 驱动报 Unmapped 异常）
+            if not is_anthropic:
+                kwargs["reasoning_effort"] = reasoning_effort
+                allowed = kwargs.setdefault("allowed_openai_params", [])
+                if "reasoning_effort" not in allowed:
+                    allowed.append("reasoning_effort")
         if stream:
             kwargs["stream_options"] = {"include_usage": True}
         if response_format:
