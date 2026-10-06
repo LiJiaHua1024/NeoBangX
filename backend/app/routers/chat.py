@@ -1338,6 +1338,13 @@ async def chat_stream(
                     visual_fw_error = str(e)
                     logger.warning(f"框架解析流失败（{request_id}）：{e}")
                 visual_fw_stats = applier.stats
+                logger.info(
+                    "框架解析完成（%s）：marks=%s applied=%s skipped=%s questions=%s passages=%s pools=%s fw_tokens=%s",
+                    request_id,
+                    visual_fw_stats.marks_total, visual_fw_stats.marks_applied, visual_fw_stats.marks_skipped,
+                    visual_fw_stats.questions, visual_fw_stats.passages, visual_fw_stats.pools,
+                    visual_fw_usage.get("completion_tokens"),
+                )
                 if client_disconnected or stop_event.is_set():
                     visual_fw_status = STATUS_CANCELLED
                 elif visual_fw_error:
@@ -1551,9 +1558,13 @@ async def chat_stream(
             # 全局异常处理器据此跳过，避免同一次请求被记两条
             request.state.usage_logged = True
             # 收尾日志必须写出来：这一步的 await 在流被 aclose 关掉时可能撞上
-            # 事件循环关闭而抛错，异常会盖掉 GeneratorExit、把整条日志丢掉
+            # 事件循环关闭而抛错，异常会盖掉 GeneratorExit、把整条日志丢掉。
+            # 另一个真实的丢行路径：流被取消（停止/断开）后任务可能收到第二次
+            # CancelledError，它不是 Exception、会穿透下面的 except——整个 finally
+            # 从这个 await 起全部跳过，连后面的日志一起丢。shield 让落库线程
+            # 不受本次取消影响；捕获到 CancelledError 时线程仍在写，行不会丢。
             try:
-                await asyncio.to_thread(
+                await asyncio.shield(asyncio.to_thread(
                     _log_llm_call,
                     code=code,
                     tool_id=req.tool_id,
@@ -1576,17 +1587,22 @@ async def chat_stream(
                     fallback_attempts=attempts,
                     fingerprint=fp_hash,
                     device_summary=fp_summary,
-                )
+                ))
+            except asyncio.CancelledError:
+                # shield 的落库线程会继续完成写入，这里吞掉取消不往外抛
+                # （GeneratorExit 后再 yield 才会炸，吞掉是安全的）
+                logger.info(f"Log write shielded from cancellation ({request_id})")
             except Exception as e:
                 # usage_logged 已置位，全局处理器不会补记；这里至少别把异常
                 # 抛回给正在收尾的流（GeneratorExit 尤其不能被它盖掉）
                 logger.error(f"Usage log write failed ({request_id}): {e}")
             if visual_fw_stats is not None:
                 # 阶段一单独留痕：模型、用量与产出都不同于主阶段，合并记会把
-                # Chores 模型的 token 摊到主模型头上，排查锚点失配也需要原始输出
+                # Chores 模型的 token 摊到主模型头上，排查锚点失配也需要原始输出。
+                # 同样 shield：取消竞态曾把这条日志整个吞掉（用户停止落在写库 await 上）
                 try:
                     fw_prov_id, fw_prov_name, fw_attempts = _router_log_fields(visual_fw_llm) if visual_fw_llm else (None, None, 0)
-                    await asyncio.to_thread(
+                    await asyncio.shield(asyncio.to_thread(
                         _log_llm_call,
                         code=code,
                         tool_id=req.tool_id,
@@ -1608,7 +1624,9 @@ async def chat_stream(
                         fallback_attempts=fw_attempts,
                         fingerprint=fp_hash,
                         device_summary=fp_summary,
-                    )
+                    ))
+                except asyncio.CancelledError:
+                    logger.info(f"Framework log write shielded from cancellation ({request_id})")
                 except Exception as e:
                     logger.warning(f"Framework stage log write failed ({request_id}): {e}")
             # 批次缓存只在注册新批次时被动清理，若此后再无迁移请求，过期批次与

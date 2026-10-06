@@ -476,3 +476,179 @@ class TestWritingSectionGrouping:
         assert groups["writing_cont"]["questions"][0]["passage"].startswith("It was a sunny morning")
         assert "Paragraph 1:" in groups["writing_cont"]["questions"][0]["passage"]
         assert groups["writing_app"]["questions"][0]["passage"] == ""
+
+
+def test_no_regression_and_unmarked_key_warn(caplog):
+    """可观测性：题号大幅回跳（节名当题号）与答案区漏发 KEY 都要留告警。"""
+    import logging
+
+    paper = (
+        "Q one?\nA. one B. two\n"
+        "参考答案与解析\n1. B"
+    )
+    applier = FrameworkApplier(paper)
+    with caplog.at_level(logging.WARNING, logger="app.services.visual_paper_framework"):
+        applier.feed(
+            "@@MARK GROUP reading|阅读理解@@ Q one\n"
+            "@@MARK Q 30@@ Q one\n"
+            "@@MARK OPTIONS@@ A. one\n"
+            "@@MARK Q 1@@ 参考答案与解析\n"   # 题号回跳 + 锚到答案区（模型双重犯错）
+        )
+        applier.finish()
+    assert "题号从 30 回跳" in caplog.text
+    assert "未收到 KEY 标记" in caplog.text   # 答案区被粘进 Q1 的题干区域，同样该告警
+    # 漏发 KEY 的常见形态：答案区粘进最后一个开着的区域（这里被并进 OPTIONS）
+    applier2 = FrameworkApplier("Q one?\nA. one B. two\n参考答案与解析\n1. B")
+    with caplog.at_level(logging.WARNING, logger="app.services.visual_paper_framework"):
+        applier2.feed(
+            "@@MARK GROUP reading|阅读理解@@ Q one\n"
+            "@@MARK Q 30@@ Q one\n"
+            "@@MARK OPTIONS@@ A. one\n"
+        )
+        applier2.finish()
+    assert "未收到 KEY 标记" in caplog.text
+
+
+class TestAnchorRobustness:
+    """2024 II 卷实战暴露的三类锚点失配：中西文加空格、标记顺序颠倒、池尾混入节头。"""
+
+    def test_fuzzy_anchor_tolerates_added_spaces(self):
+        """模型爱在中西文边界加空格（Chris → " Chris "），逐字匹配落空时按空白归一化兜住。"""
+        paper = (
+            "第二节 应用文写作\n"
+            "假定你是李华，上周五你们班在公园上了一堂美术课。请你给英国朋友Chris写一封邮件分享这次经历，内容包括：\n"
+            "参考答案\n66 略"
+        )
+        marks = (
+            "@@MARK GROUP writing_app|应用文写作@@ 假定你是李华\n"
+            "@@MARK Q 66@@ 假定你是李华，上周五你们班在公园上了一堂美术课。"
+            "请你给英国朋友 Chris 写一封邮件分享这次经历，内容包括：\n"
+            "@@MARK KEY@@ 参考答案\n"
+        )
+        text, applier = _run(paper, marks)
+        assert applier.stats.marks_skipped == 0
+        assert applier.stats.questions == 1
+        assert "@@Q@@ 66" in text
+        assert "请你给英国朋友Chris写一封邮件分享这次经历" in text
+
+    def test_backward_q_reinserted_after_passage(self, caplog):
+        """模型先发 PASSAGE 再发 Q（要求行印在材料之前）：Q 锚点在游标后方，回插兜底而不是丢题。"""
+        import logging
+
+        paper = (
+            "第二节 读后续写\n"
+            "阅读下面材料，根据其内容和所给段落开头语续写两段，使之构成一篇完整的短文。\n"
+            "I met Gunter on a cold, wet and unforgettable evening in September. It was raining.\n"
+            "Para 1: I ran back to Gunter and told him the bad news.\n"
+            "参考答案\n67 略"
+        )
+        # 顺序颠倒：GROUP → PASSAGE → Q（正确顺序应为 GROUP → Q → PASSAGE）
+        marks = (
+            "@@MARK GROUP writing_cont|读后续写@@ 阅读下面材料\n"
+            "@@MARK PASSAGE P1@@ I met Gunter\n"
+            "@@MARK Q 67@@ 阅读下面材料\n"
+            "@@MARK KEY@@ 参考答案\n"
+        )
+        with caplog.at_level(logging.WARNING, logger="app.services.visual_paper_framework"):
+            text, applier = _run(paper, marks)
+        assert applier.stats.questions == 1
+        assert "已回插" in caplog.text
+        # 题干收进要求行 + 材料全文；悬空的 P1 引用（语篇区已被回插掏空）不再下发
+        assert "@@Q@@ 67\n@@STEM@@\n阅读下面材料" in text
+        assert "I met Gunter" in text
+        assert "@@PASSAGE_REF@@" not in text
+        data = parse_custom_visual_paper(text)
+        groups = {g["id"]: g for g in data["groups"]}
+        q = groups["writing_cont"]["questions"][0]
+        assert q["no"] == "67"
+        assert "阅读下面材料" in q["stem"] and "I met Gunter" in q["stem"]
+
+    def test_pool_options_truncated_at_section_header(self):
+        """共享选项池的尾部混入下一节大题头：选项在「第X部分/节」处截断，节名不并进最后一个选项。"""
+        paper = (
+            "第三节 七选五\n"
+            "Overtourism Is For Real: How Can You Help?\n"
+            "A. Visit during off-peak times. B. So, should we stop traveling? C. Travel for you.\n"
+            "D. Can overtourism be avoided then? E. You can still find quiet places.\n"
+            "F. You'll find yourself virtually alone. G. Consider giving back to communities.\n"
+            "第四部分 写作（共两节，满分35分）\n"
+            "阅读下面短文，从短文后的选项中选出能填入空白处的最佳选项。\n"
+            "When I decided to buy a house in Europe ten years ago, I didn't think too long.\n"
+            "参考答案\n36-40 BCEAGF"
+        )
+        marks = (
+            "@@MARK GROUP cloze7|七选五@@ Overtourism\n"
+            "@@MARK PASSAGE P1@@ Overtourism\n"
+            "@@MARK OPTIONS 36-40@@ A. Visit during off-peak times.\n"
+            "@@MARK GROUP cloze|完形填空@@ When I decided to buy a house\n"
+            "@@MARK KEY@@ 参考答案\n"
+        )
+        text, applier = _run(paper, marks)
+        assert applier.stats.questions == 5
+        assert "G. Consider giving back to communities." in text
+        assert "第四部分" not in text
+        assert "阅读下面短文" not in text
+
+    def test_stem_drops_section_header_line(self):
+        """夹在写作任务结尾和下一节锚点之间的节名行（第二节（满分25分））由程序确定性丢弃。"""
+        paper = (
+            "第一节（满分15分）\n"
+            "假定你是李华，上周五你们班在公园上了一堂美术课。请你给英国朋友Chris写一封邮件分享这次经历，内容包括：\n"
+            "（1）你完成的作品；\n"
+            "注意：\n"
+            "（1）写作词数应为80个左右；\n"
+            "Dear Chris,\n"
+            "I'm writing to share with you an art class I had in a park last Friday.\n"
+            "Yours,\n"
+            "Li Hua\n"
+            "第二节（满分25分）\n"
+            "阅读下面材料，根据其内容和所给段落开头语续写两段，使之构成一篇完整的短文。\n"
+            "参考答案\n66-67 略"
+        )
+        marks = (
+            "@@MARK GROUP writing_app|应用文写作@@ 假定你是李华\n"
+            "@@MARK Q 66@@ 假定你是李华\n"
+            "@@MARK GROUP writing_cont|读后续写@@ 阅读下面材料\n"
+            "@@MARK Q 67@@ 阅读下面材料\n"
+            "@@MARK KEY@@ 参考答案\n"
+        )
+        text, applier = _run(paper, marks)
+        assert applier.stats.questions == 2
+        # 节名行不进题干；GROUP 锚点之前的节名行本来就在噪声里
+        assert "第二节（满分25分）" not in text
+        assert "第一节（满分15分）" not in text
+        assert "假定你是李华" in text
+        # 没有 CUT 时范文仍在题干里——那是模型侧的职责（见下一条用例）
+
+    def test_cut_drops_model_essay_after_task(self):
+        """任务后面印的范文靠模型发 CUT 丢弃：题干在范文首行提前收口。"""
+        paper = (
+            "第一节（满分15分）\n"
+            "假定你是李华，上周五你们班在公园上了一堂美术课。请你给英国朋友Chris写一封邮件分享这次经历，内容包括：\n"
+            "注意：\n"
+            "（1）写作词数应为80个左右；\n"
+            "Dear Chris,\n"
+            "I'm writing to share with you an art class I had in a park last Friday.\n"
+            "Yours,\n"
+            "Li Hua\n"
+            "第二节（满分25分）\n"
+            "阅读下面材料，根据其内容和所给段落开头语续写两段，使之构成一篇完整的短文。\n"
+            "参考答案\n66-67 略"
+        )
+        marks = (
+            "@@MARK GROUP writing_app|应用文写作@@ 假定你是李华\n"
+            "@@MARK Q 66@@ 假定你是李华\n"
+            "@@MARK CUT@@ Dear Chris,\n"
+            "@@MARK GROUP writing_cont|读后续写@@ 阅读下面材料\n"
+            "@@MARK Q 67@@ 阅读下面材料\n"
+            "@@MARK KEY@@ 参考答案\n"
+        )
+        text, applier = _run(paper, marks)
+        assert applier.stats.questions == 2
+        assert "Dear Chris" not in text
+        assert "Yours" not in text
+        assert "第二节（满分25分）" not in text
+        assert "假定你是李华" in text
+        data = parse_custom_visual_paper(text)
+        groups = {g["id"]: g for g in data["groups"]}
+        assert "写作词数应为80个左右" in groups["writing_app"]["questions"][0]["stem"]

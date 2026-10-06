@@ -5,7 +5,9 @@
 - Chores 模型先输出 @@TOTAL@@ / @@PAPER@@ 两行头，再逐条输出单行插标指令：
   ``@@MARK <类型>[ <参数>]@@ <锚点>``，锚点是从原卷逐字抄的一小段文字。
 - applier 用「正向游标」定位锚点：从上一个标记位置向后找，先精确匹配、
-  再空白归一化、最后忽略大小写；找不到就丢弃该条并计数，绝不着墨。
+  再空白归一化（词间空白可有可无，容忍模型在中西文边界加空格）、最后忽略大小写；
+  Q 标记找不到时再向游标后方兜底回插（模型先标材料再标题的顺序颠倒）。
+  都落空才丢弃该条并计数。
 - 标记插在锚点之前；锚点允许落在行中间——applier 在匹配点断行，
   从而切开「语篇末尾和题号挤同一行」「题干和选项挤同一行」这类排版。
   原文内容一个字都不由模型输出，骨架正文全部来自原卷。
@@ -23,16 +25,20 @@
 - ``CUT``             当前区域在此提前收口，其后内容按噪声丢弃（语篇后的「阅读下列短文…」等）
 
 在定向输出之外，applier 还做几件确定性防御：选项行按标号拆成一行一项、
-折行并入上一项；题干尾部连续选项样式的行并回选项（模型漏发 OPTIONS 标记时自救）。
+折行并入上一项；题干尾部连续选项样式的行并回选项（模型漏发 OPTIONS 标记时自救）；
+语篇/题干区里夹带的独立节名行（「第二节（满分25分）」）与选项池尾部的大题头直接丢弃。
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Optional
 
 from app.services.visual_paper import ALLOWED_GROUP_IDS
+
+logger = logging.getLogger(__name__)
 
 # 单行插标指令：@@MARK 类型[ 参数]@@ 锚点。类型与参数之间容许下划线漂移（MARK_OPTIONS）。
 MARK_LINE_RE = re.compile(
@@ -57,6 +63,15 @@ OPT_LABEL_START_RE = re.compile(r"^\s*[A-G][\.、:：\)）]\s*")
 OPT_LABEL_SPLIT_RE = re.compile(r"(?:^|(?<=\s))(?:[（(]([A-G])[\)）]|([A-G])[\.、:：\)）])[ \t]*")
 # 选项行自带的题号前缀（完形填空的 "21. A. hoped B. wanted" 一行）
 OPT_LEAD_NO_RE = re.compile(r"^\s*[\(（]?\d{1,3}[\)）]?\s*[\.、．]\s*")
+# 大题头/节名（「第三部分 语言运用」「第一节」）：共享选项池的尾部常混入下一节的标题，
+# 选项内容在此截断，节名及之后的说明文字不并进最后一个选项
+SECTION_HEADER_RE = re.compile(r"第\s*[0-9０-９一二三四五六七八九十ⅠⅡⅢⅣⅤ]+\s*[部分节]")
+# 独立成行的节名（「第二节（满分25分）」「第四部分 写作（共两节，满分40分）」）：
+# 夹在上一区域结尾和下一个锚点之间的板块标题不属于任何题目，语篇/题干区直接丢弃；
+# 限定无句末标点且总长很短，防止误伤以「第二部分」开头的正文句
+SECTION_HEADER_LINE_RE = re.compile(
+    r"^\s*第\s*[0-9０-９一二三四五六七八九十ⅠⅡⅢⅣⅤ]+\s*[部分节]\s*[^\n。！？]{0,20}$"
+)
 _Q_RANGE_SEPS = str.maketrans({"～": "-", "—": "-", "–": "-", "~": "-"})
 
 
@@ -152,12 +167,15 @@ class FrameworkApplier:
         self._region: str = "noise"          # noise | passage | stem | options | key
         self._question: Optional[dict] = None  # {"no", "options", "options_emitted"}
         self._group: Optional[dict] = None
+        self._group_pos: tuple[int, int] = (0, 0)  # 当前分组头的插入位置（回插搜索的下界）
         self._group_pool: Optional[list[str]] = None
         self._group_seq: dict[str, int] = {}   # 每个板块 id 已声明的分组数（消歧用）
         self._last_group_key: Optional[tuple[str, str]] = None
         # 开组时的语篇状态：读后续写的材料语篇在组内声明（要求行在前、原文在后），
         # 组内有没有自己的语篇以此为基准判断
         self._group_passage_ref = ""
+        # 被丢弃的未标注文字（听力、说明、漏标的答案区……）：仅供收尾时做特征扫描告警
+        self._noise_lines: list[str] = []
         self._passage_ref = ""
         self._last_no: Optional[int] = None
         self._options_range: Optional[tuple[int, int]] = None
@@ -183,10 +201,15 @@ class FrameworkApplier:
         if self._buf.strip():
             self._feed_line(self._buf)
             self._buf = ""
-        self._close_region(self._region_text(len(self._lines), 0))
+        final_content = self._region_text(len(self._lines), 0)
+        final_kind = self._region
+        self._close_region(final_content)
         self._close_question()
         if self._pending_q_ranges:
             self._flush_pending_q_ranges()
+        # 漏发 KEY 时答案区不会进噪声区，而是粘进最后一个开着的区域——一并扫描；
+        # 正确标记的 KEY 区本身就是答案区，不扫
+        self._warn_if_answer_section_unmarked(None if final_kind == "key" else final_content)
         return self._take()
 
     def _take(self) -> str:
@@ -230,27 +253,47 @@ class FrameworkApplier:
         if len(a) < 2:
             # 单字符锚点（篇标 "A"、孤立数字）几乎必然误配到正文/选项标号里，直接拒收
             return None
-        # 短锚点先只认行首（"B篇" 这类篇标通常独占一行或顶行首），
-        # 失败再回退全文匹配；长锚点保持原来的任意位置匹配
-        if len(a) <= 4:
-            pos = self._search(a, _line_start_matcher(a))
+        for matcher in self._anchor_matchers(a):
+            pos = self._search(a, matcher)
             if pos is not None:
                 return pos
-        pos = self._search(a, lambda line, start: line.find(a, start))
-        if pos is not None:
-            return pos
-        # 空白归一化：模型抄锚点时多打了空格/换行拼行
+        return None
+
+    def _anchor_matchers(self, a: str) -> list:
+        """锚点匹配器链，先精确后宽松；短锚点优先只认行首。"""
+        matchers: list = []
+        if len(a) <= 4:
+            matchers.append(_line_start_matcher(a))
+        matchers.append(lambda line, start: line.find(a, start))
         tokens = [t for t in a.split() if t]
         if tokens:
-            pattern = r"\s+".join(re.escape(t) for t in tokens)
-            pos = self._search(a, lambda line, start: _regex_search(pattern, line, start))
-            if pos is not None:
-                return pos
-            # 忽略大小写再兜一层
-            pos = self._search(
-                a, lambda line, start: _regex_search(pattern, line, start, ignore_case=True)
+            # 词间允许零或多个空白：模型爱在中西文边界自作主张加空格
+            #（把「英国朋友Chris写」抄成「英国朋友 Chris 写」），逐字精确匹配就会落空
+            pattern = r"\s*".join(re.escape(t) for t in tokens)
+            matchers.append(lambda line, start: _regex_search(pattern, line, start))
+            matchers.append(
+                lambda line, start, p=pattern: _regex_search(p, line, start, ignore_case=True)
             )
-        return pos
+        return matchers
+
+    def _find_anchor_backward(self, anchor: str) -> Optional[tuple[int, int]]:
+        """游标后方找最近的锚点命中（仅 Q 兜底用）：模型偶尔先标材料再标题，
+        题的锚点（如读后续写的要求行）已被 PASSAGE 标记甩在身后，向前找必然落空。
+        从游标所在行向上扫到当前分组头为止，取离游标最近的命中；再找不到就真跳过。"""
+        a = anchor.strip()
+        if len(a) < 2:
+            return None
+        cl, cc = self._cut
+        floor = max(self._group_pos[0] if self._group else 0, 0)
+        for line_no in range(min(cl, len(self._lines) - 1), floor - 1, -1):
+            text = self._lines[line_no]
+            if line_no == cl:
+                text = text[:cc]  # 游标所在行只看前半行
+            for matcher in self._anchor_matchers(a):
+                hit = matcher(text, 0)
+                if hit >= 0:
+                    return (line_no, hit)
+        return None
 
     def _search(self, anchor: str, matcher) -> Optional[tuple[int, int]]:
         """从游标行:列起向后逐行找；matcher 返回命中列号或 -1。"""
@@ -270,6 +313,8 @@ class FrameworkApplier:
     def _region_text(self, new_line: int, new_col: int) -> list[str]:
         """上一个切点 → 新切点之间的原文，作为当前区域的内容。"""
         cl, cc = self._cut
+        if new_line < cl or (new_line == cl and new_col < cc):
+            return []  # 回插兜底：切点在游标后方，当前区域没有可收的内容
         out: list[str] = []
         if cl >= len(self._lines):
             return out
@@ -294,6 +339,13 @@ class FrameworkApplier:
     def _apply_mark(self, mtype: str, args: str, anchor: str) -> None:
         self.stats.marks_total += 1
         pos = self._find_anchor(anchor)
+        if pos is None and mtype == "Q":
+            pos = self._find_anchor_backward(anchor)
+            if pos is not None:
+                logger.warning(
+                    "框架解析：Q %s 的锚点在游标后方（模型先标了材料再标题），已回插到要求处",
+                    args.strip() or "?",
+                )
         if pos is None:
             self.stats.marks_skipped += 1
             return
@@ -320,6 +372,7 @@ class FrameworkApplier:
             pending_passage_ref = _parse_passage_ref(args) or f"P{self.stats.passages + 1}"
             if (self._group or {}).get("id") == "writing_cont" and self._question is not None:
                 self._passage_ref = pending_passage_ref
+        backward = pos < self._cut
         self._close_region(self._region_text(*pos))
         if self._question is not None and mtype != "OPTIONS":
             self._close_question()
@@ -327,6 +380,10 @@ class FrameworkApplier:
             # 语篇正文刚收口：此时挂起的区间题块所属语篇已确定，派生才拿到正确引用
             self._flush_pending_q_ranges()
         self._cut = pos
+        if backward and closed_kind == "passage":
+            # 回插把游标拉回锚点：刚收口的语篇区从切点到旧游标之间收不到正文
+            #（正文将随题干一起派生），悬空的语篇引用不再下发
+            self._passage_ref = ""
         self._last_mark = (mtype, args, pos[0], pos[1])
         self.stats.marks_applied += 1
         if mtype == "GROUP":
@@ -340,6 +397,7 @@ class FrameworkApplier:
                 self._group_seq[gid] = self._group_seq.get(gid, 0) + 1
             self._last_group_key = (gid, title)
             self._group = {"id": gid, "title": title}
+            self._group_pos = pos
             # 记下本组开组时的语篇状态：组内后来声明过新语篇，才算这个组的材料
             self._group_passage_ref = self._passage_ref
             self._group_pool = None
@@ -353,6 +411,7 @@ class FrameworkApplier:
             self._region = "passage"
         elif mtype == "Q":
             no = _parse_q_no(args, anchor) or self._next_no()
+            self._warn_if_no_regression(no)
             self._question = {"no": no, "options": None, "options_emitted": False}
             self._set_last_no(no)
             ref_line = self._passage_ref_line()
@@ -384,11 +443,15 @@ class FrameworkApplier:
         content = _trim_blank_edges(content)
         if not content:
             return
+        if kind == "noise":
+            self._noise_lines.extend(content)
         if kind == "passage":
-            self._emit(content)
+            self._emit(self._drop_section_headers(content))
         elif kind == "stem":
             if self._question is not None:
-                stem_lines, rescued = self._clean_stem(content, self._question["no"])
+                stem_lines, rescued = self._clean_stem(
+                    self._drop_section_headers(content), self._question["no"]
+                )
                 if rescued and not self._question.get("options"):
                     self._question["options"] = rescued
                 if stem_lines:
@@ -416,6 +479,17 @@ class FrameworkApplier:
         elif kind == "key":
             self._emit(content)
 
+    def _drop_section_headers(self, content: list[str]) -> list[str]:
+        """语篇/题干区里混进的独立节名行（「第二节（满分25分）」）：板块标题不属于任何
+        题目，直接丢弃并入噪声（供收尾告警扫描）；带句末标点的正文行不受影响。"""
+        kept: list[str] = []
+        dropped: list[str] = []
+        for ln in content:
+            (dropped if SECTION_HEADER_LINE_RE.match(ln) else kept).append(ln)
+        if dropped:
+            self._noise_lines.extend(dropped)
+        return kept
+
     def _close_question(self) -> None:
         q = self._question
         self._question = None
@@ -436,6 +510,31 @@ class FrameworkApplier:
         ranges, self._pending_q_ranges = self._pending_q_ranges, []
         for lo, hi in ranges:
             self._emit_q_blocks(lo, hi, pool=None)
+
+    def _warn_if_no_regression(self, no: str) -> None:
+        """题号相对前一大幅回跳：多半是模型把「第一节/第二节」当题号重新编了号
+        （正确做法是接着前面笔试题顺延）。只告警不纠正——编号以模型声明为准。"""
+        try:
+            cur = int(re.sub(r"\D", "", str(no)) or 0)
+        except ValueError:
+            return
+        if self._last_no and cur <= self._last_no - 5:
+            logger.warning(
+                "框架解析：题号从 %s 回跳到 %s，疑似把节名当题号重新编号，"
+                "课件答案速查表将与卷面对不上",
+                self._last_no, cur,
+            )
+
+    def _warn_if_answer_section_unmarked(self, extra_lines: Optional[list[str]]) -> None:
+        """疑似答案区出现在噪声区或粘进普通区域（漏发 KEY）：讲解阶段将看不到参考答案。"""
+        for line in self._noise_lines + list(extra_lines or []):
+            if any(t in line for t in ("参考答案", "答案与解析", "【答案】")):
+                logger.warning(
+                    "框架解析：未标注文字中出现疑似答案区（%r），但未收到 KEY 标记——"
+                    "答案区可能被当作噪声丢弃或粘进题目，讲解阶段将无法核对答案",
+                    line.strip()[:40],
+                )
+                return
 
     # ---------- 派生辅助 ----------
 
@@ -501,8 +600,15 @@ class FrameworkApplier:
     def _normalize_options(lines: list[str]) -> list[str]:
         """选项归一：剥题号前缀、按标号拆成一行一项、折行并入上一项。"""
         out: list[str] = []
+        terminated = False
         for raw in lines:
-            line = OPT_LEAD_NO_RE.sub("", raw.rstrip())
+            if terminated:
+                break
+            # 撞到大题头（「第三部分 语言运用」）：本行从标题处截断，其后的说明行整体丢弃
+            head = SECTION_HEADER_RE.split(raw.rstrip(), 1)[0]
+            if head != raw.rstrip():
+                terminated = True
+            line = OPT_LEAD_NO_RE.sub("", head.rstrip())
             if not line.strip():
                 continue
             matches = list(OPT_LABEL_SPLIT_RE.finditer(line))
