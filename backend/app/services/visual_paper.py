@@ -11,7 +11,9 @@ ALLOWED_GROUP_IDS = {"reading", "cloze7", "cloze", "grammar", "writing_app", "wr
 # 增量友好的自定义分隔格式标签
 # 单行值标签：tag 行内含值  @@TOTAL@@ 26
 # 多行内容标签：tag 独占一行，内容至下一标签
-SINGLE_VALUE_TAGS = {"TOTAL", "PAPER", "NOTICE", "GROUP", "Q", "QTYPE", "PASSAGE_REF"}
+# GROUP_INTRO：两阶段模式下阶段二为分组补写的一句话导语（挂在当前题所在分组上）
+# KEY：试卷末尾的答案/解析区（框架阶段原样圈出，阶段二照它核对答案）
+SINGLE_VALUE_TAGS = {"TOTAL", "PAPER", "NOTICE", "GROUP", "GROUP_INTRO", "Q", "QTYPE", "PASSAGE_REF"}
 ALLOWED_QTYPES = {"choice", "blank", "writing"}
 # 选项标号：阅读/完形为 A-D，七选五为 A-G，按原文照录
 OPT_LABEL_RE = re.compile(r"^([A-Ga-g])\s*[\.、:：\)）]?\s*(.*)$")
@@ -20,6 +22,7 @@ MULTILINE_TAGS = {
     "PITFALLS", "PATTERN_NAME", "PATTERN_STEPS",
     "TRANSFER_PASSAGE", "TRANSFER_STEM", "TRANSFER_OPTIONS", "TRANSFER_ANSWER", "TRANSFER_EXPL",
     "WRITING_POINTS", "WRITING_OUTLINE", "WRITING_SAMPLE",
+    "KEY",
 }
 ALL_TAGS = SINGLE_VALUE_TAGS | MULTILINE_TAGS | {"END_Q"}
 
@@ -31,7 +34,7 @@ _TAG_NAMES = [
     "TRANSFER_PASSAGE", "TRANSFER_STEM", "TRANSFER_OPTIONS", "TRANSFER_ANSWER", "TRANSFER_EXPL",
     "WRITING_POINTS", "WRITING_OUTLINE", "WRITING_SAMPLE", "PATTERN_NAME", "PATTERN_STEPS",
     "PASSAGE_DEF", "PASSAGE_REF", "PITFALLS", "DISTRACTOR", "EVIDENCE", "OPTIONS", "PASSAGE", "ANSWER", "REASON",
-    "QTYPE", "GROUP", "NOTICE", "TOTAL", "PAPER", "STEM", "END_Q", "Q",
+    "QTYPE", "GROUP_INTRO", "GROUP", "NOTICE", "TOTAL", "PAPER", "STEM", "END_Q", "KEY", "Q",
 ]
 _TAG_DELIM = r"([＠@]{2,}|[=＝]|[:：]{1,2})"
 # 行首标签：group 1=标签名 2=定界符 3=同行值
@@ -51,6 +54,70 @@ def _norm_passage_ref(v: Any) -> str:
 
 # 显式声明「本题无语篇」的编号写法（写作题）
 NO_PASSAGE_REFS = {"", "-", "NONE", "NOPASSAGE", "NULL"}
+
+# 题干首行的卷面题号：(24) / 24. / 24、——纯数字后无标点不剥，防止误伤以年份开头的题干
+_STEM_LEAD_NO_RE = re.compile(r"^\s*(?:[\(（]\s*0*(\d{1,3})\s*[\)）]|0*(\d{1,3})\s*[\.、．])\s*")
+
+
+def _strip_own_leading_no(stem: str, no: Any) -> str:
+    """剥掉题干开头与本题号一致的卷面题号。
+
+    课件渲染会把「第 N 题」chip 和打印版题号自己拼上去，题干里再带一遍卷面号
+    学生就会看到 "24. 24. Why did…"。只剥与本题号一致的数字，其余原样保留。
+    """
+    if not stem or no is None:
+        return stem
+    no_digits = re.sub(r"\D", "", str(no))
+    if not no_digits:
+        return stem
+    m = _STEM_LEAD_NO_RE.match(stem)
+    if not m:
+        return stem
+    lead = (m.group(1) or m.group(2) or "").lstrip("0")
+    if lead != no_digits.lstrip("0"):
+        return stem
+    return stem[m.end():]
+
+
+def _find_committed_question(groups: list[dict], no: str) -> tuple[dict | None, dict | None]:
+    """按题号查已提交的题（两阶段模式：阶段二同号重开时把讲解字段并回去）。
+
+    返回 (所在分组, 题对象)；重开时当前分组要跟随它，qtype 推断才不会
+    拿着骨架最后一个分组误判写作题。
+    """
+    for g in groups:
+        for q in g.get("questions", []):
+            if str(q.get("no", "")).strip() == no:
+                return g, q
+    return None, None
+
+
+def _draft_from_committed(q_obj: dict) -> dict:
+    """把已提交的题对象重播种成解析草稿（字段键与首次解析一致），重开后续写字段即可。"""
+    reference = q_obj.get("reference") or {}
+    pattern = q_obj.get("pattern") or {}
+    draft: dict = {
+        "no": q_obj.get("no", ""),
+        "qtype": q_obj.get("qtype", ""),
+        "stem": q_obj.get("stem", ""),
+        "passage": q_obj.get("passage", ""),
+        "_passage_ref": q_obj.get("passageRef", "") or "",
+        "_raw_options": q_obj.get("options", []),
+        "_answer_raw": q_obj.get("answer") or "",
+        "_evidence_raw": reference.get("evidence", ""),
+        "_reason_raw": reference.get("reason", ""),
+        "_distractor_raw": reference.get("distractor", ""),
+        "_pitfalls_raw": q_obj.get("pitfalls", []),
+        "_pattern_name_raw": pattern.get("name", ""),
+        "_pattern_steps_raw": pattern.get("steps", []),
+        "_transfers_raw": [dict(t) for t in (q_obj.get("transfers") or []) if isinstance(t, dict)],
+    }
+    wg = q_obj.get("writingGuide")
+    if wg is not None:
+        draft["_writing_points_raw"] = list(wg.get("points", []) or [])
+        draft["_writing_outline_raw"] = wg.get("outline", "") or ""
+        draft["_writing_sample_raw"] = wg.get("sample", "") or ""
+    return draft
 
 # ========== 旧 JSON 解析（保留兼容历史） ==========
 
@@ -113,6 +180,10 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
     # 收尾时统一解析引用，声明写在引用之后、跨组复用、截断与续写都能对上
     passage_defs: dict[str, dict] = {}
     pending_def_ref = ""
+    # 试卷所附答案/解析区（@@KEY@@，框架阶段圈出）：全局收集，供阶段二核对答案
+    paper_key_parts: list[str] = []
+    # 分组导语延迟挂载：@@GROUP_INTRO@@ 先于该组第一题到达，等下一道题解析出归属再挂
+    pending_group_intro = ""
 
     def begin_transfer_field(key: str) -> dict:
         """迁移块可整块重复（每题 N 道），块以 TRANSFER_PASSAGE 开头。
@@ -149,6 +220,10 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 passage_defs[key] = {"ref": pending_def_ref.strip(), "text": text}
             pending_def_ref = ""
             return
+        if cf == "KEY":
+            # 试卷所附答案区：全局字段，与当前题无关，禁止被迁移块改道逻辑吞掉
+            paper_key_parts.append(content)
+            return
         if current_q is None:
             return
         # 迁移块里的标签漂移：模型会把迁移题的选项/答案写成主题的 @@OPTIONS@@/@@ANSWER@@
@@ -183,7 +258,7 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 passage_defs[key] = {"ref": pending_def_ref.strip(), "text": text}
             pending_def_ref = ""
         elif cf == "STEM":
-            current_q["stem"] = content
+            current_q["stem"] = _strip_own_leading_no(content, current_q.get("no", ""))
         elif cf == "OPTIONS":
             # 每行一个选项，形如 "A. text"；非选择题此段为空
             opts = []
@@ -376,13 +451,22 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
         # 若 answer 为空字符串则转为 None（写作）或保留空？
         if q_obj["answer"] == "":
             q_obj["answer"] = None if is_writing else ""
-        current_group["questions"].append(q_obj)
+        committed = current_q.pop("_committed", None)
+        if committed is not None:
+            # 同号重开：原地更新已提交的题对象（保持它在分组数组里的位置与身份）
+            committed.clear()
+            committed.update(q_obj)
+        else:
+            current_group["questions"].append(q_obj)
         # 重置 current_q
         current_q = None
 
     def collecting() -> bool:
-        """当前是否在往字段里收正文：@@PASSAGE_DEF@@ 可以出现在第一道题之前（此时还没有 current_q）"""
-        return current_field is not None and (current_q is not None or current_field == "PASSAGE_DEF")
+        """当前是否在往字段里收正文：@@PASSAGE_DEF@@ 可以出现在第一道题之前、
+        @@KEY@@ 通常落在全部题之后（此时都没有 current_q），两者都放行"""
+        return current_field is not None and (
+            current_q is not None or current_field in ("PASSAGE_DEF", "KEY")
+        )
 
     # 逐行解析；一行内出现多个标签时逐段切分，前段文本归入当前字段
     for raw_line in lines:
@@ -458,11 +542,28 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     current_field = None
                     field_buf = []
                 no = value.strip() or "1"
-                current_q = {"no": no}
+                committed_group, committed = _find_committed_question(groups, no)
+                if committed is not None:
+                    # 两阶段：阶段二对同一题号重开——讲解字段并回已提交的题，
+                    # 不再新建（否则同一题在结构里出现两遍）
+                    current_q = _draft_from_committed(committed)
+                    current_q["_committed"] = committed
+                    # 当前分组跟随本题所属分组：qtype 推断、后续新建题归属都以它为准
+                    current_group = committed_group
+                else:
+                    current_q = {"no": no}
                 # 确保有组
                 if current_group is None:
                     current_group = {"id": "other", "title": "未分组", "intro": "", "questions": []}
                     groups.append(current_group)
+                if pending_group_intro:
+                    current_group["intro"] = pending_group_intro
+                    pending_group_intro = ""
+            elif tag == "GROUP_INTRO":
+                # 两阶段：阶段二为本组补写的一句话导语。讲解流开始时 current_group 还停在
+                # 骨架最后一个分组上，直接挂会挂错——挂到「下一道题」所属的分组
+                if value:
+                    pending_group_intro = value
             elif tag == "QTYPE":
                 if current_q is not None:
                     v = value.strip().lower()
@@ -540,6 +641,8 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
         "answerMap": answerMap,
         "groups": groups,
         "total": total_declared,  # 额外字段，供前端进度条
+        # 试卷所附答案/解析区原文（@@KEY@@）：仅供建档与调试回看，渲染端不用它
+        "paperKey": "\n".join(paper_key_parts).strip(),
     }
     # 若 groups 为空且 total 为 0，视为例外空
     return result

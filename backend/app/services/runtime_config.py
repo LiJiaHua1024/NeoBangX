@@ -717,6 +717,21 @@ def resolve_llm_settings(db: Session) -> dict:
 
     chores_model = _fallback_if_disabled(chores_model)
     ocr_model = _fallback_if_disabled(ocr_model)
+
+    # 试卷可视化全解阶段一（框架解析）的模型与预算：默认跟随 Chores 模型；
+    # framework_max_tokens 独立于 chores 的 256 钳制——整卷插标是几千 token 的量级
+    framework_model = ((cfg.get("framework_model") or "").strip() or chores_model)
+    framework_model = _fallback_if_disabled(framework_model)
+    try:
+        framework_max_tokens = int(cfg.get("framework_max_tokens") or max_tokens)
+    except ValueError:
+        framework_max_tokens = max_tokens
+    framework_max_tokens = max(512, framework_max_tokens)
+    # 两阶段开关：管理端未配置即默认开启，写入 off/false/0/no/否/关闭 才停用
+    _visual_fw_flag = (cfg.get("visual_paper_framework") or "").strip().lower()
+    visual_paper_framework_enabled = _visual_fw_flag not in {
+        "off", "false", "0", "no", "否", "关闭",
+    }
     # 「跟随默认」是否仍然成立：只有真正留着显式配置的模型才算配置过；
     # 配的那个被禁用而回退到默认时，等于又变成跟随默认，能力校验得按默认模型算。
     ocr_model_configured = bool(ocr_model_cfg) and ocr_model == ocr_model_cfg
@@ -817,6 +832,9 @@ def resolve_llm_settings(db: Session) -> dict:
         "chores_model": chores_model,
         "chores_base_url": "",
         "chores_api_key": "",
+        "framework_model": framework_model,
+        "framework_max_tokens": framework_max_tokens,
+        "visual_paper_framework_enabled": visual_paper_framework_enabled,
         "ocr_model": ocr_model,
         "ocr_model_configured": ocr_model_configured,
         "ocr_max_tokens": ocr_max_tokens,

@@ -463,6 +463,7 @@ data: [DONE]
 | `reasoning` | 推理片段（与 token 同样 JSON 编码） | 模型的思考过程，仅用于展示，不计入正文、不写日志；不支持推理的模型不发送该事件，前端回退到原有等待动画 |
 | `fallback` | JSON 字符串 `{"failed_index": 1, "total": 3, "next_index": 2, "reason": "timeout"}` | 当前 Provider 失败、正在切换下一优先级（按优先级链顺序尝试）。`reason` 取值：`timeout`（首块等待超时）/ `empty`（上游未返回任何正文）/ `unavailable`（其余失败）。只用于向前端展示进度，不含 Provider 名称；单 Provider 或切换后无下一家时不发送 |
 | `truncated` | JSON 字符串 `{"limit": 8192}` | **工具 32 / 33**：本次输出撞到了上限（32 是 `ocr_max_tokens`，33 是全局 `max_tokens`），结果可能不完整。前端据此提示减少张数、调大上限，或「继续翻译」把译文接着译完，不静默交付半份内容 |
+| `stage` | JSON 字符串 `{"name": "framework" \| "explain", "framework": true}` | **工具 13**：两阶段生成的阶段切换。`framework` = Chores 模型正在插标解析结构（此后的 `token` 是派生的 `@@TAG@@` 骨架）；`explain` = 主模型开始写讲解。`framework` 为 `false` 表示框架解析失败、已回退单阶段老路径（前端不做骨架快照，续写走老路径），详见 12.1 |
 | `done` | `[DONE]` / `[CANCELLED]` | 生成结束；`[CANCELLED]` 表示用户停止或客户端断开 |
 | `error` | JSON 字符串 `{"message": "...", "model": "..."}` | 生成过程中发生错误（含全部 Provider 均失败）；`model` 供前端失败归因 |
 
@@ -1131,6 +1132,8 @@ data: [DONE]
 
 工具 13 输出不用 JSON，而是逐行 `@@TAG@@` 自定义分隔格式（增量友好：每遇 `@@END_Q@@` 即提交一道题，截断不丢已完成题）。解析在前端 `frontend/script.js` 的 `parseCustomVisualPaper`；后端 `app/services/visual_paper.py` 是同源参考实现（解析 + 校验 + 归一化），生产链路不调用它。
 
+**两阶段生成（默认开启）：** 阶段一由 Chores 模型按 `@@MARK` 插标协议（`prompts/试卷可视化全解框架.md`）处理带行号的原卷——只输出 `@@TOTAL@@`/`@@PAPER@@` 头和 `@@MARK GROUP/PASSAGE/Q/OPTIONS/KEY/CUT@@ <锚点>` 单行指令，不转录任何原文；分组跟着语篇走，**每篇语篇一组**（阅读理解 A/B/C/D 篇各一组，标题可区分同类各篇；相邻同 id 同标题的分组由 applier 自动加序号消歧，防止解析端按「重复声明」合并）；锚点至少 2 字符（单字符拒收）、≤4 字符时优先行首匹配；后端 `visual_paper_framework.FrameworkApplier` 从上一标记处向后搜索锚点（精确 → 空白归一化 → 忽略大小写，失配丢弃并计数）在锚点前插入标记，锚点允许落在行中间（断行切开「语篇末尾与题号挤同一行」），派生出的 `@@TAG@@` 骨架逐段以 `token` 事件发给前端——语篇与题目从流式一开始就逐步上屏。阶段二以骨架为 `<material>`（`prompts/试卷可视化全解精讲.md`），主模型只输出讲解字段（`@@Q@@`/`@@QTYPE@@`/`@@ANSWER@@`/`@@EVIDENCE@@`/`@@REASON@@`/`@@DISTRACTOR@@`/`@@PITFALLS@@`/`@@PATTERN_*@@`/`@@TRANSFER_*@@`/`@@WRITING_*@@` + `@@END_Q@@`），题干、选项、语篇不再转录；解析端对同号 `@@Q@@` **重开合并**（从已提交的同号题重播种解析草稿，`@@END_Q@@` 原地更新，不新建）。`this.output` = 骨架 + 讲解 = 一份完整 `@@TAG@@` 文档，历史/打印/编辑链路无感。阶段边界发 `stage` 事件；框架解析失败或零产出时自动回退单阶段（老 prompt + 原文，无 `stage` 语义差异，`framework: false`）。阶段一模型取配置 `framework_model`（默认跟随 Chores 模型）、输出预算 `framework_max_tokens`（默认跟随全局 `max_tokens`）；开关 `visual_paper_framework`（默认开）。
+
 同一篇语篇常被多道题共用，正文按编号只输出一次（这是输出 token 的最大头）：
 
 | 标签 | 形式 | 说明 |
@@ -1143,7 +1146,7 @@ data: [DONE]
 - 编号查不到对应声明时该题标记 `passageUnresolved`（左栏告警），正文留空——绝不静默顶上一篇别的语篇；同号重复声明保留首份。
 - 旧格式内联 `@@PASSAGE@@`（正文逐题内联）继续兼容：历史记录照常打开；教师只改某一道题的语篇时，序列化会为该题写内联正文，不污染同篇其他题。
 - 结构 → 契约文本的回写见前端 `vpSerializeRaw`：同一篇只写一份 `@@PASSAGE_DEF@@`，其余题写 `@@PASSAGE_REF@@`。
-- **续写（工具 13 不走 8.1 的 `continue_from`）**：前端先丢掉尾巴上的未完成片段（`vpLastCompleteEnd` 截到最后一个 `@@END_Q@@` 之后），再把「进度简报」（全卷题数、已完成题号、最后一题所属板块、已用语篇编号、每题迁移题量）拼在原始输入之后作为 `input` 发出，不重发已生成正文——输出量常比试卷原文还大，回传它会让每轮输入多吞一份输出。按钮有三处：工具栏续写条、中断卡（无完整题时）、全屏舞台顶栏（`!vpComplete` 时）。`@@TOTAL@@` 被截断或模型自己数错时 `vpComplete` 为假，入口一律保留。
+- **续写（工具 13 不走 8.1 的 `continue_from`）**：前端先丢掉尾巴上的未完成片段（`vpLastCompleteEnd` 截到最后一个 `@@END_Q@@` 之后），再把「进度简报」拼在输入之后作为 `input` 发出，不重发已生成正文——输出量常比试卷原文还大，回传它会让每轮输入多吞一份输出。两阶段骨架可用时（`stage` 事件 `framework: true` 时刻的输出快照，`vpFrameworkRaw`）续写走讲解阶段：输入 = 骨架 + 讲解续写简报，后端见输入含 `@@TAG@@` 即跳过阶段一；历史记录打开的旧会话没有骨架快照，走原路重新两阶段，重发的讲解被解析端同号重开合并。按钮有三处：工具栏续写条、中断卡（无完整题时）、全屏舞台顶栏（`!vpComplete` 时）。`@@TOTAL@@` 被截断或模型自己数错时 `vpComplete` 为假，入口一律保留。
 - 历史记录：续写/重试都写回原记录（`visualPaper.historyId`），`partial` 记录「未确认写完」——用户停止、`@@TOTAL@@` 截断、题数不足都算，重开时据此恢复「已停止」状态与续写入口。
 
 ---
@@ -1197,3 +1200,4 @@ openrouter/deepseek/deepseek-chat
 | 1.13.0 | 2026-09-21 | 模型用途迁移的可用性修正：管理端「禁用模型」开关改为「启用模型」（标签此前与正向的 `enabled` 字段相反，打开开关即启用却写着"禁用"）；旧单 URL 配置迁移改为直读环境配置与库中旧键（此前从 `get_config_map` 取已被移出白名单的 `llm_base_url` / `llm_api_key`，恒为空），并会在启动时补齐已存在的空地址 Provider；静态资源改为「未版本化一律每次重验证」，避免升级后浏览器继续用旧 script.js（管理端 index.html 的资源版本串同步提升） |
 | 1.14.0 | 2026-09-23 | 新增翻译工具（33「翻译」）：`/api/chat/stream` 与 `/api/chat/preview` 新增 `source_lang` / `target_lang`（渲染进 `翻译.md`，缺省回落 `auto` / `简体中文`）；`truncated` 事件的适用范围放宽到工具 33（撞全局 `max_tokens` 时前端给出「继续翻译」出口）；`ocr_mode` 的手动选择名单增加工具 33（印刷试卷与手写作文都可能来）；工具 33 走普通工具链路：须正文、按模型计费、用用户所选模型。同批：本地静态资源不再带 `?v=` 版本串（改走 `no-cache` + `etag`，升级后无需强刷即可拿到新代码），`bridge.html` 与 `index.html` 引用镜像模块的 URL 必须一致 |
 | 1.15.0 | 2026-09-25 | 标题生成改为后端持久任务：新增 `title_jobs` 与 `/api/chat/title-jobs`、`/api/chat/title-jobs/status`；任务最多尝试 3 次，浏览器关闭或刷新不影响 worker；历史标题待生成时显示原文摘要 Shimmer，终态失败静默回退原文 |
+| 1.16.0 | 2026-10-06 | 试卷可视化全解（工具 13）改两阶段生成：阶段一由 Chores 模型按 `@@MARK` 插标协议（`prompts/试卷可视化全解框架.md`）在带行号的原卷上标出语篇/题目/选项/答案区，分组跟着语篇走（每篇一组，阅读理解 A/B/C/D 篇各自独立；GROUP 锚点必须落在本组第一题的标记之前——语篇在前的题型与 PASSAGE 同锚正文首行，写作两节锚在各自要求行且应用文/读后续写各自成组），读后续写的材料原文（含两段开头语）挂回本题展示，后端 `visual_paper_framework.FrameworkApplier` 按锚点（支持行中定位断行、短锚点行首优先、单字符拒收）派生出 `@@TAG@@` 骨架逐段流给前端，结构从流式一开始就逐步上屏；阶段二（`prompts/试卷可视化全解精讲.md`）材料换成骨架，主模型只输出讲解字段（题干/选项/语篇不再转录），解析端对同号 `@@Q@@` 重开合并。新增 SSE `stage` 事件（见 7）、标签 `@@KEY@@`（卷末答案区）与 `@@GROUP_INTRO@@`（分组导语）；续写输入携带骨架时后端跳过阶段一。进度条改两段式：浅色条为第一轮结构解析，跑完留作背景，深色条在其上展示第二轮讲解进度；进度行单一状态文案按阶段切换（解析结构 N/M → 撰写讲解 N/M），不再出现双计数。框架解析失败或产出为零时自动回退单阶段老路径（`@@TOTAL@@`/`@@PAPER@@` 头部重复对解析无害）。配置键：`visual_paper_framework`（默认开）、`framework_model`（默认跟随 chores 模型）、`framework_max_tokens`（默认跟随全局 `max_tokens`，不受 chores 256 钳制）；阶段一单记一条使用日志（`tool_name`「试卷可视化全解·框架」，`request_id` 加 `_fw` 后缀，`units` 恒 0），与主记录分列，便于核对锚点命中率 |

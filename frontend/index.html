@@ -890,14 +890,16 @@
               </div>
             </div>
 
-            <!-- 进度条（B方案增量解析，实时追踪） -->
+            <!-- 进度条（B方案增量解析，实时追踪）。两段式：浅色条 = 第一轮结构解析，跑完留在原地当背景；
+                 深色条 = 第二轮讲解撰写，以负 margin 叠在其上。定位全用内联样式：编译版 tailwind.css
+                 不保证收录 absolute/inset 这类低频工具类，此前依赖它们导致两条进度条高度塌陷不可见 -->
             <div x-show="vpTotal > 0 && (vpHasData || streaming) && !vpFullscreen" class="px-4 sm:px-5 py-2 shrink-0" style="border-bottom:1px solid var(--border);background:color-mix(in srgb, var(--accent) 3%, transparent)">
               <div class="flex items-center gap-3">
                 <div class="flex-1 h-1.5 rounded-full overflow-hidden" style="background:var(--border)">
-                  <div class="h-full transition-all duration-500" style="background:linear-gradient(90deg,var(--accent),var(--accent-2))" :style="{ width: vpProgressPercent + '%' }"></div>
+                  <div class="h-full transition-all duration-500" style="background:linear-gradient(90deg,var(--accent),var(--accent-2));opacity:.25" :style="{ width: vpProgressPercent + '%' }"></div>
+                  <div class="h-full transition-all duration-500" style="background:linear-gradient(90deg,var(--accent),var(--accent-2));margin-top:-0.375rem" :style="{ width: vpExplainPercent + '%' }"></div>
                 </div>
-                <span class="text-xs text-dim whitespace-nowrap" x-text="vpQuestionCount + ' / ' + vpTotal + ' 题'"></span>
-                <span class="text-xs font-medium whitespace-nowrap" :class="vpComplete ? 'text-emerald-600' : 'text-dim'" x-text="streaming ? (vpRemaining>0 ? '剩余 ' + vpRemaining + ' 题' : '即将完成…') : (vpComplete ? '已完成' : (vpRemaining===0 ? '未确认写完' : '已生成 ' + vpProgressPercent + '%'))"></span>
+                <span class="text-xs font-medium whitespace-nowrap" :class="vpComplete ? 'text-emerald-600' : 'text-dim'" x-text="vpProgressText"></span>
                 <button x-show="streaming" class="btn-primary btn-stop" style="padding:.3rem .8rem;font-size:.78rem" @click="stop()" title="停止生成，已生成题目会保留，可继续生成"><span x-html="icon('stop','w-3.5 h-3.5')"></span>停止</button>
               </div>
               <div x-show="streaming" class="text-[11px] text-faint mt-1.5">每完成一道题即实时预览，已生成内容即使中断也不会丢失</div>
@@ -1065,7 +1067,7 @@
                           <span class="vp-passage-badge" :title="'本题所属语篇编号：' + (vpCurrentQuestion.passageRef || '')" x-text="vpCurrentQuestion.passageRef"></span>
                         </div>
                         <div x-show="vpCurrentQuestion && vpCurrentQuestion.passage" class="vp-passage text-sm leading-relaxed whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.passage)"></div>
-                        <div x-show="vpCurrentQuestion && !vpCurrentQuestion.passage && !vpCurrentQuestion.passageUnresolved" class="text-sm text-dim">该题无独立语篇（写作题或语法填空）</div>
+                        <div x-show="vpCurrentQuestion && !vpCurrentQuestion.passage && !vpCurrentQuestion.passageUnresolved" class="text-sm text-dim">该题无独立语篇</div>
                       </div>
                     </template>
                     <template x-if="vpEditing">
@@ -1405,7 +1407,7 @@
                   <div class="flex items-center gap-2 shrink-0">
                     <span x-show="streaming" class="vp-stage-live">
                       <span class="status-dot live"></span>
-                      <span class="whitespace-nowrap" x-text="'生成中 ' + vpQuestionCount + ' / ' + (vpTotal || '…')"></span>
+                      <span class="whitespace-nowrap" x-text="vpStage === 'framework' ? ('解析结构中 ' + vpQuestionCount + ' / ' + (vpTotal || '…')) : ('撰写讲解中 ' + vpAnalyzedCount + ' / ' + (vpTotal || '…'))"></span>
                       <button class="vp-stage-live-stop" @click="stop()" title="停止生成，已生成题目会保留">停止</button>
                     </span>
                     <!-- 中断/失败后全屏里没有别的续写入口：普通视图那条续写条被 !vpFullscreen

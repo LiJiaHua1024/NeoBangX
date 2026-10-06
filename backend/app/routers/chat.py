@@ -58,6 +58,12 @@ from app.services.request_log import (
     get_fingerprint_info,
     record_usage_log,
 )
+from app.services.visual_paper import HAS_TAG_RE
+from app.services.visual_paper_framework import (
+    FrameworkApplier,
+    FrameworkStats,
+    render_numbered_lines,
+)
 from app.services.runtime_config import (
     find_model_entry,
     find_tool_reasoning_rule,
@@ -87,6 +93,14 @@ _stop_events: dict[str, tuple[asyncio.Event, str]] = {}
 
 # 免码调用（免费模型无码可用）在使用日志里的占位使用码
 ANON_CODE_LABEL = "（免码）"
+
+# 试卷可视化全解（工具 13）两阶段生成：
+# 阶段一由 Chores 模型按 @@MARK 协议在原卷上插标，后端派生出 @@TAG@@ 骨架流给前端（结构立即可见）；
+# 阶段二由主模型基于骨架只写讲解字段。输入已是 @@TAG@@ 骨架（续写/重讲解）时跳过阶段一。
+VISUAL_PAPER_TOOL_ID = "13"
+VISUAL_FRAMEWORK_PROMPT = "试卷可视化全解框架"
+VISUAL_EXPLAIN_PROMPT = "试卷可视化全解精讲"
+VISUAL_FRAMEWORK_TOOL_NAME = "试卷可视化全解·框架"
 
 
 def _load_cfg() -> dict:
@@ -1076,6 +1090,19 @@ async def chat_stream(
             detail=f"Prompt file {prompt_filename}.md not found",
         )
 
+    # 试卷可视化全解两阶段：阶段一（Chores 模型插标解析结构）的提示词。
+    # 输入已是 @@TAG@@ 骨架（续写/重新讲解）时跳过阶段一，材料直接进讲解阶段；
+    # 框架提示词文件缺失视作功能未启用，静默走单阶段老路径。
+    visual_framework_prompt: Optional[str] = None
+    if req.tool_id == VISUAL_PAPER_TOOL_ID and not HAS_TAG_RE.search(req.input):
+        visual_framework_prompt = loader.render(
+            VISUAL_FRAMEWORK_PROMPT,
+            render_numbered_lines(req.input),
+            {},
+        )
+        if visual_framework_prompt is None:
+            logger.info("框架提示词缺失，试卷可视化全解走单阶段路径")
+
     # 图片识别：图片随请求上传（data URL）或来自扫码配对会话，二选一
     ocr_images: list[str] = []
     ocr_messages: Optional[list[dict]] = None
@@ -1120,6 +1147,24 @@ async def chat_stream(
         _ensure_model_access(ctx, model_entry)
         free_model = is_free_model(model_entry)
         charged_free = free_model
+
+    # 试卷可视化全解阶段一的模型与输出预算：默认用 Chores 模型（廉价），
+    # 管理端可配置 framework_model / framework_max_tokens 覆盖；开关关闭时走单阶段。
+    visual_framework_model: Optional[str] = None
+    visual_framework_max_tokens = 0
+    if visual_framework_prompt is not None:
+        if cfg.get("visual_paper_framework_enabled", True):
+            visual_framework_model = cfg.get("framework_model") or cfg["chores_model"]
+            try:
+                visual_framework_max_tokens = int(
+                    cfg.get("framework_max_tokens") or cfg["max_tokens"]
+                )
+            except (TypeError, ValueError):
+                visual_framework_max_tokens = int(cfg["max_tokens"])
+            # 标注输出虽短，整卷插标也是几千 token 的量级，不能落回 chores 的 256 钳制
+            visual_framework_max_tokens = max(512, visual_framework_max_tokens)
+        else:
+            visual_framework_prompt = None
 
     # 日志元数据：客户端信息与原始数据开关（开关随请求读取，改配置即时生效）
     client_ip, user_agent = get_client_info(request)
@@ -1220,6 +1265,7 @@ async def chat_stream(
     visual_response_format = None
 
     async def event_generator():
+        nonlocal prompt  # 阶段一会把它换成讲解提示词或回退单阶段；不声明会变成局部变量
         charged = False
         migration_finished = False
         client_disconnected = False
@@ -1229,7 +1275,101 @@ async def chat_stream(
         output_parts: list[str] = []
         usage: dict = {}
         started = monotonic()
+        # ---- 阶段一（试卷可视化全解）：框架解析的日志与统计 ----
+        visual_fw_usage: dict = {}
+        visual_fw_raw: list[str] = []
+        visual_fw_started = monotonic()
+        visual_fw_status: Optional[str] = None
+        visual_fw_error = ""
+        visual_fw_llm = None
+        visual_fw_stats: Optional[FrameworkStats] = None
         try:
+            if visual_framework_prompt is not None and visual_framework_model is not None:
+                # 阶段一：Chores 模型在原卷上插标，applier 派生出 @@TAG@@ 骨架逐段推给前端，
+                # 语篇与题目从流式一开始就逐步上屏（正文全部来自原卷，不经模型转述）
+                yield {"event": "stage", "data": json.dumps({"name": "framework"}, ensure_ascii=False)}
+                base_prompt = prompt
+                applier = FrameworkApplier(req.input)
+                visual_fw_llm = _build_llm(cfg, model=visual_framework_model, chores=True)
+                try:
+                    async for item in visual_fw_llm.chat_stream_with_stop(
+                        user_prompt=visual_framework_prompt,
+                        model=visual_framework_model,
+                        # 插标输出不走 chores 的 256 钳制：整卷标记也是几千 token 的量级
+                        max_tokens=visual_framework_max_tokens,
+                        stop_event=stop_event,
+                        usage_out=visual_fw_usage,
+                        response_format=None,
+                    ):
+                        if isinstance(item, tuple) and item and item[0] == "fallback":
+                            # 通道切换只发生在首块之前：派生从零重跑，前端此时尚未收到骨架内容
+                            yield {"event": "fallback", "data": json.dumps(item[1], ensure_ascii=False)}
+                            applier = FrameworkApplier(req.input)
+                            continue
+                        if isinstance(item, tuple) and item and item[0] == "reasoning":
+                            reasoning_text = item[1] if len(item) > 1 else ""
+                            if not reasoning_text:
+                                continue
+                            if await request.is_disconnected():
+                                logger.info(f"Client disconnected: {request_id}")
+                                client_disconnected = True
+                                break
+                            yield {"event": "reasoning", "data": json.dumps(
+                                {"t": reasoning_text, "n": count_text_tokens(reasoning_text, visual_framework_model)},
+                                ensure_ascii=False,
+                            )}
+                            continue
+                        token = item
+                        visual_fw_raw.append(token)
+                        if await request.is_disconnected():
+                            logger.info(f"Client disconnected: {request_id}")
+                            client_disconnected = True
+                            break
+                        derived = applier.feed(token)
+                        if derived:
+                            output_parts.append(derived)
+                            yield {"event": "token", "data": json.dumps(derived, ensure_ascii=False)}
+                    if not client_disconnected and not stop_event.is_set():
+                        derived = applier.finish()
+                        if derived:
+                            output_parts.append(derived)
+                            yield {"event": "token", "data": json.dumps(derived, ensure_ascii=False)}
+                except Exception as e:
+                    visual_fw_error = str(e)
+                    logger.warning(f"框架解析流失败（{request_id}）：{e}")
+                visual_fw_stats = applier.stats
+                if client_disconnected or stop_event.is_set():
+                    visual_fw_status = STATUS_CANCELLED
+                elif visual_fw_error:
+                    visual_fw_status = STATUS_ERROR
+                else:
+                    visual_fw_status = STATUS_SUCCESS
+                if visual_fw_stats.ok:
+                    # 骨架可用：讲解阶段的材料换成骨架，主模型只写讲解字段
+                    prompt = loader.render(
+                        VISUAL_EXPLAIN_PROMPT,
+                        applier.skeleton_text,
+                        {"transfer_count": req.transfer_count},
+                    )
+                    if prompt is None:
+                        # 讲解提示词缺失：骨架内容与老路径输出同格式，可安全回退单阶段
+                        logger.warning("讲解提示词缺失，试卷可视化全解回退单阶段")
+                        prompt = base_prompt
+                else:
+                    # 干净回退：applier 只派生过头部/零散标记，前端几乎没收到内容，
+                    # 老路径对原文完整重跑；骨架与老输出同为 @@TAG@@ 文档，解析端兼容
+                    logger.info(
+                        "框架解析未产出可用骨架（%s）：stats=%s，回退单阶段",
+                        request_id, visual_fw_stats.as_dict(),
+                    )
+                    prompt = base_prompt
+                # framework 标志告诉前端是否真的存在两阶段骨架（false = 回退单阶段，
+                # 前端不做骨架快照，续写走老路径）
+                yield {"event": "stage", "data": json.dumps(
+                    {"name": "explain", "framework": bool(visual_fw_stats.ok)},
+                    ensure_ascii=False,
+                )}
+
             async for item in llm.chat_stream_with_stop(
                 user_prompt=prompt,
                 # OCR 走多模态消息序列（指令 + N 张图片），续写走残文序列，其余为 prompt 单条
@@ -1441,6 +1581,36 @@ async def chat_stream(
                 # usage_logged 已置位，全局处理器不会补记；这里至少别把异常
                 # 抛回给正在收尾的流（GeneratorExit 尤其不能被它盖掉）
                 logger.error(f"Usage log write failed ({request_id}): {e}")
+            if visual_fw_stats is not None:
+                # 阶段一单独留痕：模型、用量与产出都不同于主阶段，合并记会把
+                # Chores 模型的 token 摊到主模型头上，排查锚点失配也需要原始输出
+                try:
+                    fw_prov_id, fw_prov_name, fw_attempts = _router_log_fields(visual_fw_llm) if visual_fw_llm else (None, None, 0)
+                    await asyncio.to_thread(
+                        _log_llm_call,
+                        code=code,
+                        tool_id=req.tool_id,
+                        tool_name=VISUAL_FRAMEWORK_TOOL_NAME,
+                        model=visual_framework_model or "",
+                        request_id=f"{request_id}_fw",
+                        status=visual_fw_status or STATUS_ERROR,
+                        started=visual_fw_started,
+                        usage=visual_fw_usage,
+                        client=(client_ip, user_agent),
+                        log_payload=log_payload_enabled,
+                        error_message=visual_fw_error,
+                        units=0,
+                        input_text=req.input,
+                        rendered_prompt=visual_framework_prompt,
+                        output_text="".join(visual_fw_raw),
+                        provider_id=fw_prov_id,
+                        provider_name=fw_prov_name,
+                        fallback_attempts=fw_attempts,
+                        fingerprint=fp_hash,
+                        device_summary=fp_summary,
+                    )
+                except Exception as e:
+                    logger.warning(f"Framework stage log write failed ({request_id}): {e}")
             # 批次缓存只在注册新批次时被动清理，若此后再无迁移请求，过期批次与
             # 额度预留会一直留在内存里；每次生成收尾顺手扫一遍，代价可忽略
             _cleanup_migration_batches()
