@@ -43,6 +43,19 @@ TAG_LINE_RE = re.compile(r"^[＠@]{2,}\s*(" + "|".join(_TAG_NAMES) + r")\s*" + _
 TAG_FIND_RE = re.compile(r"[＠@]{2,}\s*(?:" + "|".join(_TAG_NAMES) + r")\s*" + _TAG_DELIM, re.IGNORECASE)
 # 门卫：raw 中是否出现过自定义标签（解析入口分流共用）
 HAS_TAG_RE = re.compile(r"[＠@]{2,}\s*(?:" + "|".join(_TAG_NAMES) + r")\s*" + _TAG_DELIM, re.IGNORECASE)
+# 骨架文档判定：@@TAG@@ 必须顶行出现（独占行首）。续写简报会以字面形式提到
+# `@@Q@@`、`@@GROUP@@` 等标签（教模型认输出格式），逐字搜索会把「原文试卷 + 续写简报」
+# 误判成骨架——实测模型被告知「前 47 题已完成，接着第 67 题之后补全」后凭空编出
+# 第 68 题并宣布结束。骨架由程序派生或按契约输出，标签必然顶行。
+TAG_AT_LINE_START_RE = re.compile(
+    r"^[ \t]*[＠@]{2,}\s*(?:" + "|".join(_TAG_NAMES) + r")\s*" + _TAG_DELIM,
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def looks_like_tag_document(text: str) -> bool:
+    """输入是否是一份 @@TAG@@ 文档（有标签顶行出现），用于与「原文+简报」区分。"""
+    return bool(text) and bool(TAG_AT_LINE_START_RE.search(text))
 
 def _is_nonempty_str(v: Any) -> bool:
     return isinstance(v, str) and v.strip() != ""

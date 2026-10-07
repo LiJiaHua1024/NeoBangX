@@ -8536,6 +8536,10 @@ function nbx() {
       }
       const contInput = (hasFramework ? this.visualPaper.frameworkRaw : this.submittedInput)
         + "\n\n" + (hasFramework ? this.vpContinueBrief2() : this.vpContinueBrief());
+      // 续写是第二阶段的工作，直接把阶段指针拨到 explain：续写流里没有 stage 事件，
+      // 不拨的话两阶段指示器整个回落成「待开始」（第一步明明已锁定 N 题结构）。
+      // 整卷重跑走上面的 reset 分支，阶段由事件驱动，不经过这里
+      this.vpStage = "explain";
       const baseLen = this.output.length;
       await this._runVisualStream(contInput, keepId);
       // 若续写未新增任何内容（模型未按指令），提示

@@ -267,6 +267,30 @@ function test_vp_remaining_and_complete_use_analyzed_semantics() {
   assert.strictEqual(c.vpProgressText, "已完成");
 }
 
+function test_stage_pills_during_continuation() {
+  // 续写流没有 stage 事件：入口把 vpStage 拨到 explain 后，指示器不得回落成「待开始」
+  // （实测续写期间第一步显示「待开始」，停止后才变绿——两阶段口径残留）
+  const c = loadComponent();
+  c.visualPaper = c.newVisualPaperState();
+  c.visualPaper.total = 47;
+  c.visualPaper.groups = [
+    {id: "reading", title: "A篇", intro: "", questions: [
+      {no: "21", answer: "A"}, {no: "22", answer: null},
+    ]},
+  ];
+  c.streaming = true;
+  c.vpStage = "explain"; // continueVisualPaper 入口设置
+  assert.strictEqual(c.vpIsStage1Active, false);
+  assert.strictEqual(c.vpIsStage1Done, true, "续写期间第一步应显示已完成");
+  assert.ok(c.vpStep1StatusText.includes("已锁定"), "第一步文案：" + c.vpStep1StatusText);
+  assert.strictEqual(c.vpIsStage2Active, true, "续写期间第二步应处于进行中");
+  assert.strictEqual(c.vpIsStage2Done, false);
+  // 对照：首跑框架阶段不误报完成
+  c.vpStage = "framework";
+  assert.strictEqual(c.vpIsStage1Active, true);
+  assert.strictEqual(c.vpIsStage1Done, false, "框架提取中不得显示已完成");
+}
+
 const tests = [
   test_reopen_merges_into_one_question,
   test_group_intro_and_key,
@@ -280,6 +304,7 @@ const tests = [
   test_continue_brief2_lists_missing_nos,
   test_stray_fields_after_early_endq_reopened,
   test_vp_remaining_and_complete_use_analyzed_semantics,
+  test_stage_pills_during_continuation,
 ];
 
 for (const t of tests) {

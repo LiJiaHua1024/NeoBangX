@@ -183,6 +183,10 @@ class FrameworkApplier:
         # 否则要么拿错 PASSAGE_REF（语篇还没声明），要么把语篇正文的收集打断
         self._pending_q_ranges: list[tuple[int, int]] = []
         self._last_mark: Optional[tuple[str, str, int, int]] = None
+        # 模型声明的总题数（@@TOTAL@@ 头）与实际派生出的题号：两者对不上时以派生为准，
+        # 收尾补一行校正——实测模型会把 47 题报成 51，总数虚高让 UI 显示不存在的余题
+        self._declared_total: Optional[int] = None
+        self._derived_nos: set[int] = set()
         self._buf = ""
         self._pending: list[str] = []        # 待取走的派生行
         self._all: list[str] = []            # 全量骨架（阶段二的 material）
@@ -210,6 +214,16 @@ class FrameworkApplier:
         # 漏发 KEY 时答案区不会进噪声区，而是粘进最后一个开着的区域——一并扫描；
         # 正确标记的 KEY 区本身就是答案区，不扫
         self._warn_if_answer_section_unmarked(None if final_kind == "key" else final_content)
+        # 总数校正：派生题号来自锚点命中的原文，比模型口头报的总数可信。
+        # 补一行 @@TOTAL@@，解析端后者生效（虚高的总数让 UI 显示不存在的余题，
+        # 也让续写工单去追不存在的题）。derived 是题号集合，区间声明不会重复计数
+        derived = len(self._derived_nos)
+        if derived and derived != (self._declared_total or 0):
+            logger.info(
+                "框架解析：@@TOTAL@@ 声明 %s，实际派生 %d 题，骨架末尾校正",
+                self._declared_total, derived,
+            )
+            self._emit([f"@@TOTAL@@ {derived}"])
         return self._take()
 
     def _take(self) -> str:
@@ -241,6 +255,9 @@ class FrameworkApplier:
         h = HEADER_LINE_RE.match(stripped)
         if h:
             value = h.group(2).strip()
+            if h.group(1).upper() == "TOTAL":
+                m = re.search(r"\d{1,4}", value)
+                self._declared_total = int(m.group()) if m else None
             self._emit([f"@@{h.group(1).upper()}@@ {value}".rstrip()])
         # 其余输出（解释、闲聊、误吐的正文）一律忽略
 
@@ -412,6 +429,9 @@ class FrameworkApplier:
         elif mtype == "Q":
             no = _parse_q_no(args, anchor) or self._next_no()
             self._warn_if_no_regression(no)
+            no_digits = re.sub(r"\D", "", str(no))
+            if no_digits:
+                self._derived_nos.add(int(no_digits))
             self._question = {"no": no, "options": None, "options_emitted": False}
             self._set_last_no(no)
             ref_line = self._passage_ref_line()
@@ -563,6 +583,7 @@ class FrameworkApplier:
 
     def _emit_q_blocks(self, lo: int, hi: int, pool: Optional[list[str]]) -> None:
         for k in range(lo, hi + 1):
+            self._derived_nos.add(k)
             lines = [f"@@Q@@ {k}"]
             ref_line = self._passage_ref_line()
             if ref_line is not None:

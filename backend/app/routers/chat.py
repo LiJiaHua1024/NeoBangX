@@ -60,7 +60,7 @@ from app.services.request_log import (
     get_fingerprint_info,
     record_usage_log,
 )
-from app.services.visual_paper import HAS_TAG_RE
+from app.services.visual_paper import looks_like_tag_document
 from app.services.visual_paper_framework import (
     FrameworkApplier,
     FrameworkStats,
@@ -1093,13 +1093,15 @@ async def chat_stream(
         )
 
     # 试卷可视化全解两阶段：阶段一（Chores 模型插标解析结构）的提示词。
-    # 输入已是 @@TAG@@ 骨架（续写/重新讲解）时跳过阶段一，并换用精讲提示词：
-    # 单阶段契约会要求模型重发 @@GROUP@@/语篇正文等结构行，正是续写轮次里
-    # 文档底部长出空分组、正文被复读的直接诱因。
+    # 输入是 @@TAG@@ 骨架文档（续写/重新讲解，标签顶行出现）时跳过阶段一，并换用精讲
+    # 提示词：单阶段契约会要求模型重发 @@GROUP@@/语篇正文等结构行，正是续写轮次里
+    # 文档底部长出空分组、正文被复读的直接诱因。不能用「出现过标签」判定——老路径
+    # 续写简报里就有字面的 `@@Q@@`/`@@GROUP@@`，误判会把整份原文当骨架送进讲解阶段，
+    # 模型被告知「前面都已完成」后凭空编出不存在的题号。
     # 框架提示词文件缺失视作功能未启用，静默走单阶段老路径。
     visual_framework_prompt: Optional[str] = None
     if req.tool_id == VISUAL_PAPER_TOOL_ID:
-        if HAS_TAG_RE.search(req.input):
+        if looks_like_tag_document(req.input):
             explain_prompt = loader.render(
                 VISUAL_EXPLAIN_PROMPT,
                 req.input,

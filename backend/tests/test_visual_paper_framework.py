@@ -723,3 +723,35 @@ def test_tag_input_skips_framework_and_uses_explain_prompt():
         db.close()
     assert len(logs) == 1, f"续写请求只落一条主日志，实际 {len(logs)} 条"
     assert logs[0].tool_name == "试卷可视化全解精讲"
+
+
+def test_tag_mentions_in_brief_do_not_look_like_skeleton():
+    """老路径续写简报里有字面的 `@@Q@@`/`@@GROUP@@`（教模型格式用），但都不是顶行——
+    不能被当成骨架文档。误判会把「原文+简报」整份送进讲解阶段，模型被告知
+    「前面都已完成」后凭空编出不存在的题号（实测 log-303 凭空 68 题）。"""
+    from app.services.visual_paper import HAS_TAG_RE, looks_like_tag_document
+    raw_plus_brief = (
+        "2024年高考英语（新课标II卷）\n第二节 阅读理解\nMost people ride BART every day.\n"
+        "板块写法：接下来的题若仍属于 `reading|阅读理解`，直接输出 `@@Q@@` 行；"
+        "只有跨进新板块时，才输出新的 `@@GROUP@@ id|title|intro` 行。\n"
+        "语篇写法：只有遇到新语篇时，才输出一次 `@@PASSAGE_DEF@@ 新编号`。\n"
+    )
+    assert HAS_TAG_RE.search(raw_plus_brief), "简报字面标签应命中逐字搜索（证明旧判定会误判）"
+    assert not looks_like_tag_document(raw_plus_brief)
+    skeleton = "@@TOTAL@@ 1\n@@PAPER@@ 测试卷\n@@GROUP@@ reading|阅读理解|\n@@Q@@ 1\n@@END_Q@@\n"
+    assert looks_like_tag_document(skeleton)
+    assert looks_like_tag_document("\n\n@@TOTAL@@ 2\n@@PAPER@@ 另一卷\n")  # 允许前导空行
+
+
+def test_applier_corrects_declared_total():
+    """模型口头报的总数不可靠（实测 47 题报成 51）：派生题号来自锚点命中的原文，
+    finish 时补一行 @@TOTAL@@ 校正，解析端后者生效。"""
+    import re
+
+    marks = _MARKS.replace("@@TOTAL@@ 3", "@@TOTAL@@ 51")
+    applier = FrameworkApplier(_RAW_PAPER)
+    text = applier.feed(marks) + applier.finish()
+    totals = re.findall(r"[＠@]{2,}\s*TOTAL\s*[＠@]{2,}\s*(\d+)", text)
+    assert totals[0] == "51", "头部保留模型声明"
+    assert totals[-1] == "3", f"末尾应校正为实际派生题数 3，实际 {totals}"
+    assert applier.stats.questions >= 3
