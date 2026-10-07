@@ -9036,6 +9036,7 @@ function nbx() {
       const raw = this.vpSerializeRaw();
       this.output = raw;
       this.visualPaper.rawJson = raw;
+      this.vpRefreshFramework();
       this._vpPersistEdits();
     },
     _vpPersistEdits() {
@@ -9074,7 +9075,7 @@ function nbx() {
     /* 结构 → @@TAG@@ 契约文本（与 parseCustomVisualPaper 的口径严格对应：
        QTYPE 值必须同行、每题必须 @@END_Q@@ 收题、易错点用 :: 分隔、组信息用 | 分隔、
        语篇用 @@PASSAGE_DEF@@/@@PASSAGE_REF@@ 编号复用，同一篇只写一份正文） */
-    vpSerializeRaw() {
+    vpSerializeRaw({ frameworkOnly = false } = {}) {
       const vp = this.visualPaper || {};
       const paper = vp.paper || {};
       // 字段内容里的 @@标签@@ 形状会被解析器当标签，插一个零宽空格打断（肉眼无差别）
@@ -9082,6 +9083,8 @@ function nbx() {
       const flat = (s) => guard(String(s == null ? "" : s).replace(/\r?\n/g, " ")).trim();
       const block = (s) => guard(String(s == null ? "" : s));
       const out = [];
+      const paperKey = this.tryParseVisualPaper(this.output || vp.rawJson || "").data?.paperKey
+        || this.tryParseVisualPaper(vp.frameworkRaw || "").data?.paperKey || "";
       const total = Number(vp.total) > 0 ? Number(vp.total) : this.vpQuestionCount;
       out.push(`@@TOTAL@@ ${total}`);
       out.push(`@@PAPER@@ ${flat(paper.title)}`);
@@ -9140,6 +9143,10 @@ function nbx() {
             if (!o) return;
             out.push(`${flat(o.label) || String.fromCharCode(65 + i)}. ${flat(o.text)}`);
           });
+          if (frameworkOnly) {
+            out.push("@@END_Q@@");
+            continue;
+          }
           out.push("@@ANSWER@@");
           out.push(flat(q.answer));
           out.push("@@EVIDENCE@@");
@@ -9189,7 +9196,14 @@ function nbx() {
           out.push("@@END_Q@@");
         }
       }
+      if (paperKey) out.push("@@KEY@@", block(paperKey));
       return `${out.join("\n")}\n`;
+    },
+    vpRefreshFramework() {
+      // 完整旧记录可建立骨架；残缺旧记录仍需回到原卷补齐结构。
+      if (this.visualPaper.frameworkRaw || this.vpQuestionCount >= this.vpTotal) {
+        this.visualPaper.frameworkRaw = this.vpSerializeRaw({ frameworkOnly: true });
+      }
     },
     /* 退出修改模式：先序列化写回原始文本，再重解析对账（答案速查表/题量随之更新） */
     vpCommitEdits() {
@@ -9217,6 +9231,7 @@ function nbx() {
         this.toast("保存校验未通过，这次修改没有写入历史记录；请检查内容后重试", "error");
         return;
       }
+      this.vpRefreshFramework();
       this._vpPersistEdits();
       if (this.vpQuestionCount !== before) this.toast(`保存提示：题数由 ${before} 变成 ${this.vpQuestionCount}`, "warn");
       else if (over.length) this.toast(`有内容超出长度上限，已截断：${over.join("、")}`, "warn");

@@ -131,6 +131,31 @@ def _transfers(no: int, count: int) -> list[dict]:
                 "偷换成「灯被改称」；C 项在原文中没有对应信息。"
             ),
         })
+    if _SHAPES[(no - 1) % len(_SHAPES)]["opts"] == "ABCDEFG":
+        for i, tr in enumerate(out, 1):
+            tr.update({
+                "passage": (
+                    f"Transfer passage {no}.{i}. A coastal library converted a storage room "
+                    "into a workshop after readers began bringing damaged books to the desk. __1__ "
+                    "At first, volunteers repaired only loose covers. Demand soon revealed that "
+                    "most visitors wanted to learn the work themselves, so the library introduced "
+                    "short classes. __2__ Each participant now practises on a discarded book "
+                    "before touching a valued copy. The change also gave the volunteers a clearer "
+                    "role: they demonstrate techniques rather than repair everything. __3__"
+                ),
+                "stem": "Choose the sentences that best fill blanks 1–3. Four choices are extra.",
+                "options": [
+                    "The library had no readers who owned books.",
+                    "A small repair bench was therefore installed beside the entrance.",
+                    "All damaged books were immediately thrown away.",
+                    "These sessions teach simple methods that require only basic tools.",
+                    "Every visitor was already an experienced bookbinder.",
+                    "As a result, more people can look after their own collections.",
+                    "The workshop closed before its first class began.",
+                ],
+                "answer": "1. B 2. D 3. F",
+                "explanation": "B 承接维修需求，D 解释课程内容，F 总结角色变化带来的结果；其余选项与语篇事实不符。",
+            })
     return out
 
 
@@ -221,7 +246,7 @@ class PaperBuilder:
             self.out.append(f"@@TRANSFER_PASSAGE@@\n{tr['passage']}\n")
             self.out.append(f"@@TRANSFER_STEM@@\n{tr['stem']}\n")
             self.out.append("@@TRANSFER_OPTIONS@@\n")
-            for label, text in zip("ABCD", tr["options"]):
+            for label, text in zip("ABCDEFGHIJKLMNOPQRSTUVWXYZ", tr["options"]):
                 self.out.append(f"{label}. {text}\n")
             self.out.append(f"@@TRANSFER_ANSWER@@\n{tr['answer']}\n")
             self.out.append(f"@@TRANSFER_EXPL@@\n{tr['explanation']}\n")
@@ -258,7 +283,7 @@ def build_paper(plan: Any, req: dict, input_text: str) -> str:
     return builder.text()
 
 
-_BRIEF_TOTAL_RE = re.compile(r"全卷\s*(\d+)\s*题，已完成\s*(\d+)\s*题")
+_BRIEF_TOTAL_RE = re.compile(r"全卷\s*(\d+)\s*题，已(?:完成|解析结构)\s*(\d+)\s*题")
 _BRIEF_LAST_RE = re.compile(r"最后一题是第\s*([^\s，。]+)\s*题，属于板块\s*`([^|`]+)\|([^`]*)`")
 _BRIEF_REMAIN_RE = re.compile(r"写完剩余\s*(\d+)\s*题")
 _BRIEF_TRANSFER_RE = re.compile(r"仍输出\s*(\d+)\s*块迁移")

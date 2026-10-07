@@ -165,3 +165,66 @@ test("完整选择、填空和写作题可完成，停止时仍保留未确认�
   c.streaming = true;
   assert.equal(c.vpGeneratingQuestionNo, null);
 });
+
+test("七选五迁移选项池不完整时保留续写入口，七项齐全后才完成", () => {
+  const c = component();
+  const q = fullQuestion();
+  q.options = Array.from("ABCDEFG", label => ({ label, text: `Option ${label}` }));
+  q.transfers[0].options = q.options.slice(0, 4);
+  assert.equal(c.vpQuestionAnalyzed(q), false);
+  q.transfers[0].options = q.options;
+  assert.equal(c.vpQuestionAnalyzed(q), true);
+});
+
+test("编辑后续写与历史快照使用新结构，保留答案区和同篇其他题", async () => {
+  const c = component();
+  const original = SKELETON + "@@KEY@@\n1 A 2 B\n";
+  loadPaper(c, original);
+  const questions = c.visualPaper.groups[0].questions;
+  Object.assign(questions[0], fullQuestion("1"));
+  questions[0].passage = "Original passage.";
+  questions[0].passageRef = "P1";
+  questions[1].passage = "Teacher revised passage.";
+  questions[1].stem = "Teacher revised question?";
+  questions[1].options[0].text = "Teacher revised option";
+  c.vpCommitEdits();
+  assert.equal(c.visualPaper.groups[0].questions[0].passage, "Original passage.");
+  assert.ok(!c.visualPaper.frameworkRaw.includes("@@ANSWER@@"), "骨架不携带讲解");
+  assert.ok(!c.visualPaper.frameworkRaw.includes("@@TRANSFER_STEM@@"));
+  assert.equal(c.parseCustomVisualPaper(c.output).paperKey, "1 A 2 B");
+  const reopened = component();
+  reopened.visualPaper = JSON.parse(JSON.stringify(c.visualPaper));
+  reopened.output = c.output;
+  reopened.submittedInput = c.submittedInput;
+  let request;
+  reopened._runVisualStream = async input => { request = input; };
+  await reopened.continueVisualPaper();
+  const parsed = reopened.parseCustomVisualPaper(request);
+  const qs = parsed.groups[0].questions;
+  assert.equal(qs[0].passage, "Original passage.");
+  assert.equal(qs[1].passage, "Teacher revised passage.");
+  assert.equal(qs[1].stem, "Teacher revised question?");
+  assert.equal(qs[1].options[0].text, "Teacher revised option");
+  assert.equal(parsed.paperKey.split("\n\n【续写指令】")[0].trim(), "1 A 2 B");
+  assert.ok(!request.includes("Second question?"));
+  assert.ok(request.includes("：2。名单之外"));
+});
+
+test("自动保存同步骨架，旧单阶段记录也能保留修改后续写", async () => {
+  const c = component();
+  loadPaper(c);
+  c.visualPaper.frameworkRaw = "";
+  c.visualPaper.groups[0].questions[1].stem = "Autosaved question?";
+  c.vpEditing = true;
+  c.vpEditDirty = true;
+  let persisted;
+  c._vpPersistEdits = () => { persisted = JSON.parse(JSON.stringify(c.visualPaper)); };
+  c.vpFlushEdits();
+  assert.ok(persisted.frameworkRaw.includes("Autosaved question?"));
+  c.vpEditing = false;
+  let request;
+  c._runVisualStream = async input => { request = input; };
+  await c.continueVisualPaper();
+  assert.ok(request.includes("Autosaved question?"));
+  assert.ok(!request.includes("Second question?"));
+});

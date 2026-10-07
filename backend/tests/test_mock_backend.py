@@ -341,6 +341,22 @@ def test_paper_fixtures_pass_real_validator():
         assert ok, f"{name} 不是合法试卷：{errors[:3]}"
 
 
+@pytest.mark.parametrize("transfer_count", [1, 3])
+def test_paper_choice_transfers_preserve_option_pool(transfer_count):
+    from app.services.visual_paper import parse_custom_visual_paper
+    from mock_backend.scenarios import StreamPlan
+
+    raw = paper_mod.build_paper(StreamPlan(content="paper", paper_questions=5, transfer_count=transfer_count), {}, "")
+    data = parse_custom_visual_paper(raw)
+    for group in data["groups"]:
+        for question in group["questions"]:
+            if question["qtype"] != "choice":
+                continue
+            assert len(question["transfers"]) == transfer_count
+            for transfer in question["transfers"]:
+                assert len(transfer["options"]) == len(question["options"])
+
+
 def test_paper_partial_keeps_declared_total():
     """partial 场景：只发 3 题，但 @@TOTAL@@ 仍是 5，前端进度条才会停在 3/5。"""
     from app.services.visual_paper import parse_custom_visual_paper
@@ -353,7 +369,8 @@ def test_paper_partial_keeps_declared_total():
     assert sum(len(g["questions"]) for g in data["groups"]) == 3
 
 
-def test_paper_resume_continues_from_brief():
+@pytest.mark.parametrize("progress", ["已完成 3 题", "已解析结构 3 题"])
+def test_paper_resume_continues_from_brief(progress):
     """按【续写指令】简报续写：拼回原文后仍是合法整卷，且题号连续。"""
     from app.services.visual_paper import parse_custom_visual_paper
 
@@ -362,7 +379,7 @@ def test_paper_resume_continues_from_brief():
     first = paper_mod.build_paper(StreamPlan(content="paper", paper_questions=5, paper_done=3), {}, "")
     brief = (
         "【续写指令】你的输出会被原样追加在前面已生成内容的后面，接着往下写。\n"
-        "进度：全卷 5 题，已完成 3 题（题号 1,2,3），最后一题是第 3 题，属于板块 `cloze7|七选五`。\n"
+        f"进度：全卷 5 题，{progress}（题号 1,2,3），讲解完整 3 题，最后一题是第 3 题，属于板块 `cloze7|七选五`。\n"
         "接着第 3 题之后的题继续写，直到写完剩余 2 题。\n"
         "板块写法：接下来的题若仍属于 `cloze7|七选五`，直接输出 `@@Q@@` 行；只有跨进新板块时，"
         "才输出新的 `@@GROUP@@ id|title|intro` 行。\n"
@@ -371,7 +388,7 @@ def test_paper_resume_continues_from_brief():
         "每道笔试题仍输出 2 块迁移（写作题除外）。"
     )
     parsed = paper_mod.parse_continue_brief("试卷原文\n\n" + brief)
-    assert parsed and parsed["total"] == 5 and parsed["last_no"] == "3"
+    assert parsed and parsed["total"] == 5 and parsed["done"] == 3 and parsed["last_no"] == "3"
 
     continuation = paper_mod.build_resume(parsed)
     assert "@@PASSAGE_DEF@@" not in continuation, "已声明过的语篇不能再写一遍全文"
