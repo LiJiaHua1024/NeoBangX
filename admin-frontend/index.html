@@ -948,109 +948,115 @@
             <button class="btn-primary" @click="openAddModel()">+ 添加模型</button>
           </div>
 
-          <table class="data-table mt-3 model-table">
-            <thead>
-              <tr>
-                <th></th>
-                <th>显示名称</th>
-                <th>可用 Provider<span class="hint-th">（首位优先 · 拖拽排序）</span></th>
-                <th>推荐评分</th>
-                <th>思考控制</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr x-show="!configForm.models.length">
-                <td colspan="6" class="empty">暂无模型，点击右上角“添加模型”</td>
-              </tr>
-              <template x-for="(m, i) in configForm.models" :key="m.id + '-' + i">
-                <tr
-                  :class="{
-                    'dragging': dragIndex === i,
-                    'drag-over': dragOverIndex === i && dragIndex !== null && dragIndex !== i,
-                    'drag-over-before': dragOverIndex === i && dragOverBefore && dragIndex !== i,
-                    'drag-over-after': dragOverIndex === i && !dragOverBefore && dragIndex !== i,
-                  }"
-                  @dragover.prevent="dragModelOver(i, $event)"
-                  @dragleave="dragLeaveModel()"
-                  @drop.prevent="dropModel()">
-                  <td class="drag-cell">
-                    <span class="drag-handle" draggable="true"
-                          @dragstart="startModelDrag(i, $event)"
-                          @dragend="endModelDrag()"
-                          title="拖动调整模型顺序">
-                      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                        <circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle>
-                        <circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle>
-                        <circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle>
-                      </svg>
-                    </span>
-                  </td>
-                  <td data-label="显示名称" data-span="full">
-                    <span x-text="m.name || m.id"></span>
-                    <span class="badge badge-admin ml-1.5" x-show="m.id === configForm.default_model">默认</span>
-                    <span class="badge badge-free ml-1.5" x-show="m.is_free"
-                          :title="m.free_no_code ? '免费模型：不消耗次数，且无码/次数用尽也可用' : '免费模型：不消耗次数'"
-                          x-text="m.is_free && m.free_no_code ? '免费 · 无码可用' : '免费'"></span>
-                    <template x-for="tag in modelCapabilityTags(m)" :key="'cap-' + m.id + '-' + tag">
-                      <span class="badge badge-cap ml-1.5" x-text="tag"
-                            title="该模型的用途勾选：用户 = 用户端可选，OCR = 识别图片文字，Chores = 轻量任务"></span>
-                    </template>
-                    <span class="badge ml-1.5" x-show="m.enabled === false" style="color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 40%, transparent);background:color-mix(in srgb, var(--danger) 12%, transparent)">已禁用</span>
-                    <div class="mono dim" style="font-size:0.7rem; margin-top:2px;" x-text="m.id"></div>
-                  </td>
-                  <td data-label="可用 Provider" data-span="full" style="min-width: 260px;">
-                    <div class="model-providers-cell">
-                      <template x-if="(modelProviderMap[m.id] || []).length === 0">
-                        <div class="model-providers-empty">
-                          <span>⚠ 未绑定</span>
-                          <button class="link-btn" @click="openModelProviders(m.id)">去绑定</button>
-                        </div>
-                      </template>
-                      <template x-if="(modelProviderMap[m.id] || []).length > 0">
-                        <div class="model-providers-list">
-                          <template x-for="(pid, pIdx) in (modelProviderMap[m.id] || [])" :key="m.id + '-' + pid">
-                            <span class="provider-chip"
-                                  :class="{ 'disabled': !(providersById[pid] && providersById[pid].enabled), 'dragging': providerDragModelId === m.id && providerDragIndex === pIdx, 'drag-over': providerDragModelId === m.id && providerDragOverIndex === pIdx && providerDragIndex !== pIdx }"
-                                  draggable="true"
-                                  @dragstart="startProviderDrag(m.id, pIdx, $event)"
-                                  @dragend="endProviderDrag()"
-                                  @dragover.prevent="dragProviderOver(m.id, pIdx, $event)"
-                                  @dragleave="dragLeaveProvider()"
-                                  @drop.prevent="dropProvider(m.id)"
-                                  :title="(providersById[pid] ? providersById[pid].name : pid) + (providersById[pid] && !providersById[pid].enabled ? '（已禁用）' : '（拖动或用 ↑↓ 调整优先级）')">
-                              <span class="provider-chip-handle">⋮⋮</span>
-                              <span class="provider-chip-name" x-text="providersById[pid] ? providersById[pid].name : pid"></span>
-                              <span class="provider-chip-order" x-text="pIdx === 0 ? '· 首选' : '· #' + (pIdx+1)"></span>
-                              <span class="provider-chip-moves">
-                                <button class="provider-chip-move" @click.stop="moveProviderInModel(m.id, pIdx, -1)" :disabled="pIdx===0" title="上移">↑</button>
-                                <button class="provider-chip-move" @click.stop="moveProviderInModel(m.id, pIdx, 1)" :disabled="pIdx===(modelProviderMap[m.id]||[]).length-1" title="下移">↓</button>
-                              </span>
-                            </span>
-                          </template>
-                          <button class="link-btn" @click="openModelProviders(m.id)" title="编辑绑定与优先级">编辑</button>
-                        </div>
-                      </template>
-                    </div>
-                  </td>
-                  <td data-label="推荐评分">
-                    <span class="badge" :style="m.score != null ? 'color:' + scoreColor(m.score) + ';border-color:' + scoreColor(m.score) + '66;background:' + scoreColor(m.score) + '1a' : ''"
-                          x-text="m.score != null ? m.score + ' / 10' : '—'"></span>
-                  </td>
-                  <td data-label="思考控制"><span class="badge badge-user" x-text="thinkingLabel(m)"></span></td>
-                  <td class="actions" data-label="操作" data-span="full">
-                    <button class="link-btn" x-show="m.id !== configForm.default_model && m.user_usable !== false && m.enabled !== false" @click="setDefaultModel(m.id)">设为默认</button>
-                    <button class="link-btn" @click="toggleModelEnabled(i)" x-text="m.enabled === false ? '启用' : '禁用'"></button>
-                    <button class="link-btn" @click="openEditModel(i)">编辑</button>
-                    <button class="link-btn" @click="openModelProviders(m.id)">绑定</button>
-                    <button class="link-btn" :disabled="i === 0" @click="moveModel(i, -1)" title="上移">↑</button>
-                    <button class="link-btn" :disabled="i === configForm.models.length - 1" @click="moveModel(i, 1)" title="下移">↓</button>
-                    <button class="link-btn danger" @click="removeModel(i)">删除</button>
-                  </td>
+          <div class="table-wrap mt-3">
+            <table class="data-table model-table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>显示名称</th>
+                  <th>可用 Provider<span class="hint-th">（首位优先 · 拖拽排序）</span></th>
+                  <th>推荐评分</th>
+                  <th>思考控制</th>
+                  <th>操作</th>
                 </tr>
-              </template>
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                <tr x-show="!configForm.models.length">
+                  <td colspan="6" class="empty">暂无模型，点击右上角“添加模型”</td>
+                </tr>
+                <template x-for="(m, i) in configForm.models" :key="m.id + '-' + i">
+                  <tr
+                    :class="{
+                      'dragging': dragIndex === i,
+                      'drag-over': dragOverIndex === i && dragIndex !== null && dragIndex !== i,
+                      'drag-over-before': dragOverIndex === i && dragOverBefore && dragIndex !== i,
+                      'drag-over-after': dragOverIndex === i && !dragOverBefore && dragIndex !== i,
+                    }"
+                    @dragover.prevent="dragModelOver(i, $event)"
+                    @dragleave="dragLeaveModel()"
+                    @drop.prevent="dropModel()">
+                    <td class="drag-cell">
+                      <span class="drag-handle" draggable="true"
+                            @dragstart="startModelDrag(i, $event)"
+                            @dragend="endModelDrag()"
+                            title="拖动调整模型顺序">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                          <circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle>
+                          <circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle>
+                          <circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle>
+                        </svg>
+                      </span>
+                    </td>
+                    <td class="model-name-cell" data-label="显示名称" data-span="full">
+                      <div class="model-name-row">
+                        <span class="model-name-title" x-text="m.name || m.id"></span>
+                        <span class="badge badge-admin ml-1" x-show="m.id === configForm.default_model">默认</span>
+                        <span class="badge badge-free ml-1" x-show="m.is_free"
+                              :title="m.free_no_code ? '免费模型：不消耗次数，且无码/次数用尽也可用' : '免费模型：不消耗次数'"
+                              x-text="m.is_free && m.free_no_code ? '免费 · 无码可用' : '免费'"></span>
+                        <template x-for="tag in modelCapabilityTags(m)" :key="'cap-' + m.id + '-' + tag">
+                          <span class="badge badge-cap ml-1" x-text="tag"
+                                title="该模型的用途勾选：用户 = 用户端可选，OCR = 识别图片文字，Chores = 轻量任务"></span>
+                        </template>
+                        <span class="badge badge-disabled ml-1" x-show="m.enabled === false">已禁用</span>
+                      </div>
+                      <div class="mono dim model-id-text" :title="m.id" x-text="m.id"></div>
+                    </td>
+                    <td data-label="可用 Provider" data-span="full">
+                      <div class="model-providers-cell">
+                        <template x-if="(modelProviderMap[m.id] || []).length === 0">
+                          <div class="model-providers-empty">
+                            <span>⚠ 未绑定</span>
+                            <button class="link-btn" @click="openModelProviders(m.id)">去绑定</button>
+                          </div>
+                        </template>
+                        <template x-if="(modelProviderMap[m.id] || []).length > 0">
+                          <div class="model-providers-list">
+                            <template x-for="(pid, pIdx) in (modelProviderMap[m.id] || [])" :key="m.id + '-' + pid">
+                              <span class="provider-chip"
+                                    :class="{ 'disabled': !(providersById[pid] && providersById[pid].enabled), 'dragging': providerDragModelId === m.id && providerDragIndex === pIdx, 'drag-over': providerDragModelId === m.id && providerDragOverIndex === pIdx && providerDragIndex !== pIdx }"
+                                    draggable="true"
+                                    @dragstart="startProviderDrag(m.id, pIdx, $event)"
+                                    @dragend="endProviderDrag()"
+                                    @dragover.prevent="dragProviderOver(m.id, pIdx, $event)"
+                                    @dragleave="dragLeaveProvider()"
+                                    @drop.prevent="dropProvider(m.id)"
+                                    :title="(providersById[pid] ? providersById[pid].name : pid) + (providersById[pid] && !providersById[pid].enabled ? '（已禁用）' : '（拖动或用 ↑↓ 调整优先级）')">
+                                <span class="provider-chip-handle">⋮⋮</span>
+                                <span class="provider-chip-name" x-text="providersById[pid] ? providersById[pid].name : pid"></span>
+                                <span class="provider-chip-order" x-text="pIdx === 0 ? '· 首选' : '· #' + (pIdx+1)"></span>
+                                <span class="provider-chip-moves">
+                                  <button class="provider-chip-move" @click.stop="moveProviderInModel(m.id, pIdx, -1)" :disabled="pIdx===0" title="上移">↑</button>
+                                  <button class="provider-chip-move" @click.stop="moveProviderInModel(m.id, pIdx, 1)" :disabled="pIdx===(modelProviderMap[m.id]||[]).length-1" title="下移">↓</button>
+                                </span>
+                              </span>
+                            </template>
+                            <button class="link-btn" @click="openModelProviders(m.id)" title="编辑绑定与优先级">编辑</button>
+                          </div>
+                        </template>
+                      </div>
+                    </td>
+                    <td data-label="推荐评分">
+                      <span class="badge" :style="m.score != null ? 'color:' + scoreColor(m.score) + ';border-color:' + scoreColor(m.score) + '66;background:' + scoreColor(m.score) + '1a' : ''"
+                            x-text="m.score != null ? m.score + ' / 10' : '—'"></span>
+                    </td>
+                    <td data-label="思考控制"><span class="badge badge-user" x-text="thinkingLabel(m)"></span></td>
+                    <td class="actions-cell" data-label="操作" data-span="full">
+                      <div class="actions">
+                        <button class="link-btn" x-show="m.id !== configForm.default_model && m.user_usable !== false && m.enabled !== false" @click="setDefaultModel(m.id)">设为默认</button>
+                        <button class="link-btn" @click="toggleModelEnabled(i)" x-text="m.enabled === false ? '启用' : '禁用'"></button>
+                        <button class="link-btn" @click="openEditModel(i)">编辑</button>
+                        <button class="link-btn" @click="openModelProviders(m.id)">绑定</button>
+                        <button class="link-btn" :disabled="i === 0" @click="moveModel(i, -1)" title="上移">↑</button>
+                        <button class="link-btn" :disabled="i === configForm.models.length - 1" @click="moveModel(i, 1)" title="下移">↓</button>
+                        <button class="link-btn danger" @click="removeModel(i)">删除</button>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
           <p class="field-hint mt-2" x-show="defaultModelMissing">⚠ 当前默认模型不在列表中，请重新选择或添加。</p>
           <p class="field-hint mt-2" x-show="hasUnboundModels">⚠ 有 <span x-text="unboundModelCount"></span> 个模型未绑定可用 Provider，教师端将无法选择这些模型。请在“可用 Provider”列点击“去绑定/编辑”进行配置。</p>
         </div>
@@ -1069,45 +1075,49 @@
             <span class="dim" x-text="`共 ${providers.length} 个 Provider · ${providers.filter(p=>p.enabled).length} 个已启用 · ${Object.keys(modelProviderMap).length} 个模型已配置优先级`"></span>
           </div>
 
-          <table class="data-table mt-3">
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>Base URL</th>
-                <th>API Key</th>
-                <th>启用</th>
-                <th>已绑定模型数</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr x-show="!providers.length">
-                <td colspan="6" class="empty">暂无 Provider，点击右上角“添加 Provider”</td>
-              </tr>
-              <template x-for="p in providers" :key="p.id">
+          <div class="table-wrap mt-3">
+            <table class="data-table">
+              <thead>
                 <tr>
-                  <td data-label="名称" data-span="full">
-                    <span class="mono" style="font-weight:700" x-text="p.name"></span>
-                    <div class="mono dim" style="font-size:0.68rem" x-text="p.id"></div>
-                  </td>
-                  <td class="dim mono truncate-cell" data-label="Base URL" data-span="full" :title="p.base_url" x-text="p.base_url || '（默认）'"></td>
-                  <td class="mono dim truncate-cell" data-label="API Key" :title="p.api_key" x-text="p.api_key || '—'"></td>
-                  <td data-label="启用">
-                    <label class="switch switch-sm" :class="{ disabled: savingProvider }">
-                      <input type="checkbox" :checked="p.enabled" @change="toggleProviderEnabled(p)">
-                      <span class="switch-slider"></span>
-                    </label>
-                  </td>
-                  <td class="dim" data-label="已绑定模型数" x-text="providerBoundCount(p.id)"></td>
-                  <td class="actions" data-label="操作" data-span="full">
-                    <button class="link-btn" @click="openEditProvider(p)">编辑</button>
-                    <button class="link-btn" @click="openTestProvider(p)" :disabled="testingProviderId === p.id" x-text="testingProviderId === p.id ? '测试中…' : '测试'"></button>
-                    <button class="link-btn danger" @click="removeProvider(p)">删除</button>
-                  </td>
+                  <th>名称</th>
+                  <th>Base URL</th>
+                  <th>API Key</th>
+                  <th>启用</th>
+                  <th>已绑定模型数</th>
+                  <th>操作</th>
                 </tr>
-              </template>
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                <tr x-show="!providers.length">
+                  <td colspan="6" class="empty">暂无 Provider，点击右上角“添加 Provider”</td>
+                </tr>
+                <template x-for="p in providers" :key="p.id">
+                  <tr>
+                    <td data-label="名称" data-span="full">
+                      <span class="mono" style="font-weight:700" x-text="p.name"></span>
+                      <div class="mono dim" style="font-size:0.68rem" x-text="p.id"></div>
+                    </td>
+                    <td class="dim mono truncate-cell" data-label="Base URL" data-span="full" :title="p.base_url" x-text="p.base_url || '（默认）'"></td>
+                    <td class="mono dim truncate-cell" data-label="API Key" :title="p.api_key" x-text="p.api_key || '—'"></td>
+                    <td data-label="启用">
+                      <label class="switch switch-sm" :class="{ disabled: savingProvider }">
+                        <input type="checkbox" :checked="p.enabled" @change="toggleProviderEnabled(p)">
+                        <span class="switch-slider"></span>
+                      </label>
+                    </td>
+                    <td class="dim" data-label="已绑定模型数" x-text="providerBoundCount(p.id)"></td>
+                    <td class="actions-cell" data-label="操作" data-span="full">
+                      <div class="actions">
+                        <button class="link-btn" @click="openEditProvider(p)">编辑</button>
+                        <button class="link-btn" @click="openTestProvider(p)" :disabled="testingProviderId === p.id" x-text="testingProviderId === p.id ? '测试中…' : '测试'"></button>
+                        <button class="link-btn danger" @click="removeProvider(p)">删除</button>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
           <p class="field-hint mt-2" x-show="providers.length && Object.keys(modelProviderMap).length === 0">提示：已创建 Provider，但尚未为任何模型绑定优先级。请在上方模型表格的“可用 Provider”列点击“去绑定”完成配置。</p>
         </div>
 
@@ -1120,41 +1130,45 @@
             </div>
             <button class="btn-primary" @click="openAddRule()">+ 添加规则</button>
           </div>
-          <table class="data-table mt-3">
-            <thead>
-              <tr>
-                <th>适用工具</th>
-                <th>思考强度</th>
-                <th>模型不支持时</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr x-show="!configForm.tool_reasoning_rules.length">
-                <td colspan="4" class="empty">暂无规则，所有工具沿用模型自身的思考配置。点击右上角“添加规则”创建。</td>
-              </tr>
-              <template x-for="(r, i) in configForm.tool_reasoning_rules" :key="r.id || ('rule-' + i)">
+          <div class="table-wrap mt-3">
+            <table class="data-table">
+              <thead>
                 <tr>
-                  <td data-label="适用工具" data-span="full">
-                    <template x-for="tid in r.tool_ids" :key="r.id + '-' + tid">
-                      <span class="badge badge-user" style="margin:0 4px 4px 0" x-text="toolName(tid)"></span>
-                    </template>
-                  </td>
-                  <td data-label="思考强度"><span class="badge badge-user" x-text="ruleEffortLabel(r.reasoning_effort)"></span></td>
-                  <td data-label="模型不支持时">
-                    <span class="badge" x-show="r.on_unsupported === 'fail'" style="color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 40%, transparent);background:color-mix(in srgb, var(--danger) 12%, transparent)">直接失败</span>
-                    <span class="badge" x-show="r.on_unsupported !== 'fail'">回退默认</span>
-                  </td>
-                  <td class="actions" data-label="操作" data-span="full">
-                    <button class="link-btn" @click="openEditRule(i)">编辑</button>
-                    <button class="link-btn" :disabled="i === 0" @click="moveRule(i, -1)" title="上移">↑</button>
-                    <button class="link-btn" :disabled="i === configForm.tool_reasoning_rules.length - 1" @click="moveRule(i, 1)" title="下移">↓</button>
-                    <button class="link-btn danger" @click="removeRule(i)">删除</button>
-                  </td>
+                  <th>适用工具</th>
+                  <th>思考强度</th>
+                  <th>模型不支持时</th>
+                  <th>操作</th>
                 </tr>
-              </template>
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                <tr x-show="!configForm.tool_reasoning_rules.length">
+                  <td colspan="4" class="empty">暂无规则，所有工具沿用模型自身的思考配置。点击右上角“添加规则”创建。</td>
+                </tr>
+                <template x-for="(r, i) in configForm.tool_reasoning_rules" :key="r.id || ('rule-' + i)">
+                  <tr>
+                    <td data-label="适用工具" data-span="full">
+                      <template x-for="tid in r.tool_ids" :key="r.id + '-' + tid">
+                        <span class="badge badge-user" style="margin:0 4px 4px 0" x-text="toolName(tid)"></span>
+                      </template>
+                    </td>
+                    <td data-label="思考强度"><span class="badge badge-user" x-text="ruleEffortLabel(r.reasoning_effort)"></span></td>
+                    <td data-label="模型不支持时">
+                      <span class="badge" x-show="r.on_unsupported === 'fail'" style="color:var(--danger);border:1px solid color-mix(in srgb, var(--danger) 40%, transparent);background:color-mix(in srgb, var(--danger) 12%, transparent)">直接失败</span>
+                      <span class="badge" x-show="r.on_unsupported !== 'fail'">回退默认</span>
+                    </td>
+                    <td class="actions-cell" data-label="操作" data-span="full">
+                      <div class="actions">
+                        <button class="link-btn" @click="openEditRule(i)">编辑</button>
+                        <button class="link-btn" :disabled="i === 0" @click="moveRule(i, -1)" title="上移">↑</button>
+                        <button class="link-btn" :disabled="i === configForm.tool_reasoning_rules.length - 1" @click="moveRule(i, 1)" title="下移">↓</button>
+                        <button class="link-btn danger" @click="removeRule(i)">删除</button>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
           <p class="field-hint mt-2">规则在用户发起该工具生成时生效。模型是否支持规则强度由 LiteLLM 模型库判定；未收录的自定义模型无法判定，将按规则强度放行、由上游决定是否忽略。</p>
         </div>
 
