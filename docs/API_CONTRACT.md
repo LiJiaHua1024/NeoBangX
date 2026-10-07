@@ -465,7 +465,7 @@ data: [DONE]
 | `reasoning` | 推理片段（与 token 同样 JSON 编码） | 模型的思考过程，仅用于展示，不计入正文、不写日志；不支持推理的模型不发送该事件，前端回退到原有等待动画 |
 | `fallback` | JSON 字符串 `{"failed_index": 1, "total": 3, "next_index": 2, "reason": "timeout"}` | 当前 Provider 失败、正在切换下一优先级（按优先级链顺序尝试）。`reason` 取值：`timeout`（首块等待超时）/ `empty`（上游未返回任何正文）/ `unavailable`（其余失败）。只用于向前端展示进度，不含 Provider 名称；单 Provider 或切换后无下一家时不发送 |
 | `truncated` | JSON 字符串 `{"limit": 8192}` | **工具 32 / 33**：本次输出撞到了上限（32 是 `ocr_max_tokens`，33 是全局 `max_tokens`），结果可能不完整。前端据此提示减少张数、调大上限，或「继续翻译」把译文接着译完，不静默交付半份内容 |
-| `stage` | JSON 字符串 `{"name": "framework" \| "explain", "framework": true}` | **工具 13**：两阶段生成的阶段切换。`framework` = Chores 模型正在插标解析结构（此后的 `token` 是派生的 `@@TAG@@` 骨架）；`explain` = 主模型开始写讲解。`framework` 为 `false` 表示框架解析失败、已回退单阶段老路径（前端不做骨架快照，续写走老路径），详见 12.1 |
+| `stage` | JSON 字符串 `{"name": "framework" \| "explain", "framework": true, "reset": false}` | **工具 13**：两阶段生成的阶段切换。`framework` = Chores 模型正在插标解析结构（此后的 `token` 是派生的 `@@TAG@@` 骨架）；`explain` = 主模型开始写讲解。`framework` 为 `false` 表示框架解析失败、已回退单阶段老路径；`reset: true` 要求丢弃本轮已发出的残缺骨架，保留续写前的正文。标记失配、漏题、输出触顶或异常时回退原卷，停止生成时保留残片。详见 12.1 |
 | `done` | `[DONE]` / `[CANCELLED]` | 生成结束；`[CANCELLED]` 表示用户停止或客户端断开 |
 | `error` | JSON 字符串 `{"message": "...", "model": "..."}` | 生成过程中发生错误（含全部 Provider 均失败）；`model` 供前端失败归因 |
 

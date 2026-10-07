@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from app.services.visual_paper import parse_custom_visual_paper
 from app.services.visual_paper_framework import (
     FrameworkApplier,
@@ -755,3 +757,72 @@ def test_applier_corrects_declared_total():
     assert totals[0] == "51", "头部保留模型声明"
     assert totals[-1] == "3", f"末尾应校正为实际派生题数 3，实际 {totals}"
     assert applier.stats.questions >= 3
+
+
+def test_missing_question_anchor_does_not_reduce_total_or_accept_skeleton():
+    marks = _MARKS.replace("25. What can riders do", "missing question anchor")
+    text, applier = _run(marks=marks)
+    data = parse_custom_visual_paper(text)
+    assert not applier.stats.ok
+    assert data["total"] == 3
+    assert "25" not in [q["no"] for g in data["groups"] for q in g["questions"]]
+
+
+def test_unmarked_question_in_noise_rejects_skeleton():
+    paper = "Passage.\n1. First?\nA. One B. Two\nSecond section\n2. Second?\nA. Three B. Four\nAnswer key\n1 A 2 B"
+    marks = "@@TOTAL@@ 2\n@@PAPER@@ Test\n@@MARK GROUP reading|Reading@@ Passage.\n@@MARK PASSAGE P1@@ Passage.\n@@MARK Q 1@@ 1. First?\n@@MARK OPTIONS@@ A. One\n@@MARK CUT@@ Second section\n@@MARK KEY@@ Answer key\n"
+    text, applier = _run(paper, marks)
+    assert not applier.stats.ok
+    assert parse_custom_visual_paper(text)["total"] == 2
+
+
+@pytest.mark.parametrize("failure", ["anchor", "truncated", "error"])
+def test_partial_framework_falls_back_to_original_paper(monkeypatch, failure):
+    import json
+    from fastapi.testclient import TestClient
+    from app import deps
+    from app.database import SessionLocal
+    from app.main import app
+    from app.models import UsageCode
+    from app.routers import chat as chat_router, tools as tools_router
+    from app.services.prompt_loader import PromptLoader
+
+    captured = {}
+
+    class RecordingLLM(_FakeLLM):
+        async def chat_stream_with_stop(self, *, user_prompt, **kwargs):
+            captured["prompt"] = user_prompt
+            async for token in super().chat_stream_with_stop(user_prompt=user_prompt, **kwargs):
+                yield token
+
+    class FailingLLM(_FakeLLM):
+        async def chat_stream_with_stop(self, **kwargs):
+            async for token in super().chat_stream_with_stop(**kwargs):
+                yield token
+            if failure == "truncated":
+                kwargs["usage_out"]["completion_tokens"] = kwargs["max_tokens"]
+            if failure == "error":
+                raise RuntimeError("framework interrupted")
+
+    marks = _MARKS
+    if failure == "anchor":
+        marks = marks.replace("25. What can riders do", "missing question anchor")
+    fw_fake = FailingLLM([marks])
+    main_fake = RecordingLLM(["@@TOTAL@@ 3\n@@PAPER@@ Recovered\n"])
+    fakes = [main_fake, fw_fake]
+    monkeypatch.setattr(chat_router, "_build_llm", lambda *_a, **_kw: fakes.pop(0))
+    with SessionLocal() as db:
+        code = UsageCode(code=f"NBXU-VP-RECOVER-{failure}", quota=100, used_count=0, is_enabled=True)
+        db.add(code)
+        db.commit()
+        db.refresh(code)
+        db.expunge(code)
+    monkeypatch.setitem(app.dependency_overrides, deps.get_code_context, lambda: deps.CodeContext(code=code, reason=""))
+    monkeypatch.setitem(app.dependency_overrides, tools_router.get_prompt_loader, lambda: PromptLoader(_REPO_PROMPTS_DIR))
+    resp = TestClient(app).post("/api/chat/stream", json={"tool_id": "13", "input": _RAW_PAPER})
+    assert resp.status_code == 200
+    assert "[DONE]" in resp.text
+    stages = [json.loads(block.split("data: ", 1)[1]) for block in resp.text.replace("\r\n", "\n").split("\n\n") if block.startswith("event: stage\n")]
+    assert stages[-1] == {"name": "explain", "framework": False, "reset": True}
+    assert _RAW_PAPER in captured["prompt"]
+    assert "结构骨架" not in captured["prompt"].split("<material>")[0]

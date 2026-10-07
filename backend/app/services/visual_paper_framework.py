@@ -83,6 +83,7 @@ class FrameworkStats:
     questions: int = 0
     passages: int = 0
     pools: int = 0
+    structure_errors: int = 0
 
     def as_dict(self) -> dict:
         return {
@@ -92,13 +93,14 @@ class FrameworkStats:
             "questions": self.questions,
             "passages": self.passages,
             "pools": self.pools,
+            "structure_errors": self.structure_errors,
         }
 
     @property
     def ok(self) -> bool:
         """骨架是否值得交给阶段二：至少解析出一道题，且命中了不止一两条标记
         （只命中一两处的骨架大概率是锚点大面积失配，不如回退老路径）。"""
-        return self.questions >= 1 and self.marks_applied >= 3
+        return self.questions >= 1 and self.marks_applied >= 3 and not self.structure_errors
 
 
 def _trim_blank_edges(lines: list[str]) -> list[str]:
@@ -187,6 +189,7 @@ class FrameworkApplier:
         # 收尾补一行校正——实测模型会把 47 题报成 51，总数虚高让 UI 显示不存在的余题
         self._declared_total: Optional[int] = None
         self._derived_nos: set[int] = set()
+        self._unmarked_nos: set[int] = set()
         self._buf = ""
         self._pending: list[str] = []        # 待取走的派生行
         self._all: list[str] = []            # 全量骨架（阶段二的 material）
@@ -214,11 +217,14 @@ class FrameworkApplier:
         # 漏发 KEY 时答案区不会进噪声区，而是粘进最后一个开着的区域——一并扫描；
         # 正确标记的 KEY 区本身就是答案区，不扫
         self._warn_if_answer_section_unmarked(None if final_kind == "key" else final_content)
+        # 已进入笔试分组后，噪声区或选项区仍有未标注题号，说明题目被漏掉/并进了上一题。
+        # 听力在首个分组之前、答案在 KEY 区，两者不参与这个检查。
+        self.stats.structure_errors += len(self._unmarked_nos - self._derived_nos)
         # 总数校正：派生题号来自锚点命中的原文，比模型口头报的总数可信。
         # 补一行 @@TOTAL@@，解析端后者生效（虚高的总数让 UI 显示不存在的余题，
         # 也让续写工单去追不存在的题）。derived 是题号集合，区间声明不会重复计数
         derived = len(self._derived_nos)
-        if derived and derived != (self._declared_total or 0):
+        if derived and not self.stats.structure_errors and derived != (self._declared_total or 0):
             logger.info(
                 "框架解析：@@TOTAL@@ 声明 %s，实际派生 %d 题，骨架末尾校正",
                 self._declared_total, derived,
@@ -365,6 +371,8 @@ class FrameworkApplier:
                 )
         if pos is None:
             self.stats.marks_skipped += 1
+            if mtype in {"GROUP", "PASSAGE", "Q", "OPTIONS", "KEY"}:
+                self.stats.structure_errors += 1
             return
         # 同型同参且命中同一位置 = 重复指令，跳过（同位置不同类型是合法的：Q 与 OPTIONS 同锚）
         if self._last_mark is not None:
@@ -465,6 +473,11 @@ class FrameworkApplier:
             return
         if kind == "noise":
             self._noise_lines.extend(content)
+        if kind in {"noise", "options"} and self._group is not None:
+            for line in content:
+                m = STEM_LEAD_NO_RE.match(line)
+                if m:
+                    self._unmarked_nos.add(int(m.group(1) or m.group(2)))
         if kind == "passage":
             self._emit(self._drop_section_headers(content))
         elif kind == "stem":
@@ -487,6 +500,7 @@ class FrameworkApplier:
                     self._emit_q_blocks(lo, hi, pool=opts)
                 else:
                     self.stats.marks_skipped += 1
+                    self.stats.structure_errors += 1
             elif self._question is not None:
                 if opts:
                     self._question["options"] = opts

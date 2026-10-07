@@ -8315,6 +8315,8 @@ function nbx() {
       if (!this.visualPaper) this.visualPaper = this.newVisualPaperState();
       const transferCount = this.vpLockedTransferCount;
       this.visualPaper.transferCount = transferCount;
+      const baselineOutput = this.output;
+      const baselineFramework = this.visualPaper.frameworkRaw;
       // 解卷的续写指令由前端按解析结构拼（见 vpContinueBrief）：走简报而不是回传正文，
       // 所以这里不传 continueFrom，后端对该工具的路径与从前完全一致
       return this._runStream({
@@ -8329,6 +8331,13 @@ function nbx() {
           // 续写时作为输入重发，后端见 @@TAG@@ 输入即跳过框架阶段
           const name = (info && info.name) || "";
           this.vpStage = name;
+          if (info && info.reset) {
+            const historyId = this.vpHistoryId;
+            this.output = baselineOutput;
+            this.visualPaper = { ...this.newVisualPaperState(), historyId, transferCount, frameworkRaw: baselineFramework };
+            this._outputDirty = true;
+            this.vpDoRender();
+          }
           if (name === "explain" && info.framework && this.visualPaper) {
             this.visualPaper.frameworkRaw = this.output;
           }
@@ -8527,7 +8536,8 @@ function nbx() {
       // 两阶段：骨架已在阶段一解析完成 → 续写直接续讲解阶段（输入含 @@TAG@@，后端跳过框架阶段）。
       // 骨架快照存在 visualPaper 上并随历史记录持久化，历史续写同样走这条近路；
       // 旧记录没有快照 → 走原路：重新两阶段，重发讲解会被解析端同号重开合并
-      const hasFramework = !!(this.visualPaper && this.visualPaper.frameworkRaw);
+      const hasFramework = !!(this.visualPaper && this.visualPaper.frameworkRaw)
+        && this.vpQuestionCount >= this.vpTotal;
       if (hasFramework && this.vpTotal > 0
         && this.vpQuestionCount >= this.vpTotal && this.vpAnalyzedCount >= this.vpQuestionCount) {
         // 工单为空还发请求只会白烧一次调用：模型没有可写的题，多半回头重写已有题

@@ -1393,7 +1393,14 @@ async def chat_stream(
                     visual_fw_status = STATUS_ERROR
                 else:
                     visual_fw_status = STATUS_SUCCESS
-                if visual_fw_stats.ok:
+                framework_usable = (
+                    visual_fw_stats.ok
+                    and not visual_fw_error
+                    and not _hit_output_cap(visual_fw_usage, visual_framework_max_tokens)
+                    and not client_disconnected
+                    and not stop_event.is_set()
+                )
+                if framework_usable:
                     # 骨架可用：讲解阶段的材料换成骨架，主模型只写讲解字段
                     prompt = loader.render(
                         VISUAL_EXPLAIN_PROMPT,
@@ -1404,6 +1411,7 @@ async def chat_stream(
                         # 讲解提示词缺失：骨架内容与老路径输出同格式，可安全回退单阶段
                         logger.warning("讲解提示词缺失，试卷可视化全解回退单阶段")
                         prompt = base_prompt
+                        framework_usable = False
                 else:
                     # 干净回退：applier 只派生过头部/零散标记，前端几乎没收到内容，
                     # 老路径对原文完整重跑；骨架与老输出同为 @@TAG@@ 文档，解析端兼容
@@ -1412,10 +1420,14 @@ async def chat_stream(
                         request_id, visual_fw_stats.as_dict(),
                     )
                     prompt = base_prompt
+                discard_framework = not framework_usable and not client_disconnected and not stop_event.is_set()
+                if discard_framework:
+                    # 回退模型会从原卷重建结构，残缺骨架不能参与合并或日志正文。
+                    output_parts.clear()
                 # framework 标志告诉前端是否真的存在两阶段骨架（false = 回退单阶段，
                 # 前端不做骨架快照，续写走老路径）
                 yield {"event": "stage", "data": json.dumps(
-                    {"name": "explain", "framework": bool(visual_fw_stats.ok)},
+                    {"name": "explain", "framework": framework_usable, "reset": discard_framework},
                     ensure_ascii=False,
                 )}
 
