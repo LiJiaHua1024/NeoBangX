@@ -51,6 +51,12 @@ function loadComponent() {
   return nbx();
 }
 
+function completedQuestion(no, answer) {
+  return { no, answer, qtype: "blank", reference: { evidence: "text", reason: "reason", distractor: "无（非选择题）" },
+    pitfalls: [{ title: "trap", desc: "reason" }], pattern: { name: "pattern", steps: ["step"] },
+    transfers: [{ passage: "context", stem: "Fill ___ (be).", options: [], answer: "is", explanation: "explanation" }] };
+}
+
 const SKELETON = `@@TOTAL@@ 1
 @@PAPER@@ 测试卷
 @@GROUP@@ reading|阅读理解|
@@ -207,18 +213,18 @@ function test_continue_brief2_lists_missing_nos() {
   c.visualPaper.total = 3;
   c.visualPaper.groups = [
     {id: "reading", title: "A篇", intro: "", questions: [
-      {no: "21", answer: "A"},
+      completedQuestion("21", "A"),
       {no: "22", answer: null},
     ]},
     {id: "writing_app", title: "应用文写作", intro: "", questions: [
-      {no: "66", answer: null, writingGuide: {points: ["x"], outline: "", sample: ""}},
+      {no: "66", qtype: "writing", answer: null, writingGuide: {points: ["x"], outline: "outline", sample: "sample"}},
     ]},
   ];
   const brief = c.vpContinueBrief2();
   assert.ok(brief.includes("：22。名单之外"), "工单应点名缺失题号 22：" + brief);
   assert.ok(!brief.includes("21"), "已讲解的题号不得进工单：" + brief);
-  assert.ok(!brief.includes("66"), "写作指导非空的写作题也算已讲解：" + brief);
-  assert.ok(brief.includes("已有讲解 2 题"), "进度必须用已讲解数（21 有答案 + 66 有写作指导）：" + brief);
+  assert.ok(!brief.includes("66"), "写作指导完整的写作题也算已讲解：" + brief);
+  assert.ok(brief.includes("已有讲解 2 题"), "进度必须用完整讲解数：" + brief);
   assert.ok(!brief.includes("最后完成的是"), "不再用「最后完成的是第 N 题」误导续写起点");
   assert.ok(brief.includes("不要输出 @@TOTAL@@"), "应禁发结构行：" + brief);
   assert.ok(brief.includes("按题号合并进已有文档"), "开篇应说明合并方式：" + brief);
@@ -249,7 +255,7 @@ function test_vp_remaining_and_complete_use_analyzed_semantics() {
   c.visualPaper.total = 3;
   c.visualPaper.groups = [
     {id: "reading", title: "A篇", intro: "", questions: [
-      {no: "21", answer: "A"},
+      completedQuestion("21", "A"),
       {no: "22", answer: null},
       {no: "23", answer: null},
     ]},
@@ -260,8 +266,8 @@ function test_vp_remaining_and_complete_use_analyzed_semantics() {
   // 进度行：结构齐了但讲解没写完 → 报讲解进度，不再报「已解析 3/3 题，未写完」
   assert.ok(c.vpProgressText.includes("讲解完成"), "进度行应报讲解进度：" + c.vpProgressText);
   assert.ok(!c.vpProgressText.includes("已解析"), "结构已满不得再报结构进度：" + c.vpProgressText);
-  c.visualPaper.groups[0].questions[1].answer = "B";
-  c.visualPaper.groups[0].questions[2].answer = "C";
+  c.visualPaper.groups[0].questions[1] = completedQuestion("22", "B");
+  c.visualPaper.groups[0].questions[2] = completedQuestion("23", "C");
   assert.strictEqual(c.vpRemaining, 0);
   assert.strictEqual(c.vpComplete, true, "全部讲解 + 自然收尾才算完成");
   assert.strictEqual(c.vpProgressText, "已完成");

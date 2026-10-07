@@ -3064,11 +3064,27 @@ function nbx() {
       if (!this.vpTotal) return 0;
       return Math.min(100, Math.round((this.vpQuestionCount / this.vpTotal) * 100));
     },
-    /* 单题「讲解已写」判定：有答案的题 + 写作指导非空的写作题。
-       讲解完成数与续写工单共用这一份判定——两处口径不一致，工单就会点错名 */
+    /* 完成计数、题目状态与续写工单共用内容完整性判定，答案落笔不等于全解完成。 */
     vpQuestionAnalyzed(q) {
-      const wg = q && q.writingGuide;
-      return !!(q && (q.answer || (wg && ((wg.points && wg.points.length) || wg.outline || wg.sample))));
+      if (!q) return false;
+      const text = v => typeof v === "string" && !!v.trim();
+      const list = v => Array.isArray(v) && v.length > 0 && v.every(text);
+      if (this.vpIsWritingQuestion(q)) {
+        const wg = q.writingGuide;
+        return !!wg && list(wg.points) && text(wg.outline) && text(wg.sample);
+      }
+      const ref = q.reference;
+      const pat = q.pattern;
+      if (!text(q.answer) || !ref || ![ref.evidence, ref.reason, ref.distractor].every(text)
+        || !Array.isArray(q.pitfalls) || !q.pitfalls.length || !q.pitfalls.every(p => p && text(p.title) && text(p.desc))
+        || !pat || !text(pat.name) || !list(pat.steps)) return false;
+      const choice = q.qtype === "choice" || (q.options || []).length > 0;
+      const optionCount = (q.options || []).length;
+      return Array.isArray(q.transfers) && q.transfers.length >= this.vpLockedTransferCount
+        && q.transfers.every(tr => tr && text(tr.stem) && text(tr.answer) && text(tr.explanation)
+          && (!choice || (text(tr.passage) && Array.isArray(tr.options)
+            && tr.options.length >= (optionCount || 2)
+            && tr.options.every(o => o && text(o.label) && text(o.text)))));
     },
     /* 讲解完成数。两阶段下结构（第一轮）很快跑满，这才是第二轮真正在动的数字 */
     get vpAnalyzedCount() {
@@ -3152,7 +3168,7 @@ function nbx() {
       if (!this.visualPaper) return null;
       for (const g of this.visualPaper.groups) {
         for (const q of (g.questions || [])) {
-          if (!this.vpHasAnalysis(q)) return q.no;
+          if (!this.vpQuestionAnalyzed(q)) return q.no;
         }
       }
       return null;
@@ -3160,7 +3176,7 @@ function nbx() {
     /* 题目级状态：'done'（已完成精讲）/ 'generating'（正在实时撰写中）/ 'pending'（排队等待精讲）/ 'idle'（已停止待续写） */
     vpQuestionStatus(q) {
       if (!q) return "idle";
-      if (this.vpHasAnalysis(q)) return "done";
+      if (this.vpQuestionAnalyzed(q)) return "done";
       if (this.streaming) {
         if (this.vpStage === "framework") return "pending";
         if (this.vpStage === "explain") {
@@ -8474,11 +8490,16 @@ function nbx() {
       const lastLabel = known ? `第 ${lastQ.no} 题` : "最后一道已完成题（题号未能识别）";
       const nosList = allNos.filter((n) => n && n !== "?");
       const lines = ["【续写指令】你的输出会被原样追加在前面已生成内容的后面，接着往下写。"];
+      const incomplete = groups.flatMap(g => (g.questions || []))
+        .filter(q => q.no && q.no !== "?" && !this.vpQuestionAnalyzed(q)).map(q => q.no);
+      if (incomplete.length) {
+        lines.push(`已有结构但讲解未完整的题号：${incomplete.join(",")}。先为这些题重新输出完整讲解块（含足额迁移或完整写作指导），程序按题号合并；再补下面尚未覆盖的题。`);
+      }
       if (!lastQ) {
         lines.push(`进度：全卷 ${total} 题，还没有题目完成。请从试卷的第一道笔试题开始，按原文顺序输出全部 ${total} 题。`);
         lines.push("板块写法：每进入一个板块时输出一行 `@@GROUP@@ id|title|intro`，该板块的题跟在它后面。");
       } else {
-        lines.push(`进度：全卷 ${total} 题，已完成 ${count} 题（题号 ${nosList.join(",")}），最后一题是${lastLabel}，属于板块 ${label}。`);
+        lines.push(`进度：全卷 ${total} 题，已解析结构 ${count} 题（题号 ${nosList.join(",")}），讲解完整 ${this.vpAnalyzedCount} 题，最后一题是${lastLabel}，属于板块 ${label}。`);
         if (remaining > 0) {
           lines.push(`接着${lastLabel}之后的题继续写，直到写完剩余 ${remaining} 题。`);
         } else {
