@@ -3060,6 +3060,90 @@ function nbx() {
       if (this.vpRemaining > 0) return `已解析 ${this.vpQuestionCount}/${total} 题，未写完`;
       return `讲解完成 ${this.vpExplainPercent}%，未确认写完`;
     },
+    /* 两阶段指示器状态计算属性 */
+    get vpIsStage1Active() {
+      return this.streaming && this.vpStage === "framework";
+    },
+    get vpIsStage1Done() {
+      return this.vpStage === "explain" || (!this.streaming && this.vpQuestionCount > 0);
+    },
+    get vpIsStage2Active() {
+      return this.streaming && this.vpStage === "explain";
+    },
+    get vpIsStage2Done() {
+      return this.vpComplete;
+    },
+    get vpStep1StatusText() {
+      if (this.vpIsStage1Active) return "正在提取题干/选项/语篇…";
+      if (this.vpIsStage1Done) return `已锁定 ${this.vpQuestionCount} 题结构`;
+      return "待开始";
+    },
+    get vpStep2StatusText() {
+      if (this.vpIsStage2Done) return `全卷 ${this.vpTotal} 题解析已完成`;
+      if (this.vpIsStage2Active) return `正在生成第 ${this.vpGeneratingQuestionNo || "…"} 题解析`;
+      if (this.vpIsStage1Active) return "等待结构提取后开始";
+      if (this.vpAnalyzedCount > 0) return `已完成 ${this.vpAnalyzedCount}/${this.vpTotal} 题解析`;
+      return "待结构提取后生成";
+    },
+    /* 准确判断某道题是否是写作题 */
+    vpIsWritingQuestion(q) {
+      if (!q) return false;
+      if (q.qtype === "writing") return true;
+      if (this.vpCurrentGroup && (this.vpCurrentGroup.id === "writing_app" || this.vpCurrentGroup.id === "writing_cont")) return true;
+      return false;
+    },
+    /* 判定某题是否已有讲解内容生成 */
+    vpHasAnalysis(q) {
+      if (!q) return false;
+      if (this.vpIsWritingQuestion(q)) {
+        const wg = q.writingGuide;
+        return !!(wg && ((wg.points && wg.points.length) || wg.outline || wg.sample));
+      }
+      const hasAns = !!q.answer;
+      const ref = q.reference;
+      const hasRef = !!(ref && (ref.evidence || ref.reason || ref.distractor));
+      const hasTr = Array.isArray(q.transfers) && q.transfers.length > 0;
+      const hasPit = Array.isArray(q.pitfalls) && q.pitfalls.length > 0;
+      const hasPat = !!(q.pattern && (q.pattern.name || (q.pattern.steps && q.pattern.steps.length > 0)));
+      return hasAns || hasRef || hasTr || hasPit || hasPat;
+    },
+    /* 获取当前正在撰写讲解的题号（阶段二中第一道尚未完成的题目） */
+    get vpGeneratingQuestionNo() {
+      if (!this.visualPaper) return null;
+      for (const g of this.visualPaper.groups) {
+        for (const q of (g.questions || [])) {
+          if (!this.vpHasAnalysis(q)) return q.no;
+        }
+      }
+      return null;
+    },
+    /* 题目级状态：'done'（已完成精讲）/ 'generating'（正在实时撰写中）/ 'pending'（排队等待精讲）/ 'idle'（已停止待续写） */
+    vpQuestionStatus(q) {
+      if (!q) return "idle";
+      if (this.vpHasAnalysis(q)) return "done";
+      if (this.streaming) {
+        if (this.vpStage === "framework") return "pending";
+        if (this.vpStage === "explain") {
+          const genNo = this.vpGeneratingQuestionNo;
+          if (genNo && String(q.no) === String(genNo)) return "generating";
+          return "pending";
+        }
+        return "pending";
+      }
+      return "idle";
+    },
+    /* 一键根据题号切换题目 */
+    vpSelectQuestionByNo(targetNo) {
+      if (!this.visualPaper || targetNo == null) return;
+      for (let gIdx = 0; gIdx < this.visualPaper.groups.length; gIdx++) {
+        const g = this.visualPaper.groups[gIdx];
+        const qIdx = (g.questions || []).findIndex((q) => String(q.no) === String(targetNo));
+        if (qIdx !== -1) {
+          this.vpSelectQuestion(gIdx, qIdx);
+          return;
+        }
+      }
+    },
     get vpRemaining() {
       return Math.max(0, (this.vpTotal || 0) - this.vpQuestionCount);
     },

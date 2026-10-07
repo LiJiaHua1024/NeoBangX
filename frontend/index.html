@@ -890,19 +890,64 @@
               </div>
             </div>
 
-            <!-- 进度条（B方案增量解析，实时追踪）。两段式：浅色条 = 第一轮结构解析，跑完留在原地当背景；
-                 深色条 = 第二轮讲解撰写，以负 margin 叠在其上。定位全用内联样式：编译版 tailwind.css
-                 不保证收录 absolute/inset 这类低频工具类，此前依赖它们导致两条进度条高度塌陷不可见 -->
-            <div x-show="vpTotal > 0 && (vpHasData || streaming) && !vpFullscreen" class="px-4 sm:px-5 py-2 shrink-0" style="border-bottom:1px solid var(--border);background:color-mix(in srgb, var(--accent) 3%, transparent)">
-              <div class="flex items-center gap-3">
-                <div class="flex-1 h-1.5 rounded-full overflow-hidden" style="background:var(--border)">
-                  <div class="h-full transition-all duration-500" style="background:linear-gradient(90deg,var(--accent),var(--accent-2));opacity:.25" :style="{ width: vpProgressPercent + '%' }"></div>
-                  <div class="h-full transition-all duration-500" style="background:linear-gradient(90deg,var(--accent),var(--accent-2));margin-top:-0.375rem" :style="{ width: vpExplainPercent + '%' }"></div>
+            <!-- 两阶段流水线指示器（阶段一：框架解析；阶段二：深度精讲） -->
+            <div x-show="vpTotal > 0 && (vpHasData || streaming) && !vpFullscreen" class="vp-stepper-panel px-4 sm:px-5 py-2.5 shrink-0">
+              <div class="vp-stepper-grid">
+                <!-- 第一阶段：试卷框架解析 -->
+                <div class="vp-step-card" :class="{ 'active': vpIsStage1Active, 'done': vpIsStage1Done }">
+                  <div class="vp-step-icon">
+                    <span x-show="!vpIsStage1Done" x-html="icon('grid','w-4 h-4')"></span>
+                    <span x-show="vpIsStage1Done" x-html="icon('check','w-4 h-4')"></span>
+                  </div>
+                  <div class="vp-step-info">
+                    <div class="vp-step-head">
+                      <span class="vp-step-tag">第一步</span>
+                      <span class="vp-step-title">试卷框架提取</span>
+                      <span class="chip-mini text-xs" :class="vpIsStage1Done ? 'text-emerald-600' : 'text-dim'" x-text="vpQuestionCount + '/' + (vpTotal || '…') + ' 题'"></span>
+                    </div>
+                    <div class="vp-step-desc" x-text="vpStep1StatusText"></div>
+                  </div>
                 </div>
-                <span class="text-xs font-medium whitespace-nowrap" :class="vpComplete ? 'text-emerald-600' : 'text-dim'" x-text="vpProgressText"></span>
-                <button x-show="streaming" class="btn-primary btn-stop" style="padding:.3rem .8rem;font-size:.78rem" @click="stop()" title="停止生成，已生成题目会保留，可继续生成"><span x-html="icon('stop','w-3.5 h-3.5')"></span>停止</button>
+
+                <!-- 流程衔接指示 -->
+                <div class="vp-step-divider" :class="{ 'active': vpIsStage2Active || vpIsStage2Done }">
+                  <span x-html="icon('chevron-right','w-4 h-4')"></span>
+                </div>
+
+                <!-- 第二阶段：试题解析与迁移 -->
+                <div class="vp-step-card" :class="{ 'active': vpIsStage2Active, 'done': vpIsStage2Done, 'waiting': !vpIsStage2Active && !vpIsStage2Done && vpIsStage1Active }">
+                  <div class="vp-step-icon">
+                    <span x-show="!vpIsStage2Done" x-html="icon('sparkle','w-4 h-4')"></span>
+                    <span x-show="vpIsStage2Done" x-html="icon('check','w-4 h-4')"></span>
+                  </div>
+                  <div class="vp-step-info">
+                    <div class="vp-step-head">
+                      <span class="vp-step-tag">第二步</span>
+                      <span class="vp-step-title">试题解析与迁移</span>
+                      <span class="chip-mini text-xs" :class="vpIsStage2Done ? 'text-emerald-600' : 'text-dim'" x-text="vpAnalyzedCount + '/' + (vpTotal || '…') + ' 题'"></span>
+                    </div>
+                    <div class="vp-step-desc" x-text="vpStep2StatusText"></div>
+                  </div>
+                </div>
+
+                <!-- 动作控制：停止 / 状态 -->
+                <div class="flex items-center gap-2 ml-auto shrink-0">
+                  <button x-show="streaming" class="btn-primary btn-stop" style="padding:.32rem .85rem;font-size:.78rem" @click="stop()" title="停止生成，已生成题目会保留，可继续生成"><span x-html="icon('stop','w-3.5 h-3.5')"></span>停止</button>
+                </div>
               </div>
-              <div x-show="streaming" class="text-[11px] text-faint mt-1.5">每完成一道题即实时预览，已生成内容即使中断也不会丢失</div>
+
+              <!-- 联动两段式进度条 -->
+              <div class="vp-stepper-progress-wrap mt-2">
+                <div class="vp-progress-track">
+                  <div class="vp-progress-bar-stage1" :style="{ width: vpProgressPercent + '%' }"></div>
+                  <div class="vp-progress-bar-stage2" :style="{ width: vpExplainPercent + '%' }"></div>
+                </div>
+                <div class="flex items-center justify-between text-[11px] text-faint mt-1">
+                  <span x-show="streaming">每完成一道题即实时预览，中断也可继续生成</span>
+                  <span x-show="!streaming" x-text="vpComplete ? '试卷全解已就绪，可随时打印或导出课件' : '部分题目待补全，可点击下方继续生成'"></span>
+                  <span class="font-medium whitespace-nowrap ml-2" :class="vpComplete ? 'text-emerald-600' : 'text-dim'" x-text="vpProgressText"></span>
+                </div>
+              </div>
             </div>
 
             <!-- 续写按钮（中断恢复）：卷子已确认写完（vpComplete）就整条收起，不能再挂着
@@ -941,7 +986,7 @@
                     <div class="glass-soft rounded-2xl p-6 flex flex-col items-center text-center">
                       <div class="w-12 h-12 rounded-xl flex items-center justify-center mb-3" style="background:color-mix(in srgb, var(--accent) 10%, transparent);color:var(--accent)" x-html="icon('analysis','w-6 h-6')"></div>
                       <div class="font-semibold text-sm">等待解题</div>
-                      <div class="text-xs text-dim mt-1.5 leading-relaxed">识题完成后，点击左侧题目生成专业四维解析</div>
+                      <div class="text-xs text-dim mt-1.5 leading-relaxed">识题完成后，点击左侧题目查看答案、解析与迁移训练</div>
                     </div>
                   </div>
                   <div x-show="visualPaper && visualPaper.notice" class="error-card mt-4" x-text="visualPaper.notice"></div>
@@ -1047,9 +1092,18 @@
                         </template>
                         <div class="flex flex-wrap gap-1.5">
                           <template x-for="(q, qIdx) in (g.questions || [])" :key="q.no">
-                            <button class="vp-q-chip" :class="{ 'active': vpIsCurrent(gIdx, qIdx) }" @click="vpSelectQuestion(gIdx, qIdx)">
+                            <button class="vp-q-chip"
+                                    :class="{
+                                      'active': vpIsCurrent(gIdx, qIdx),
+                                      'generating': vpQuestionStatus(q) === 'generating',
+                                      'pending': vpQuestionStatus(q) === 'pending',
+                                      'done': vpQuestionStatus(q) === 'done'
+                                    }"
+                                    @click="vpSelectQuestion(gIdx, qIdx)"
+                                    :title="vpQuestionStatus(q) === 'generating' ? '正在生成第 ' + q.no + ' 题解析' : (vpQuestionStatus(q) === 'pending' ? '第 ' + q.no + ' 题结构已就绪，排队等待生成' : '')">
                               <span x-text="q.no"></span>
                               <span class="vp-q-chip-ans" x-show="q.answer" :class="{ 'masked': maskOn }" x-text="vpDetag(q.answer)"></span>
+                              <span class="vp-q-chip-dot" x-show="vpQuestionStatus(q) === 'generating'"></span>
                             </button>
                           </template>
                         </div>
@@ -1088,10 +1142,27 @@
                   </div>
                 </div>
 
-                <!-- 右：题目 + 四维 Tab -->
+                <!-- 右：题目 + 解析 Tabs -->
                 <div x-ref="vpRightPane" class="vp-pane vp-pane-right flex-1 min-h-0 overflow-y-auto scroll-thin p-4 sm:p-5">
                   <template x-if="vpCurrentQuestion">
                     <div>
+                      <!-- 题目状态提示条（生成中 / 排队等待中） -->
+                      <div x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'" class="vp-q-status-badge generating">
+                        <div class="flex items-center gap-2 min-w-0">
+                          <span class="status-dot live"></span>
+                          <span class="font-medium truncate">正在生成本题解析与迁移训练…</span>
+                        </div>
+                        <span class="text-xs text-dim whitespace-nowrap">正在生成</span>
+                      </div>
+                      <div x-show="vpQuestionStatus(vpCurrentQuestion) === 'pending'" class="vp-q-status-badge pending">
+                        <div class="flex items-center gap-2 min-w-0">
+                          <span class="text-xs text-dim">试卷结构已就绪 · 等待生成解析</span>
+                        </div>
+                        <button class="vp-jump-btn" x-show="vpGeneratingQuestionNo && String(vpGeneratingQuestionNo) !== String(vpCurrentQuestion.no)" @click="vpSelectQuestionByNo(vpGeneratingQuestionNo)">
+                          前往正在生成的第 <span x-text="vpGeneratingQuestionNo"></span> 题 →
+                        </button>
+                      </div>
+
                       <!-- 题干 + 选项 2x2 -->
                       <div class="vp-question-head">
                         <div class="flex items-start gap-2 mb-3">
@@ -1171,22 +1242,44 @@
                         </template>
                       </div>
 
-                      <!-- 四维 Tabs -->
+                      <!-- 解析 Tabs -->
                       <div class="seg mt-4" style="padding:.2rem">
                         <button :class="{ 'on': vpActiveTab === 'reference' }" @click="vpSetTab('reference')">参考答案</button>
                         <button :class="{ 'on': vpActiveTab === 'pitfalls' }" @click="vpSetTab('pitfalls')">易错点</button>
                         <button :class="{ 'on': vpActiveTab === 'pattern' }" @click="vpSetTab('pattern')">考点范式</button>
-                        <button :class="{ 'on': vpActiveTab === 'transfer' }" @click="vpSetTab('transfer')" :disabled="!(vpCurrentQuestion.transfers || []).length" :title="(vpCurrentQuestion.transfers || []).length ? '' : '写作题不设迁移训练'">迁移训练</button>
+                        <button :class="{ 'on': vpActiveTab === 'transfer' }" @click="vpSetTab('transfer')"
+                                :disabled="vpIsWritingQuestion(vpCurrentQuestion)"
+                                :title="vpIsWritingQuestion(vpCurrentQuestion) ? '写作题侧重范文与审题要点，不设客观迁移训练' : ((vpCurrentQuestion.transfers || []).length ? ('已包含 ' + vpCurrentQuestion.transfers.length + ' 道迁移训练') : (streaming ? '迁移训练将在本题生成时填入' : '暂无迁移训练内容'))">
+                          <span>迁移训练</span>
+                          <span class="chip-mini text-[10px] ml-1" x-show="(vpCurrentQuestion.transfers || []).length" x-text="vpCurrentQuestion.transfers.length"></span>
+                        </button>
                       </div>
 
                       <!-- 参考答案 -->
                       <div x-show="vpActiveTab === 'reference'" class="vp-tab-panel" :class="{ 'mask-answers': maskOn && !vpEditing }">
                         <div class="vp-tab-title">参考答案 <span class="vp-tab-sub" x-show="vpCurrentQuestion.answer" :class="{ 'ans': true }" x-text="'答案：' + vpDetag(vpCurrentQuestion.answer)"></span></div>
                         <template x-if="!vpEditing">
-                          <div x-show="vpCurrentQuestion.reference" class="space-y-2 text-sm leading-relaxed">
-                            <div><span class="font-semibold">证据：</span><span class="whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.reference.evidence)"></span></div>
-                            <div><span class="font-semibold">推理：</span><span class="whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.reference.reason)"></span></div>
-                            <div><span class="font-semibold">干扰项：</span><span class="whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.reference.distractor)"></span></div>
+                          <div>
+                            <div x-show="vpCurrentQuestion.reference && (vpCurrentQuestion.reference.evidence || vpCurrentQuestion.reference.reason || vpCurrentQuestion.reference.distractor)" class="space-y-2 text-sm leading-relaxed">
+                              <div><span class="font-semibold">证据：</span><span class="whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.reference.evidence)"></span></div>
+                              <div><span class="font-semibold">推理：</span><span class="whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.reference.reason)"></span></div>
+                              <div><span class="font-semibold">干扰项：</span><span class="whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.reference.distractor)"></span></div>
+                            </div>
+                            <!-- 待生成/生成中骨架屏 -->
+                            <div x-show="(!vpCurrentQuestion.reference || (!vpCurrentQuestion.reference.evidence && !vpCurrentQuestion.reference.reason && !vpCurrentQuestion.reference.distractor)) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
+                              <div class="vp-skeleton-tip">
+                                <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
+                                <span x-text="vpQuestionStatus(vpCurrentQuestion) === 'generating' ? '正在生成参考答案与依据…' : '排队等待生成参考答案'"></span>
+                              </div>
+                              <div class="vp-skeleton-lines">
+                                <div class="skel h-3.5 w-11/12"></div>
+                                <div class="skel h-3.5 w-4/5"></div>
+                                <div class="skel h-3.5 w-3/4"></div>
+                              </div>
+                            </div>
+                            <div x-show="(!vpCurrentQuestion.reference || (!vpCurrentQuestion.reference.evidence && !vpCurrentQuestion.reference.reason && !vpCurrentQuestion.reference.distractor)) && vpQuestionStatus(vpCurrentQuestion) === 'done'" class="text-sm text-dim">
+                              暂无参考答案内容
+                            </div>
                           </div>
                         </template>
                         <template x-if="vpEditing">
@@ -1214,14 +1307,29 @@
                       <div x-show="vpActiveTab === 'pitfalls'" class="vp-tab-panel">
                         <div class="vp-tab-title">易错点分析</div>
                         <template x-if="!vpEditing">
-                          <div class="space-y-2">
-                            <template x-for="(p, idx) in (vpCurrentQuestion.pitfalls || [])" :key="idx">
-                              <div class="vp-pitfall-item">
-                                <div class="vp-pitfall-title whitespace-pre-wrap" x-html="(idx+1) + '. ' + vpFmt(p.title)"></div>
-                                <div class="vp-pitfall-desc whitespace-pre-wrap" x-html="vpFmt(p.desc)"></div>
+                          <div>
+                            <div x-show="vpCurrentQuestion.pitfalls && vpCurrentQuestion.pitfalls.length" class="space-y-2">
+                              <template x-for="(p, idx) in (vpCurrentQuestion.pitfalls || [])" :key="idx">
+                                <div class="vp-pitfall-item">
+                                  <div class="vp-pitfall-title whitespace-pre-wrap" x-html="(idx+1) + '. ' + vpFmt(p.title)"></div>
+                                  <div class="vp-pitfall-desc whitespace-pre-wrap" x-html="vpFmt(p.desc)"></div>
+                                </div>
+                              </template>
+                            </div>
+                            <!-- 待生成/生成中骨架屏 -->
+                            <div x-show="!(vpCurrentQuestion.pitfalls && vpCurrentQuestion.pitfalls.length) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
+                              <div class="vp-skeleton-tip">
+                                <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
+                                <span x-text="vpQuestionStatus(vpCurrentQuestion) === 'generating' ? '正在分析易错点与干扰项…' : '排队等待生成易错点分析'"></span>
                               </div>
-                            </template>
-                            <div x-show="!(vpCurrentQuestion.pitfalls && vpCurrentQuestion.pitfalls.length)" class="text-sm text-dim">暂无易错点分析</div>
+                              <div class="vp-skeleton-lines">
+                                <div class="skel h-3.5 w-5/6"></div>
+                                <div class="skel h-3.5 w-2/3"></div>
+                              </div>
+                            </div>
+                            <div x-show="!(vpCurrentQuestion.pitfalls && vpCurrentQuestion.pitfalls.length) && vpQuestionStatus(vpCurrentQuestion) === 'done'" class="text-sm text-dim">
+                              暂无易错点分析
+                            </div>
                           </div>
                         </template>
                         <template x-if="vpEditing">
@@ -1251,13 +1359,29 @@
                       <div x-show="vpActiveTab === 'pattern'" class="vp-tab-panel" :class="{ 'mask-answers': maskOn && !vpEditing }">
                         <div class="vp-tab-title">考点范式归纳</div>
                         <template x-if="!vpEditing">
-                          <div class="space-y-2 text-sm">
-                            <div><span class="font-semibold">范式：</span><span class="ans whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.pattern ? vpCurrentQuestion.pattern.name : '')"></span></div>
-                            <ol class="list-decimal pl-5 space-y-1">
-                              <template x-for="(step, idx) in (vpCurrentQuestion.pattern ? vpCurrentQuestion.pattern.steps : [])" :key="idx">
-                                <li class="whitespace-pre-wrap" x-html="vpFmt(step)"></li>
-                              </template>
-                            </ol>
+                          <div>
+                            <div x-show="vpCurrentQuestion.pattern && (vpCurrentQuestion.pattern.name || (vpCurrentQuestion.pattern.steps && vpCurrentQuestion.pattern.steps.length))" class="space-y-2 text-sm">
+                              <div><span class="font-semibold">范式：</span><span class="ans whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.pattern ? vpCurrentQuestion.pattern.name : '')"></span></div>
+                              <ol class="list-decimal pl-5 space-y-1">
+                                <template x-for="(step, idx) in (vpCurrentQuestion.pattern ? vpCurrentQuestion.pattern.steps : [])" :key="idx">
+                                  <li class="whitespace-pre-wrap" x-html="vpFmt(step)"></li>
+                                </template>
+                              </ol>
+                            </div>
+                            <!-- 待生成/生成中骨架屏 -->
+                            <div x-show="!(vpCurrentQuestion.pattern && (vpCurrentQuestion.pattern.name || (vpCurrentQuestion.pattern.steps && vpCurrentQuestion.pattern.steps.length))) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
+                              <div class="vp-skeleton-tip">
+                                <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
+                                <span x-text="vpQuestionStatus(vpCurrentQuestion) === 'generating' ? '正在归纳考点范式与解题步骤…' : '排队等待归纳考点范式'"></span>
+                              </div>
+                              <div class="vp-skeleton-lines">
+                                <div class="skel h-3.5 w-4/5"></div>
+                                <div class="skel h-3.5 w-3/5"></div>
+                              </div>
+                            </div>
+                            <div x-show="!(vpCurrentQuestion.pattern && (vpCurrentQuestion.pattern.name || (vpCurrentQuestion.pattern.steps && vpCurrentQuestion.pattern.steps.length))) && vpQuestionStatus(vpCurrentQuestion) === 'done'" class="text-sm text-dim">
+                              暂无考点范式归纳
+                            </div>
                           </div>
                         </template>
                         <template x-if="vpEditing">
@@ -1354,8 +1478,34 @@
                         </template>
                         <template x-if="!(vpCurrentQuestion.transfers || []).length">
                           <div>
-                            <div class="text-sm text-dim" x-html="vpCurrentQuestion.qtype === 'writing' ? '该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。' : '该题暂无迁移训练内容（填写后会自动出现在这里）。'"></div>
-                            <button x-show="vpEditing && vpCurrentQuestion.qtype !== 'writing'" class="vp-edit-add mt-2" @click="vpAddItem('q.transfers')">+ 加一道迁移题</button>
+                            <!-- 情况 1：是写作题 -->
+                            <div x-show="vpIsWritingQuestion(vpCurrentQuestion)" class="glass-soft rounded-xl p-4">
+                              <div class="font-semibold text-sm mb-1">写作题不设客观迁移训练</div>
+                              <div class="text-xs text-dim leading-relaxed">
+                                写作题侧重审题要点与篇章构建，请在“写作指导”或“参考答案”中查看审题要点、结构框架与高分范文。
+                              </div>
+                            </div>
+                            <!-- 情况 2：非写作题，且正在生成或排队等待生成中 -->
+                            <div x-show="!vpIsWritingQuestion(vpCurrentQuestion) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
+                              <div class="vp-skeleton-tip">
+                                <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
+                                <span x-text="vpQuestionStatus(vpCurrentQuestion) === 'generating' ? '正在生成迁移训练题…' : '排队等待生成迁移训练题'"></span>
+                              </div>
+                              <div class="text-xs text-dim mb-3">根据本题考点生成的同类变式题，包含题干、选项及解析。</div>
+                              <div class="vp-skeleton-lines">
+                                <div class="skel h-3.5 w-full"></div>
+                                <div class="skel h-3.5 w-5/6"></div>
+                                <div class="grid grid-cols-2 gap-2 mt-2">
+                                  <div class="skel h-8 w-full"></div>
+                                  <div class="skel h-8 w-full"></div>
+                                </div>
+                              </div>
+                            </div>
+                            <!-- 情况 3：非写作题，且流已结束但无迁移训练 -->
+                            <div x-show="!vpIsWritingQuestion(vpCurrentQuestion) && vpQuestionStatus(vpCurrentQuestion) === 'done'" class="text-sm text-dim">
+                              该题暂无迁移训练内容（可进入修改模式手动添加）。
+                              <button x-show="vpEditing" class="vp-edit-add mt-2" @click="vpAddItem('q.transfers')">+ 加一道迁移题</button>
+                            </div>
                           </div>
                         </template>
                       </div>
@@ -1407,7 +1557,7 @@
                   <div class="flex items-center gap-2 shrink-0">
                     <span x-show="streaming" class="vp-stage-live">
                       <span class="status-dot live"></span>
-                      <span class="whitespace-nowrap" x-text="vpStage === 'framework' ? ('解析结构中 ' + vpQuestionCount + ' / ' + (vpTotal || '…')) : ('撰写讲解中 ' + vpAnalyzedCount + ' / ' + (vpTotal || '…'))"></span>
+                      <span class="whitespace-nowrap" x-text="vpStage === 'framework' ? ('① 提取框架 ' + vpQuestionCount + ' / ' + (vpTotal || '…') + ' 题') : ('② 试题解析 ' + vpAnalyzedCount + ' / ' + (vpTotal || '…') + ' 题')"></span>
                       <button class="vp-stage-live-stop" @click="stop()" title="停止生成，已生成题目会保留">停止</button>
                     </span>
                     <!-- 中断/失败后全屏里没有别的续写入口：普通视图那条续写条被 !vpFullscreen
