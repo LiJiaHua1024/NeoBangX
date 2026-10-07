@@ -1235,7 +1235,7 @@ async def chat_stream(
     stop_event = asyncio.Event()
     _stop_events[request_id] = (stop_event, owner_key)
     reasoning_effort = model_entry.get("reasoning_effort") if model_entry else None
-    thinking_budget = model_entry.get("thinking_budget") if model_entry else None
+    extra_body = model_entry.get("extra_body") if model_entry else None
     # 免费额度命中的调用不扣次数；转为按次计费时扣 1 次（迁移批次按 charge_units 结算）
     quota_units = 0 if charged_free else 1
     # 工具推理规则：按列表顺序取第一条命中该工具的规则，强制覆盖思考强度
@@ -1257,10 +1257,8 @@ async def chat_stream(
                 ),
             )
         if supported is not False:
-            # 明确支持或能力未知（未知时交由 litellm.drop_params 兜底，不会报错）时应用规则强度；
-            # 同时清掉模型级思考预算，避免 budget 优先级高于档位而架空规则
+            # 明确支持或能力未知（未知时交由 litellm.drop_params 兜底，不会报错）时应用规则强度
             reasoning_effort = tool_rule.get("reasoning_effort")
-            thinking_budget = None
     # 试卷可视化全解使用自定义分隔格式，无需 JSON mode，兼容性更强（忠于原始模型配置，不强制覆盖 reasoning/max_tokens）
     visual_response_format = None
 
@@ -1385,7 +1383,7 @@ async def chat_stream(
                 max_tokens=cfg["ocr_max_tokens"] if is_ocr else None,
                 stop_event=stop_event,
                 reasoning_effort=reasoning_effort,
-                thinking_budget=thinking_budget,
+                extra_body=extra_body,
                 usage_out=usage,
                 response_format=visual_response_format,
             ):
@@ -1772,8 +1770,7 @@ async def _generate_title_once(
             system_prompt=TITLE_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             model=model,
-            max_tokens=256,
-            reasoning_effort="none",
+            max_tokens=512,
             usage_out=usage,
         )
     except Exception as exc:

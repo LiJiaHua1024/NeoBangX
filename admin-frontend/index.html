@@ -1640,25 +1640,23 @@
             <span class="field-hint">用户端以红→绿渐变圆环展示，评分越高越推荐</span>
           </label>
           <label class="field mb-3">
-            <span>思考（Thinking）控制</span>
-            <div class="custom-select" @click.outside="thinkingMenuOpen = false">
-              <button class="custom-select-trigger" :class="{ open: thinkingMenuOpen }"
-                      @click="thinkingMenuOpen = !thinkingMenuOpen">
-                <span x-text="thinkingModeLabel(modelForm.mode)"></span>
-                <span class="chev">▼</span>
-              </button>
-              <div class="custom-select-menu" x-show="thinkingMenuOpen" x-cloak>
-                <template x-for="opt in thinkingModes" :key="opt.id">
-                  <button class="custom-select-item" :class="{ on: modelForm.mode === opt.id }"
-                          @click="modelForm.mode = opt.id; thinkingMenuOpen = false" x-text="opt.label"></button>
-                </template>
-              </div>
+            <span>思考强度档位（Reasoning Effort）</span>
+            <input type="text" x-model.trim="modelForm.reasoning_effort"
+                   placeholder="留空为 default；可手动输入如 none / off / instant / low / high">
+            <div class="preset-chips" style="margin-top:0.45rem">
+              <template x-for="p in effortPresets" :key="p.id">
+                <button type="button" class="preset-chip"
+                        :class="{ on: (modelForm.reasoning_effort || '') === p.value }"
+                        @click="modelForm.reasoning_effort = p.value"
+                        x-text="p.label" :title="p.hint"></button>
+              </template>
             </div>
-            <span class="field-hint" x-text="thinkingModeHint(modelForm.mode)"></span>
+            <span class="field-hint">直接透传给上游 API 的 reasoning_effort 字符串。可从上方预设一键填入，亦可直接手动输入任意自定义档位。</span>
           </label>
-          <label class="field" x-show="modelForm.mode === 'budget'">
-            <span>思考 Token 预算</span>
-            <input type="number" x-model.number="modelForm.thinking_budget" min="1" step="256" placeholder="如 8192">
+          <label class="field mb-3" style="margin-top:0.8rem">
+            <span>自定义请求体（Extra Body，JSON 格式）</span>
+            <textarea x-model="modelForm.extra_body" rows="3" placeholder='{"reasoning_effort": "off"} 或 {"reasoning": {"effort": "instant"}}' style="font-family: monospace; font-size: 0.85rem;"></textarea>
+            <span class="field-hint">可选。直接透传给底层 API / 网关的自定义参数（如特定推理控制参数、Anthropic thinking 参数等，优先级高于上述设置）</span>
           </label>
         </div>
         <div class="modal-foot">

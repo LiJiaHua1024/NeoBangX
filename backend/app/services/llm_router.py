@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 from typing import AsyncGenerator, AsyncIterator, Optional
 
@@ -13,6 +14,9 @@ from app.services.llm import (
     estimate_missing_usage,
     extract_reasoning_from_delta,
     extract_usage,
+    has_reasoning_params,
+    is_reasoning_param_error,
+    strip_reasoning_kwargs,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,6 +166,7 @@ class LLMRouter:
         stream: bool,
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
+        extra_body: Optional[dict] = None,
         response_format: Optional[dict] = None,
     ) -> dict:
         # provider_model_id 为该 Provider 下实际的 LiteLLM ID（可与逻辑 model 不同）
@@ -177,29 +182,31 @@ class LLMRouter:
         base_url = (provider.get("base_url") or "").strip()
         if base_url:
             kwargs["api_base"] = base_url
-        actual_model_str = str(kwargs.get("model") or "").lower()
-        effective_base_url_str = str(base_url or "").lower()
-        is_anthropic = "anthropic" in actual_model_str or "anthropic" in effective_base_url_str
 
-        extra_body = kwargs.setdefault("extra_body", {})
+        merged_extra_body = {}
+        if extra_body and isinstance(extra_body, dict):
+            merged_extra_body.update(copy.deepcopy(extra_body))
 
         if thinking_budget and thinking_budget > 0:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
-            extra_body["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
-            extra_body.setdefault("reasoning", {})["max_tokens"] = thinking_budget
+            merged_extra_body.setdefault("thinking_budget", thinking_budget)
+            if "reasoning" not in merged_extra_body:
+                merged_extra_body["reasoning"] = {"max_tokens": thinking_budget}
         elif reasoning_effort:
-            # 统一通过 extra_body 穿透传递：LiteLLM 对 extra_body 完全免检，不会触发任何白名单丢弃或映射报错
-            extra_body["reasoning_effort"] = reasoning_effort
-            extra_body.setdefault("reasoning", {})["effort"] = reasoning_effort
-            if reasoning_effort == "none":
-                extra_body["thinking"] = {"type": "disabled"}
+            # 直接透传用户配置的 reasoning_effort，不按厂商硬编码篡改值
+            kwargs["reasoning_effort"] = reasoning_effort
+            allowed = kwargs.setdefault("allowed_openai_params", [])
+            if "reasoning_effort" not in allowed:
+                allowed.append("reasoning_effort")
+            # 同时兜底写入 extra_body（若未被用户显式覆盖），适配纯透传 extra_body 的网关
+            if "reasoning_effort" not in merged_extra_body:
+                merged_extra_body["reasoning_effort"] = reasoning_effort
+            if "reasoning" not in merged_extra_body:
+                merged_extra_body["reasoning"] = {"effort": reasoning_effort}
 
-            # 非 Anthropic 渠道下同时保留顶层参数与放行标记（避免 LiteLLM Anthropic 驱动报 Unmapped 异常）
-            if not is_anthropic:
-                kwargs["reasoning_effort"] = reasoning_effort
-                allowed = kwargs.setdefault("allowed_openai_params", [])
-                if "reasoning_effort" not in allowed:
-                    allowed.append("reasoning_effort")
+        if merged_extra_body:
+            kwargs["extra_body"] = merged_extra_body
+
         if stream:
             kwargs["stream_options"] = {"include_usage": True}
         if response_format:
@@ -261,6 +268,7 @@ class LLMRouter:
         max_tokens: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
+        extra_body: Optional[dict] = None,
         usage_out: Optional[dict] = None,
         response_format: Optional[dict] = None,
     ) -> str:
@@ -284,10 +292,22 @@ class LLMRouter:
             kwargs = self._build_kwargs(
                 provider, model_id, request_messages, max_tokens, stream=False,
                 reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
-                response_format=response_format,
+                extra_body=extra_body, response_format=response_format,
             )
             try:
-                response = await acompletion(**kwargs)
+                try:
+                    response = await acompletion(**kwargs)
+                except Exception as e:
+                    if has_reasoning_params(kwargs) and is_reasoning_param_error(e):
+                        logger.warning(
+                            "Provider %s (%s) 拒绝推理参数，自动剥离推理参数在当前 Provider 原地重试: %s",
+                            provider.get("id"), provider.get("name"), e,
+                        )
+                        safe_kwargs = strip_reasoning_kwargs(kwargs)
+                        response = await acompletion(**safe_kwargs)
+                    else:
+                        raise
+
                 content = response.choices[0].message.content or ""
                 if not str(content).strip():
                     raise EmptyResponseError(f"{self._provider_label(provider)} 返回空响应")
@@ -326,6 +346,7 @@ class LLMRouter:
         stop_event: Optional[asyncio.Event] = None,
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
+        extra_body: Optional[dict] = None,
         usage_out: Optional[dict] = None,
         response_format: Optional[dict] = None,
     ) -> AsyncGenerator[str | tuple[str, str] | tuple[str, dict], None]:
@@ -360,13 +381,25 @@ class LLMRouter:
             kwargs = self._build_kwargs(
                 provider, model_id, base_messages, max_tokens, stream=True,
                 reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
-                response_format=response_format,
+                extra_body=extra_body, response_format=response_format,
             )
             yielded_any = False
             streamed_parts: list[str] = []
             response: object | None = None
             try:
-                response, chunks = await self._open_stream(kwargs)
+                try:
+                    response, chunks = await self._open_stream(kwargs)
+                except Exception as e:
+                    if has_reasoning_params(kwargs) and is_reasoning_param_error(e):
+                        logger.warning(
+                            "Provider %s (%s) 流式建连拒绝推理参数，自动剥离推理参数在当前 Provider 原地重试: %s",
+                            provider.get("id"), provider.get("name"), e,
+                        )
+                        kwargs = strip_reasoning_kwargs(kwargs)
+                        response, chunks = await self._open_stream(kwargs)
+                    else:
+                        raise
+
                 if chunks is not None:
                     async for chunk in chunks:
                         if stop_event and stop_event.is_set():

@@ -629,11 +629,15 @@ function adminApp() {
     ruleForm: { id: "", tool_ids: [], reasoning_effort: "high", on_unsupported: "fallback" },
     ruleEffortMenuOpen: false,
     ruleEffortModes: [
-      { id: "none", label: "关闭思考" },
-      { id: "minimal", label: "最低强度" },
-      { id: "low", label: "低强度" },
-      { id: "medium", label: "中强度" },
-      { id: "high", label: "高强度" },
+      { id: "none", label: "none" },
+      { id: "off", label: "off" },
+      { id: "instant", label: "instant" },
+      { id: "minimal", label: "minimal" },
+      { id: "low", label: "low" },
+      { id: "medium", label: "medium" },
+      { id: "high", label: "high" },
+      { id: "xhigh", label: "xhigh" },
+      { id: "max", label: "max" },
     ],
     // MinerU 文档解析
     parseConfig: { mode: "precision", model: "pipeline", has_token: false, token_masked: "" },
@@ -701,7 +705,7 @@ function adminApp() {
     modelModalOpen: false,
     modelModalIndex: null,
     modelForm: {
-      id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null,
+      id: "", name: "", description: "", score: null, reasoning_effort: "", extra_body: "",
       user_usable: true, ocr_usable: false, chores_usable: true, enabled: true,
       is_free: false, free_no_code: false,
       free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
@@ -714,19 +718,21 @@ function adminApp() {
       { key: "week", label: "每周" },
       { key: "month", label: "每月" },
     ],
-    thinkingMenuOpen: false,
     // 模型拖拽排序
     dragIndex: null,
     dragOverIndex: null,
     dragOverBefore: false,
-    thinkingModes: [
-      { id: "default", label: "跟随模型默认", hint: "不传任何参数，是否思考由供应商默认策略决定" },
-      { id: "none", label: "关闭思考", hint: "尽可能禁用思考，响应更快、消耗更少" },
-      { id: "minimal", label: "最低强度", hint: "保留极少量思考" },
-      { id: "low", label: "低强度", hint: "轻度思考，适合简单任务" },
-      { id: "medium", label: "中强度", hint: "均衡的思考投入" },
-      { id: "high", label: "高强度", hint: "深度思考，适合复杂分析任务，响应较慢" },
-      { id: "budget", label: "自定义 Token 预算", hint: "显式指定思考 token 上限（Anthropic 风格 thinking 参数）" },
+    effortPresets: [
+      { id: "default", value: "", label: "default", hint: "留空，跟随模型默认" },
+      { id: "none", value: "none", label: "none", hint: "none" },
+      { id: "off", value: "off", label: "off", hint: "off" },
+      { id: "instant", value: "instant", label: "instant", hint: "instant" },
+      { id: "minimal", value: "minimal", label: "minimal", hint: "minimal" },
+      { id: "low", value: "low", label: "low", hint: "low" },
+      { id: "medium", value: "medium", label: "medium", hint: "medium" },
+      { id: "high", value: "high", label: "high", hint: "high" },
+      { id: "xhigh", value: "xhigh", label: "xhigh", hint: "xhigh" },
+      { id: "max", value: "max", label: "max", hint: "max" },
     ],
     createOpen: false,
     creating: false,
@@ -2301,7 +2307,7 @@ function adminApp() {
                 description: m.description || "",
                 score: m.score ?? null,
                 reasoning_effort: m.reasoning_effort || null,
-                thinking_budget: m.thinking_budget || null,
+                extra_body: m.extra_body || null,
                 ...capsOf(m),
                 enabled: m.enabled !== false,
                 is_free: !!m.is_free,
@@ -2380,28 +2386,18 @@ function adminApp() {
       return `hsl(${Math.round(s * 12)} 85% 45%)`;
     },
     thinkingLabel(m) {
-      if (m.thinking_budget) return `预算 ${m.thinking_budget} tokens`;
-      const opt = this.thinkingModes.find((o) => o.id === m.reasoning_effort);
-      return opt ? opt.label : "跟随模型默认";
-    },
-    thinkingModeLabel(mode) {
-      const opt = this.thinkingModes.find((o) => o.id === mode);
-      return opt ? opt.label : "跟随模型默认";
-    },
-    thinkingModeHint(mode) {
-      const opt = this.thinkingModes.find((o) => o.id === mode);
-      return opt ? opt.hint : "";
+      const val = (m.reasoning_effort || "").trim();
+      return val || "default";
     },
 
     openAddModel() {
       this.modelModalIndex = null;
       this.modelForm = {
-        id: "", name: "", description: "", score: null, mode: "default", thinking_budget: null,
+        id: "", name: "", description: "", score: null, reasoning_effort: "", extra_body: "",
         user_usable: true, ocr_usable: false, chores_usable: true, enabled: true,
         is_free: false, free_no_code: false,
         free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
       };
-      this.thinkingMenuOpen = false;
       this.freeLimitsOpen = false;
       this.modelModalOpen = true;
     },
@@ -2415,8 +2411,8 @@ function adminApp() {
         name: m.name || "",
         description: m.description || "",
         score: m.score ?? null,
-        mode: m.thinking_budget ? "budget" : m.reasoning_effort || "default",
-        thinking_budget: m.thinking_budget || null,
+        reasoning_effort: m.reasoning_effort || "",
+        extra_body: m.extra_body ? JSON.stringify(m.extra_body, null, 2) : "",
         user_usable: m.user_usable !== false,
         ocr_usable: !!m.ocr_usable,
         chores_usable: m.chores_usable !== false,
@@ -2431,7 +2427,6 @@ function adminApp() {
           month: Number(m.free_limits && m.free_limits.month) || 0,
         },
       };
-      this.thinkingMenuOpen = false;
       this.freeLimitsOpen = false;
       this.modelModalOpen = true;
     },
@@ -2466,11 +2461,17 @@ function adminApp() {
         this.toast("该模型 ID 已在列表中", "error");
         return;
       }
-      const mode = this.modelForm.mode;
-      if (mode === "budget") {
-        const budget = parseInt(this.modelForm.thinking_budget, 10);
-        if (!Number.isFinite(budget) || budget < 1) {
-          this.toast("请填写有效的思考 Token 预算", "error");
+      let extraBody = null;
+      if (this.modelForm.extra_body && this.modelForm.extra_body.trim()) {
+        try {
+          const parsed = JSON.parse(this.modelForm.extra_body.trim());
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            this.toast("自定义请求体 (Extra Body) 必须是 JSON 对象，如 {\"key\": \"value\"}", "error");
+            return;
+          }
+          extraBody = parsed;
+        } catch (err) {
+          this.toast("自定义请求体 (Extra Body) 不是合法的 JSON 格式", "error");
           return;
         }
       }
@@ -2522,13 +2523,14 @@ function adminApp() {
         this.toast("该模型正被用作 OCR 模型，请先切换 OCR 模型，或为它勾上「用于 OCR」", "error");
         return;
       }
+      const effort = (this.modelForm.reasoning_effort || "").trim() || null;
       const entry = {
         id,
         name: (this.modelForm.name || "").trim(),
         description: (this.modelForm.description || "").trim(),
         score: this.modelForm.score,
-        reasoning_effort: mode !== "default" && mode !== "budget" ? mode : null,
-        thinking_budget: mode === "budget" ? parseInt(this.modelForm.thinking_budget, 10) : null,
+        reasoning_effort: effort,
+        extra_body: extraBody,
         user_usable: userUsable,
         ocr_usable: ocrUsable,
         chores_usable: choresUsable,
@@ -2858,7 +2860,7 @@ function adminApp() {
             description: m.description || "",
             score: m.score ?? null,
             reasoning_effort: m.reasoning_effort || null,
-            thinking_budget: m.thinking_budget || null,
+            extra_body: m.extra_body || null,
             user_usable: m.user_usable !== false,
             ocr_usable: !!m.ocr_usable,
             chores_usable: m.chores_usable !== false,

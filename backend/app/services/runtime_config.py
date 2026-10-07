@@ -47,8 +47,20 @@ MINERU_MODELS = {"pipeline", "vlm"}
 # 敏感字段：列表接口可脱敏（旧键保留仅为兼容读取，不再写入）
 SENSITIVE_KEYS = {"llm_api_key", "chores_api_key", "openrouter_api_key", "mineru_token"}
 
-# LiteLLM reasoning_effort 合法取值（none = 关闭思考）
-REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high"}
+# 常见推理强度标识（off/none/instant/minimal/low/medium/high/xhigh/max 等）
+REASONING_EFFORTS = {"off", "none", "instant", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+
+def normalize_reasoning_effort(val: Any) -> Optional[str]:
+    """规范化推理强度标识，直接放行合法标识符透传给上游。"""
+    if val is None:
+        return None
+    s = str(val).strip().lower()
+    if not s:
+        return None
+    if len(s) <= 32 and s.replace("-", "").replace("_", "").isalnum():
+        return s
+    return None
 
 # 工具推理规则：模型不支持规则强度时的处理方式
 TOOL_REASONING_UNSUPPORTED_ACTIONS = {"fallback", "fail"}
@@ -325,8 +337,10 @@ def parse_models(raw: str) -> list[dict]:
             model_id = str(item.get("id") or "").strip()
             if not model_id:
                 continue
-            effort = item.get("reasoning_effort")
-            budget = item.get("thinking_budget")
+            effort = normalize_reasoning_effort(item.get("reasoning_effort"))
+            extra_body = item.get("extra_body")
+            if not isinstance(extra_body, dict):
+                extra_body = None
             enabled = _parse_enabled(item)
             # 免费模型：兼容 is_free / free 两种写法；未标记免费时无码开关强制归零
             is_free = _parse_flag(item, "is_free", "free")
@@ -336,8 +350,9 @@ def parse_models(raw: str) -> list[dict]:
                 "name": str(item.get("name") or "").strip() or model_id,
                 "description": str(item.get("description") or "").strip(),
                 "score": _clamp_score(item.get("score")),
-                "reasoning_effort": effort if effort in REASONING_EFFORTS else None,
-                "thinking_budget": int(budget) if isinstance(budget, (int, float)) and int(budget) > 0 else None,
+                "reasoning_effort": effort,
+                "thinking_budget": None,
+                "extra_body": extra_body,
                 **parse_capabilities(item),
                 "enabled": enabled,
                 "is_free": is_free,
@@ -354,6 +369,7 @@ def parse_models(raw: str) -> list[dict]:
             "score": None,
             "reasoning_effort": None,
             "thinking_budget": None,
+            "extra_body": None,
             "user_usable": True,
             "ocr_usable": False,
             "chores_usable": True,
@@ -403,8 +419,8 @@ def parse_tool_reasoning_rules(raw: str) -> list[dict]:
             s = str(tid).strip()
             if s and s not in tool_ids:
                 tool_ids.append(s)
-        effort = item.get("reasoning_effort")
-        if not tool_ids or effort not in REASONING_EFFORTS:
+        effort = normalize_reasoning_effort(item.get("reasoning_effort"))
+        if not tool_ids or not effort:
             continue
         action = item.get("on_unsupported")
         if action not in TOOL_REASONING_UNSUPPORTED_ACTIONS:

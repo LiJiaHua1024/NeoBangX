@@ -595,3 +595,115 @@ def test_stream_endpoint_logs_all_provider_failures(monkeypatch):
     assert row.fallback_attempts == 2
     assert "通道1(prov_1)" in row.error_message and "通道2(prov_2)" in row.error_message
     assert "BadGatewayError" in row.error_message
+
+
+def test_build_kwargs_direct_passthrough():
+    """验证 extra_body 与 reasoning_effort 直接透传，不再做按模型/网关打地鼠篡改。"""
+    router = _router(count=1)
+    prov = router.providers[0]
+
+    # 1. 传入 reasoning_effort='off'（Command Code 规范）：原样透传且放行 allowed_openai_params
+    kw_off = router._build_kwargs(
+        prov, "cmdc-model", [{"role": "user", "content": "hi"}], max_tokens=100,
+        stream=False, reasoning_effort="off",
+    )
+    assert kw_off["reasoning_effort"] == "off"
+    assert "reasoning_effort" in kw_off.get("allowed_openai_params", [])
+    assert kw_off["extra_body"]["reasoning_effort"] == "off"
+
+    # 2. 传入 reasoning_effort='instant'（水星 Mercury 规范）：原样透传
+    kw_inst = router._build_kwargs(
+        prov, "mercury-2.5", [{"role": "user", "content": "hi"}], max_tokens=100,
+        stream=False, reasoning_effort="instant",
+    )
+    assert kw_inst["reasoning_effort"] == "instant"
+    assert kw_inst["extra_body"]["reasoning_effort"] == "instant"
+
+    # 3. 传入自定义 extra_body：原样合并且拥有最高优先级
+    custom_extra = {"reasoning": {"effort": "custom-val"}, "anthropic_beta": ["thinking-2025"]}
+    kw_custom = router._build_kwargs(
+        prov, "custom-model", [{"role": "user", "content": "hi"}], max_tokens=100,
+        stream=False, reasoning_effort="off", extra_body=custom_extra,
+    )
+    assert kw_custom["extra_body"]["reasoning"] == {"effort": "custom-val"}
+    assert kw_custom["extra_body"]["anthropic_beta"] == ["thinking-2025"]
+
+
+@pytest.mark.anyio
+async def test_chat_auto_heals_on_reasoning_error_within_same_provider(monkeypatch):
+    """当首个 Provider 报 reasoning_effort 枚举或参数不支持时，自动剥离推理参数原地重试，不切备用 Provider。"""
+    import copy
+    from litellm import exceptions as litellm_exceptions
+
+    class DummyResponse:
+        def __init__(self, content):
+            self.choices = [type("Choice", (), {"message": type("Msg", (), {"content": content})()})()]
+            self.usage = None
+
+    calls = []
+
+    async def fake_acompletion(**kwargs):
+        calls.append(copy.deepcopy(kwargs))
+        # 第一次调用（带 reasoning_effort）：模拟 Command Code 报 400 Invalid option
+        if kwargs.get("reasoning_effort") == "none":
+            raise litellm_exceptions.BadRequestError(
+                message='OpenAIException - Invalid option: expected one of "off"|"low"|"medium"|"high"|"xhigh"',
+                model="test-model",
+                llm_provider="openai",
+            )
+        # 第二次调用（已自愈剥离推理参数）：成功响应
+        return DummyResponse("这是自愈重试成功的回答")
+
+    monkeypatch.setattr("app.services.llm_router.acompletion", fake_acompletion)
+
+    router = _router(count=2)
+    result = await router.chat(
+        user_prompt="你好",
+        reasoning_effort="none",
+    )
+
+    assert result == "这是自愈重试成功的回答"
+    assert router.provider_used["id"] == "prov_1"  # 依然是第 1 家，没切换到 prov_2
+    assert len(calls) == 2
+    # 第一次带推理参数
+    assert calls[0].get("reasoning_effort") == "none"
+    # 第二次已被安全剥离
+    assert "reasoning_effort" not in calls[1]
+    assert "extra_body" not in calls[1] or "reasoning_effort" not in calls[1].get("extra_body", {})
+
+
+@pytest.mark.anyio
+async def test_stream_auto_heals_on_reasoning_error_within_same_provider(monkeypatch):
+    """流式建连时上游拒绝推理参数，在当前 Provider 原地剥离参数重试建连，平滑输出。"""
+    import copy
+    from litellm import exceptions as litellm_exceptions
+
+    stream_attempts = []
+
+    async def fake_acompletion(**kwargs):
+        stream_attempts.append(copy.deepcopy(kwargs))
+        if kwargs.get("reasoning_effort"):
+            raise litellm_exceptions.BadRequestError(
+                message="unrecognized request argument: reasoning_effort",
+                model="test-model",
+                llm_provider="openai",
+            )
+        return _Stream([_Chunk("自愈"), _Chunk("流式"), _Chunk("成功")])
+
+    monkeypatch.setattr("app.services.llm_router.acompletion", fake_acompletion)
+
+    router = _router(count=2)
+    chunks = []
+    async for item in router.chat_stream_with_stop(
+        user_prompt="测试流式自愈",
+        reasoning_effort="off",
+    ):
+        if isinstance(item, str):
+            chunks.append(item)
+
+    assert "".join(chunks) == "自愈流式成功"
+    assert router.provider_used["id"] == "prov_1"
+    assert len(stream_attempts) == 2
+    assert stream_attempts[0].get("reasoning_effort") == "off"
+    assert "reasoning_effort" not in stream_attempts[1]
+

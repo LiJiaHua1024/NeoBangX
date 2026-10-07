@@ -111,10 +111,13 @@ class ModelEntry(BaseModel):
     description: str = Field("", max_length=200, description="用户端展示的模型描述，替代模型 ID 显示")
     score: Optional[float] = Field(None, ge=0, le=10, description="推荐评分 0-10，用户端以红绿圆环展示")
     reasoning_effort: Optional[str] = Field(
-        None, description="思考强度：none/minimal/low/medium/high；空为供应商默认"
+        None, description="思考强度档位：直接透传给上游（如 none/off/instant/low/medium/high/xhigh 等）；空为供应商默认"
     )
     thinking_budget: Optional[int] = Field(
-        None, ge=1, description="思考 token 预算，优先于 reasoning_effort"
+        None, ge=1, description="【已废弃】思考 token 预算，现代主流模型已转向档位控制"
+    )
+    extra_body: Optional[dict] = Field(
+        None, description="自定义请求体参数（透传给底层 API，如自定义 extra_body 映射）"
     )
     # 用途能力位：三者为空表示客户端未提交（旧版后台），按下面的 chores_only 迁移
     user_usable: Optional[bool] = Field(
@@ -145,7 +148,7 @@ class ToolReasoningRuleEntry(BaseModel):
         ..., min_length=1, description="适用的工具 ID 列表（字符串，如 \"1\"）"
     )
     reasoning_effort: str = Field(
-        ..., description="思考强度：none/minimal/low/medium/high"
+        ..., description="思考强度：透传给上游（如 off/none/instant/low/medium/high/xhigh 等）"
     )
     on_unsupported: str = Field(
         "fallback",

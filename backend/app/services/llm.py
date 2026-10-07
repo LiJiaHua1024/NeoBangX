@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import logging
 from typing import AsyncGenerator, Optional
 
@@ -6,6 +7,83 @@ import litellm
 from litellm import acompletion
 
 logger = logging.getLogger(__name__)
+
+
+def is_reasoning_param_error(exc: Exception) -> bool:
+    """判断是否为上游 API 因不识别或拒绝推理控制参数抛出的 400 / BadRequest 错误。
+
+    常见场景：
+    - Command Code / Inception / OpenAI / DeepSeek 等网关对 reasoning_effort 枚举报错：
+      "expected one of 'off'|'low'|'medium'|'high'|'xhigh'"
+      "Invalid option: expected one of ..."
+      "Invalid value: 'none' for reasoning_effort"
+      "unrecognized request argument: reasoning_effort"
+      "Extra inputs are not permitted: reasoning_effort"
+      "thinking is not supported"
+      "reasoning_effort is not supported"
+    """
+    err_str = str(exc).lower()
+    status_code = getattr(exc, "status_code", None)
+    is_400 = (
+        status_code == 400
+        or "badrequesterror" in type(exc).__name__.lower()
+        or "bad request" in err_str
+        or "400" in err_str
+    )
+    if not is_400:
+        return False
+
+    keywords = (
+        "reasoning_effort",
+        "reasoning",
+        "thinking",
+        "thinking_budget",
+        "budget_tokens",
+        "extra_body",
+        "invalid option",
+        "expected one of",
+        "unrecognized request argument",
+        "unknown parameter",
+        "extra inputs are not permitted",
+        "invalid_request_error",
+    )
+    return any(kw in err_str for kw in keywords)
+
+
+def has_reasoning_params(kwargs: dict) -> bool:
+    """检查请求参数中是否包含推理控制参数。"""
+    if kwargs.get("reasoning_effort") or kwargs.get("thinking"):
+        return True
+    extra = kwargs.get("extra_body")
+    if isinstance(extra, dict):
+        for k in ("reasoning_effort", "reasoning", "thinking", "thinking_budget"):
+            if k in extra:
+                return True
+    return False
+
+
+def strip_reasoning_kwargs(kwargs: dict) -> dict:
+    """深拷贝并剔除所有推理控制参数，构造安全回退的请求参数。"""
+    safe_kwargs = copy.deepcopy(kwargs)
+    safe_kwargs.pop("reasoning_effort", None)
+    safe_kwargs.pop("thinking", None)
+
+    allowed = safe_kwargs.get("allowed_openai_params")
+    if isinstance(allowed, list) and "reasoning_effort" in allowed:
+        safe_kwargs["allowed_openai_params"] = [p for p in allowed if p != "reasoning_effort"]
+        if not safe_kwargs["allowed_openai_params"]:
+            safe_kwargs.pop("allowed_openai_params", None)
+
+    extra = safe_kwargs.get("extra_body")
+    if isinstance(extra, dict):
+        extra.pop("reasoning_effort", None)
+        extra.pop("reasoning", None)
+        extra.pop("thinking", None)
+        extra.pop("thinking_budget", None)
+        if not extra:
+            safe_kwargs.pop("extra_body", None)
+    return safe_kwargs
+
 
 
 def _usage_field(usage, key):
@@ -200,6 +278,7 @@ class LLMService:
         stream: bool,
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
+        extra_body: Optional[dict] = None,
         response_format: Optional[dict] = None,
     ) -> dict:
         kwargs = {
@@ -214,30 +293,31 @@ class LLMService:
         effective_base_url = base_url or self.base_url
         if effective_base_url:
             kwargs["api_base"] = effective_base_url
-        # thinking 控制：显式预算优先，其次统一推理强度；都为空则交由供应商默认
-        actual_model_str = str(kwargs.get("model") or "").lower()
-        effective_base_url_str = str(effective_base_url or "").lower()
-        is_anthropic = "anthropic" in actual_model_str or "anthropic" in effective_base_url_str
 
-        extra_body = kwargs.setdefault("extra_body", {})
+        merged_extra_body = {}
+        if extra_body and isinstance(extra_body, dict):
+            merged_extra_body.update(copy.deepcopy(extra_body))
 
         if thinking_budget and thinking_budget > 0:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
-            extra_body["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
-            extra_body.setdefault("reasoning", {})["max_tokens"] = thinking_budget
+            merged_extra_body.setdefault("thinking_budget", thinking_budget)
+            if "reasoning" not in merged_extra_body:
+                merged_extra_body["reasoning"] = {"max_tokens": thinking_budget}
         elif reasoning_effort:
-            # 统一通过 extra_body 穿透传递：LiteLLM 对 extra_body 完全免检，不会触发任何白名单丢弃或映射报错
-            extra_body["reasoning_effort"] = reasoning_effort
-            extra_body.setdefault("reasoning", {})["effort"] = reasoning_effort
-            if reasoning_effort == "none":
-                extra_body["thinking"] = {"type": "disabled"}
+            # 直接透传用户配置的 reasoning_effort，不按厂商硬编码篡改值
+            kwargs["reasoning_effort"] = reasoning_effort
+            allowed = kwargs.setdefault("allowed_openai_params", [])
+            if "reasoning_effort" not in allowed:
+                allowed.append("reasoning_effort")
+            # 同时兜底写入 extra_body（若未被用户显式覆盖），适配纯透传 extra_body 的网关
+            if "reasoning_effort" not in merged_extra_body:
+                merged_extra_body["reasoning_effort"] = reasoning_effort
+            if "reasoning" not in merged_extra_body:
+                merged_extra_body["reasoning"] = {"effort": reasoning_effort}
 
-            # 非 Anthropic 渠道下同时保留顶层参数与放行标记（避免 LiteLLM Anthropic 驱动报 Unmapped 异常）
-            if not is_anthropic:
-                kwargs["reasoning_effort"] = reasoning_effort
-                allowed = kwargs.setdefault("allowed_openai_params", [])
-                if "reasoning_effort" not in allowed:
-                    allowed.append("reasoning_effort")
+        if merged_extra_body:
+            kwargs["extra_body"] = merged_extra_body
+
         if stream:
             # 请求供应商在流末尾返回 token 用量；不支持的供应商由
             # litellm.drop_params 自动丢弃该参数，不会引发报错
@@ -256,6 +336,7 @@ class LLMService:
         max_tokens: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
+        extra_body: Optional[dict] = None,
         messages: Optional[list[dict]] = None,
         usage_out: Optional[dict] = None,
         response_format: Optional[dict] = None,
@@ -265,11 +346,23 @@ class LLMService:
         kwargs = self._build_kwargs(
             model, request_messages, api_key, base_url, max_tokens, stream=False,
             reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
-            response_format=response_format,
+            extra_body=extra_body, response_format=response_format,
         )
 
         try:
-            response = await acompletion(**kwargs)
+            try:
+                response = await acompletion(**kwargs)
+            except Exception as e:
+                if has_reasoning_params(kwargs) and is_reasoning_param_error(e):
+                    logger.warning(
+                        "LLM chat 上游拒绝推理参数（%s），自动剥离推理参数原地重试: %s",
+                        kwargs.get("model"), e,
+                    )
+                    safe_kwargs = strip_reasoning_kwargs(kwargs)
+                    response = await acompletion(**safe_kwargs)
+                else:
+                    raise
+
             content = response.choices[0].message.content or ""
             if usage_out is not None:
                 extract_usage(getattr(response, "usage", None), usage_out)
@@ -332,6 +425,7 @@ class LLMService:
         stop_event: Optional[asyncio.Event] = None,
         reasoning_effort: Optional[str] = None,
         thinking_budget: Optional[int] = None,
+        extra_body: Optional[dict] = None,
         usage_out: Optional[dict] = None,
         response_format: Optional[dict] = None,
         messages: Optional[list[dict]] = None,
@@ -348,12 +442,24 @@ class LLMService:
         kwargs = self._build_kwargs(
             model, messages, api_key, base_url, max_tokens, stream=True,
             reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
-            response_format=response_format,
+            extra_body=extra_body, response_format=response_format,
         )
 
         streamed_parts: list[str] = []
         try:
-            response = await acompletion(**kwargs)
+            try:
+                response = await acompletion(**kwargs)
+            except Exception as e:
+                if has_reasoning_params(kwargs) and is_reasoning_param_error(e):
+                    logger.warning(
+                        "LLM stream 上游拒绝推理参数（%s），自动剥离推理参数原地重试: %s",
+                        kwargs.get("model"), e,
+                    )
+                    safe_kwargs = strip_reasoning_kwargs(kwargs)
+                    response = await acompletion(**safe_kwargs)
+                else:
+                    raise
+
             async for chunk in response:
                 if stop_event and stop_event.is_set():
                     logger.info("LLM stream stopped by stop_event")
