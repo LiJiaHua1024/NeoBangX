@@ -81,3 +81,27 @@ test("旧残缺骨架的续写重新发送原卷，完整骨架仍走精讲", as
   await c.continueVisualPaper();
   assert.ok(input.startsWith(SKELETON));
 });
+
+test("切换当前分组不会改变其他题的题型或生成状态", () => {
+  const c = component();
+  const reading = { no: "1", qtype: "choice", answer: "A" };
+  const writing = { no: "2", qtype: "writing", writingGuide: { points: [], outline: "", sample: "" } };
+  const legacyWriting = { no: "3", writingGuide: { points: [], outline: "", sample: "" } };
+  c.visualPaper = { ...c.newVisualPaperState(), groups: [
+    { id: "reading", questions: [reading] },
+    { id: "writing_app", questions: [writing] },
+    { id: "writing_cont", questions: [legacyWriting] },
+  ] };
+  c.streaming = true;
+  c.vpStage = "explain";
+  for (let index = 0; index < 3; index++) {
+    c.visualPaper.currentGroupIdx = index;
+    assert.equal(c.vpIsWritingQuestion(reading), false);
+    assert.equal(c.vpIsWritingQuestion(writing), true);
+    assert.equal(c.vpIsWritingQuestion(legacyWriting), true);
+    assert.equal(c.vpQuestionStatus(reading), "done");
+    assert.equal(c.vpGeneratingQuestionNo, "2");
+    assert.equal(c.vpQuestionStatus(writing), "generating");
+    assert.equal(c.vpQuestionStatus(legacyWriting), "pending");
+  }
+});

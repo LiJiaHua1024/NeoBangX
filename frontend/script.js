@@ -3128,8 +3128,9 @@ function nbx() {
     vpIsWritingQuestion(q) {
       if (!q) return false;
       if (q.qtype === "writing") return true;
-      if (this.vpCurrentGroup && (this.vpCurrentGroup.id === "writing_app" || this.vpCurrentGroup.id === "writing_cont")) return true;
-      return false;
+      // 遍历全卷时 q 不一定是当前题；旧记录缺少 qtype 时也只能查它自己的分组。
+      const group = this.vpGroups.find(g => (g.questions || []).includes(q));
+      return !!group && (group.id === "writing_app" || group.id === "writing_cont");
     },
     /* 判定某题是否已有讲解内容生成 */
     vpHasAnalysis(q) {
