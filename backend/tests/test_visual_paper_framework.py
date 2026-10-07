@@ -652,3 +652,74 @@ class TestAnchorRobustness:
         data = parse_custom_visual_paper(text)
         groups = {g["id"]: g for g in data["groups"]}
         assert "写作词数应为80个左右" in groups["writing_app"]["questions"][0]["stem"]
+
+
+def test_tag_input_skips_framework_and_uses_explain_prompt():
+    """续写请求（输入已是 @@TAG@@ 骨架）跳过阶段一，并换用精讲提示词：
+    单阶段契约会要求模型重发 @@GROUP@@/语篇正文等结构行，正是续写轮次里
+    文档底部长出空分组、正文被复读的直接诱因。用量日志记「试卷可视化全解·精讲」。"""
+    from fastapi.testclient import TestClient
+
+    from app import deps
+    from app.database import SessionLocal
+    from app.main import app
+    from app.models import UsageCode, UsageLog
+    from app.routers import chat as chat_router
+    from app.routers import tools as tools_router
+    from app.services.prompt_loader import PromptLoader
+
+    captured = {}
+
+    class _RecordingLLM(_FakeLLM):
+        async def chat_stream_with_stop(self, *, user_prompt, usage_out=None, **kwargs):
+            captured["prompt"] = user_prompt
+            async for token in super().chat_stream_with_stop(user_prompt=user_prompt, usage_out=usage_out, **kwargs):
+                yield token
+
+    fake = _RecordingLLM(["@@Q@@ 1\n@@ANSWER@@\nB\n@@END_Q@@\n"])
+    original_build_llm = chat_router._build_llm
+    chat_router._build_llm = lambda *_a, **_kw: fake
+
+    db = SessionLocal()
+    try:
+        code = UsageCode(code="NBXU-VP-TAGPROMPT-01", quota=100, used_count=0, is_enabled=True, note="测试")
+        db.add(code)
+        db.commit()
+        db.refresh(code)
+        db.expunge(code)
+    finally:
+        db.close()
+
+    app.dependency_overrides[deps.get_code_context] = lambda: deps.CodeContext(code=code, reason="")
+    app.dependency_overrides[tools_router.get_prompt_loader] = lambda: PromptLoader(_REPO_PROMPTS_DIR)
+    cont_input = (
+        "@@TOTAL@@ 1\n@@PAPER@@ 测试卷\n@@GROUP@@ reading|阅读理解|\n"
+        "@@Q@@ 1\n@@QTYPE@@ choice\n@@STEM@@\nQ one?\n@@END_Q@@\n"
+        "\n【续写指令】本次只需要为下列题号输出讲解块：1。\n"
+    )
+    try:
+        client = TestClient(app)
+        resp = client.post(
+            "/api/chat/stream",
+            json={"tool_id": _VISUAL_TOOL_ID, "input": cont_input},
+            headers={"X-Real-IP": "203.0.113.78", "User-Agent": "pytest-vp"},
+        )
+        assert resp.status_code == 200
+        assert "[DONE]" in resp.text, resp.text[:500]
+        # 首条 user 消息用精讲提示词渲染（续写工单条款只在精讲里有），材料携带原样输入
+        prompt = captured.get("prompt") or ""
+        assert "续写工单" in prompt, prompt[:300]
+        assert "【续写指令】本次只需要为下列题号输出讲解块：1。" in prompt
+        # 阶段一被跳过：不出现框架阶段事件
+        assert '"name": "framework"' not in resp.text
+    finally:
+        chat_router._build_llm = original_build_llm
+        app.dependency_overrides.clear()
+
+    db = SessionLocal()
+    try:
+        logs = db.query(UsageLog).filter(UsageLog.code_id == code.id).order_by(UsageLog.id).all()
+    finally:
+        db.close()
+    assert len(logs) == 1, f"续写请求只落一条主日志，实际 {len(logs)} 条"
+    assert logs[0].tool_name == "试卷可视化全解精讲"

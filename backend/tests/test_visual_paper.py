@@ -338,3 +338,131 @@ def test_prompt_loader_variable_rendering(tmp_path: Path):
     assert loader.render("demo", "材料").startswith("量：1；")
     # 用户输入里的同名占位符不被二次扫描替换
     assert loader.render("demo", "{{transfer_count}}").startswith("量：1；输入：{{transfer_count}}；")
+
+
+# ========== 续写轮次（input 已是 @@TAG@@ 文档再追加讲解）的合并语义 ==========
+
+_SKELETON = """@@TOTAL@@ 1
+@@PAPER@@ 测试卷
+@@GROUP@@ reading|阅读理解 A 篇|
+@@Q@@ 24
+@@QTYPE@@ choice
+@@PASSAGE_REF@@ -
+@@STEM@@
+Why did BART start the kiosk program?
+@@OPTIONS@@
+A. One
+B. Two
+C. Three
+D. Four
+@@END_Q@@
+"""
+
+
+def _transfer_text(passage: str, answer: str) -> str:
+    return (
+        "@@TRANSFER_PASSAGE@@\n"
+        f"{passage}\n"
+        "@@TRANSFER_STEM@@\n"
+        "Transfer stem?\n"
+        "@@TRANSFER_ANSWER@@\n"
+        f"{answer}\n"
+        "@@TRANSFER_EXPL@@\n"
+        "解析\n"
+    )
+
+
+def test_group_redeclaration_reuses_existing_group():
+    """续写轮次模型重发 @@GROUP@@ 头（字面常与骨架略有出入：空格、导语有无），
+    必须复用既有分组——否则重开的题并回原组，新组沦为底部 0 题空分组。"""
+    cont = (
+        "@@GROUP@@ reading|阅读理解A篇|信息匹配类应用文，考查细节定位\n"
+        "@@Q@@ 24\n@@ANSWER@@\nB\n@@END_Q@@\n"
+    )
+    data = parse_custom_visual_paper(_SKELETON + cont)
+    assert len(data["groups"]) == 1, f"重声明不得新建分组：{[g['title'] for g in data['groups']]}"
+    g = data["groups"][0]
+    assert g["title"] == "阅读理解 A 篇"
+    assert g["questions"][0]["answer"] == "B"
+    # 原组没有导语时，重声明带来的导语补上
+    assert g["intro"] == "信息匹配类应用文，考查细节定位"
+
+
+def test_group_redeclaration_different_title_still_new_group():
+    """同 id 不同标题仍是合法拆分（完形可按叙事分组），照旧新建。"""
+    cont = "@@GROUP@@ reading|完形填空第二部分|\n@@Q@@ 25\n@@ANSWER@@\nC\n@@END_Q@@\n"
+    data = parse_custom_visual_paper(_SKELETON + cont)
+    assert [g["title"] for g in data["groups"]] == ["阅读理解 A 篇", "完形填空第二部分"]
+    assert [len(g["questions"]) for g in data["groups"]] == [1, 1]
+
+
+def test_group_intro_not_overwritten_on_reopen():
+    """续写轮次重发的 @@GROUP_INTRO@@ 让位给第一轮写好的导语。"""
+    pass1 = "@@GROUP_INTRO@@ 第一轮导语\n@@Q@@ 24\n@@ANSWER@@\nB\n@@END_Q@@\n"
+    pass2 = "@@GROUP_INTRO@@ 第二轮导语\n@@Q@@ 24\n@@ANSWER@@\nC\n@@END_Q@@\n"
+    data = parse_custom_visual_paper(_SKELETON + pass1 + pass2)
+    assert data["groups"][0]["intro"] == "第一轮导语"
+    assert data["groups"][0]["questions"][0]["answer"] == "C"
+
+
+def test_reopen_transfer_replaced_by_new_blocks():
+    """同号重开且模型重写了迁移块：整体替换旧块，不得新旧叠加翻倍。"""
+    pass1 = (
+        "@@GROUP_INTRO@@ g\n"
+        "@@Q@@ 24\n@@ANSWER@@\nB\n@@PATTERN_STEPS@@\ns\n"
+        + _transfer_text("Old passage.", "A")
+        + "@@END_Q@@\n"
+    )
+    pass2 = (
+        "@@Q@@ 24\n@@ANSWER@@\nC\n@@PATTERN_STEPS@@\ns2\n"
+        + _transfer_text("New passage.", "D")
+        + "@@END_Q@@\n"
+    )
+    data = parse_custom_visual_paper(_SKELETON + pass1 + pass2)
+    q = data["groups"][0]["questions"][0]
+    assert q["answer"] == "C"
+    assert len(q["transfers"]) == 1, f"重写后迁移块应整体替换，实际 {len(q['transfers'])} 块"
+    assert q["transfers"][0]["passage"] == "New passage."
+
+
+def test_reopen_without_transfer_keeps_old_blocks():
+    """同号重开但模型没重写迁移块：沿用重开前持有的旧块，不得清空。"""
+    pass1 = (
+        "@@Q@@ 24\n@@ANSWER@@\nB\n@@PATTERN_STEPS@@\ns\n"
+        + _transfer_text("Old passage.", "A")
+        + "@@END_Q@@\n"
+    )
+    pass2 = "@@Q@@ 24\n@@ANSWER@@\nC\n@@END_Q@@\n"
+    data = parse_custom_visual_paper(_SKELETON + pass1 + pass2)
+    q = data["groups"][0]["questions"][0]
+    assert len(q["transfers"]) == 1
+    assert q["transfers"][0]["passage"] == "Old passage."
+
+
+def test_paper_and_notice_empty_value_not_overwrite():
+    """续写轮次模型偶尔重发空 @@PAPER@@/@@NOTICE@@：空值不得抹掉已有内容。"""
+    doc = _SKELETON.replace(
+        "@@PAPER@@ 测试卷\n", "@@PAPER@@ 测试卷\n@@NOTICE@@ AI 判断，建议核对\n"
+    )
+    cont = "@@PAPER@@\n@@NOTICE@@ \n@@Q@@ 24\n@@ANSWER@@\nB\n@@END_Q@@\n"
+    data = parse_custom_visual_paper(doc + cont)
+    assert data["paper"]["title"] == "测试卷"
+    assert data["notice"] == "AI 判断，建议核对"
+
+
+def test_stray_fields_after_early_endq_reopened_into_committed_question():
+    """实测（log-300）：模型把 @@END_Q@@ 提前写在 OPTIONS 之后，ANSWER/迁移块全落在
+    第一个 END_Q 之后。这些字段只可能属于刚提交的题，重开并入而不是静默丢弃。"""
+    doc = _SKELETON + (
+        "@@Q@@ 24\n@@QTYPE@@ choice\n@@STEM@@\nRecent activities?\n@@OPTIONS@@\nA. x\nB. y\n@@END_Q@@\n"
+        "@@ANSWER@@\nA\n@@EVIDENCE@@\nPara 2: evidence.\n"
+        "@@TRANSFER_PASSAGE@@\nStray transfer.\n@@TRANSFER_ANSWER@@\nC\n@@TRANSFER_EXPL@@\n路径\n@@END_Q@@\n"
+    )
+    data = parse_custom_visual_paper(doc)
+    qs = data["groups"][0]["questions"]
+    assert [q["no"] for q in qs] == ["24"], "不得新建第二道 24"
+    q = qs[0]
+    assert q["answer"] == "A"
+    assert q["reference"]["evidence"] == "Para 2: evidence."
+    assert len(q["transfers"]) == 1
+    assert q["transfers"][0]["passage"] == "Stray transfer."

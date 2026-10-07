@@ -92,6 +92,11 @@ def _find_committed_question(groups: list[dict], no: str) -> tuple[dict | None, 
     return None, None
 
 
+def _norm_group_title(s: str) -> str:
+    """分组标题比较键：去掉全部空白（"阅读理解 A 篇" 与 "阅读理解A篇" 视为同一板块）。"""
+    return re.sub(r"\s+", "", s or "")
+
+
 def _draft_from_committed(q_obj: dict) -> dict:
     """把已提交的题对象重播种成解析草稿（字段键与首次解析一致），重开后续写字段即可。"""
     reference = q_obj.get("reference") or {}
@@ -110,7 +115,10 @@ def _draft_from_committed(q_obj: dict) -> dict:
         "_pitfalls_raw": q_obj.get("pitfalls", []),
         "_pattern_name_raw": pattern.get("name", ""),
         "_pattern_steps_raw": pattern.get("steps", []),
-        "_transfers_raw": [dict(t) for t in (q_obj.get("transfers") or []) if isinstance(t, dict)],
+        # 重开时旧迁移块只作保底（_transfers_carry）：本轮重写出新块就整体替换，
+        # 一块新块都没有才沿用旧块。旧块若混进 _transfers_raw，提交时新旧叠加会翻倍
+        "_transfers_carry": [dict(t) for t in (q_obj.get("transfers") or []) if isinstance(t, dict)],
+        "_transfers_raw": [],
     }
     wg = q_obj.get("writingGuide")
     if wg is not None:
@@ -184,6 +192,9 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
     paper_key_parts: list[str] = []
     # 分组导语延迟挂载：@@GROUP_INTRO@@ 先于该组第一题到达，等下一道题解析出归属再挂
     pending_group_intro = ""
+    # 最近一次提交的题与所在组：模型偶尔把 @@END_Q@@ 提前写在一题字段中间（实测），
+    # 落在其后的 ANSWER/迁移块只可能属于刚提交的那道题，靠它重开并入而不是丢弃
+    last_committed: dict = {"q": None, "g": None}
 
     def begin_transfer_field(key: str) -> dict:
         """迁移块可整块重复（每题 N 道），块以 TRANSFER_PASSAGE 开头。
@@ -413,21 +424,28 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
             if not writingGuide["points"] and not writingGuide["outline"] and not writingGuide["sample"]:
                 writingGuide = {"points": [], "outline": "", "sample": ""}
         else:
-            # 非写作：把已收下的迁移块与最后一块草稿合并成数组
+            # 非写作：本轮新收的迁移块 + 最后一块草稿，有内容才算有效迁移（spec 要求必有，容错）
             drafts = list(current_q.get("_transfers_raw", []))
             draft = current_q.get("_transfer_draft")
             if draft:
                 drafts.append(draft)
-            for d in drafts:
-                # 仅当至少有 passage 或 stem 等内容时才视为有效迁移（spec 要求必有，容错）
-                if d.get("passage") or d.get("stem") or d.get("options") or d.get("answer"):
-                    transfers.append({
-                        "passage": d.get("passage") or "",
-                        "stem": d.get("stem") or "",
-                        "options": d.get("options") or [],
-                        "answer": d.get("answer") or "",
-                        "explanation": d.get("explanation") or "",
-                    })
+            fresh = [
+                {
+                    "passage": d.get("passage") or "",
+                    "stem": d.get("stem") or "",
+                    "options": d.get("options") or [],
+                    "answer": d.get("answer") or "",
+                    "explanation": d.get("explanation") or "",
+                }
+                for d in drafts
+                if d.get("passage") or d.get("stem") or d.get("options") or d.get("answer")
+            ]
+            # 同号重开时模型重写的迁移块整体替换旧块；一块都没重写才沿用重开前持有的旧块
+            carry = current_q.get("_transfers_carry")
+            if fresh or carry is None:
+                transfers = fresh
+            else:
+                transfers = [dict(t) for t in carry if isinstance(t, dict)]
         # 构建最终 question
         q_obj = {
             "no": str(no).strip(),
@@ -458,6 +476,8 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
             committed.update(q_obj)
         else:
             current_group["questions"].append(q_obj)
+        last_committed["q"] = committed if committed is not None else q_obj
+        last_committed["g"] = current_group
         # 重置 current_q
         current_q = None
 
@@ -508,9 +528,12 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 except:
                     total_declared = None
             elif tag == "PAPER":
-                paper_title = value
+                # 续写时模型偶尔会重发总览行：空值不覆盖已有内容（与前端解析器一致）
+                if value:
+                    paper_title = value
             elif tag == "NOTICE":
-                notice = value
+                if value:
+                    notice = value
             elif tag == "GROUP":
                 # flush 前一组的不完整题（若有）
                 if current_q is not None:
@@ -533,8 +556,23 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 else:
                     title = parts[1] if len(parts) > 1 else gid
                     intro = parts[2] if len(parts) > 2 else ""
-                current_group = {"id": gid, "title": title, "intro": intro, "questions": []}
-                groups.append(current_group)
+                # 同 id 且标题（去空白归一化）相同的既有分组 = 同一板块被重复声明
+                # （续写/重讲解时模型又把 @@GROUP@@ 头写了一遍，字面常与骨架略有出入：
+                # 空格、导语有无）。全局查重复用而不是新建——重开的题都会并回原组，
+                # 新建组只会沦为挂在文档底部的 0 题空组；标题不同的同 id 分组仍是合法
+                # 拆分（完形可按叙事分 2-3 组），照旧新建
+                seen = next(
+                    (g for g in groups if g["id"] == gid and _norm_group_title(g["title"]) == _norm_group_title(title)),
+                    None,
+                )
+                if seen is not None:
+                    current_group = seen
+                    # 重声明带来的导语只在原组还没有导语时补上，不覆盖第一轮写好的
+                    if not current_group["intro"] and intro:
+                        current_group["intro"] = intro
+                else:
+                    current_group = {"id": gid, "title": title, "intro": intro, "questions": []}
+                    groups.append(current_group)
             elif tag == "Q":
                 # 若上一题未 END_Q，丢弃
                 if current_q is not None:
@@ -557,7 +595,9 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     current_group = {"id": "other", "title": "未分组", "intro": "", "questions": []}
                     groups.append(current_group)
                 if pending_group_intro:
-                    current_group["intro"] = pending_group_intro
+                    # 已有导语不覆盖——续写轮次重发的导语让位给第一轮写好的
+                    if not current_group["intro"]:
+                        current_group["intro"] = pending_group_intro
                     pending_group_intro = ""
             elif tag == "GROUP_INTRO":
                 # 两阶段：阶段二为本组补写的一句话导语。讲解流开始时 current_group 还停在
@@ -583,6 +623,13 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 current_field = None
                 field_buf = []
             elif tag in MULTILINE_TAGS:
+                if current_q is None and last_committed["q"] is not None and tag not in ("PASSAGE_DEF", "KEY"):
+                    # 模型偶尔把 @@END_Q@@ 提前写在一题字段中间（实测 STEM/OPTIONS 先提交、
+                    # ANSWER/迁移块全落在 END_Q 之后）：这些字段只可能属于刚提交的那道题，
+                    # 重开并入而不是静默丢弃；PASSAGE_DEF/KEY 是全局字段，无主时照旧直收
+                    current_q = _draft_from_committed(last_committed["q"])
+                    current_q["_committed"] = last_committed["q"]
+                    current_group = last_committed["g"]
                 current_field = tag
                 field_buf = []
                 # 若 value 非空（同行有内容），视为首行内容

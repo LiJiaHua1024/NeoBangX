@@ -1093,17 +1093,30 @@ async def chat_stream(
         )
 
     # 试卷可视化全解两阶段：阶段一（Chores 模型插标解析结构）的提示词。
-    # 输入已是 @@TAG@@ 骨架（续写/重新讲解）时跳过阶段一，材料直接进讲解阶段；
+    # 输入已是 @@TAG@@ 骨架（续写/重新讲解）时跳过阶段一，并换用精讲提示词：
+    # 单阶段契约会要求模型重发 @@GROUP@@/语篇正文等结构行，正是续写轮次里
+    # 文档底部长出空分组、正文被复读的直接诱因。
     # 框架提示词文件缺失视作功能未启用，静默走单阶段老路径。
     visual_framework_prompt: Optional[str] = None
-    if req.tool_id == VISUAL_PAPER_TOOL_ID and not HAS_TAG_RE.search(req.input):
-        visual_framework_prompt = loader.render(
-            VISUAL_FRAMEWORK_PROMPT,
-            render_numbered_lines(req.input),
-            {},
-        )
-        if visual_framework_prompt is None:
-            logger.info("框架提示词缺失，试卷可视化全解走单阶段路径")
+    if req.tool_id == VISUAL_PAPER_TOOL_ID:
+        if HAS_TAG_RE.search(req.input):
+            explain_prompt = loader.render(
+                VISUAL_EXPLAIN_PROMPT,
+                req.input,
+                {"transfer_count": req.transfer_count},
+            )
+            if explain_prompt is not None:
+                prompt = explain_prompt
+                # tool_name 由 prompt 文件名派生：续写轮次在用量日志里记为「…精讲」
+                prompt_filename = VISUAL_EXPLAIN_PROMPT
+        else:
+            visual_framework_prompt = loader.render(
+                VISUAL_FRAMEWORK_PROMPT,
+                render_numbered_lines(req.input),
+                {},
+            )
+            if visual_framework_prompt is None:
+                logger.info("框架提示词缺失，试卷可视化全解走单阶段路径")
 
     # 图片识别：图片随请求上传（data URL）或来自扫码配对会话，二选一
     ocr_images: list[str] = []

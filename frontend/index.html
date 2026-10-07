@@ -956,7 +956,7 @@
                  不代表卷子真的写完，卡死入口比多花一次生成更糟 -->
             <div x-show="vpHasData && !streaming && !vpFullscreen && !vpComplete" class="px-4 sm:px-5 py-2 flex justify-center shrink-0" style="border-bottom:1px solid var(--border)">
               <button class="btn-primary" @click="continueVisualPaper()"
-                      :title="vpRemaining > 0 ? '从已完成的最后一题之后接着生成，不会新增记录' : '如果原文还有未覆盖的题，点此接着补全'">
+                      :title="vpRemaining > 0 ? '为还没有讲解的题目补齐讲解（按题号合并，已生成的不动），不会新增记录' : '如果原文还有未覆盖的题，点此接着补全'">
                 <span x-html="icon('refresh','w-4 h-4')"></span>
                 <span x-text="vpRemaining > 0 ? '继续生成剩余 ' + vpRemaining + ' 题' : '继续生成'"></span>
               </button>

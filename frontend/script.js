@@ -2046,10 +2046,9 @@ function nbx() {
     // 不是卷子结构，不该跟着历史快照走（历史回放时由 partial/error 重新推导）。
     vpRunState: "",
     _vpRenderPending: false,
-    // 两阶段生成状态：vpStage = 当前阶段（""/framework/explain）；vpFrameworkRaw =
-    // 阶段边界快照下来的骨架文本，续写时作为输入重发（后端见 @@TAG@@ 即跳过框架阶段）
+    // 两阶段生成状态：vpStage = 当前阶段（""/framework/explain）。阶段边界快照下来的
+    // 骨架文本存在 visualPaper.frameworkRaw 上——随历史快照一起持久化，历史续写才有骨架可走
     vpStage: "",
-    vpFrameworkRaw: "",
     // 全屏讲解舞台：总览面板 / 控制台自动隐藏（上下两半可独立唤回）/ 固定
     vpOverviewOpen: false,
     vpTopHidden: false,
@@ -2413,6 +2412,8 @@ function nbx() {
         // 这份卷子生成时锁定的每题迁移题量，随历史记录一起存。
         // 未锁定（null）＝还没跑过，第一次发起时用当前设置盖章
         transferCount: null,
+        // 阶段边界快照下来的骨架文本（两阶段续写的输入）；随 visualPaper 快照进历史记录
+        frameworkRaw: "",
         historyId: null,
         rawJson: "",
         parseError: "",
@@ -2448,9 +2449,9 @@ function nbx() {
       this.vpActiveTab = "reference";
       this.vpParseError = "";
       this.vpRunState = "";
-      // 两阶段状态：当前阶段（""/framework/explain）与阶段边界的骨架快照（续写输入用）
+      // 两阶段状态：当前阶段（""/framework/explain）；骨架快照 frameworkRaw 随
+      // newVisualPaperState 一并清空
       this.vpStage = "";
-      this.vpFrameworkRaw = "";
       this._vpRenderPending = false;
     },
     parseCustomVisualPaper(raw) {
@@ -2473,6 +2474,10 @@ function nbx() {
       const paperKeyParts = [];
       // 分组导语延迟挂载：@@GROUP_INTRO@@ 先于该组第一题到达，等下一道题解析出归属再挂
       let pendingGroupIntro = "";
+      // 最近一次提交的题与所在组：模型偶尔把 @@END_Q@@ 提前写在一题字段中间（实测），
+      // 落在其后的 ANSWER/迁移块只可能属于刚提交的那道题，靠它重开并入而不是丢弃
+      let lastCommittedQ = null;
+      let lastCommittedGroup = null;
       // @@Q@@ 独占一行、题号落在下一行时的等待标记（见下方逐行解析）
       let pendingQNo = false;
       // 题干开头剥卷面题号：课件自动拼「第 N 题」，题干里再带一遍号学生就会看到两遍。
@@ -2512,7 +2517,10 @@ function nbx() {
           _pitfalls_raw: qObj.pitfalls || [],
           _pattern_name_raw: pattern.name || "",
           _pattern_steps_raw: pattern.steps || [],
-          _transfers_raw: (qObj.transfers || []).filter((t) => t && typeof t === "object").map((t) => ({...t})),
+          // 重开时旧迁移块只作保底（_transfers_carry）：本轮重写出新块就整体替换，
+          // 一块新块都没有才沿用旧块。旧块若混进 _transfers_raw，提交时新旧叠加会翻倍
+          _transfers_carry: (qObj.transfers || []).filter((t) => t && typeof t === "object").map((t) => ({...t})),
+          _transfers_raw: [],
         };
         if (qObj.writingGuide != null) {
           draft._writing_points_raw = (qObj.writingGuide.points || []).slice();
@@ -2660,10 +2668,10 @@ function nbx() {
           writingGuide = {points: currentQ._writing_points_raw || [], outline: currentQ._writing_outline_raw || "", sample: currentQ._writing_sample_raw || ""};
           if (!writingGuide.points.length && !writingGuide.outline && !writingGuide.sample) writingGuide = {points:[], outline:"", sample:""};
         } else {
-          // 已收下的迁移块 + 最后一块草稿：有 passage/stem/选项/答案才算有效迁移
+          // 本轮新收的迁移块 + 最后一块草稿：有 passage/stem/选项/答案才算有效迁移
           const drafts = (currentQ._transfers_raw || []).slice();
           if (currentQ._transfer_draft) drafts.push(currentQ._transfer_draft);
-          transfers = drafts
+          const fresh = drafts
             .filter((d) => d && (d.passage || d.stem || (d.options && d.options.length) || d.answer))
             .map((d) => ({
               passage: d.passage || "",
@@ -2672,6 +2680,9 @@ function nbx() {
               answer: d.answer || "",
               explanation: d.explanation || "",
             }));
+          // 同号重开时模型重写的迁移块整体替换旧块；一块都没重写才沿用重开前持有的旧块
+          if (fresh.length || !currentQ._transfers_carry) transfers = fresh;
+          else transfers = currentQ._transfers_carry.filter((t) => t && typeof t === "object").map((t) => ({...t}));
         }
         const qObj = {
           no: String(no).trim(),
@@ -2701,6 +2712,7 @@ function nbx() {
           currentGroup.questions.push(qObj);
         }
         currentQ = null;
+        return {q: committedRef || qObj, g: currentGroup};
       };
       // 当前是否在往字段里收正文：@@PASSAGE_DEF@@ 可以出现在第一道题之前（此时还没有 currentQ）
       // 当前是否在往字段里收正文：@@PASSAGE_DEF@@ 可以出现在第一道题之前、@@KEY@@ 通常落在全部题
@@ -2779,11 +2791,18 @@ function nbx() {
               title = parts[1] || gid;
               intro = parts[2] || "";
             }
-            // 相邻且表头三项完全相同的分组 = 同一板块被重复声明（续写时模型又把 @@GROUP@@ 头写了一遍），
-            // 复用而不是新建；标题/导语不同的同 id 分组是合法拆分（完形可按叙事分 2-3 组），照旧新建。
-            const prevGroup = groups[groups.length - 1];
-            if (prevGroup && prevGroup.id === gid && prevGroup.title === title && prevGroup.intro === intro) {
-              currentGroup = prevGroup;
+            // 同 id 且标题（去内部空白归一化）相同的既有分组 = 同一板块被重复声明
+            // （续写/重讲解时模型又把 @@GROUP@@ 头写了一遍，字面常与骨架略有出入：
+            // 空格、导语有无）。全局查重复用而不是新建——重开的题都会并回原组，
+            // 新建组只会沦为挂在文档底部的 0 题空组。标题不同的同 id 分组仍视作
+            // 合法拆分（完形可按叙事分 2-3 组）照旧新建；骨架端对相邻同 id 同标题
+            // 的组已加序号消歧，骨架内 id+标题对唯一，此规则不会误并合法分组。
+            const normTitle = (s) => String(s || "").replace(/\s+/g, "");
+            const seen = groups.find((g) => g.id === gid && normTitle(g.title) === normTitle(title));
+            if (seen) {
+              currentGroup = seen;
+              // 重声明带来的导语只在原组还没有导语时补上，不覆盖第一轮写好的
+              if (!currentGroup.intro && intro) currentGroup.intro = intro;
             } else {
               currentGroup = {id: gid, title: title, intro: intro, questions: []};
               groups.push(currentGroup);
@@ -2819,8 +2838,9 @@ function nbx() {
               }
             }
             if (pendingGroupIntro) {
-              // @@GROUP_INTRO@@ 先于该组第一题到达，此刻才解析出归属
-              currentGroup.intro = pendingGroupIntro;
+              // @@GROUP_INTRO@@ 先于该组第一题到达，此刻才解析出归属；
+              // 已有导语不覆盖——续写轮次重发的导语让位给第一轮写好的
+              if (!currentGroup.intro) currentGroup.intro = pendingGroupIntro;
               pendingGroupIntro = "";
             }
           } else if (tag === "GROUP_INTRO") {
@@ -2841,9 +2861,20 @@ function nbx() {
             fieldBuf = [];
             pendingDefRef = value;
           } else if (tag === "END_Q") {
-            commitQuestion();
+            const committedNow = commitQuestion();
+            if (committedNow) { lastCommittedQ = committedNow.q; lastCommittedGroup = committedNow.g; }
             currentField = null;
             fieldBuf = [];
+          } else if (currentQ === null && lastCommittedQ && tag !== "PASSAGE_DEF" && tag !== "KEY") {
+            // 模型偶尔把 @@END_Q@@ 提前写在一题字段中间（实测 STEM/OPTIONS 先提交、
+            // ANSWER/迁移块全落在 END_Q 之后）：这些字段只可能属于刚提交的那道题，
+            // 重开并入而不是静默丢弃；PASSAGE_DEF/KEY 是全局字段，无主时照旧直收
+            currentQ = draftFromCommitted(lastCommittedQ);
+            currentQ._committed = lastCommittedQ;
+            currentGroup = lastCommittedGroup;
+            currentField = tag;
+            fieldBuf = [];
+            if (value) fieldBuf.push(value);
           } else {
             // 白名单剩余均为多行内容标签；同行有值则作为首行内容
             currentField = tag;
@@ -3033,14 +3064,18 @@ function nbx() {
       if (!this.vpTotal) return 0;
       return Math.min(100, Math.round((this.vpQuestionCount / this.vpTotal) * 100));
     },
-    /* 讲解完成数：有答案的题 + 写作指导非空的写作题。两阶段下结构（第一轮）很快跑满，
-       这才是第二轮真正在动的数字 */
+    /* 单题「讲解已写」判定：有答案的题 + 写作指导非空的写作题。
+       讲解完成数与续写工单共用这一份判定——两处口径不一致，工单就会点错名 */
+    vpQuestionAnalyzed(q) {
+      const wg = q && q.writingGuide;
+      return !!(q && (q.answer || (wg && ((wg.points && wg.points.length) || wg.outline || wg.sample))));
+    },
+    /* 讲解完成数。两阶段下结构（第一轮）很快跑满，这才是第二轮真正在动的数字 */
     get vpAnalyzedCount() {
       if (!this.visualPaper) return 0;
       let c = 0;
       for (const g of this.visualPaper.groups) for (const q of (g.questions || [])) {
-        const wg = q.writingGuide;
-        if (q.answer || (wg && ((wg.points && wg.points.length) || wg.outline || wg.sample))) c += 1;
+        if (this.vpQuestionAnalyzed(q)) c += 1;
       }
       return c;
     },
@@ -3057,7 +3092,11 @@ function nbx() {
         return `撰写讲解 ${this.vpAnalyzedCount}/${total || "…"} 题`;
       }
       if (this.vpComplete) return "已完成";
-      if (this.vpRemaining > 0) return `已解析 ${this.vpQuestionCount}/${total} 题，未写完`;
+      // 「剩余 N 题」已是讲解口径：结构没齐时报结构进度，结构齐了（骨架即满）之后
+      // 报讲解进度——再报「已解析 47/47 题，未写完」会让人以为没差题却卡着不动
+      if (this.vpRemaining > 0 && this.vpQuestionCount < this.vpTotal) {
+        return `已解析 ${this.vpQuestionCount}/${total} 题，未写完`;
+      }
       return `讲解完成 ${this.vpExplainPercent}%，未确认写完`;
     },
     /* 两阶段指示器状态计算属性 */
@@ -3144,11 +3183,16 @@ function nbx() {
         }
       }
     },
+    /* 还没写完讲解的题数（两阶段口径）：骨架一到位结构题数就满了，拿结构题数算
+       「剩余」会恒为 0——续写按钮退化成光杆「继续生成」，简报也跟着谎报进度。
+       老路径下已提交的题几乎都带讲解，两套口径数值一致，行为不变。 */
     get vpRemaining() {
-      return Math.max(0, (this.vpTotal || 0) - this.vpQuestionCount);
+      return Math.max(0, (this.vpTotal || 0) - this.vpAnalyzedCount);
     },
     /* 整卷是否已确认写完——「继续生成」入口与「已完成」字样都以此为准。
-       三条同时成立才算：声明总题数有效、实际题数不少于它、上一轮是自然收尾。
+       四条同时成立才算：声明总题数有效、结构题数不少于它、讲解全部落笔、上一轮是自然收尾。
+       两阶段下骨架一到位结构就满了，讲解没写完时若只看结构会把整卷当「已完成」，
+       续写入口被整条收起、学生对着「讲解完成 0%」没有恢复动作。
        缺任何一条都按「没写完」处理：没有 @@TOTAL@@ 时 vpTotal 会退化成已生成题数，
        「剩余 0」就只是个恒真式；停止/报错/断流时总数可能是被截断的数字前缀、
        模型也可能自己数错，卡死补全入口比多花一次生成更糟。 */
@@ -3157,6 +3201,7 @@ function nbx() {
       const declared = Number(this.visualPaper && this.visualPaper.total);
       if (!Number.isFinite(declared) || declared <= 0) return false;
       if (this.vpQuestionCount < declared) return false;
+      if (this.vpAnalyzedCount < this.vpTotal) return false;
       return this.vpRunState === "done";
     },
     /* 失败是否发生在正文已经开始输出之后。判据用 errorMsg + output：只有正文 token 会
@@ -8284,7 +8329,9 @@ function nbx() {
           // 续写时作为输入重发，后端见 @@TAG@@ 输入即跳过框架阶段
           const name = (info && info.name) || "";
           this.vpStage = name;
-          if (name === "explain" && info.framework) this.vpFrameworkRaw = this.output;
+          if (name === "explain" && info.framework && this.visualPaper) {
+            this.visualPaper.frameworkRaw = this.output;
+          }
         },
         onToken: () => {
           if (this.visualPaper) this.visualPaper.rawJson = this.output;
@@ -8478,45 +8525,48 @@ function nbx() {
       }
       if (this.output && !this.output.endsWith("\n")) this.output += "\n";
       // 两阶段：骨架已在阶段一解析完成 → 续写直接续讲解阶段（输入含 @@TAG@@，后端跳过框架阶段）。
-      // 历史记录打开的旧会话没有骨架快照 → 走原路：重新两阶段，重发讲解会被解析端同号重开合并
-      const hasFramework = !!this.vpFrameworkRaw;
-      const contInput = (hasFramework ? this.vpFrameworkRaw : this.submittedInput)
+      // 骨架快照存在 visualPaper 上并随历史记录持久化，历史续写同样走这条近路；
+      // 旧记录没有快照 → 走原路：重新两阶段，重发讲解会被解析端同号重开合并
+      const hasFramework = !!(this.visualPaper && this.visualPaper.frameworkRaw);
+      if (hasFramework && this.vpTotal > 0
+        && this.vpQuestionCount >= this.vpTotal && this.vpAnalyzedCount >= this.vpQuestionCount) {
+        // 工单为空还发请求只会白烧一次调用：模型没有可写的题，多半回头重写已有题
+        this.toast("全部题目均已有讲解，无需续写", "warn");
+        return;
+      }
+      const contInput = (hasFramework ? this.visualPaper.frameworkRaw : this.submittedInput)
         + "\n\n" + (hasFramework ? this.vpContinueBrief2() : this.vpContinueBrief());
       const baseLen = this.output.length;
       await this._runVisualStream(contInput, keepId);
       // 若续写未新增任何内容（模型未按指令），提示
       if (this.output.length === baseLen) this.toast("续写未返回新题目，请重试", "warn");
     },
-    /* 讲解阶段续写指令：结构与老路径的 vpContinueBrief 同思路，但交代的是「材料已定稿、
-       只写讲解字段」。骨架文本不回传（它就在输入里），只交模型猜不到的进度信息。 */
+    /* 讲解阶段续写指令：一份按题号点名的工单。进度必须取「已讲解」数——骨架一到位
+       结构题数就满了，拿结构计数冒充进度会谎报「全部完成」，模型只能自己猜从哪续，
+       实测会从头重写并撞输出上限。缺失题号逐个点名；输出由程序按题号合并进已有文档，
+       所以不用交代「接着哪里往下写」。骨架文本不回传（它就在输入里），只交工单。 */
     vpContinueBrief2() {
-      const vp = this.visualPaper || {};
-      const groups = vp.groups || [];
+      const groups = (this.visualPaper && this.visualPaper.groups) || [];
       const total = this.vpTotal || 0;
-      const count = this.vpQuestionCount;
-      const remaining = Math.max(0, total - count);
-      const allNos = [];
-      for (const g of groups) for (const q of (g.questions || [])) allNos.push(q.no);
-      const filled = groups.filter((g) => (g.questions || []).length);
-      const lastGroup = filled.length ? filled[filled.length - 1] : null;
-      const lastQ = lastGroup ? lastGroup.questions[lastGroup.questions.length - 1] : null;
-      // 题号没识别出来时（"?"）不要把占位符喂给模型——它会当成真题号照抄进 @@Q@@ 行
-      const known = !!(lastQ && lastQ.no && lastQ.no !== "?");
-      const lastLabel = known ? `第 ${lastQ.no} 题` : "最后一道已完成题（题号未能识别）";
-      const nosList = allNos.filter((n) => n && n !== "?");
-      const lines = ["【续写指令】你的输出会被原样追加在前面已生成内容的后面，接着往下写。"];
-      lines.push("材料是已标注好的试卷骨架：语篇、题干、选项已定稿，照常只写讲解字段，不要重复它们。");
-      if (!lastQ) {
-        lines.push("进度：还没有任何讲解完成。请从材料的第一道笔试题开始，按材料题号顺序输出全部讲解块。");
-      } else {
-        lines.push(`进度：全卷 ${total || "?"} 题，已有讲解 ${count} 题（题号 ${nosList.join(",")}），最后完成的是${lastLabel}。`);
-        if (remaining > 0) {
-          lines.push(`接着为材料中${lastLabel}之后的题写讲解块，直到覆盖全部 ${total} 题。`);
-        } else {
-          lines.push(`如果材料中还有未覆盖的笔试题，接着为它们按同样格式补写讲解块。`);
-        }
+      let analyzed = 0;
+      const missingNos = [];
+      for (const g of groups) for (const q of (g.questions || [])) {
+        // 题号没识别出来时（"?"）不要把占位符喂给模型——它会当成真题号照抄进 @@Q@@ 行
+        if (!q.no || q.no === "?") continue;
+        if (this.vpQuestionAnalyzed(q)) analyzed += 1;
+        else missingNos.push(String(q.no));
       }
-      lines.push("题号照抄材料中的 @@Q@@ 编号；每块以 @@END_Q@@ 结尾；语篇编号一律沿用 @@PASSAGE_REF@@，不要重发语篇正文。");
+      const lines = ["【续写指令】你的输出由程序按题号合并进已有文档，顺序与归属都由程序决定。"];
+      lines.push("材料是已标注好的试卷骨架：语篇、题干、选项已定稿，照常只写讲解字段，不要重复它们。");
+      lines.push(`进度：全卷 ${total || "?"} 题，已有讲解 ${analyzed} 题。`);
+      if (missingNos.length) {
+        lines.push(`本次只需要为下列题号输出讲解块（按题号顺序）：${missingNos.join(",")}。名单之外的题号一律不要再输出。`);
+      } else {
+        // 缺失清单为空但仍有未知题号（"?"）等识别不出的情况：列不出工单，退回泛化指令
+        lines.push("请为材料中还没有讲解的笔试题按材料题号顺序补写讲解块，已有讲解的题不要再输出。");
+      }
+      lines.push("每块以 @@Q@@ 题号开头、@@END_Q@@ 结尾；语篇编号一律沿用 @@PASSAGE_REF@@，不要重发语篇正文。");
+      lines.push("不要输出 @@TOTAL@@、@@PAPER@@、@@NOTICE@@、@@GROUP@@、@@GROUP_INTRO@@、@@PASSAGE_DEF@@、@@STEM@@、@@OPTIONS@@、@@KEY@@ 等结构行——程序按题号合并，多发结构行会在文档里长出重复的空分组。");
       lines.push(`每道笔试题仍输出 ${this.vpLockedTransferCount} 块迁移（写作题除外）。`);
       return lines.join("\n");
     },
