@@ -27,6 +27,7 @@ from app.routers.tools import (
     PROPOSITION_TOOLS,
     REFERENCE_TOOLS,
     TEACHING_TOOLS,
+    CHORES_TOOLS,
 )
 from app.services.llm_router import LLMRouter
 from app.services.provider_config import (
@@ -61,6 +62,8 @@ from app.services.runtime_config import (
     REASONING_EFFORTS,
     TOOL_REASONING_UNSUPPORTED_ACTIONS,
     get_config_map,
+    find_model_entry,
+    find_tool_reasoning_rule,
     get_config_value,
     has_any_capability,
     mask_config,
@@ -74,6 +77,7 @@ from app.services.runtime_config import (
     serialize_tool_reasoning_rules,
     set_config_values,
 )
+from app.services.model_capabilities import supports_reasoning
 from app.services.usage_code import create_codes, write_jwt_secret_file
 
 logger = logging.getLogger(__name__)
@@ -1865,11 +1869,31 @@ async def generate_device_ai_profile(
             status_code=503,
             detail="Chores 模型未绑定可用 Provider，请先到「配置」页设置 chores 模型与 Provider",
         )
+    model_used = str(cfg.get("chores_model") or "")
+    model_entry = find_model_entry(cfg.get("models") or [], model_used)
+    profile_reasoning_effort = model_entry.get("reasoning_effort") if model_entry else None
+    profile_extra_body = model_entry.get("extra_body") if model_entry else None
+
+    profile_rule = find_tool_reasoning_rule(cfg.get("tool_reasoning_rules") or [], "device_profile")
+    if profile_rule is not None:
+        provider_chain = getattr(llm, "providers", None) or []
+        actual_model = (provider_chain[0].get("provider_model_id") if provider_chain else "") or model_used
+        supported = supports_reasoning(actual_model)
+        if supported is False and profile_rule.get("on_unsupported") == "fail":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Chores 模型「{model_used}」不支持推理强度「{profile_rule['reasoning_effort']}」",
+            )
+        if supported is not False:
+            profile_reasoning_effort = profile_rule.get("reasoning_effort")
+
     try:
         content = await llm.chat(
             system_prompt=AI_PROFILE_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=1500,
+            reasoning_effort=profile_reasoning_effort,
+            extra_body=profile_extra_body,
         )
     except HTTPException:
         raise
@@ -1974,7 +1998,7 @@ async def update_admin_config(
     if "tool_reasoning_rules" in raw and raw["tool_reasoning_rules"] is not None:
         known_tool_ids = {
             str(t["id"])
-            for group in (EXCLUSIVE_TOOLS, TEACHING_TOOLS, PROPOSITION_TOOLS, REFERENCE_TOOLS)
+            for group in (EXCLUSIVE_TOOLS, TEACHING_TOOLS, PROPOSITION_TOOLS, REFERENCE_TOOLS, CHORES_TOOLS)
             for t in group
         }
         for item in raw["tool_reasoning_rules"]:
@@ -2163,6 +2187,7 @@ async def list_admin_tools():
             {"id": "teaching", "title": "备课与教学", "tools": TEACHING_TOOLS},
             {"id": "proposition", "title": "命题与试题分析", "tools": PROPOSITION_TOOLS},
             {"id": "reference", "title": "通用工具", "tools": REFERENCE_TOOLS},
+            {"id": "chores", "title": "Chores 工作", "tools": CHORES_TOOLS},
         ],
     }
 

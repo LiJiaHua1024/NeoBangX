@@ -82,6 +82,37 @@ REFERENCE_TOOLS = [
     },
 ]
 
+# Chores 系列工作：供工具推理规则等后台配置管理
+TITLE_TOOL_ID = "title"
+TITLE_TOOL_NAME = "生成标题"
+
+VISUAL_FRAMEWORK_TOOL_ID = "visual_framework"
+VISUAL_FRAMEWORK_TOOL_NAME = "可视化试卷全解框架"
+
+DEVICE_PROFILE_TOOL_ID = "device_profile"
+DEVICE_PROFILE_TOOL_NAME = "设备画像分析"
+
+CHORES_TOOLS = [
+    {
+        "id": TITLE_TOOL_ID,
+        "name": TITLE_TOOL_NAME,
+        "icon": "sparkle",
+        "description": "历史记录与会话标题生成",
+    },
+    {
+        "id": VISUAL_FRAMEWORK_TOOL_ID,
+        "name": VISUAL_FRAMEWORK_TOOL_NAME,
+        "icon": "projector",
+        "description": "试卷可视化全解第一阶段结构插标",
+    },
+    {
+        "id": DEVICE_PROFILE_TOOL_ID,
+        "name": DEVICE_PROFILE_TOOL_NAME,
+        "icon": "user",
+        "description": "后台设备列表生成 AI 用户画像",
+    },
+]
+
 # 翻译（工具 33）：工具本身只固定「对照翻译」这件事，语言对由请求带入
 # （ChatRequest.source_lang / target_lang），与 OCR 一条工具两种模式同理。
 TRANSLATE_TOOL_ID = "33"

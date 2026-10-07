@@ -24,7 +24,9 @@ from app.routers.tools import (
     OCR_MODES,
     OCR_TOOL_ID,
     OCR_TOOL_NAME,
+    TITLE_TOOL_ID,
     TRANSLATE_TOOL_ID,
+    VISUAL_FRAMEWORK_TOOL_ID,
     _resolve_continue_prompt_filename,
     _resolve_prompt_filename,
     get_prompt_loader,
@@ -1259,6 +1261,31 @@ async def chat_stream(
         if supported is not False:
             # 明确支持或能力未知（未知时交由 litellm.drop_params 兜底，不会报错）时应用规则强度
             reasoning_effort = tool_rule.get("reasoning_effort")
+    # 试卷可视化全解阶段一（框架解析）：应用专属推理规则
+    visual_fw_reasoning_effort: Optional[str] = None
+    visual_fw_extra_body: Optional[dict] = None
+    if visual_framework_prompt is not None and visual_framework_model is not None:
+        fw_model_entry = find_model_entry(cfg.get("models") or [], visual_framework_model)
+        visual_fw_reasoning_effort = fw_model_entry.get("reasoning_effort") if fw_model_entry else None
+        visual_fw_extra_body = fw_model_entry.get("extra_body") if fw_model_entry else None
+        fw_tool_rule = find_tool_reasoning_rule(cfg.get("tool_reasoning_rules") or [], VISUAL_FRAMEWORK_TOOL_ID)
+        if fw_tool_rule is not None:
+            test_fw_llm = _build_llm(cfg, model=visual_framework_model, chores=True)
+            fw_provider_chain = getattr(test_fw_llm, "providers", None) or []
+            fw_actual_model = (fw_provider_chain[0].get("provider_model_id") if fw_provider_chain else "") or visual_framework_model
+            fw_supported = supports_reasoning(fw_actual_model)
+            if fw_supported is False and fw_tool_rule.get("on_unsupported") == "fail":
+                _stop_events.pop(request_id, None)
+                release_free_slot()
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"框架解析模型「{visual_framework_model}」不支持推理强度「{fw_tool_rule['reasoning_effort']}」，"
+                        "本次生成已被工具推理规则拦截，可更换 Chores 模型重试"
+                    ),
+                )
+            if fw_supported is not False:
+                visual_fw_reasoning_effort = fw_tool_rule.get("reasoning_effort")
     # 试卷可视化全解使用自定义分隔格式，无需 JSON mode，兼容性更强（忠于原始模型配置，不强制覆盖 reasoning/max_tokens）
     visual_response_format = None
 
@@ -1298,6 +1325,8 @@ async def chat_stream(
                         stop_event=stop_event,
                         usage_out=visual_fw_usage,
                         response_format=None,
+                        reasoning_effort=visual_fw_reasoning_effort,
+                        extra_body=visual_fw_extra_body,
                     ):
                         if isinstance(item, tuple) and item and item[0] == "fallback":
                             # 通道切换只发生在首块之前：派生从零重跑，前端此时尚未收到骨架内容
@@ -1736,6 +1765,24 @@ async def _generate_title_once(
     user_prompt = _title_user_prompt(tool_id, input_text, output_text)
     llm = _build_llm(cfg, model=model, chores=True)
     model_used = model or cfg["chores_model"]
+    model_entry = find_model_entry(cfg.get("models") or [], model_used)
+    title_reasoning_effort = model_entry.get("reasoning_effort") if model_entry else None
+    title_extra_body = model_entry.get("extra_body") if model_entry else None
+    title_tool_rule = find_tool_reasoning_rule(cfg.get("tool_reasoning_rules") or [], TITLE_TOOL_ID)
+    if title_tool_rule is not None:
+        provider_chain = getattr(llm, "providers", None) or []
+        actual_model = (provider_chain[0].get("provider_model_id") if provider_chain else "") or model_used
+        supported = supports_reasoning(actual_model)
+        if supported is False and title_tool_rule.get("on_unsupported") == "fail":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"标题模型「{model_used}」不支持推理强度「{title_tool_rule['reasoning_effort']}」，"
+                    "本次生成已被工具推理规则拦截"
+                ),
+            )
+        if supported is not False:
+            title_reasoning_effort = title_tool_rule.get("reasoning_effort")
     started = monotonic()
     usage: dict = {}
     log_payload_enabled = bool(cfg.get("log_payload"))
@@ -1771,6 +1818,8 @@ async def _generate_title_once(
             user_prompt=user_prompt,
             model=model,
             max_tokens=512,
+            reasoning_effort=title_reasoning_effort,
+            extra_body=title_extra_body,
             usage_out=usage,
         )
     except Exception as exc:
