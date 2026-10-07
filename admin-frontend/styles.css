@@ -1436,7 +1436,7 @@ body.modal-open .panel-stack {
   overflow: hidden;
 }
 .payload-block summary {
-  display: flex; align-items: center; gap: 0.55rem;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem;
   padding: 0.6rem 0.8rem;
   font-size: 0.82rem; font-weight: 650;
   cursor: pointer; list-style: none;
@@ -1456,6 +1456,20 @@ body.modal-open .panel-stack {
   border-top: 1px solid var(--border);
   font-size: 0.76rem; line-height: 1.65;
   white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.payload-block .log-payload-pre { max-height: 320px; contain: content; }
+.log-payload-viewer { position: relative; min-height: 3.5rem; overflow-anchor: none; }
+/* 分页窗口高度固定，末页、加载与错误状态都不推动下方按钮或抽屉滚动。 */
+.log-payload-viewer.is-paged { height: 320px; }
+.log-payload-viewer.is-paged .log-payload-pre { height: 100%; }
+.payload-message { padding: 0.8rem; color: var(--faint); font-size: 0.8rem; }
+.log-payload-viewer .payload-message {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  flex-wrap: wrap; gap: 0.5rem; background: var(--code-bg);
+}
+.payload-pager {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  padding: 0.6rem 0.8rem; border-top: 1px solid var(--border);
 }
 .payload-empty {
   margin-top: 1.3rem; padding: 0.9rem 1rem;

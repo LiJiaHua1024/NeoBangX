@@ -1070,6 +1070,84 @@ def test_admin_log_detail_exposes_payload(admin_client):
     assert admin_client.get("/api/admin/logs/99999999").status_code == 404
 
 
+def test_admin_log_metadata_omits_large_payload(admin_client):
+    from sqlalchemy import event
+    from app.database import engine
+
+    _, ok_id, bad_id = _seed_admin_logs("METADATA")
+    full = "连续原文🙂" * 10000
+    with SessionLocal() as db:
+        payload = db.get(LogPayload, ok_id)
+        payload.input = full
+        payload.prompt = full
+        payload.output = ""
+        db.commit()
+    queries = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT") and "log_payloads" in statement:
+            queries.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        response = admin_client.get(f"/api/admin/logs/{ok_id}?include_payload=false")
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert response.status_code == 200
+    assert len(response.content) < 4096
+    assert response.json()["payload"] is None
+    assert response.json()["payload_sizes"] == {"input": len(full), "prompt": len(full), "output": 0}
+    assert len(queries) == 1
+    assert queries[0].count("length(") == 3  # SQL 只投影长度，没有加载 LogPayload 全文
+    assert admin_client.get(f"/api/admin/logs/{bad_id}?include_payload=false").json()["payload_sizes"] is None
+    assert admin_client.get("/api/admin/logs/99999999?include_payload=false").status_code == 404
+
+
+@pytest.mark.parametrize("part", ["input", "prompt", "output"])
+def test_admin_payload_pages_reconstruct_full_unicode_text(admin_client, part):
+    _, ok_id, _ = _seed_admin_logs(f"PAGE-{part}")
+    full = ("长文本🙂\r\n<原始数据>" * 6000) + "尾页"
+    with SessionLocal() as db:
+        setattr(db.get(LogPayload, ok_id), part, full)
+        db.commit()
+    chunks = []
+    for offset in range(0, len(full), 4096):
+        response = admin_client.get(f"/api/admin/logs/{ok_id}/payload/{part}", params={"offset": offset})
+        assert response.status_code == 200
+        page = response.json()
+        assert page["total"] == len(full)
+        assert page["offset"] == offset
+        assert page["limit"] == 4096
+        assert len(page["text"]) <= 4096
+        chunks.append(page["text"])
+    assert "".join(chunks) == full
+    beyond = admin_client.get(f"/api/admin/logs/{ok_id}/payload/{part}", params={"offset": len(full) + 1}).json()
+    assert beyond["text"] == ""
+    custom = admin_client.get(f"/api/admin/logs/{ok_id}/payload/{part}", params={"offset": 3, "limit": 7}).json()
+    assert custom["text"] == full[3:10]
+    downloaded = admin_client.get(f"/api/admin/logs/{ok_id}/payload/{part}/download")
+    assert downloaded.status_code == 200
+    assert downloaded.text == full
+    assert downloaded.headers["content-type"] == "text/plain; charset=utf-8"
+    assert downloaded.headers["content-disposition"] == f'attachment; filename="log-{ok_id}-{part}.txt"'
+
+
+def test_admin_payload_endpoints_validate_and_handle_missing_or_empty_data(admin_client):
+    _, ok_id, bad_id = _seed_admin_logs("PAGE-ERRORS")
+    with SessionLocal() as db:
+        db.get(LogPayload, ok_id).input = ""
+        db.commit()
+    empty = admin_client.get(f"/api/admin/logs/{ok_id}/payload/input").json()
+    assert empty == {"text": "", "total": 0, "offset": 0, "limit": 4096}
+    assert admin_client.get(f"/api/admin/logs/{ok_id}/payload/input/download").text == ""
+    for suffix in ("", "/download"):
+        for missing_id in (bad_id, 99999999):
+            assert admin_client.get(f"/api/admin/logs/{missing_id}/payload/input{suffix}").status_code == 404
+        assert admin_client.get(f"/api/admin/logs/{ok_id}/payload/invalid{suffix}").status_code == 422
+    for params in ({"offset": -1}, {"limit": 0}, {"limit": 8193}):
+        assert admin_client.get(f"/api/admin/logs/{ok_id}/payload/input", params=params).status_code == 422
+
+
 def test_admin_purge_endpoint(admin_client):
     code, ok_id, _bad = _seed_admin_logs("D005")
     db = SessionLocal()

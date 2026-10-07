@@ -2047,23 +2047,41 @@
               </div>
 
               <!-- 原始数据：仅在开启记录时入库 -->
-              <template x-if="logDetail?.payload">
+              <template x-if="logPayloadParts.length">
                 <div class="payload-list">
-                  <template x-for="part in payloadParts" :key="part.key">
-                    <details class="payload-block" :open="part.open">
+                  <p class="field-hint">长内容分页展示，复制与下载包含完整记录。</p>
+                  <template x-for="part in logPayloadParts" :key="part.key">
+                    <details class="payload-block" :open="part.open" @toggle="toggleLogPayload(part, $el.open)">
                       <summary>
                         <span class="payload-title" x-text="part.label"></span>
-                        <span class="payload-size mono"
-                              x-text="`${(logDetail?.payload[part.key] || '').length} 字`"></span>
-                        <button class="link-btn" @click.prevent.stop="copyText(logDetail?.payload[part.key] || '')">复制</button>
+                        <span class="payload-size mono" x-text="`${fmtNum(part.total)} 字`"></span>
+                        <button class="link-btn" @click.prevent.stop="copyLogPayload(part)" :disabled="part.copying"
+                                x-text="part.copying ? '复制中…' : '复制全文'"></button>
+                        <a class="link-btn" :href="logPayloadDownloadUrl(part)" download @click.stop>下载</a>
                       </summary>
-                      <pre class="payload-pre mono" x-text="logDetail?.payload[part.key] || '（空）'"></pre>
+                      <template x-if="part.open">
+                        <div>
+                          <div class="log-payload-viewer" :class="{ 'is-paged': logPayloadPages(part) > 1 }" :aria-busy="part.loading">
+                            <pre class="payload-pre log-payload-pre mono" x-text="part.loaded ? (part.text || '（空）') : ''"></pre>
+                            <div class="payload-message" x-show="part.loading">加载中…</div>
+                            <div class="payload-message" x-show="part.error">
+                              <span x-text="part.error"></span>
+                              <button class="link-btn" @click="loadLogPayload(part, part.page)">重试</button>
+                            </div>
+                          </div>
+                          <div class="payload-pager" x-show="logPayloadPages(part) > 1">
+                            <button class="btn-ghost" @click="loadLogPayload(part, part.page - 1)" :disabled="part.loading || part.page === 0">上一页</button>
+                            <span class="payload-size mono" x-text="`${part.page + 1} / ${logPayloadPages(part)} 页`"></span>
+                            <button class="btn-ghost" @click="loadLogPayload(part, part.page + 1)" :disabled="part.loading || part.page + 1 >= logPayloadPages(part)">下一页</button>
+                          </div>
+                        </div>
+                      </template>
                     </details>
                   </template>
                 </div>
               </template>
 
-              <div class="payload-empty" x-show="!logDetail?.payload" x-cloak>
+              <div class="payload-empty" x-show="!logPayloadParts.length" x-cloak>
                 本次请求未记录原始输入 / 输出（记录开关处于关闭状态）。
                 如需查看内容，请到「日志设置」开启后重新发起请求。
               </div>

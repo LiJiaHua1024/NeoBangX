@@ -62,6 +62,8 @@
 | GET | `/api/admin/logs` | 使用日志列表（可按状态 / 模型 / 时间筛选） |
 | GET | `/api/admin/logs/summary` | 使用日志聚合统计（随筛选联动） |
 | GET | `/api/admin/logs/{id}` | 单条日志详情（含原始输入 / Prompt / 输出） |
+| GET | `/api/admin/logs/{id}/payload/{part}` | 原始数据按字符分页读取 |
+| GET | `/api/admin/logs/{id}/payload/{part}/download` | 下载单段原始数据全文 |
 | GET | `/api/admin/devices` | 设备指纹聚合列表（短码/备注/昵称搜索） |
 | GET | `/api/admin/devices/{id}` | 单设备画像详情（摘要翻译 + 使用分布 + 最近请求） |
 | PATCH | `/api/admin/devices/{id}` | 更新设备备注（全局） |
@@ -873,8 +875,18 @@ data: [DONE]
 }
 ```
 
-`payload` 为 `null` 表示该次请求未开启原始数据记录（或记录功能当时处于关闭状态）。
+默认 `include_payload=true`，`payload` 为 `null` 表示该次请求未开启原始数据记录（或记录功能当时处于关闭状态）。
 单段内容最长 60000 字，超出部分截断。`device` 为 `null` 表示当时无指纹。
+
+管理后台使用 `include_payload=false` 仅读取元数据：此时 `payload` 恒为 `null`，额外返回 `payload_sizes`（如 `{"input": 60000, "prompt": 60000, "output": 12000}`）；未记录原始数据时 `payload_sizes` 为 `null`。长度统计在数据库内完成，响应不携带原始数据全文。
+
+#### GET `/api/admin/logs/{log_id}/payload/{part}`
+
+`part` 只能为 `input` / `prompt` / `output`。`offset` 为从 0 开始的 Unicode 字符偏移，默认 0；`limit` 默认为 4096，范围 1–8192。返回 `{"text": "当前页内容", "total": 60000, "offset": 0, "limit": 4096}`。偏移超出全文时 `text` 为空字符串；日志或原始数据不存在时返回 404；参数无效时返回 422。
+
+#### GET `/api/admin/logs/{log_id}/payload/{part}/download`
+
+返回该段完整记录，类型为 `text/plain; charset=utf-8`，下载文件名为 `log-{log_id}-{part}.txt`。用于主动复制全文或下载，不受分页限制。日志或原始数据不存在时返回 404；`part` 无效时返回 422。
 
 #### POST `/api/admin/logs/purge`
 

@@ -10,9 +10,10 @@ import re
 import secrets as secrets_lib
 from datetime import datetime, timedelta, timezone
 
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import case, desc, func, or_
 from sqlalchemy.orm import Session
@@ -1205,23 +1206,73 @@ def _attach_devices(db: Session, items: list[dict]) -> None:
 
 
 @router.get("/logs/{log_id}")
-async def log_detail(
+def log_detail(
     log_id: int,
     db: Annotated[Session, Depends(get_db)],
+    include_payload: bool = Query(True, description="是否返回原始数据全文"),
 ):
     row = db.get(UsageLog, log_id)
     if not row:
         raise HTTPException(status_code=404, detail="日志不存在")
     data = row.to_dict()
-    payload = db.get(LogPayload, log_id)
-    data["payload"] = (
-        {"input": payload.input, "prompt": payload.prompt, "output": payload.output}
-        if payload is not None
-        else None
-    )
+    if include_payload:
+        payload = db.get(LogPayload, log_id)
+        data["payload"] = (
+            {"input": payload.input, "prompt": payload.prompt, "output": payload.output}
+            if payload is not None
+            else None
+        )
+    else:
+        # 只查长度，不把三段全文读入 Python / JSON / 浏览器响应式状态。
+        sizes = db.query(
+            func.length(LogPayload.input),
+            func.length(LogPayload.prompt),
+            func.length(LogPayload.output),
+        ).filter(LogPayload.log_id == log_id).first()
+        data["payload"] = None
+        data["payload_sizes"] = dict(zip(("input", "prompt", "output"), sizes)) if sizes else None
     device = db.get(Device, row.device_id) if row.device_id else None
     data["device"] = device.to_dict() if device is not None else None
     return data
+
+
+LogPayloadPart = Literal["input", "prompt", "output"]
+
+
+@router.get("/logs/{log_id}/payload/{part}")
+def log_payload_page(
+    log_id: int,
+    part: LogPayloadPart,
+    db: Annotated[Session, Depends(get_db)],
+    offset: int = Query(0, ge=0),
+    limit: int = Query(4096, ge=1, le=8192),
+):
+    column = getattr(LogPayload, part)
+    # SQLite 按 Unicode 字符截取；超长连续文本也只会返回有限的一页。
+    row = db.query(func.substr(column, offset + 1, limit), func.length(column)).join(
+        UsageLog, UsageLog.id == LogPayload.log_id,
+    ).filter(LogPayload.log_id == log_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="日志原始数据不存在")
+    return {"text": row[0], "total": row[1], "offset": offset, "limit": limit}
+
+
+@router.get("/logs/{log_id}/payload/{part}/download")
+def download_log_payload(
+    log_id: int,
+    part: LogPayloadPart,
+    db: Annotated[Session, Depends(get_db)],
+):
+    # 完整内容只在用户主动复制 / 下载时读取，浏览器下载不经过页面 DOM。
+    row = db.query(getattr(LogPayload, part)).join(
+        UsageLog, UsageLog.id == LogPayload.log_id,
+    ).filter(LogPayload.log_id == log_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="日志原始数据不存在")
+    return PlainTextResponse(
+        row[0],
+        headers={"Content-Disposition": f'attachment; filename="log-{log_id}-{part}.txt"'},
+    )
 
 
 class UpdateDeviceRequest(BaseModel):

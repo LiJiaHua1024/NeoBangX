@@ -7,6 +7,7 @@ function copyToClipboard(text) {
       const ta = document.createElement("textarea");
       ta.value = text;
       ta.setAttribute("readonly", "");
+      ta.setAttribute("wrap", "off");
       ta.style.cssText = "position:fixed;top:0;left:0;width:2em;height:2em;opacity:0;pointer-events:none;";
       document.body.appendChild(ta);
       const sel = document.getSelection();
@@ -530,6 +531,9 @@ function adminApp() {
   // 请求句柄不进入 Alpine 深层代理；只有最后一次查询可以更新列表与汇总。
   let logsRequest = 0;
   let logsAbort = null;
+  let logDetailRequest = 0;
+  let logDetailAbort = null;
+  const logPayloadAborts = new Map();
   return {
     version: "1.2.0",
     theme: "paper",
@@ -592,11 +596,8 @@ function adminApp() {
     logDetail: null,
     logDetailLoading: false,
     logDetailError: "",
-    payloadParts: [
-      { key: "input", label: "用户输入", open: true },
-      { key: "prompt", label: "渲染后的完整 Prompt", open: false },
-      { key: "output", label: "模型输出", open: true },
-    ],
+    logPayloadPageSize: 4096,
+    logPayloadParts: [],
     // null = 尚未读取；决定日志页「未开启记录」提示是否展示
     payloadRecording: null,
     purgeDays: null,
@@ -1053,11 +1054,12 @@ function adminApp() {
     },
 
     async api(path, options = {}) {
+      const { responseType = "json", ...fetchOptions } = options;
       let res;
       try {
         res = await fetch(path, {
-          headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-          ...options,
+          headers: { "Content-Type": "application/json", ...(fetchOptions.headers || {}) },
+          ...fetchOptions,
         });
       } catch (e) {
         // 网络层失败：浏览器只给英文的 Failed to fetch / network error，
@@ -1065,6 +1067,7 @@ function adminApp() {
         if (e.name === "AbortError") throw e;
         throw new Error("无法连接后端服务，请确认服务已启动、网络正常后重试");
       }
+      if (res.ok && responseType === "text") return res.text();
       let data = null;
       try {
         data = await res.json();
@@ -1953,24 +1956,137 @@ function adminApp() {
     },
 
     async openLogDetail(id) {
-      this.logDetail = null;
-      this.logDetailError = "";
+      this.closeLogDetail();
+      const request = logDetailRequest;
+      const controller = new AbortController();
+      logDetailAbort = controller;
       this.logDetailLoading = true;
       this.logDetailOpen = true;
       try {
-        this.logDetail = await this.api(`/api/admin/logs/${id}`);
+        const detail = await this.api(`/api/admin/logs/${id}?include_payload=false`, { signal: controller.signal });
+        if (request !== logDetailRequest) return;
+        this.logPayloadParts = detail.payload_sizes ? [
+          { key: "input", label: "用户输入", open: true },
+          { key: "prompt", label: "渲染后的完整 Prompt", open: false },
+          { key: "output", label: "模型输出", open: true },
+        ].map((part) => ({
+          ...part, total: detail.payload_sizes[part.key], page: 0,
+          text: "", loaded: false, loadedPage: -1, loading: false, copying: false, error: "",
+        })) : [];
+        this.logDetail = detail;
+        for (const part of this.logPayloadParts) {
+          if (part.open) this.loadLogPayload(part);
+        }
       } catch (e) {
+        if (request !== logDetailRequest || e.name === "AbortError") return;
         this.logDetailError = e.message || "加载详情失败";
         this.toast(this.logDetailError, "error");
       } finally {
-        this.logDetailLoading = false;
+        if (request === logDetailRequest) {
+          this.logDetailLoading = false;
+          logDetailAbort = null;
+        }
       }
     },
 
     closeLogDetail() {
+      logDetailRequest++;
+      if (logDetailAbort) logDetailAbort.abort();
+      logDetailAbort = null;
+      for (const controller of logPayloadAborts.values()) controller.abort();
+      logPayloadAborts.clear();
       this.logDetailOpen = false;
       this.logDetail = null;
+      this.logPayloadParts = [];
+      this.logDetailLoading = false;
       this.logDetailError = "";
+    },
+
+    logPayloadPages(part) {
+      return Math.max(1, Math.ceil(part.total / this.logPayloadPageSize));
+    },
+
+    toggleLogPayload(part, open) {
+      if (!this.logPayloadParts.includes(part)) return;
+      part.open = open;
+      if (open) {
+        this.loadLogPayload(part, part.page);
+      } else {
+        const controller = logPayloadAborts.get(part.key);
+        if (controller) controller.abort();
+        logPayloadAborts.delete(part.key);
+        part.loading = false;
+        part.loaded = false;
+        part.loadedPage = -1;
+        part.text = "";
+        part.error = "";
+      }
+    },
+
+    async loadLogPayload(part, page = 0) {
+      if (!this.logDetail || !part.open || !this.logPayloadParts.includes(part)) return;
+      page = Math.max(0, Math.min(page, this.logPayloadPages(part) - 1));
+      if (part.page === page && (part.loading || (part.loaded && part.loadedPage === page))) return;
+      const previous = logPayloadAborts.get(part.key);
+      if (previous) previous.abort();
+      part.page = page;
+      part.error = "";
+      // 翻页期间保留上一页正文及其节点，避免抽屉高度收缩导致滚动跳动。
+      if (!part.total) {
+        part.text = "";
+        part.loaded = true;
+        part.loadedPage = page;
+        return;
+      }
+      const request = logDetailRequest;
+      const controller = new AbortController();
+      logPayloadAborts.set(part.key, controller);
+      part.loading = true;
+      const isCurrent = () => request === logDetailRequest && logPayloadAborts.get(part.key) === controller;
+      try {
+        const data = await this.api(
+          `/api/admin/logs/${this.logDetail.id}/payload/${part.key}?offset=${page * this.logPayloadPageSize}&limit=${this.logPayloadPageSize}`,
+          { signal: controller.signal },
+        );
+        if (!isCurrent()) return;
+        part.text = data.text;
+        part.total = data.total;
+        part.loaded = true;
+        part.loadedPage = page;
+      } catch (e) {
+        if (!isCurrent() || e.name === "AbortError") return;
+        part.error = e.message || "加载原始数据失败";
+      } finally {
+        if (isCurrent()) {
+          part.loading = false;
+          logPayloadAborts.delete(part.key);
+        }
+      }
+    },
+
+    logPayloadDownloadUrl(part) {
+      return this.logDetail ? `/api/admin/logs/${this.logDetail.id}/payload/${part.key}/download` : "";
+    },
+
+    async copyLogPayload(part) {
+      if (!this.logDetail || part.copying) return;
+      const request = logDetailRequest;
+      const key = `copy:${part.key}`;
+      const controller = new AbortController();
+      logPayloadAborts.set(key, controller);
+      part.copying = true;
+      try {
+        const text = await this.api(this.logPayloadDownloadUrl(part), { signal: controller.signal, responseType: "text" });
+        if (request !== logDetailRequest) return;
+        await this.copyText(text);
+      } catch (e) {
+        if (request === logDetailRequest && e.name !== "AbortError") this.toast(e.message || "复制失败", "error");
+      } finally {
+        if (request === logDetailRequest) {
+          part.copying = false;
+          logPayloadAborts.delete(key);
+        }
+      }
     },
 
     filterByLogCode() {
