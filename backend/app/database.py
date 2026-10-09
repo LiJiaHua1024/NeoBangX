@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -61,6 +62,28 @@ def init_db() -> None:
     _add_missing_columns()
     _ensure_indexes()
     _drop_legacy_usage_code_type()
+    _link_visual_call_logs()
+
+
+def _link_visual_call_logs() -> None:
+    """将旧版框架/分片日志关联回同一用户的主记录，列表升级后无需清空历史。"""
+    with engine.begin() as conn:
+        rows = conn.execute(text(
+            "SELECT id, request_id, code_id FROM usage_logs WHERE parent_log_id IS NULL AND tool_id='13' "
+            "AND tool_name IN ('试卷可视化全解·框架', '试卷可视化全解·精讲分片')"
+        )).fetchall()
+        for row in rows:
+            parent_request = re.sub(r"_(?:fw|ex\d+(?:_a\d+)?)$", "", row.request_id or "")
+            if parent_request == row.request_id:
+                continue
+            parent = conn.execute(text(
+                "SELECT id FROM usage_logs WHERE request_id=:request AND code_id=:code AND tool_id='13' "
+                "AND parent_log_id IS NULL AND tool_name NOT IN ('试卷可视化全解·框架', '试卷可视化全解·精讲分片') "
+                "ORDER BY id DESC LIMIT 1"
+            ), {"request": parent_request, "code": row.code_id}).scalar()
+            if parent:
+                conn.execute(text("UPDATE usage_logs SET parent_log_id=:parent, counts_for_free_limit=0 WHERE id=:id"),
+                             {"parent": parent, "id": row.id})
 
 
 def _ensure_indexes() -> None:

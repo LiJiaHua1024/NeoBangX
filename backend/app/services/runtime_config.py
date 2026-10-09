@@ -22,6 +22,7 @@ CONFIG_KEYS = [
     "max_tokens",
     "timeout",
     "first_token_timeout",
+    "visual_paper_concurrency",
     "max_visible_models",
     "log_payload",
     "log_retention_days",
@@ -73,6 +74,26 @@ FREE_LIMIT_MAX = 1_000_000
 
 # 用户端模型下拉最大显示数的取值上限（0 = 不折叠，保留全量显示）
 MAX_VISIBLE_MODELS_LIMIT = 50
+DEFAULT_VISUAL_CONCURRENCY = 3
+MAX_VISUAL_CONCURRENCY = 16
+
+
+def normalize_visual_concurrency(value, default=None):
+    try:
+        if isinstance(value, bool) or value is None or str(value).strip() == "":
+            return default
+        number = int(value)
+        if str(number) != str(value).strip():
+            return default
+        return number if 1 <= number <= MAX_VISUAL_CONCURRENCY else default
+    except (ValueError, TypeError):
+        return default
+
+
+def visual_concurrency_for(cfg: dict, model: str) -> int:
+    entry = find_model_entry(cfg.get("models") or [], model) or {}
+    default = normalize_visual_concurrency(cfg.get("visual_paper_concurrency"), DEFAULT_VISUAL_CONCURRENCY)
+    return normalize_visual_concurrency(entry.get("visual_paper_concurrency"), default)
 
 # 模型用途能力位：勾选列表里那三项。禁用（enabled=false）是它们的上一级开关，
 # 禁用后三项一律失效；未禁用时必须至少勾选一项。
@@ -353,6 +374,7 @@ def parse_models(raw: str) -> list[dict]:
                 "reasoning_effort": effort,
                 "thinking_budget": None,
                 "extra_body": extra_body,
+                "visual_paper_concurrency": normalize_visual_concurrency(item.get("visual_paper_concurrency")),
                 **parse_capabilities(item),
                 "enabled": enabled,
                 "is_free": is_free,
@@ -370,6 +392,7 @@ def parse_models(raw: str) -> list[dict]:
             "reasoning_effort": None,
             "thinking_budget": None,
             "extra_body": None,
+            "visual_paper_concurrency": None,
             "user_usable": True,
             "ocr_usable": False,
             "chores_usable": True,
@@ -465,6 +488,7 @@ def _env_defaults() -> dict[str, str]:
         "ocr_model": settings.ocr_model,
         "ocr_max_tokens": str(settings.ocr_max_tokens),
         "max_tokens": str(settings.max_tokens),
+        "visual_paper_concurrency": str(DEFAULT_VISUAL_CONCURRENCY),
         "timeout": str(settings.timeout),
         "max_visible_models": str(settings.max_visible_models),
         "log_payload": "true" if settings.log_payload else "false",
@@ -851,6 +875,7 @@ def resolve_llm_settings(db: Session) -> dict:
         "framework_model": framework_model,
         "framework_max_tokens": framework_max_tokens,
         "visual_paper_framework_enabled": visual_paper_framework_enabled,
+        "visual_paper_concurrency": normalize_visual_concurrency(cfg.get("visual_paper_concurrency"), DEFAULT_VISUAL_CONCURRENCY),
         "ocr_model": ocr_model,
         "ocr_model_configured": ocr_model_configured,
         "ocr_max_tokens": ocr_max_tokens,

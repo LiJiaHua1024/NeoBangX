@@ -1,6 +1,7 @@
 """SQLAlchemy 数据模型。"""
 
 from datetime import datetime, timezone
+import json
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -189,6 +190,12 @@ class UsageLog(Base):
     # 旧库经 ALTER 补列后存量为 NULL，语义是「未保存」而非「未扣费」，
     # 因此 to_dict 保留 None 交给前端显示为「—」，不能收敛成 0。
     units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 免费限额按用户请求计次，框架/并行子调用只记用量。NULL 沿用旧的状态判断。
+    counts_for_free_limit: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # 子调用仍独立记录真实用量，日志列表默认只显示父请求；不重算到父行，避免统计翻倍。
+    parent_log_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    step_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    step_meta: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 多 Provider 聚合：实际命中 Provider 信息与 fallback 尝试次数
     provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     provider_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -222,6 +229,10 @@ class UsageLog(Base):
             "ip": self.ip or "",
             "user_agent": self.user_agent or "",
             "units": self.units,
+            "counts_for_free_limit": self.counts_for_free_limit,
+            "parent_log_id": self.parent_log_id,
+            "step_name": self.step_name or "",
+            "step_meta": json.loads(self.step_meta) if self.step_meta else None,
             "provider_id": self.provider_id or "",
             "provider_name": self.provider_name or "",
             "fallback_attempts": self.fallback_attempts,

@@ -345,7 +345,7 @@ class _FakeLLM:
 
 def test_two_stage_stream_and_logs():
     """跑通整个 SSE：framework 事件 → 骨架 token 先行 → explain 事件 → 讲解 token；
-    日志落两条——主记录「试卷可视化全解」+ 阶段一「试卷可视化全解·框架」（request_id 带 _fw 后缀）。"""
+    单题同样走有界调度，日志包含主记录、框架和精讲调用，子记录关联主记录。"""
     import json
 
     from app import deps
@@ -370,6 +370,10 @@ def test_two_stage_stream_and_logs():
         "@@Q@@ 1\n",
         "@@QTYPE@@ choice\n",
         "@@ANSWER@@\nB\n",
+        "@@EVIDENCE@@ Pas one\n@@REASON@@ Reason\n@@DISTRACTOR@@ A is wrong\n",
+        "@@PITFALLS@@ Trap::Explanation\n@@PATTERN_NAME@@ Pattern\n@@PATTERN_STEPS@@ Step\n",
+        "@@TRANSFER_PASSAGE@@ New passage\n@@TRANSFER_STEM@@ New question\n",
+        "@@TRANSFER_OPTIONS@@ A. one\nB. two\n@@TRANSFER_ANSWER@@ B\n@@TRANSFER_EXPL@@ Reason\n",
         "@@END_Q@@\n",
     ], usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
 
@@ -419,13 +423,16 @@ def test_two_stage_stream_and_logs():
         payloads = {p.log_id: p for p in db.query(LogPayload).all()}
     finally:
         db.close()
-    assert len(logs) == 2, f"应落两条日志（主 + 阶段一），实际 {[l.tool_name for l in logs]}"
+    assert len(logs) == 3, f"应落三条日志（主 + 阶段一 + 精讲），实际 {[l.tool_name for l in logs]}"
     by_name = {l.tool_name: l for l in logs}
     main_row = by_name["试卷可视化全解"]
     fw_row = by_name["试卷可视化全解·框架"]
     # 主记录：request_id 原样、正常扣费
     assert not main_row.request_id.endswith("_fw")
     assert main_row.units == 1
+    assert main_row.status == "success"
+    assert all(row.parent_log_id == main_row.id and row.units == 0 for row in logs if row.id != main_row.id)
+    assert sum(row.total_tokens or 0 for row in logs) == 15
     # 阶段一记录：request_id 带 _fw 后缀、不扣费、状态成功
     assert fw_row.request_id.endswith("_fw")
     assert fw_row.units == 0
@@ -757,6 +764,62 @@ def test_applier_corrects_declared_total():
     assert totals[0] == "51", "头部保留模型声明"
     assert totals[-1] == "3", f"末尾应校正为实际派生题数 3，实际 {totals}"
     assert applier.stats.questions >= 3
+
+
+@pytest.mark.parametrize("heading", ["A", "B", "C", "D"])
+def test_group_letter_heading_matches_only_unique_whole_line(heading):
+    paper = f"A sentence mentioning {heading} in its text.\n{heading}\nPassage starts here.\n21. Question?\nA. One B. Two"
+    marks = f"@@TOTAL@@ 1\n@@MARK GROUP reading|Reading {heading}@@ {heading}\n@@MARK PASSAGE P1@@ Passage starts\n@@MARK Q 21@@ 21. Question?\n@@MARK OPTIONS@@ A. One\n"
+    text, applier = _run(paper, marks)
+    assert applier.stats.ok
+    q = parse_custom_visual_paper(text)["groups"][0]["questions"][0]
+    assert q["passage"] == "Passage starts here."
+    assert [o["text"] for o in q["options"]] == ["One", "Two"]
+    assert applier.stats.marks_skipped == 0
+
+
+@pytest.mark.parametrize("paper", ["Body A in text.\nPassage here", "A\nFirst\nA\nSecond"])
+def test_group_letter_anchor_rejects_inline_or_ambiguous_matches(paper):
+    _, applier = _run(paper, "@@MARK GROUP reading|Reading A@@ A\n")
+    assert applier.stats.structure_errors == 1
+
+
+def test_nonexistent_optional_key_keeps_complete_framework_and_corrects_total():
+    paper = "Passage starts here.\n21. Question?\nA. One B. Two"
+    marks = "@@TOTAL@@ 31\n@@MARK GROUP reading|Reading@@ Passage starts\n@@MARK PASSAGE P1@@ Passage starts\n@@MARK Q 21@@ 21. Question?\n@@MARK OPTIONS@@ A. One\n@@MARK KEY@@ 参考答案\n"
+    text, applier = _run(paper, marks)
+    assert applier.stats.ok
+    assert applier.stats.marks_skipped == 1
+    data = parse_custom_visual_paper(text)
+    assert data["total"] == 1 and data["groups"][0]["questions"][0]["no"] == "21"
+
+
+def test_cut_before_backward_key_preserves_answer_section_and_last_passage():
+    paper = "Writing task.\nOriginal story.\n参考答案\n21 B\nDear Chris,\nSample answer."
+    marks = "@@TOTAL@@ 1\n@@MARK GROUP writing_cont|Writing@@ Writing task.\n@@MARK Q 21@@ Writing task.\n@@MARK PASSAGE P1@@ Original story.\n@@MARK CUT@@ Dear Chris,\n@@MARK KEY@@ 参考答案\n"
+    text, applier = _run(paper, marks)
+    assert applier.stats.ok and applier.stats.structure_errors == 0
+    data = parse_custom_visual_paper(text)
+    q = data["groups"][0]["questions"][0]
+    assert q["passage"] == "Original story."
+    assert "21 B" in data["paperKey"] and "Sample answer." in data["paperKey"]
+    assert text.count("@@KEY@@") == 1
+
+
+def test_cut_inside_explicit_key_can_still_remove_unrelated_transcript():
+    paper = "Writing task.\nOriginal story.\n参考答案\n21 B\nListening transcript\nUnrelated audio."
+    marks = "@@TOTAL@@ 1\n@@MARK GROUP writing_cont|Writing@@ Writing task.\n@@MARK Q 21@@ Writing task.\n@@MARK PASSAGE P1@@ Original story.\n@@MARK KEY@@ 参考答案\n@@MARK CUT@@ Listening transcript\n"
+    text, applier = _run(paper, marks)
+    assert applier.stats.ok
+    key = parse_custom_visual_paper(text)["paperKey"]
+    assert "21 B" in key and "Unrelated audio" not in key
+
+
+def test_wrong_key_anchor_with_real_answer_section_still_rejects_framework():
+    paper = "Passage starts here.\n21. Question?\nA. One B. Two\nAnswer key\n21 B"
+    marks = "@@TOTAL@@ 1\n@@MARK GROUP reading|Reading@@ Passage starts\n@@MARK PASSAGE P1@@ Passage starts\n@@MARK Q 21@@ 21. Question?\n@@MARK OPTIONS@@ A. One\n@@MARK KEY@@ nonexistent answer heading\n"
+    _, applier = _run(paper, marks)
+    assert not applier.stats.ok
 
 
 def test_missing_question_anchor_does_not_reduce_total_or_accept_skeleton():

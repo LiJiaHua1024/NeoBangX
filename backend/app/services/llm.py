@@ -446,6 +446,7 @@ class LLMService:
         )
 
         streamed_parts: list[str] = []
+        response = None
         try:
             try:
                 response = await acompletion(**kwargs)
@@ -469,6 +470,8 @@ class LLMService:
                     if usage_out is not None and getattr(chunk, "usage", None):
                         extract_usage(chunk.usage, usage_out)
                     continue
+                if usage_out is not None and getattr(chunk.choices[0], "finish_reason", None):
+                    usage_out["finish_reason"] = chunk.choices[0].finish_reason
                 delta = chunk.choices[0].delta
                 if delta is None:
                     continue
@@ -486,6 +489,15 @@ class LLMService:
             logger.error(f"LLM stream error: {e}")
             raise
         finally:
+            if response is not None:
+                closer = getattr(response, "aclose", None) or getattr(response, "close", None)
+                if callable(closer):
+                    try:
+                        result = closer()
+                        if asyncio.iscoroutine(result):
+                            await result
+                    except Exception:
+                        logger.debug("关闭上游流失败（忽略）", exc_info=True)
             if usage_out is not None:
                 # 中途停止 / 断开 / 异常时收不到末尾 usage 分块，
                 # 用已实际流出的文本估算，cancelled 的请求同样不缺数

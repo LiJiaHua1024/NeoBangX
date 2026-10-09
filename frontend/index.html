@@ -923,7 +923,7 @@
                   <div class="vp-step-info">
                     <div class="vp-step-head">
                       <span class="vp-step-tag">第二步</span>
-                      <span class="vp-step-title">试题解析与迁移</span>
+                      <span class="vp-step-title" x-text="vpParallel ? '并行解析与迁移' : '试题解析与迁移'"></span>
                       <span class="chip-mini text-xs" :class="vpIsStage2Done ? 'text-emerald-600' : 'text-dim'" x-text="vpAnalyzedCount + '/' + (vpTotal || '…') + ' 题'"></span>
                     </div>
                     <div class="vp-step-desc" x-text="vpStep2StatusText"></div>
@@ -954,12 +954,20 @@
                  「已完成」还劝人继续生成。未确认写完时即使剩余为 0 也保留入口——
                  @@TOTAL@@ 可能是被截断的数字前缀、或模型自己数错，此时「剩余 0」
                  不代表卷子真的写完，卡死入口比多花一次生成更糟 -->
-            <div x-show="vpHasData && !streaming && !vpFullscreen && !vpComplete" class="px-4 sm:px-5 py-2 flex justify-center shrink-0" style="border-bottom:1px solid var(--border)">
+            <div x-show="vpHasData && !streaming && !vpFullscreen && !vpComplete" class="px-4 sm:px-5 py-2 flex flex-col items-center gap-2 shrink-0" style="border-bottom:1px solid var(--border)">
               <button class="btn-primary" @click="continueVisualPaper()"
                       :title="vpRemaining > 0 ? '为还没有讲解的题目补齐讲解（按题号合并，已生成的不动），不会新增记录' : '如果原文还有未覆盖的题，点此接着补全'">
                 <span x-html="icon('refresh','w-4 h-4')"></span>
-                <span x-text="vpRemaining > 0 ? '继续生成剩余 ' + vpRemaining + ' 题' : '继续生成'"></span>
+                <span x-text="vpRemaining > 0 ? '补全 ' + vpRemaining + ' 题的讲解' : '继续生成'"></span>
               </button>
+              <details x-show="vpMissingQuestions.length" class="text-xs text-dim w-full" style="max-width:48rem">
+                <summary class="cursor-pointer text-center" x-text="'查看 ' + vpMissingQuestions.length + ' 题待补内容（有答案不代表讲解和迁移已完整）'"></summary>
+                <div class="flex flex-wrap gap-2 mt-2" style="max-height:7rem;overflow:auto">
+                  <template x-for="item in vpMissingQuestions" :key="item.no">
+                    <button class="btn-ghost text-xs" @click="vpSelectQuestionByNo(item.no)" x-text="'第 ' + item.no + ' 题：' + item.reasons.join('、')"></button>
+                  </template>
+                </div>
+              </details>
             </div>
 
             <!-- 主内容区 -->
@@ -999,18 +1007,18 @@
                 </div>
               </div>
 
-              <!-- 备用通道切换进度：只在后端真的切过通道时出现（单 Provider 不会触发）。
-                   放在「加载态」容器之外，显隐只由 fallbackInfo 决定：
-                   续写时 vpHasData 已为 true，若跟着加载态一起显隐就看不到了 -->
-              <div class="max-w-3xl mx-auto px-6 pt-4" x-show="fallbackInfo" x-cloak>
-                <div class="fallback-panel">
-                  <div class="fallback-dots" aria-hidden="true">
-                    <template x-for="(dot, index) in fallbackDots" :key="index">
-                      <span class="fb-dot" :class="'fb-dot-' + dot"></span>
-                    </template>
+              <!-- 按题显示通道切换与自动补全，框架已显示时也可见；讲题视图保留布局空间。 -->
+              <div class="vp-recovery-panel" :class="{ 'vp-recovery-projection': vpFullscreen }" x-show="vpRecoveryItems.length" x-cloak aria-live="polite">
+                <template x-for="recovery in vpRecoveryItems" :key="recovery.id">
+                  <div class="fallback-panel">
+                    <div class="fallback-dots" aria-hidden="true">
+                      <template x-for="(dot, index) in recovery.dots" :key="index">
+                        <span class="fb-dot" :class="'fb-dot-' + dot"></span>
+                      </template>
+                    </div>
+                    <span class="fallback-text" x-text="recovery.text"></span>
                   </div>
-                  <span class="fallback-text" x-text="fallbackText"></span>
-                </div>
+                </template>
               </div>
 
               <!-- 加载态。用 x-if 而不是 x-show：整块只在「生成中且还没有题」时存在，
@@ -1097,10 +1105,11 @@
                                       'active': vpIsCurrent(gIdx, qIdx),
                                       'generating': vpQuestionStatus(q) === 'generating',
                                       'pending': vpQuestionStatus(q) === 'pending',
+                                      'incomplete': !streaming && vpQuestionStatus(q) === 'idle',
                                       'done': vpQuestionStatus(q) === 'done'
                                     }"
                                     @click="vpSelectQuestion(gIdx, qIdx)"
-                                    :title="vpQuestionStatus(q) === 'generating' ? '正在生成第 ' + q.no + ' 题解析' : (vpQuestionStatus(q) === 'pending' ? '第 ' + q.no + ' 题结构已就绪，排队等待生成' : '')">
+                                    :title="vpQuestionStatus(q) === 'generating' ? '正在生成第 ' + q.no + ' 题解析' : (vpQuestionStatus(q) === 'pending' ? '第 ' + q.no + ' 题排队等待生成' : (vpQuestionStatus(q) === 'idle' ? '待补：' + vpQuestionMissing(q).join('、') : '讲解已完整'))">
                               <span x-text="q.no"></span>
                               <span class="vp-q-chip-ans" x-show="q.answer" :class="{ 'masked': maskOn }" x-text="vpDetag(q.answer)"></span>
                               <span class="vp-q-chip-dot" x-show="vpQuestionStatus(q) === 'generating'"></span>
@@ -1112,7 +1121,7 @@
                   </div>
                   <!-- 语篇阅读区 -->
                   <div x-ref="vpLeftPane" class="vp-pane flex-1 min-h-0 overflow-y-auto scroll-thin p-4 sm:p-5" :class="{ 'mask-answers': maskOn && !vpEditing }">
-                    <template x-if="!vpEditing">
+                    <template x-if="!vpEditing && vpCurrentQuestion">
                       <div>
                         <div x-show="vpCurrentQuestion && vpCurrentQuestion.passageUnresolved" class="vp-passage-warn">
                           该题引用的语篇 <b x-text="vpCurrentQuestion.passageRef || ''"></b> 没有找到对应的 <code>@@PASSAGE_DEF@@</code> 声明（可能被截断或模型漏写）。继续生成后会自动补上；若一直补不上，请核对这道题所属的语篇是否真的输出过。
@@ -1161,6 +1170,10 @@
                         <button class="vp-jump-btn" x-show="vpGeneratingQuestionNo && String(vpGeneratingQuestionNo) !== String(vpCurrentQuestion.no)" @click="vpSelectQuestionByNo(vpGeneratingQuestionNo)">
                           前往正在生成的第 <span x-text="vpGeneratingQuestionNo"></span> 题 →
                         </button>
+                      </div>
+
+                      <div x-show="vpQuestionStatus(vpCurrentQuestion) === 'idle'" class="vp-q-status-badge pending">
+                        <span class="text-xs text-dim" x-text="'本题待补：' + vpQuestionMissing(vpCurrentQuestion).join('、') + (streaming ? '。其他题目继续生成' : '。可点击补全讲解')"></span>
                       </div>
 
                       <!-- 题干 + 选项 2x2 -->
@@ -1269,7 +1282,7 @@
                             <div x-show="(!vpCurrentQuestion.reference || (!vpCurrentQuestion.reference.evidence && !vpCurrentQuestion.reference.reason && !vpCurrentQuestion.reference.distractor)) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
                               <div class="vp-skeleton-tip">
                                 <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
-                                <span x-text="vpQuestionStatus(vpCurrentQuestion) === 'generating' ? '正在生成参考答案与依据…' : '排队等待生成参考答案'"></span>
+                                <span x-text="vpWaitingText(vpCurrentQuestion, '参考答案与依据')"></span>
                               </div>
                               <div class="vp-skeleton-lines">
                                 <div class="skel h-3.5 w-11/12"></div>
@@ -1320,7 +1333,7 @@
                             <div x-show="!(vpCurrentQuestion.pitfalls && vpCurrentQuestion.pitfalls.length) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
                               <div class="vp-skeleton-tip">
                                 <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
-                                <span x-text="vpQuestionStatus(vpCurrentQuestion) === 'generating' ? '正在分析易错点与干扰项…' : '排队等待生成易错点分析'"></span>
+                                <span x-text="vpWaitingText(vpCurrentQuestion, '易错点分析')"></span>
                               </div>
                               <div class="vp-skeleton-lines">
                                 <div class="skel h-3.5 w-5/6"></div>
@@ -1372,7 +1385,7 @@
                             <div x-show="!(vpCurrentQuestion.pattern && (vpCurrentQuestion.pattern.name || (vpCurrentQuestion.pattern.steps && vpCurrentQuestion.pattern.steps.length))) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
                               <div class="vp-skeleton-tip">
                                 <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
-                                <span x-text="vpQuestionStatus(vpCurrentQuestion) === 'generating' ? '正在归纳考点范式与解题步骤…' : '排队等待归纳考点范式'"></span>
+                                <span x-text="vpWaitingText(vpCurrentQuestion, '考点范式')"></span>
                               </div>
                               <div class="vp-skeleton-lines">
                                 <div class="skel h-3.5 w-4/5"></div>
@@ -1489,7 +1502,7 @@
                             <div x-show="!vpIsWritingQuestion(vpCurrentQuestion) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
                               <div class="vp-skeleton-tip">
                                 <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
-                                <span x-text="vpQuestionStatus(vpCurrentQuestion) === 'generating' ? '正在生成迁移训练题…' : '排队等待生成迁移训练题'"></span>
+                                <span x-text="vpWaitingText(vpCurrentQuestion, '迁移训练题')"></span>
                               </div>
                               <div class="text-xs text-dim mb-3">根据本题考点生成的同类变式题，包含题干、选项及解析。</div>
                               <div class="vp-skeleton-lines">
@@ -1557,7 +1570,7 @@
                   <div class="flex items-center gap-2 shrink-0">
                     <span x-show="streaming" class="vp-stage-live">
                       <span class="status-dot live"></span>
-                      <span class="whitespace-nowrap" x-text="vpStage === 'framework' ? ('① 提取框架 ' + vpQuestionCount + ' / ' + (vpTotal || '…') + ' 题') : ('② 试题解析 ' + vpAnalyzedCount + ' / ' + (vpTotal || '…') + ' 题')"></span>
+                      <span class="whitespace-nowrap" x-text="vpStage === 'framework' ? ('① 提取框架 ' + vpQuestionCount + ' / ' + (vpTotal || '…') + ' 题') : ((vpParallel ? '② 并行解析 ' : '② 试题解析 ') + vpAnalyzedCount + ' / ' + (vpTotal || '…') + ' 题')"></span>
                       <button class="vp-stage-live-stop" @click="stop()" title="停止生成，已生成题目会保留">停止</button>
                     </span>
                     <!-- 中断/失败后全屏里没有别的续写入口：普通视图那条续写条被 !vpFullscreen
@@ -1565,7 +1578,7 @@
                     <button x-show="!streaming && vpHasData && !vpComplete" class="btn-primary"
                             style="padding:.3rem .8rem;font-size:.78rem"
                             @click="continueVisualPaper()" title="接着写完剩余的题，已生成题目不变，也不会新增记录">
-                      继续生成
+                      <span x-text="vpRemaining > 0 ? '补全 ' + vpRemaining + ' 题的讲解' : '继续生成'"></span>
                     </button>
                     <div class="vp-stage-themes" role="group" aria-label="主题">
                       <template x-for="th in themes" :key="th.id">
@@ -1611,7 +1624,7 @@
                      x-transition:leave="vp-ov-anim-leave" x-transition:leave-start="vp-ov-anim-to" x-transition:leave-end="vp-ov-anim-from">
                   <div class="vp-overview-head">
                     <span class="font-bold" style="font-size:.95rem">题目总览</span>
-                    <span class="text-xs text-faint" x-text="'已生成 ' + vpQuestionCount + (vpTotal > vpQuestionCount ? ' / ' + vpTotal : '') + ' 题'"></span>
+                    <span class="text-xs text-faint" x-text="'讲解完成 ' + vpAnalyzedCount + ' / ' + vpTotal + ' 题'"></span>
                     <button class="icon-btn ml-auto" style="width:1.9rem;height:1.9rem" @click="vpToggleOverview()" title="收起"
                             x-html="icon('chevron-down','w-4 h-4')"></button>
                   </div>
@@ -1625,7 +1638,7 @@
                         <div class="text-xs text-dim leading-relaxed mb-2" x-show="g.intro" x-html="vpFmt(g.intro)"></div>
                         <div class="vp-overview-grid">
                           <template x-for="q in g.questions" :key="g.gIdx + '-' + q.qIdx">
-                            <button class="vp-overview-chip" :class="{ 'active': q.current }" @click="vpJumpFromOverview(g.gIdx, q.qIdx)">
+                            <button class="vp-overview-chip" :class="{ 'active': q.current, 'incomplete': q.missing }" :title="q.missing ? '待补：' + q.missing : '讲解已完成'" @click="vpJumpFromOverview(g.gIdx, q.qIdx)">
                               <span x-text="q.no"></span>
                               <span class="vp-q-chip-ans" x-show="q.answer" :class="{ 'masked': maskOn }" x-text="vpDetag(q.answer)"></span>
                             </button>
@@ -2649,7 +2662,7 @@
                     <span x-show="item.trPair" class="chip neutral" x-text="item.trPair"
                           title="这条记录的语言对"></span>
                     <span x-show="item.error" class="chip danger">生成失败</span>
-                    <span x-show="item.partial && !item.error" class="chip neutral">已停止</span>
+                    <span x-show="item.partial && !item.error" class="chip neutral" x-text="item.toolId === '13' ? '待补全' : '已停止'"></span>
                     <!-- 多版本记录：这条有过重新生成，打开后底部可切换新旧结果 -->
                     <span x-show="item.verCount > 1" class="chip neutral"
                           :title="'这条记录保留了 ' + item.verCount + ' 版生成结果，可逐个对比'"

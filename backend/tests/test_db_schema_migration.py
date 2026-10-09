@@ -62,6 +62,30 @@ def test_drop_legacy_code_type_migrates_rows_and_is_idempotent():
     init_db()  # 幂等重跑不报错
 
 
+def test_links_legacy_visual_calls_by_request_and_owner_idempotently():
+    from app.database import _link_visual_call_logs
+    from app.models import UsageLog
+    with SessionLocal() as db:
+        parent = UsageLog(code_id=71001, code="MIGRATE-VP", tool_id="13", tool_name="试卷可视化全解", request_id="migration-vp")
+        other = UsageLog(code_id=71002, code="MIGRATE-OTHER", tool_id="13", tool_name="试卷可视化全解", request_id="migration-vp")
+        fw = UsageLog(code_id=71001, code="MIGRATE-VP", tool_id="13", tool_name="试卷可视化全解·框架", request_id="migration-vp_fw", total_tokens=8)
+        ex = UsageLog(code_id=71001, code="MIGRATE-VP", tool_id="13", tool_name="试卷可视化全解·精讲分片", request_id="migration-vp_ex3", total_tokens=10)
+        unrelated = UsageLog(code_id=71001, code="MIGRATE-VP", tool_id="25", tool_name="自由对话", request_id="migration-vp_ex4")
+        db.add_all([parent, other, fw, ex, unrelated])
+        db.commit()
+        ids = [row.id for row in [parent, other, fw, ex, unrelated]]
+    _link_visual_call_logs()
+    _link_visual_call_logs()
+    with SessionLocal() as db:
+        assert db.get(UsageLog, ids[2]).parent_log_id == ids[0]
+        assert db.get(UsageLog, ids[3]).parent_log_id == ids[0]
+        assert db.get(UsageLog, ids[4]).parent_log_id is None
+        assert db.get(UsageLog, ids[2]).counts_for_free_limit is False
+        assert db.get(UsageLog, ids[2]).total_tokens == 8
+        db.query(UsageLog).filter(UsageLog.id.in_(ids)).delete(synchronize_session=False)
+        db.commit()
+
+
 def test_bootstrap_code_is_unlimited_and_written_to_file():
     db = SessionLocal()
     try:
@@ -120,7 +144,8 @@ def test_composite_identity_index_is_used_by_free_limit_count():
     这条查询是唯一「表增长 → 每次用户请求变慢」的链路：日志默认永久保留，
     窗口最长 30 天，没有可用索引时每个窗口都要扫窗口内所有行。
     """
-    with engine.begin() as conn:
+    # 退出连接时回滚探针，避免固定日期的日志污染后续保留期清理测试。
+    with engine.connect() as conn:
         conn.execute(text(
             "INSERT INTO usage_logs (code_id, code, tool_id, tool_name, model, request_id,"
             " created_at, status, error_message, ip, user_agent, units, fingerprint)"
@@ -136,3 +161,22 @@ def test_composite_identity_index_is_used_by_free_limit_count():
         )).fetchall()
     detail = " | ".join(str(row[-1]) for row in plan)
     assert "ix_usage_logs_fp_model_created" in detail, detail
+
+
+def test_free_limit_marker_migrates_as_nullable_on_legacy_database(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine
+    from app import database
+
+    legacy_engine = create_engine(f"sqlite:///{(tmp_path / 'legacy.db').as_posix()}")
+    monkeypatch.setattr(database, "engine", legacy_engine)
+    try:
+        with legacy_engine.begin() as conn:
+            conn.execute(text("CREATE TABLE usage_logs (id INTEGER PRIMARY KEY, status VARCHAR(16))"))
+            conn.execute(text("INSERT INTO usage_logs (id, status) VALUES (1, 'success')"))
+        database._add_missing_columns()
+        database._add_missing_columns()  # 重复启动幂等
+        with legacy_engine.connect() as conn:
+            row = conn.execute(text("SELECT status, counts_for_free_limit FROM usage_logs WHERE id=1")).one()
+        assert tuple(row) == ("success", None)  # 旧行继续按旧状态计次
+    finally:
+        legacy_engine.dispose()

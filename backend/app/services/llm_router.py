@@ -36,6 +36,7 @@ _NON_RETRYABLE_CLASSES = {"ContextWindowExceededError", "ContentPolicyViolationE
 _NON_RETRYABLE_KEYWORDS = (
     # 上下文超限
     "context length",
+    "context_length_exceeded",
     "context window",
     "maximum context",
     "too many tokens",
@@ -227,6 +228,7 @@ class LLMRouter:
         )
         remaining = deadline - loop.time()
         if remaining <= 0:
+            await self._aclose_stream(response)
             raise asyncio.TimeoutError("等待首个数据块超时")
         iterator = response.__aiter__()
         try:
@@ -234,6 +236,7 @@ class LLMRouter:
         except StopAsyncIteration:
             return response, None
         except asyncio.CancelledError:
+            await self._aclose_stream(response)
             raise
         except Exception:
             # 建连成功却没等到首块（多为超时）：顺手关掉这条连接，别让它挂在外面
@@ -409,6 +412,8 @@ class LLMRouter:
                             if usage_out is not None and getattr(chunk, "usage", None):
                                 extract_usage(chunk.usage, usage_out)
                             continue
+                        if usage_out is not None and getattr(chunk.choices[0], "finish_reason", None):
+                            usage_out["finish_reason"] = chunk.choices[0].finish_reason
                         delta = chunk.choices[0].delta
                         if delta is None:
                             continue
@@ -440,6 +445,7 @@ class LLMRouter:
                 self._last_error = e
                 self._remember_failure(provider, e)
                 await self._aclose_stream(response)
+                response = None
                 # 若已吐出首 token，则不再 fallback，直接抛
                 if yielded_any:
                     logger.error(f"LLM stream error after yield (provider={provider.get('id')}): {e}")
@@ -465,6 +471,10 @@ class LLMRouter:
                     continue
                 logger.error(f"LLM stream error (provider={provider.get('id')}): {e}")
                 raise
+            finally:
+                await self._aclose_stream(response)
+                if usage_out is not None and (yielded_any or idx == len(self.providers) - 1 or (stop_event and stop_event.is_set())):
+                    estimate_missing_usage(base_messages, "".join(streamed_parts), kwargs["model"], usage_out)
         if last_exc:
             raise last_exc
         raise RuntimeError("LLM stream 无可用 Provider")

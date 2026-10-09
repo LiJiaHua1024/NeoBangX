@@ -2049,6 +2049,8 @@ function nbx() {
     // 两阶段生成状态：vpStage = 当前阶段（""/framework/explain）。阶段边界快照下来的
     // 骨架文本存在 visualPaper.frameworkRaw 上——随历史快照一起持久化，历史续写才有骨架可走
     vpStage: "",
+    vpParallel: false,
+    vpTasks: [],
     // 全屏讲解舞台：总览面板 / 控制台自动隐藏（上下两半可独立唤回）/ 固定
     vpOverviewOpen: false,
     vpTopHidden: false,
@@ -2452,6 +2454,8 @@ function nbx() {
       // 两阶段状态：当前阶段（""/framework/explain）；骨架快照 frameworkRaw 随
       // newVisualPaperState 一并清空
       this.vpStage = "";
+      this.vpParallel = false;
+      this.vpTasks = [];
       this._vpRenderPending = false;
     },
     parseCustomVisualPaper(raw) {
@@ -2978,9 +2982,8 @@ function nbx() {
         }
         out.answerMap = am;
       }
-      const trunc = (s,n)=> s.length>n ? s.slice(0,n)+"…" : s;
       for (const g of out.groups) {
-        g.intro = trunc(String(g.intro||""), 200);
+        g.intro = String(g.intro || "");
         for (const q of g.questions) {
           if (q.qtype !== "choice" && q.qtype !== "blank" && q.qtype !== "writing") {
             if (g.id === "writing_app" || g.id === "writing_cont") q.qtype = "writing";
@@ -2998,21 +3001,15 @@ function nbx() {
             if (q.writingGuide === undefined) q.writingGuide = null;
           }
           delete q.transfer;
-          if (typeof q.passage === "string") q.passage = trunc(q.passage, 4000);
-          if (typeof q.stem === "string") q.stem = trunc(q.stem, 1000);
-          if (q.reference) {
-            for (const k of ["evidence","reason","distractor"]) if (typeof q.reference[k]==="string") q.reference[k]=trunc(q.reference[k],800);
-          }
-          for (const p of (q.pitfalls||[])) if (typeof p.desc==="string") p.desc=trunc(p.desc,500);
-          if (q.pattern && Array.isArray(q.pattern.steps)) q.pattern.steps = q.pattern.steps.slice(0,5).map(s=>trunc(String(s),300));
+          // 结构快照会用于续写、编辑与导出，不能在展示归一化时静默截断原文或讲解。
+          if (q.pattern && Array.isArray(q.pattern.steps)) q.pattern.steps = q.pattern.steps.map(String);
           for (const tr of (q.transfers || [])) {
-            // 每道迁移题各自补全字段 + 语篇截断（沿用原来的 800 字上限）
+            // 每道迁移题各自补全字段，保留完整材料。
             tr.passage = typeof tr.passage === "string" ? tr.passage : "";
             tr.stem = typeof tr.stem === "string" ? tr.stem : "";
             tr.answer = typeof tr.answer === "string" ? tr.answer : "";
             tr.explanation = typeof tr.explanation === "string" ? tr.explanation : "";
             if (!Array.isArray(tr.options)) tr.options = [];
-            tr.passage = trunc(tr.passage, 800);
           }
         }
       }
@@ -3065,26 +3062,46 @@ function nbx() {
       return Math.min(100, Math.round((this.vpQuestionCount / this.vpTotal) * 100));
     },
     /* 完成计数、题目状态与续写工单共用内容完整性判定，答案落笔不等于全解完成。 */
-    vpQuestionAnalyzed(q) {
-      if (!q) return false;
+    vpQuestionMissing(q) {
+      if (!q) return ["未返回完整讲解"];
       const text = v => typeof v === "string" && !!v.trim();
       const list = v => Array.isArray(v) && v.length > 0 && v.every(text);
       if (this.vpIsWritingQuestion(q)) {
-        const wg = q.writingGuide;
-        return !!wg && list(wg.points) && text(wg.outline) && text(wg.sample);
+        const guide = q.writingGuide || {};
+        return [["points", "写作要点"], ["outline", "写作框架"], ["sample", "范文"]]
+          .filter(([key]) => !(key === "points" ? list(guide[key]) : text(guide[key]))).map(([,label]) => label);
       }
-      const ref = q.reference;
-      const pat = q.pattern;
-      if (!text(q.answer) || !ref || ![ref.evidence, ref.reason, ref.distractor].every(text)
-        || !Array.isArray(q.pitfalls) || !q.pitfalls.length || !q.pitfalls.every(p => p && text(p.title) && text(p.desc))
-        || !pat || !text(pat.name) || !list(pat.steps)) return false;
+      const missing = [], ref = q.reference || {}, pat = q.pattern || {};
+      if (!text(q.answer)) missing.push("参考答案");
+      for (const [key, label] of [["evidence", "原文依据"], ["reason", "解题推理"], ["distractor", "干扰项分析"]]) {
+        if (!text(ref[key])) missing.push(label);
+      }
+      if (!q.pitfalls?.length || !q.pitfalls.every(p => p && text(p.title) && text(p.desc))) missing.push("易错点");
+      if (!text(pat.name) || !list(pat.steps)) missing.push("考点范式");
       const choice = q.qtype === "choice" || (q.options || []).length > 0;
-      const optionCount = (q.options || []).length;
-      return Array.isArray(q.transfers) && q.transfers.length >= this.vpLockedTransferCount
-        && q.transfers.every(tr => tr && text(tr.stem) && text(tr.answer) && text(tr.explanation)
-          && (!choice || (text(tr.passage) && Array.isArray(tr.options)
-            && tr.options.length >= (optionCount || 2)
-            && tr.options.every(o => o && text(o.label) && text(o.text)))));
+      const owner = this.vpGroups.find(g => (g.questions || []).includes(q));
+      const embedded = ["cloze7", "cloze", "grammar"].includes(owner?.id);
+      const transfers = Array.isArray(q.transfers) ? q.transfers : [];
+      if (transfers.length < this.vpLockedTransferCount) missing.push("迁移题数量（" + transfers.length + "/" + this.vpLockedTransferCount + "）");
+      transfers.forEach((tr, i) => {
+        const t = tr || {}, prefix = "迁移 " + (i + 1) + "：";
+        if (!text(t.stem) && !embedded && (choice || !text(t.passage))) missing.push(prefix + "题干");
+        if ((choice || (embedded && !text(t.stem))) && !text(t.passage)) missing.push(prefix + "语篇");
+        if (!text(t.answer)) missing.push(prefix + "答案");
+        if (!text(t.explanation)) missing.push(prefix + "解析");
+        if (choice) {
+          const options = Array.isArray(t.options) ? t.options : [], expected = (q.options || []).length || 2;
+          if (options.length < expected || !options.every(o => o && text(o.label) && text(o.text))) missing.push(prefix + "选项不足（" + options.length + "/" + expected + "）");
+        }
+      });
+      return missing;
+    },
+    vpQuestionAnalyzed(q) {
+      return this.vpQuestionMissing(q).length === 0;
+    },
+    get vpMissingQuestions() {
+      return this.vpGroups.flatMap(g => g.questions || []).map(q => ({ no: String(q.no), reasons: this.vpQuestionMissing(q) }))
+        .filter(q => q.reasons.length);
     },
     /* 讲解完成数。两阶段下结构（第一轮）很快跑满，这才是第二轮真正在动的数字 */
     get vpAnalyzedCount() {
@@ -3105,7 +3122,7 @@ function nbx() {
       const total = this.vpTotal || 0;
       if (this.streaming) {
         if (this.vpStage === "framework") return `解析试卷结构 ${this.vpQuestionCount}/${total || "…"} 题`;
-        return `撰写讲解 ${this.vpAnalyzedCount}/${total || "…"} 题`;
+        return `${this.vpParallel ? '并行生成讲解' : '撰写讲解'} ${this.vpAnalyzedCount}/${total || "…"} 题`;
       }
       if (this.vpComplete) return "已完成";
       // 「剩余 N 题」已是讲解口径：结构没齐时报结构进度，结构齐了（骨架即满）之后
@@ -3120,7 +3137,8 @@ function nbx() {
       return this.streaming && this.vpStage === "framework";
     },
     get vpIsStage1Done() {
-      return this.vpStage === "explain" || (!this.streaming && this.vpQuestionCount > 0);
+      return !this.vpIsStage1Active && this.vpQuestionCount > 0 && this.vpQuestionCount >= this.vpTotal
+        && (!!this.visualPaper.frameworkRaw || this.vpComplete);
     },
     get vpIsStage2Active() {
       return this.streaming && this.vpStage === "explain";
@@ -3131,14 +3149,58 @@ function nbx() {
     get vpStep1StatusText() {
       if (this.vpIsStage1Active) return "正在提取题干/选项/语篇…";
       if (this.vpIsStage1Done) return `已锁定 ${this.vpQuestionCount} 题结构`;
+      if (this.streaming && this.vpStage === "explain") return `正在补全结构，已提取 ${this.vpQuestionCount} 题`;
+      if (!this.streaming && this.vpQuestionCount > 0) return `已提取 ${this.vpQuestionCount} 题，结构待确认`;
       return "待开始";
     },
     get vpStep2StatusText() {
       if (this.vpIsStage2Done) return `全卷 ${this.vpTotal} 题解析已完成`;
+      if (this.vpIsStage2Active && this.vpParallel) {
+        const active = this.vpTasks.filter(t => t.state === "running").flatMap(t => (t.active_nos || t.nos).filter(n => !(t.completed || []).includes(n))).length;
+        const retrying = this.vpTasks.filter(t => t.state === "retrying" || (t.state === "running" && t.attempt > 1))
+          .flatMap(t => (t.active_nos || t.nos).filter(n => !(t.completed || []).includes(n))).length;
+        return `已完成 ${this.vpAnalyzedCount}/${this.vpTotal} 题${active ? ` · 正在生成 ${active} 题` : ''}${retrying ? ` · 自动补全 ${retrying} 题` : ''}`;
+      }
       if (this.vpIsStage2Active) return `正在生成第 ${this.vpGeneratingQuestionNo || "…"} 题解析`;
       if (this.vpIsStage1Active) return "等待结构提取后开始";
       if (this.vpAnalyzedCount > 0) return `已完成 ${this.vpAnalyzedCount}/${this.vpTotal} 题解析`;
       return "待结构提取后生成";
+    },
+    get vpTaskFailures() {
+      return this.vpTasks.filter(t => t.state === "error" || t.state === "incomplete").length;
+    },
+    vpApplyTask(info) {
+      if (!this.vpParallel || !info || !info.id) return;
+      const index = this.vpTasks.findIndex(t => t.id === info.id);
+      if (index < 0) return;
+      this.vpTasks = this.vpTasks.map((t, i) => i === index ? { ...t, fallback: null, ...info } : t);
+      if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
+    },
+    get vpRecoveryItems() {
+      if (!this.streaming) return [];
+      const items = [];
+      if (this.fallbackInfo && !this.vpParallel) {
+        items.push({ id: "stage", text: (this.vpStage === "framework" ? "框架提取：" : "试题解析：") + this.fallbackText, dots: this.fallbackDots });
+      }
+      for (const task of this.vpTasks) {
+        if (!["running", "retrying"].includes(task.state)) continue;
+        const nos = (task.active_nos?.length ? task.active_nos : task.nos).filter(n => !(task.completed || []).includes(n));
+        if (!nos.length) continue;
+        const label = `第 ${nos.join('、')} 题：`;
+        if (task.fallback) {
+          const info = { total: task.fallback.total, failed: task.fallback.failed_index, current: task.fallback.next_index, reason: task.fallback.reason };
+          items.push({ id: task.id, text: label + this.formatFallbackText(info), dots: this.formatFallbackDots(info) });
+        } else if (task.state === "retrying" || task.attempt > 1) {
+          items.push({ id: task.id, text: `${label}自动补全中（第 ${task.attempt}/${task.max_attempts || 3} 次尝试），已完成题目保留`, dots: ["active"] });
+        }
+      }
+      return items;
+    },
+    vpWaitingText(q, label) {
+      const state = this.vpQuestionStatus(q);
+      if (state === "generating") return `正在生成${label}…`;
+      if (state === "pending") return `排队等待生成${label}`;
+      return `${label}待补全，可继续生成`;
     },
     /* 准确判断某道题是否是写作题 */
     vpIsWritingQuestion(q) {
@@ -3166,6 +3228,10 @@ function nbx() {
     /* 获取当前正在撰写讲解的题号（阶段二中第一道尚未完成的题目） */
     get vpGeneratingQuestionNo() {
       if (!this.visualPaper) return null;
+      if (this.vpParallel) {
+        const task = this.vpTasks.find(t => t.state === "running" && (t.active_nos || t.nos).some(n => !(t.completed || []).includes(n)));
+        return task ? (task.active_nos || task.nos).find(n => !(task.completed || []).includes(n)) : null;
+      }
       for (const g of this.visualPaper.groups) {
         for (const q of (g.questions || [])) {
           if (!this.vpQuestionAnalyzed(q)) return q.no;
@@ -3180,6 +3246,13 @@ function nbx() {
       if (this.streaming) {
         if (this.vpStage === "framework") return "pending";
         if (this.vpStage === "explain") {
+          if (this.vpParallel) {
+            const task = this.vpTasks.find(t => t.nos.includes(String(q.no)));
+            if (!task) return "idle";
+            if (task.state === "retrying") return "pending";
+            if (task.state === "running") return (task.active_nos || task.nos).includes(String(q.no)) ? "generating" : "pending";
+            return task.state === "pending" ? "pending" : "idle";
+          }
           const genNo = this.vpGeneratingQuestionNo;
           if (genNo && String(q.no) === String(genNo)) return "generating";
           return "pending";
@@ -3260,6 +3333,7 @@ function nbx() {
           gIdx, qIdx,
           no: q.no,
           answer: q.answer || "",
+          missing: this.vpQuestionMissing(q).join('、'),
           current: this.vpIsCurrent(gIdx, qIdx),
         })),
       }));
@@ -7666,7 +7740,7 @@ function nbx() {
          而不是覆盖当前那一版
        - nearBottom：是否把外层结果容器拉到底。解卷的滚动由左右分栏自己管，
          不参与外层自动滚动 */
-    async _runStream({ toolId, inputText, updateId = null, continueFrom = null, newVersion = false, transferCount, onToken, onStage, finalize, nearBottom = true }) {
+    async _runStream({ toolId, inputText, updateId = null, continueFrom = null, newVersion = false, transferCount, visualQuestionNos, onToken, onStage, onVisualTask, finalize, nearBottom = true }) {
       // 通用路径（新一轮/继续生成/重试）都跑当前工具，只有解卷会显式传 "13"；
       // 这里统一兜底，避免某个入口漏传导致请求的 tool_id 为空
       const tid = toolId || (this.currentTool && this.currentTool.id) || "";
@@ -7707,10 +7781,12 @@ function nbx() {
           input: inputText,
           requestId: this.requestId,
           transferCount,
+          visualQuestionNos,
           continueFrom,
           onReasoning: (text) => { if (seq === this._runSeq) this.appendReasoning(text); },
           onFallback: (info) => { if (seq === this._runSeq) this.updateFallback(info); },
           onStage: onStage ? (info) => { if (seq === this._runSeq) onStage(info); } : undefined,
+          onVisualTask: onVisualTask ? (info) => { if (seq === this._runSeq) onVisualTask(info); } : undefined,
           onToken: (text) => {
             // 作废后可能还有已排队未处理的 chunk，别再写进已被清空的输出
             if (seq !== this._runSeq) return;
@@ -7740,7 +7816,7 @@ function nbx() {
     },
 
     /* 通用 SSE 流式调用：返回 { state: "done" | "stopped" }，出错时抛出 Error */
-    async _streamChat({ toolId, input, requestId, transferCount, continueFrom, onToken, onReasoning, onFallback, onStage }) {
+    async _streamChat({ toolId, input, requestId, transferCount, visualQuestionNos, continueFrom, onToken, onReasoning, onFallback, onStage, onVisualTask }) {
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: {
@@ -7753,6 +7829,7 @@ function nbx() {
           model: this.selectedModel || undefined,
           request_id: requestId,
           transfer_count: transferCount || undefined,
+          visual_question_nos: visualQuestionNos || undefined,
           // 续写：残文回传后端当上一条 assistant 消息，后端在末尾追加续写指令
           continue_from: continueFrom || undefined,
           // 翻译：语言对每次都要发——续写/重试也走这里，模型得知道接着译成什么
@@ -7823,6 +7900,12 @@ function nbx() {
           let info = null;
           try { info = JSON.parse(data); } catch {}
           if (info && onStage) onStage(info);
+          return;
+        }
+        if (ev === "visual_task") {
+          let info = null;
+          try { info = JSON.parse(data); } catch {}
+          if (info && onVisualTask) onVisualTask(info);
           return;
         }
         if (ev === "reasoning") {
@@ -8321,7 +8404,7 @@ function nbx() {
       await this._runVisualStream(text, null);
     },
     // 可视化流式共享入口：updateId 非空时在原历史记录上追加更新，不新增记录
-    async _runVisualStream(inputText, updateId) {
+    async _runVisualStream(inputText, updateId, visualQuestionNos = undefined) {
       // 续写/重试也走这里（不经 resetVisualPaper）：开跑就收浮层，
       // 否则输入坞一收起，浮层会孤零零留在半空中
       this.closeVpSettings();
@@ -8334,20 +8417,29 @@ function nbx() {
       this.visualPaper.transferCount = transferCount;
       const baselineOutput = this.output;
       const baselineFramework = this.visualPaper.frameworkRaw;
-      // 解卷的续写指令由前端按解析结构拼（见 vpContinueBrief）：走简报而不是回传正文，
-      // 所以这里不传 continueFrom，后端对该工具的路径与从前完全一致
+      this.vpParallel = false;
+      this.vpTasks = [];
+      // 完整骨架续写发送结构化缺失题号；简报兼容旧后端，不回传已有讲解正文。
       return this._runStream({
         toolId: "13",
         inputText,
         updateId,
         transferCount,
+        visualQuestionNos,
         nearBottom: false,
+        onVisualTask: info => this.vpApplyTask(info),
         onStage: (info) => {
           // 两阶段进度：framework = Chores 模型在插标解析结构，explain = 主模型在写讲解。
           // 阶段边界快照骨架文本（仅当两阶段骨架真实可用；回退单阶段时无骨架可存），
           // 续写时作为输入重发，后端见 @@TAG@@ 输入即跳过框架阶段
           const name = (info && info.name) || "";
+          if (name !== this.vpStage) {
+            this.fallbackInfo = null;
+            this.resetReasoning();
+          }
           this.vpStage = name;
+          this.vpParallel = !!info.parallel;
+          this.vpTasks = Array.isArray(info.tasks) ? info.tasks : [];
           if (info && info.reset) {
             const historyId = this.vpHistoryId;
             this.output = baselineOutput;
@@ -8355,8 +8447,9 @@ function nbx() {
             this._outputDirty = true;
             this.vpDoRender();
           }
-          if (name === "explain" && info.framework && this.visualPaper) {
-            this.visualPaper.frameworkRaw = this.output;
+          if (name === "explain" && info.framework && !info.reuse_framework && this.visualPaper) {
+            this.vpDoRender();
+            this.visualPaper.frameworkRaw = this.vpSerializeRaw({ frameworkOnly: true });
           }
         },
         onToken: () => {
@@ -8364,7 +8457,7 @@ function nbx() {
           this.vpScheduleRender();
         },
         finalize: (state, errMsg, ctx) =>
-          this.finalizeVisualPaper(state, errMsg, ctx.updateId ? { updateId: ctx.updateId } : {}, ctx.seq),
+          this.finalizeVisualPaper(state, errMsg, { updateId: ctx.updateId, modelUsed: ctx.modelUsed }, ctx.seq),
       });
     },
     finalizeVisualPaper(state, errMsg, opts = {}, seq) {
@@ -8373,6 +8466,7 @@ function nbx() {
       this.streaming = false;
       // 收尾方式决定「继续生成」入口是否保留，必须先于渲染落定
       this.vpRunState = state;
+      this.vpTasks = this.vpTasks.map(t => ["pending", "running", "retrying"].includes(t.state) ? { ...t, state: "cancelled", fallback: null } : t);
       this.thinking = false;
       this.fallbackInfo = null;
       this.stopTimer();
@@ -8404,14 +8498,17 @@ function nbx() {
           }
           origin.error = String(this.errorMsg).slice(0, 300);
           origin.partial = false;
-          origin.model = this.failedModel || this.selectedModel;
+          origin.model = opts.modelUsed || this.failedModel || this.selectedModel;
           origin.createdAt = Date.now();
           this._persistHistoryItem(origin);
           // 重试走的是 resetVisualPaper 之后的新快照，historyId 已经被清掉，
           // 这里必须把指针接回原记录，否则下一次「继续生成」又会新建一条
           if (this.visualPaper) this.visualPaper.historyId = origin.id;
         } else {
-          const created = this.pushFailedHistory(this.errorMsg, hasPaper ? { visualPaper: JSON.parse(JSON.stringify(this.visualPaper)) } : {});
+          const created = this.pushFailedHistory(this.errorMsg, {
+            model: opts.modelUsed || this.failedModel || this.selectedModel,
+            ...(hasPaper ? { visualPaper: JSON.parse(JSON.stringify(this.visualPaper)) } : {}),
+          });
           if (created && this.visualPaper) this.visualPaper.historyId = created.id;
         }
       } else {
@@ -8433,7 +8530,7 @@ function nbx() {
             item.output = this.output;
             item.partial = unfinished;
             item.error = "";
-            item.model = this.selectedModel;
+            item.model = opts.modelUsed || this.selectedModel;
             if (this.visualPaper && (this.visualPaper.groups?.length || this.visualPaper.total)) {
               item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
             }
@@ -8443,7 +8540,7 @@ function nbx() {
             // 失败记录从来没生成过标题，续写成功后补一条
             if (!item.title) this.generateTitle(item);
           } else {
-            item = this.pushHistory(unfinished);
+            item = this.pushHistory(unfinished, opts.modelUsed);
             // 为可视化历史附加结构化数据，便于回放（0 完整题也保存 total/paper，中断可续）
             if (this.visualPaper && (this.visualPaper.groups?.length || this.visualPaper.total || (this.visualPaper.paper && this.visualPaper.paper.title))) {
               item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
@@ -8454,6 +8551,7 @@ function nbx() {
           }
         }
         if (state === "stopped") this.toast("已停止生成", "warn");
+        else if (this.vpTaskFailures && !this.vpComplete) this.toast("部分题目未完成，已保留生成结果，可继续补全", "warn");
       }
       // 一题都没解析出来（中断/失败）→ 输入坞弹回原位：此时「每题迁移题量」还可能被改
       // （重新生成用的就是当前设置），坞收着且没有唤回入口就等于把设置一起锁死了。
@@ -8547,35 +8645,46 @@ function nbx() {
         await this._runVisualStream(text, keepId);
         return;
       }
+      const hasFramework = !!(this.visualPaper && this.visualPaper.frameworkRaw)
+        && this.vpQuestionCount >= this.vpTotal;
+      // 完整骨架不能按最后一个 END_Q 截断：KEY / TOTAL 可能在其后。
+      // 从已解析快照重建可同时保住答案区、编辑内容，并丢弃本轮未提交的半题。
+      if (hasFramework) {
+        this.output = this.vpSerializeRaw();
+        this._outputDirty = true;
+      }
       // 尾巴上的未完成片段（半道题、半句语篇、被截断的 @@GROUP@@ 头）在续写前整段丢掉：
       // 它们既没进结构也没显示过，留着只会让重解析在同一个位置反复走死路
       const cut = this.vpLastCompleteEnd(this.output);
-      if (cut > 0) {
+      if (!hasFramework && cut > 0) {
         this.output = this.output.slice(0, cut);
         this._outputDirty = true;
       }
       if (this.output && !this.output.endsWith("\n")) this.output += "\n";
       // 两阶段：骨架已在阶段一解析完成 → 续写直接续讲解阶段（输入含 @@TAG@@，后端跳过框架阶段）。
       // 骨架快照存在 visualPaper 上并随历史记录持久化，历史续写同样走这条近路；
-      // 旧记录没有快照 → 走原路：重新两阶段，重发讲解会被解析端同号重开合并
-      const hasFramework = !!(this.visualPaper && this.visualPaper.frameworkRaw)
-        && this.vpQuestionCount >= this.vpTotal;
+      // 旧记录没有快照 → 用原卷和续写工单走单阶段，保留已完成讲解。
       if (hasFramework && this.vpTotal > 0
         && this.vpQuestionCount >= this.vpTotal && this.vpAnalyzedCount >= this.vpQuestionCount) {
         // 工单为空还发请求只会白烧一次调用：模型没有可写的题，多半回头重写已有题
-        this.toast("全部题目均已有讲解，无需续写", "warn");
+        this.finalizeVisualPaper("done", undefined, { updateId: keepId });
+        this.toast("全部题目均已有完整讲解");
         return;
       }
       const contInput = (hasFramework ? this.visualPaper.frameworkRaw : this.submittedInput)
         + "\n\n" + (hasFramework ? this.vpContinueBrief2() : this.vpContinueBrief());
-      // 续写是第二阶段的工作，直接把阶段指针拨到 explain：续写流里没有 stage 事件，
-      // 不拨的话两阶段指示器整个回落成「待开始」（第一步明明已锁定 N 题结构）。
+      // 先显示讲解阶段，收到并行 stage 后再显示各任务；兼容不发 stage 的旧后端。
       // 整卷重跑走上面的 reset 分支，阶段由事件驱动，不经过这里
       this.vpStage = "explain";
+      const missingNos = hasFramework ? this.vpGroups.flatMap(g => g.questions || [])
+        .filter(q => !this.vpQuestionAnalyzed(q)).map(q => String(q.no)) : undefined;
       const baseLen = this.output.length;
-      await this._runVisualStream(contInput, keepId);
+      const expectedSeq = this._runSeq + 1;
+      await this._runVisualStream(contInput, keepId, missingNos?.every(n => /^\d{1,3}$/.test(n)) ? missingNos : undefined);
       // 若续写未新增任何内容（模型未按指令），提示
-      if (this.output.length === baseLen) this.toast("续写未返回新题目，请重试", "warn");
+      if (this._runSeq === expectedSeq && this.vpRunState === "done" && this.output.length === baseLen) {
+        this.toast("续写未返回新题目，请重试", "warn");
+      }
     },
     /* 讲解阶段续写指令：一份按题号点名的工单。进度必须取「已讲解」数——骨架一到位
        结构题数就满了，拿结构计数冒充进度会谎报「全部完成」，模型只能自己猜从哪续，
@@ -10055,7 +10164,7 @@ function nbx() {
       this._persistHistoryItem(item);
       return item;
     },
-    pushHistory(partial) {
+    pushHistory(partial, modelUsed) {
       return this.commitHistoryWithTitle({
         id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
         toolId: this.currentTool.id,
@@ -10065,7 +10174,7 @@ function nbx() {
         input: this.submittedInput || this.input.trim(),
         fileName: this.submittedFileName || "",
         output: this.output,
-        model: this.selectedModel,
+        model: modelUsed || this.selectedModel,
         partial: !!partial,
         createdAt: Date.now(),
       });
@@ -11553,7 +11662,9 @@ function nbx() {
     },
     /* 备用通道切换：文字进度 + 方格子示意（已失败标红、当前尝试的呼吸动画、未尝试的留空） */
     get fallbackText() {
-      const info = this.fallbackInfo;
+      return this.formatFallbackText(this.fallbackInfo);
+    },
+    formatFallbackText(info) {
       if (!info) return "";
       const reason = info.reason === "timeout"
         ? "响应超时"
@@ -11563,7 +11674,9 @@ function nbx() {
       return `第 ${info.failed} 个通道${reason}，正在尝试第 ${info.current} 个（共 ${info.total} 个）`;
     },
     get fallbackDots() {
-      const info = this.fallbackInfo;
+      return this.formatFallbackDots(this.fallbackInfo);
+    },
+    formatFallbackDots(info) {
       if (!info || !info.total) return [];
       const dots = [];
       for (let index = 1; index <= info.total; index += 1) {

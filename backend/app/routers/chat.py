@@ -4,6 +4,7 @@ import binascii
 import json
 import logging
 import re
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Annotated, Callable, Literal, Optional
@@ -66,7 +67,9 @@ from app.services.visual_paper_framework import (
     FrameworkStats,
     render_numbered_lines,
 )
+from app.services.visual_paper_parallel import plan_explanations, stream_explanations
 from app.services.runtime_config import (
+    visual_concurrency_for,
     find_model_entry,
     find_tool_reasoning_rule,
     resolve_llm_settings,
@@ -492,6 +495,10 @@ def _log_llm_call(
     request_id: str = "",
     error_message: str = "",
     units: int = 0,
+    counts_for_free_limit: bool | None = None,
+    parent_log_id: int | None = None,
+    step_name: str = "",
+    step_meta: dict | None = None,
     input_text: str = "",
     rendered_prompt: str = "",
     output_text: str = "",
@@ -500,7 +507,7 @@ def _log_llm_call(
     fallback_attempts: int | None = None,
     fingerprint: str = "",
     device_summary: str = "",
-) -> None:
+) -> int | None:
     """统一落一条 LLM 调用日志。同步函数，供 asyncio.to_thread 调用。
 
     元数据始终记录；原始输入 / 渲染 Prompt / 输出仅在 log_payload 开启时落库。
@@ -508,7 +515,7 @@ def _log_llm_call(
     code 为 None 表示免码调用（免费模型无码可用），记 code_id=0 + `（免码）`
     占位，便于管理后台把匿名用量与真实使用码区分开。
     """
-    record_usage_log(
+    return record_usage_log(
         code_id=code.id if code else 0,
         code=code.code if code else ANON_CODE_LABEL,
         tool_id=tool_id or "",
@@ -522,6 +529,10 @@ def _log_llm_call(
         ip=client[0],
         user_agent=client[1],
         units=units,
+        counts_for_free_limit=counts_for_free_limit,
+        parent_log_id=parent_log_id,
+        step_name=step_name,
+        step_meta=step_meta,
         input_text=input_text,
         rendered_prompt=rendered_prompt,
         output_text=output_text,
@@ -549,6 +560,9 @@ class ChatRequest(BaseModel):
     batch_index: Optional[int] = Field(None, ge=0, description="当前错因在批次中的序号")
     transfer_count: Optional[int] = Field(
         None, ge=1, le=5, description="试卷可视化全解：每道笔试题的迁移训练题量（默认 1）"
+    )
+    visual_question_nos: Optional[list[Annotated[str, StringConstraints(pattern=r"^\d{1,3}$")]]] = Field(
+        None, min_length=1, max_length=1000, description="工具 13 骨架续写：只补全这些题号"
     )
     continue_from: Optional[str] = Field(
         None,
@@ -1100,6 +1114,16 @@ async def chat_stream(
     # 模型被告知「前面都已完成」后凭空编出不存在的题号。
     # 框架提示词文件缺失视作功能未启用，静默走单阶段老路径。
     visual_framework_prompt: Optional[str] = None
+    visual_jobs = []
+    if req.visual_question_nos is not None:
+        if req.tool_id != VISUAL_PAPER_TOOL_ID or req.continue_from or not looks_like_tag_document(req.input):
+            raise HTTPException(status_code=400, detail="待补全题号仅适用于试卷骨架续写")
+        try:
+            visual_jobs = plan_explanations(req.input, loader, req.transfer_count or 1, req.visual_question_nos)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not visual_jobs:
+            raise HTTPException(status_code=400, detail="试卷骨架不完整或精讲提示词缺失，无法按题号补全")
     if req.tool_id == VISUAL_PAPER_TOOL_ID:
         if looks_like_tag_document(req.input):
             explain_prompt = loader.render(
@@ -1111,7 +1135,9 @@ async def chat_stream(
                 prompt = explain_prompt
                 # tool_name 由 prompt 文件名派生：续写轮次在用量日志里记为「…精讲」
                 prompt_filename = VISUAL_EXPLAIN_PROMPT
-        else:
+        elif not req.continue_from and not re.search(r"(?m)^【续写指令】", req.input):
+            # 旧历史没有完整骨架，只能按原卷 + 续写工单补写。
+            # 重新提取骨架会丢掉工单，导致第二阶段从头覆盖已有讲解。
             visual_framework_prompt = loader.render(
                 VISUAL_FRAMEWORK_PROMPT,
                 render_numbered_lines(req.input),
@@ -1319,10 +1345,15 @@ async def chat_stream(
         visual_fw_usage: dict = {}
         visual_fw_raw: list[str] = []
         visual_fw_started = monotonic()
+        visual_fw_elapsed = 0
         visual_fw_status: Optional[str] = None
         visual_fw_error = ""
         visual_fw_llm = None
         visual_fw_stats: Optional[FrameworkStats] = None
+        explain_jobs = visual_jobs
+        parallel_stream = None
+        visual_fw_stream = None
+        normal_stream = None
         try:
             if visual_framework_prompt is not None and visual_framework_model is not None:
                 # 阶段一：Chores 模型在原卷上插标，applier 派生出 @@TAG@@ 骨架逐段推给前端，
@@ -1330,9 +1361,10 @@ async def chat_stream(
                 yield {"event": "stage", "data": json.dumps({"name": "framework"}, ensure_ascii=False)}
                 base_prompt = prompt
                 applier = FrameworkApplier(req.input)
+                visual_fw_stats = applier.stats
                 visual_fw_llm = _build_llm(cfg, model=visual_framework_model, chores=True)
                 try:
-                    async for item in visual_fw_llm.chat_stream_with_stop(
+                    visual_fw_stream = visual_fw_llm.chat_stream_with_stop(
                         user_prompt=visual_framework_prompt,
                         model=visual_framework_model,
                         # 插标输出不走 chores 的 256 钳制：整卷标记也是几千 token 的量级
@@ -1342,11 +1374,13 @@ async def chat_stream(
                         response_format=None,
                         reasoning_effort=visual_fw_reasoning_effort,
                         extra_body=visual_fw_extra_body,
-                    ):
+                    )
+                    async for item in visual_fw_stream:
                         if isinstance(item, tuple) and item and item[0] == "fallback":
                             # 通道切换只发生在首块之前：派生从零重跑，前端此时尚未收到骨架内容
                             yield {"event": "fallback", "data": json.dumps(item[1], ensure_ascii=False)}
                             applier = FrameworkApplier(req.input)
+                            visual_fw_stats = applier.stats
                             continue
                         if isinstance(item, tuple) and item and item[0] == "reasoning":
                             reasoning_text = item[1] if len(item) > 1 else ""
@@ -1387,6 +1421,7 @@ async def chat_stream(
                     visual_fw_stats.questions, visual_fw_stats.passages, visual_fw_stats.pools,
                     visual_fw_usage.get("completion_tokens"),
                 )
+                visual_fw_elapsed = monotonic() - visual_fw_started
                 if client_disconnected or stop_event.is_set():
                     visual_fw_status = STATUS_CANCELLED
                 elif visual_fw_error:
@@ -1412,6 +1447,10 @@ async def chat_stream(
                         logger.warning("讲解提示词缺失，试卷可视化全解回退单阶段")
                         prompt = base_prompt
                         framework_usable = False
+                    else:
+                        planned = plan_explanations(applier.skeleton_text, loader, req.transfer_count or 1)
+                        if planned and continue_messages is None:
+                            explain_jobs = planned
                 else:
                     # 干净回退：applier 只派生过头部/零散标记，前端几乎没收到内容，
                     # 老路径对原文完整重跑；骨架与老输出同为 @@TAG@@ 文档，解析端兼容
@@ -1426,23 +1465,72 @@ async def chat_stream(
                     output_parts.clear()
                 # framework 标志告诉前端是否真的存在两阶段骨架（false = 回退单阶段，
                 # 前端不做骨架快照，续写走老路径）
-                yield {"event": "stage", "data": json.dumps(
-                    {"name": "explain", "framework": framework_usable, "reset": discard_framework},
-                    ensure_ascii=False,
-                )}
+                if not explain_jobs and not client_disconnected and not stop_event.is_set():
+                    yield {"event": "stage", "data": json.dumps(
+                        {"name": "explain", "framework": framework_usable, "reset": discard_framework},
+                        ensure_ascii=False,
+                    )}
 
-            async for item in llm.chat_stream_with_stop(
-                user_prompt=prompt,
-                # OCR 走多模态消息序列（指令 + N 张图片），续写走残文序列，其余为 prompt 单条
-                messages=ocr_messages or continue_messages,
-                model=model_used,
-                max_tokens=cfg["ocr_max_tokens"] if is_ocr else None,
-                stop_event=stop_event,
-                reasoning_effort=reasoning_effort,
-                extra_body=extra_body,
-                usage_out=usage,
-                response_format=visual_response_format,
-            ):
+            if explain_jobs and not stop_event.is_set() and not client_disconnected:
+                yield {"event": "stage", "data": json.dumps({
+                    "name": "explain", "framework": True, "parallel": True,
+                    "concurrency": min(visual_concurrency_for(cfg, model_used), len(explain_jobs)),
+                    "tasks": [job.progress() for job in explain_jobs],
+                    # 续写已有骨架，不能把历史的骨架+讲解重新保存成骨架。
+                    "reuse_framework": bool(visual_jobs),
+                }, ensure_ascii=False)}
+                if not visual_jobs:
+                    notice = "@@NOTICE@@ 答案为 AI 判断，建议教师核对\n" if "@@KEY@@" not in applier.skeleton_text else ""
+                    if notice:
+                        output_parts.append(notice)
+                        yield {"event": "token", "data": json.dumps(notice, ensure_ascii=False)}
+                clients = iter([llm])
+                def build_explain_llm():
+                    return next(clients, None) or _build_llm(cfg, model=model_used, chores=False)
+
+                parallel_stream = stream_explanations(
+                    explain_jobs, build_llm=build_explain_llm, stop_event=stop_event,
+                    transfer_count=req.transfer_count or 1,
+                    concurrency=visual_concurrency_for(cfg, model_used),
+                    stream_kwargs={"model": model_used, "reasoning_effort": reasoning_effort,
+                                   "extra_body": extra_body, "response_format": None},
+                )
+                async with aclosing(parallel_stream):
+                    async for event, payload in parallel_stream:
+                        if await request.is_disconnected():
+                            client_disconnected = True
+                            break
+                        if event == "token":
+                            output_parts.append(payload)
+                        yield {"event": event, "data": json.dumps(payload, ensure_ascii=False)}
+                failed = [job for job in explain_jobs if job.state in {"error", "incomplete"}]
+                if failed:
+                    status = STATUS_ERROR
+                    error_message = "部分题目讲解未完成：" + ",".join(n for job in failed for n in job.nos if n not in job.completed)
+                if not stop_event.is_set() and not client_disconnected and not any(job.completed for job in explain_jobs):
+                    raise RuntimeError(error_message)
+
+            async def main_stream():
+                # 停止发生在框架阶段时不得再发起第二步（旧逻辑仅靠上游读到首块才停止）。
+                if explain_jobs or stop_event.is_set() or client_disconnected:
+                    return
+                async with aclosing(llm.chat_stream_with_stop(
+                    user_prompt=prompt,
+                    # OCR 走多模态消息，续写走残文序列，其余为 prompt 单条。
+                    messages=ocr_messages or continue_messages,
+                    model=model_used,
+                    max_tokens=cfg["ocr_max_tokens"] if is_ocr else None,
+                    stop_event=stop_event,
+                    reasoning_effort=reasoning_effort,
+                    extra_body=extra_body,
+                    usage_out=usage,
+                    response_format=visual_response_format,
+                )) as upstream:
+                    async for item in upstream:
+                        yield item
+
+            normal_stream = main_stream()
+            async for item in normal_stream:
                 # 推理过程单独透出：不计入正文、不写日志 output、不参与用量估算；
                 # 事件为 {t, n}，n 为 litellm tokenizer 逐 delta 计得的 token 数，
                 # 前端据此累加展示 tok 与 tok/s；测试用的旧式 FakeLLM 仍 yield 纯 str，视为 token。
@@ -1524,7 +1612,7 @@ async def chat_stream(
                         request_id=request_id,
                     )
                     charged = True
-                yield {"event": "done", "data": "[DONE]"}
+                yield {"event": "done", "data": "[CANCELLED]" if status == STATUS_CANCELLED else "[DONE]"}
         except GeneratorExit:
             # 流被 aclose 关掉时走这里：GeneratorExit 继承 BaseException，
             # 不走下面两个 except，于是 status 停在默认的 success、units 停在 0，
@@ -1594,6 +1682,16 @@ async def chat_stream(
                 ),
             }
         finally:
+            for stream in (parallel_stream, visual_fw_stream, normal_stream):
+                if stream is not None:
+                    try:
+                        await stream.aclose()
+                    except asyncio.CancelledError:
+                        logger.info("Stream cleanup cancelled (%s)", request_id)
+                    except Exception:
+                        logger.warning("Stream cleanup failed (%s)", request_id, exc_info=True)
+            if visual_fw_stats is not None and visual_fw_status is None:
+                visual_fw_status = STATUS_CANCELLED if status == STATUS_CANCELLED else STATUS_ERROR
             if migration_batch and not migration_finished:
                 # 走到这里说明卡片没经过任何结算点（异常中断）。异常一律不扣费，
                 # 与普通工具的既有口径一致 —— 用户拿到的是失败提示而非可用产出。
@@ -1608,81 +1706,71 @@ async def chat_stream(
             release_free_slot()
             # 成功、停止、异常统一留痕：元数据始终记录，原始数据受开关控制
             prov_id, prov_name, attempts = _router_log_fields(llm)
+            if explain_jobs:
+                # 聚合记录只计一次额度，token 与供应商归属记在各任务，避免重复累计。
+                prov_id, prov_name, attempts = "", "", None
             # 先置位再落库：to_thread 会同步把写库任务提交进线程池，
             # 全局异常处理器据此跳过，避免同一次请求被记两条
             request.state.usage_logged = True
-            # 收尾日志必须写出来：这一步的 await 在流被 aclose 关掉时可能撞上
-            # 事件循环关闭而抛错，异常会盖掉 GeneratorExit、把整条日志丢掉。
-            # 另一个真实的丢行路径：流被取消（停止/断开）后任务可能收到第二次
-            # CancelledError，它不是 Exception、会穿透下面的 except——整个 finally
-            # 从这个 await 起全部跳过，连后面的日志一起丢。shield 让落库线程
-            # 不受本次取消影响；捕获到 CancelledError 时线程仍在写，行不会丢。
-            try:
-                await asyncio.shield(asyncio.to_thread(
-                    _log_llm_call,
-                    code=code,
-                    tool_id=req.tool_id,
-                    tool_name=tool_name,
-                    model=model_used,
-                    request_id=request_id,
-                    status=status,
-                    started=started,
-                    usage=usage,
-                    client=(client_ip, user_agent),
-                    log_payload=log_payload_enabled,
-                    error_message=_final_error_message(llm, status, error_message),
+            # 父子记录在同一个后台任务里顺序写入：即使收尾再被取消，也不会留下未关联的分片。
+            def write_request_logs():
+                parent_id = _log_llm_call(
+                    code=code, tool_id=req.tool_id, tool_name=tool_name, model=model_used,
+                    request_id=request_id, status=status, started=started, usage=usage,
+                    client=(client_ip, user_agent), log_payload=log_payload_enabled,
+                    error_message=error_message if explain_jobs else _final_error_message(llm, status, error_message),
                     units=units,
-                    # OCR 的输入是图片：正文留空，日志里记张数，便于核对视觉调用量
+                    counts_for_free_limit=(status != STATUS_ERROR or any(job.completed for job in explain_jobs))
+                    if explain_jobs else None,
                     input_text=req.input if not is_ocr else f"[图片 {len(ocr_images)} 张]",
-                    rendered_prompt=prompt,
-                    output_text="".join(output_parts),
-                    provider_id=prov_id,
-                    provider_name=prov_name,
-                    fallback_attempts=attempts,
-                    fingerprint=fp_hash,
-                    device_summary=fp_summary,
-                ))
-            except asyncio.CancelledError:
-                # shield 的落库线程会继续完成写入，这里吞掉取消不往外抛
-                # （GeneratorExit 后再 yield 才会炸，吞掉是安全的）
-                logger.info(f"Log write shielded from cancellation ({request_id})")
-            except Exception as e:
-                # usage_logged 已置位，全局处理器不会补记；这里至少别把异常
-                # 抛回给正在收尾的流（GeneratorExit 尤其不能被它盖掉）
-                logger.error(f"Usage log write failed ({request_id}): {e}")
-            if visual_fw_stats is not None:
-                # 阶段一单独留痕：模型、用量与产出都不同于主阶段，合并记会把
-                # Chores 模型的 token 摊到主模型头上，排查锚点失配也需要原始输出。
-                # 同样 shield：取消竞态曾把这条日志整个吞掉（用户停止落在写库 await 上）
-                try:
+                    rendered_prompt="并行精讲，提示词见步骤详情" if explain_jobs else prompt,
+                    output_text="".join(output_parts), provider_id=prov_id, provider_name=prov_name,
+                    fallback_attempts=attempts, fingerprint=fp_hash, device_summary=fp_summary,
+                    step_meta={
+                        "concurrency": visual_concurrency_for(cfg, model_used),
+                        "completed": [n for j in explain_jobs for n in j.completed],
+                        "missing": {n: j.issues.get(n, ["未返回完整讲解"]) for j in explain_jobs for n in j.nos if n not in j.completed},
+                    } if explain_jobs else None,
+                )
+                if visual_fw_stats is not None:
                     fw_prov_id, fw_prov_name, fw_attempts = _router_log_fields(visual_fw_llm) if visual_fw_llm else (None, None, 0)
-                    await asyncio.shield(asyncio.to_thread(
-                        _log_llm_call,
-                        code=code,
-                        tool_id=req.tool_id,
-                        tool_name=VISUAL_FRAMEWORK_TOOL_NAME,
-                        model=visual_framework_model or "",
-                        request_id=f"{request_id}_fw",
+                    _log_llm_call(
+                        code=code, tool_id=req.tool_id, tool_name=VISUAL_FRAMEWORK_TOOL_NAME,
+                        model=visual_framework_model or "", request_id=f"{request_id}_fw",
+                        counts_for_free_limit=False, parent_log_id=parent_id, step_name="第一步 · 框架提取",
                         status=visual_fw_status or STATUS_ERROR,
-                        started=visual_fw_started,
-                        usage=visual_fw_usage,
-                        client=(client_ip, user_agent),
-                        log_payload=log_payload_enabled,
-                        error_message=visual_fw_error,
-                        units=0,
-                        input_text=req.input,
-                        rendered_prompt=visual_framework_prompt,
-                        output_text="".join(visual_fw_raw),
-                        provider_id=fw_prov_id,
-                        provider_name=fw_prov_name,
-                        fallback_attempts=fw_attempts,
-                        fingerprint=fp_hash,
-                        device_summary=fp_summary,
-                    ))
-                except asyncio.CancelledError:
-                    logger.info(f"Framework log write shielded from cancellation ({request_id})")
-                except Exception as e:
-                    logger.warning(f"Framework stage log write failed ({request_id}): {e}")
+                        started=monotonic() - (visual_fw_elapsed or (monotonic() - visual_fw_started)),
+                        usage=visual_fw_usage, client=(client_ip, user_agent), log_payload=log_payload_enabled,
+                        error_message=visual_fw_error, units=0, input_text=req.input,
+                        rendered_prompt=visual_framework_prompt, output_text="".join(visual_fw_raw),
+                        provider_id=fw_prov_id, provider_name=fw_prov_name, fallback_attempts=fw_attempts,
+                        fingerprint=fp_hash, device_summary=fp_summary,
+                    )
+                for job in explain_jobs:
+                    for index, call in enumerate(job.attempts, 1):
+                        call_status = (STATUS_SUCCESS if call["state"] == "done" else
+                                       STATUS_CANCELLED if call["state"] == "cancelled" else STATUS_ERROR)
+                        pid, pname, count = _router_log_fields(call["llm"])
+                        _log_llm_call(
+                            code=code, tool_id=req.tool_id, tool_name="试卷可视化全解·精讲分片",
+                            model=model_used, request_id=f"{request_id}_ex{job.id}_a{index}", status=call_status,
+                            started=monotonic() - call["elapsed"], usage=call["usage"], units=0,
+                            counts_for_free_limit=False, parent_log_id=parent_id,
+                            step_name=f"第 {','.join(call['nos'])} 题 · 第 {call['round']} 次",
+                            step_meta={"nos": call["nos"], "attempt": call["round"], "issues": call.get("issues", {}),
+                                       "finish_reason": call["usage"].get("finish_reason")},
+                            client=(client_ip, user_agent), log_payload=log_payload_enabled,
+                            error_message=_final_error_message(call["llm"], call_status, call["error"]),
+                            input_text=job.material, rendered_prompt=call["prompt"], output_text="".join(call["raw"]),
+                            provider_id=pid, provider_name=pname, fallback_attempts=count,
+                            fingerprint=fp_hash, device_summary=fp_summary,
+                        )
+            try:
+                await asyncio.shield(asyncio.to_thread(write_request_logs))
+            except asyncio.CancelledError:
+                logger.info("Request logs shielded from cancellation (%s)", request_id)
+            except Exception:
+                logger.exception("Request logs failed (%s)", request_id)
             # 批次缓存只在注册新批次时被动清理，若此后再无迁移请求，过期批次与
             # 额度预留会一直留在内存里；每次生成收尾顺手扫一遍，代价可忽略
             _cleanup_migration_batches()

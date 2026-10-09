@@ -2133,3 +2133,8 @@ body.modal-open .panel-stack {
 @media (prefers-reduced-motion: reduce) {
   .ai-spinner { animation-duration: 2.5s; }
 }
+
+.log-step-list { display: grid; gap: .5rem; margin: .75rem 0; }
+.log-step-item { display: grid; gap: .25rem; text-align: left; padding: .65rem .75rem; border: 1px solid var(--border); border-radius: .65rem; background: var(--surface, transparent); color: inherit; cursor: pointer; }
+.log-step-item:hover { background: var(--hover-bg); }
+.log-step-head { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }

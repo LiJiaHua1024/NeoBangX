@@ -72,6 +72,26 @@ class _Stream:
         self.closed = True
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.anyio
+async def test_stream_preserves_finish_reason_for_truncation_validation(monkeypatch, legacy):
+    from app.services import llm as llm_module
+    from app.services.llm import LLMService
+    end = _Chunk("")
+    end.choices[0].finish_reason = "length"
+    end.choices[0].delta = None
+    response = _Stream([_Chunk("body"), end])
+    async def fake_acompletion(**kwargs):
+        return response
+    monkeypatch.setattr(llm_module if legacy else router_module, "acompletion", fake_acompletion)
+    service = LLMService(api_key="k", default_model="test") if legacy else _router(count=1)
+    usage = {}
+    output = [item async for item in service.chat_stream_with_stop(user_prompt="test", usage_out=usage)]
+    assert output == ["body"]
+    assert usage["finish_reason"] == "length"
+    assert response.closed
+
+
 class _Message:
     def __init__(self, content):
         self.content = content
@@ -151,6 +171,46 @@ def _router(count=2, first_token_timeout=5):
         timeout=120,
         first_token_timeout=first_token_timeout,
     )
+
+
+@pytest.mark.parametrize("before_first", [False, True])
+def test_cancellation_closes_upstream_even_before_first_token(monkeypatch, before_first):
+    async def run():
+        waiting = asyncio.Event()
+        class HangingStream(_Stream):
+            async def _gen(self):
+                if not before_first:
+                    yield _Chunk(content="partial")
+                waiting.set()
+                await asyncio.Event().wait()
+
+        stream = HangingStream()
+        _install(monkeypatch, [stream])
+        async def consume():
+            async for _ in _router(count=1).chat_stream_with_stop(user_prompt="test"):
+                pass
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(waiting.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert stream.closed
+    asyncio.run(run())
+
+
+def test_legacy_service_closes_upstream_on_generator_close(monkeypatch):
+    from app.services import llm as llm_module
+    async def run():
+        stream = _Stream([_Chunk(content="partial"), _Chunk(content="unused")])
+        async def completion(**kwargs):
+            return stream
+        monkeypatch.setattr(llm_module, "acompletion", completion)
+        llm = llm_module.LLMService(api_key="fake", default_model="test-model")
+        result = llm.chat_stream_with_stop(user_prompt="test")
+        assert await anext(result) == "partial"
+        await result.aclose()
+        assert stream.closed
+    asyncio.run(run())
 
 
 def _run_stream(router, stop_event=None):
@@ -706,4 +766,3 @@ async def test_stream_auto_heals_on_reasoning_error_within_same_provider(monkeyp
     assert len(stream_attempts) == 2
     assert stream_attempts[0].get("reasoning_effort") == "off"
     assert "reasoning_effort" not in stream_attempts[1]
-

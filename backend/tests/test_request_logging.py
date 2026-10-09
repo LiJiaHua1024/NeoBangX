@@ -1210,6 +1210,59 @@ def test_admin_config_roundtrips_log_settings(admin_client):
     assert parse_log_settings(cfg) == (False, 0)
 
 
+def test_visual_log_hierarchy_aggregates_and_filters_children(admin_client):
+    with SessionLocal() as db:
+        code = _make_code(db, "NBXU-LOG-HIERARCHY")
+    parent = record_usage_log(code_id=code.id, code=code.code, tool_id="13", tool_name="试卷可视化全解",
+                              model="main-model", status="success", units=1, usage={},
+                              step_meta={"completed": ["1"], "missing": {}})
+    children = []
+    for i in range(3):
+        children.append(record_usage_log(
+            code_id=code.id, code=code.code, tool_id="13", tool_name="试卷可视化全解·精讲分片",
+            model=f"child-model-{i}", provider_id=f"provider-{i}", status="error" if i == 0 else "success",
+            units=0, usage={"total_tokens": 10, "prompt_tokens": 4, "completion_tokens": 6},
+            parent_log_id=parent, step_name=f"第 1 题 · 第 {i+1} 次",
+            step_meta={"nos": ["1"], "attempt": i + 1, "issues": {"1": ["迁移题数量（0/1）"]} if i == 0 else {}},
+            log_payload=True, output_text="large body " * 100,
+        ))
+    for filters in [{}, {"model": "child-model-1"}, {"provider": "provider-2"}]:
+        listed = admin_client.get("/api/admin/logs", params={"code": code.code, "include_summary": True, **filters}).json()
+        assert listed["total"] == listed["summary"]["total"] == 1
+        assert listed["items"][0]["id"] == parent
+        assert listed["items"][0]["step_count"] == 3
+        assert listed["items"][0]["total_tokens"] == listed["summary"]["total_tokens"] == 30
+        assert listed["summary"]["success"] == 1 and listed["summary"]["error"] == 0
+    detail = admin_client.get(f"/api/admin/logs/{parent}?include_payload=false").json()
+    assert detail["step_count"] == 3 and detail["prompt_tokens"] == 12
+    steps = admin_client.get(f"/api/admin/logs/{parent}/steps?page_size=2").json()
+    assert steps["total"] == 3 and len(steps["items"]) == 2
+    assert all("payload" not in item for item in steps["items"])
+    assert steps["items"][0]["step_meta"]["issues"] == {"1": ["迁移题数量（0/1）"]}
+    next_page = admin_client.get(f"/api/admin/logs/{parent}/steps?page_size=2&page=2").json()
+    assert [item["id"] for item in next_page["items"]] == children[2:]
+    assert admin_client.get(f"/api/admin/logs/{children[0]}").json()["payload"]["output"].startswith("large body")
+    with SessionLocal() as db:
+        # 聚合只用于展示，数据库不复制子调用用量。
+        assert db.get(UsageLog, parent).total_tokens is None
+        assert sum(row.total_tokens or 0 for row in db.query(UsageLog).filter_by(code_id=code.id)) == 30
+
+
+def test_visual_log_cleanup_removes_children_at_retention_boundary():
+    with SessionLocal() as db:
+        code = _make_code(db, "NBXU-LOG-GROUP-PURGE")
+    parent = record_usage_log(code_id=code.id, code=code.code, tool_id="13", tool_name="试卷可视化全解")
+    child = record_usage_log(code_id=code.id, code=code.code, tool_id="13", tool_name="试卷可视化全解·框架",
+                             parent_log_id=parent, log_payload=True, output_text="framework")
+    with SessionLocal() as db:
+        db.get(UsageLog, parent).created_at = datetime.now(timezone.utc) - timedelta(days=31)
+        db.commit()
+        purge_expired_logs(db, 30)
+        assert db.get(UsageLog, parent) is None
+        assert db.get(UsageLog, child) is None
+        assert db.get(LogPayload, child) is None
+
+
 def test_admin_config_rejects_negative_retention(admin_client):
     assert admin_client.put("/api/admin/config", json={"log_retention_days": -1}).status_code == 422
     assert admin_client.put("/api/admin/config", json={"log_retention_days": 999999}).status_code == 422

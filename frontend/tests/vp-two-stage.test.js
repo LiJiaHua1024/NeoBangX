@@ -287,10 +287,14 @@ function test_stage_pills_during_continuation() {
   c.streaming = true;
   c.vpStage = "explain"; // continueVisualPaper 入口设置
   assert.strictEqual(c.vpIsStage1Active, false);
-  assert.strictEqual(c.vpIsStage1Done, true, "续写期间第一步应显示已完成");
-  assert.ok(c.vpStep1StatusText.includes("已锁定"), "第一步文案：" + c.vpStep1StatusText);
+  assert.strictEqual(c.vpIsStage1Done, false, "旧记录只有 2/47 题结构，不得误报结构已锁定");
+  assert.ok(c.vpStep1StatusText.includes("补全结构"), "第一步文案：" + c.vpStep1StatusText);
   assert.strictEqual(c.vpIsStage2Active, true, "续写期间第二步应处于进行中");
   assert.strictEqual(c.vpIsStage2Done, false);
+  c.visualPaper.total = 2;
+  c.visualPaper.frameworkRaw = "完整骨架快照";
+  assert.strictEqual(c.vpIsStage1Done, true, "完整骨架续写期间第一步应显示已完成");
+  assert.ok(c.vpStep1StatusText.includes("已锁定"));
   // 对照：首跑框架阶段不误报完成
   c.vpStage = "framework";
   assert.strictEqual(c.vpIsStage1Active, true);

@@ -257,6 +257,30 @@ test("复制获取全文而非当前页，关闭详情后不能继续复制", as
   assert.deepEqual(copied, [full]);
 });
 
+test("请求详情按需加载内部调用列表，切页与关闭不会留下过期结果", async () => {
+  const { app, requests } = setup();
+  const pending = app.openLogDetail(80);
+  requests[0].resolve({ id: 80, step_count: 90, payload_sizes: null });
+  await pending;
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].url, "/api/admin/logs/80/steps?page=1");
+  const second = app.loadLogSteps(2);
+  assert.equal(requests[1].options.signal.aborted, true);
+  requests[2].resolve({ items: [{ id: 82, step_meta: { issues: { "65": ["参考答案"] } } }], total: 90, page: 2 });
+  await second;
+  requests[1].reject(new Error("stale failure"));
+  await new Promise(setImmediate);
+  assert.equal(app.logSteps[0].id, 82);
+  assert.equal(app.logStepsError, "");
+  assert.equal(app.logStepIssues(app.logSteps[0]), "第 65 题：参考答案");
+  const late = app.loadLogSteps(1);
+  app.closeLogDetail();
+  assert.equal(requests[3].options.signal.aborted, true);
+  requests[3].resolve({ items: [{ id: 99 }], total: 90, page: 1 });
+  await late;
+  assert.equal(app.logSteps.length, 0);
+});
+
 test("文本 API 保留原文，失败时仍解析 JSON 错误", async () => {
   const { app, env } = setup();
   const actualApi = vm.runInContext("adminApp().api", env);

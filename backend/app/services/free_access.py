@@ -21,7 +21,7 @@ from time import monotonic
 from typing import Callable
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 
 from app.database import SessionLocal
 from app.models import UsageLog
@@ -99,14 +99,20 @@ def _identity_filter(identity: str):
 
 
 def _counted_status_clause():
-    """只有真正跑失败的调用不算数，其余都计入限额。
+    """显式标记优先；未标记的历史调用与其他工具沿用状态判断。
 
     生成失败（error）没有产生有效产出，不该再占用户的限额；用户主动停止 /
     中途断线（cancelled）与正常完成（success）照常计入 —— 否则「快结束时按停止」
     就能无限白嫖。存量行经 ALTER 补列后 status 为 NULL，语义是升级前的成功调用，
     一并计入（SQLite 的 `status != 'error'` 对 NULL 返回 NULL，必须显式兜底）。
     """
-    return or_(UsageLog.status.is_(None), UsageLog.status != STATUS_ERROR)
+    # 多模型/并行请求显式标记主调用与子调用；部分失败但已有完整题交付仍算一次。
+    # 存量行与其他工具保持 NULL，继续使用原状态口径。
+    return or_(
+        UsageLog.counts_for_free_limit.is_(True),
+        and_(UsageLog.counts_for_free_limit.is_(None),
+             or_(UsageLog.status.is_(None), UsageLog.status != STATUS_ERROR)),
+    )
 
 
 def _prune(entries: deque[float], now_mono: float) -> None:

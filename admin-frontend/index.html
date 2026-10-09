@@ -810,6 +810,7 @@
                   <td class="mono" data-label="使用码" data-span="full" x-text="l.code"></td>
                   <td class="truncate-cell" data-label="工具" data-span="full" :title="`${l.tool_name || ''} #${l.tool_id || ''}`">
                     <span x-text="l.tool_name || l.tool_id || '—'"></span>
+                    <span class="dim" x-show="l.step_count" x-text="' · ' + l.step_count + ' 次内部调用'"></span>
                     <span class="dim" x-show="l.tool_id"> (#<span x-text="l.tool_id"></span>)</span>
                   </td>
                   <td class="dim mono truncate-cell" data-label="模型" data-span="full" :title="l.model" x-text="l.model || '—'"></td>
@@ -1182,6 +1183,11 @@
               <span>Max Tokens</span>
               <input type="number" x-model.number="configForm.max_tokens" min="256" max="128000">
               <span class="field-hint">推理模型的思考 token 也计入此预算，建议适当调大</span>
+            </label>
+            <label class="field">
+              <span>试卷全解默认并发</span>
+              <input type="number" x-model.number="configForm.visual_paper_concurrency" min="1" max="16" step="1">
+              <span class="field-hint">第二步同时生成的请求数，默认 3。各模型可在编辑菜单中跟随此值或单独设置。</span>
             </label>
             <label class="field">
               <span>Timeout（秒）</span>
@@ -1648,6 +1654,15 @@
               </div>
             </div>
           </div>
+          <div class="field mb-3">
+            <span>试卷全解并发</span>
+            <div class="preset-chips">
+              <button class="preset-chip" :class="{ on: modelForm.concurrency_mode !== 'custom' }" @click="modelForm.concurrency_mode = 'default'" x-text="'跟随默认（' + configForm.visual_paper_concurrency + '）'"></button>
+              <button class="preset-chip" :class="{ on: modelForm.concurrency_mode === 'custom' }" @click="modelForm.concurrency_mode = 'custom'">自定义</button>
+            </div>
+            <input x-show="modelForm.concurrency_mode === 'custom'" type="number" min="1" max="16" step="1" x-model.number="modelForm.visual_paper_concurrency">
+            <span class="field-hint">每份试卷第二步同时发起的请求数，自动补全共用此上限。1 为串行；保存配置后对新请求生效。</span>
+          </div>
           <label class="field mb-3">
             <span>推荐评分（0-10）</span>
             <input type="number" x-model.number="modelForm.score" min="0" max="10" step="0.5" placeholder="留空不展示推荐环">
@@ -2041,6 +2056,28 @@
                 </div>
               </div>
 
+              <button class="btn-ghost mb-3" x-show="logDetail?.parent_log_id" @click="openLogDetail(logDetail.parent_log_id)">← 返回本次生成</button>
+              <details class="payload-block" x-show="logDetail?.step_count" open>
+                <summary class="payload-title" x-text="'调用步骤 · ' + (logDetail?.step_count || 0) + ' 次（含自动补全）'"></summary>
+                <p class="field-hint">本页用量包含下列步骤；每次真实调用独立留痕，自动补全不额外扣次数。</p>
+                <div class="drawer-error" x-show="logStepsError">
+                  <span x-text="logStepsError"></span><button class="link-btn" @click="loadLogSteps(logStepsPage)">重试</button>
+                </div>
+                <div class="log-step-list" :aria-busy="logStepsLoading">
+                  <template x-for="step in logSteps" :key="step.id">
+                    <button class="log-step-item" @click="openLogDetail(step.id)">
+                      <span class="log-step-head"><strong x-text="step.step_name || step.tool_name"></strong><span class="status-badge" :class="'st-' + step.status" x-text="logStatusLabel(step.status)"></span></span>
+                      <span class="field-hint" x-text="(step.provider_name || step.model) + ' · ' + fmtDuration(step.duration_ms) + ' · ' + fmtNum(step.total_tokens) + ' tokens'"></span>
+                      <span class="field-hint" x-show="logStepIssues(step)" x-text="logStepIssues(step)"></span>
+                    </button>
+                  </template>
+                </div>
+                <div class="payload-pager" x-show="logStepsTotal > 50">
+                  <button class="btn-ghost" @click="loadLogSteps(logStepsPage - 1)" :disabled="logStepsLoading || logStepsPage <= 1">上一页</button>
+                  <span x-text="logStepsPage + ' / ' + Math.ceil(logStepsTotal / 50)"></span>
+                  <button class="btn-ghost" @click="loadLogSteps(logStepsPage + 1)" :disabled="logStepsLoading || logStepsPage * 50 >= logStepsTotal">下一页</button>
+                </div>
+              </details>
               <div class="drawer-error" x-show="logDetail?.error_message" x-cloak>
                 <span class="meta-label">错误信息</span>
                 <div class="break-any" x-text="logDetail?.error_message"></div>

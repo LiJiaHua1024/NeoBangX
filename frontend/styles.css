@@ -1543,6 +1543,10 @@ html[data-theme="sora"][data-sky="night"] .ms-menu { --panel-strong: color-mix(i
 /* 备用通道切换进度：文字 + 方格子示意。
    已失败的格子标红、当前正在尝试的格子呼吸闪烁、还没轮到的留空，
    让用户在长等待里看得出「在等第几个通道」，而不是以为卡死了。 */
+.vp-recovery-panel { width: min(100%, 52rem); margin: 0 auto; padding: .6rem 1rem; flex-shrink: 0; max-height: 9rem; overflow: auto; }
+.vp-recovery-panel .fallback-panel + .fallback-panel { margin-top: .4rem; }
+.vp-recovery-projection { margin-top: 4.5rem; background: var(--bg); }
+.vp-q-chip.incomplete, .vp-overview-chip.incomplete { border-color: var(--warn, #d39133); box-shadow: inset 0 -2px 0 var(--warn, #d39133); }
 .fallback-panel {
   display: flex;
   align-items: center;

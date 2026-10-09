@@ -15,8 +15,8 @@ from typing import Annotated, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import case, desc, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.config import settings
 from app.database import get_db
@@ -111,6 +111,7 @@ class FreeLimitsEntry(BaseModel):
 
 
 class ModelEntry(BaseModel):
+    visual_paper_concurrency: Optional[int] = Field(None, ge=1, le=16, strict=True, description="试卷精讲并发；null 跟随默认")
     id: str = Field(..., min_length=1, description="LiteLLM 格式模型 ID")
     name: str = Field("", max_length=100, description="显示名称，留空回退模型 ID")
     description: str = Field("", max_length=200, description="用户端展示的模型描述，替代模型 ID 显示")
@@ -170,6 +171,7 @@ class ToolReasoningRuleEntry(BaseModel):
 
 
 class ConfigUpdateRequest(BaseModel):
+    visual_paper_concurrency: Optional[int] = Field(None, ge=1, le=16, strict=True, description="试卷精讲默认并发，1-16")
     default_model: Optional[str] = None
     models: Optional[List[ModelEntry]] = None
     chores_model: Optional[str] = None
@@ -1031,16 +1033,22 @@ def _apply_log_filters(
     device: str = "",
     db: Optional[Session] = None,
 ):
+    query = query.filter(UsageLog.parent_log_id.is_(None))
+    child = aliased(UsageLog)
     if code:
         query = query.filter(UsageLog.code.ilike(f"%{code.strip()}%"))
     if tool_id:
         query = query.filter(UsageLog.tool_id == tool_id.strip())
     if model:
-        query = query.filter(UsageLog.model.ilike(f"%{model.strip()}%"))
+        like = f"%{model.strip()}%"
+        query = query.filter(or_(UsageLog.model.ilike(like), select(child.id).where(
+            child.parent_log_id == UsageLog.id, child.model.ilike(like)).exists()))
     if provider:
         like = f"%{provider.strip()}%"
         query = query.filter(
-            (UsageLog.provider_id.ilike(like)) | (UsageLog.provider_name.ilike(like))
+            or_(UsageLog.provider_id.ilike(like), UsageLog.provider_name.ilike(like),
+                select(child.id).where(child.parent_log_id == UsageLog.id,
+                                      or_(child.provider_id.ilike(like), child.provider_name.ilike(like))).exists())
         )
     if status:
         if status not in LOG_STATUSES:
@@ -1107,12 +1115,14 @@ def logs_summary(
 
 def _log_summary(query) -> dict:
     """同一筛选范围只聚合一次，列表同时请求汇总时复用 total。"""
+    child = aliased(UsageLog)
+    child_tokens = select(func.sum(child.total_tokens)).where(child.parent_log_id == UsageLog.id).correlate(UsageLog).scalar_subquery()
     row = query.with_entities(
         func.count(UsageLog.id).label("total"),
         func.coalesce(func.sum(case((status_matches("success"), 1), else_=0)), 0).label("success"),
         func.coalesce(func.sum(case((status_matches("cancelled"), 1), else_=0)), 0).label("cancelled"),
         func.coalesce(func.sum(case((status_matches("error"), 1), else_=0)), 0).label("error"),
-        func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+        func.coalesce(func.sum(func.coalesce(UsageLog.total_tokens, 0) + func.coalesce(child_tokens, 0)), 0).label("total_tokens"),
         func.avg(UsageLog.duration_ms).label("avg_duration_ms"),
         func.count(func.distinct(UsageLog.device_id)).label("distinct_devices"),
     ).one()
@@ -1179,6 +1189,7 @@ def list_logs(
         # 未按工具筛选时避免额外 join，保留直接分页的短路径。
         rows = query.order_by(desc(UsageLog.id)).offset(offset).limit(page_size).all()
     items = [r.to_dict() for r in rows]
+    _attach_step_summaries(db, items)
     _attach_devices(db, items)
     result = {
         "total": total,
@@ -1189,6 +1200,25 @@ def list_logs(
     if summary is not None:
         result["summary"] = summary
     return result
+
+
+def _attach_step_summaries(db: Session, items: list[dict]) -> None:
+    ids = [item["id"] for item in items if item.get("parent_log_id") is None and item.get("tool_id") == "13"]
+    if not ids:
+        return
+    keys = ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens")
+    rows = db.query(UsageLog.parent_log_id, func.count(UsageLog.id),
+                    *(func.sum(getattr(UsageLog, key)) for key in keys),
+                    func.max(UsageLog.tokens_estimated)).filter(UsageLog.parent_log_id.in_(ids)).group_by(UsageLog.parent_log_id).all()
+    by_id = {row[0]: row for row in rows}
+    for item in items:
+        row = by_id.get(item["id"])
+        item["step_count"] = row[1] if row else 0
+        if row:
+            for key, value in zip(keys, row[2:6]):
+                if value is not None:
+                    item[key] = (item.get(key) or 0) + value
+            item["tokens_estimated"] = bool(item.get("tokens_estimated") or row[6])
 
 
 def _attach_devices(db: Session, items: list[dict]) -> None:
@@ -1219,6 +1249,7 @@ def log_detail(
     if not row:
         raise HTTPException(status_code=404, detail="日志不存在")
     data = row.to_dict()
+    _attach_step_summaries(db, [data])
     if include_payload:
         payload = db.get(LogPayload, log_id)
         data["payload"] = (
@@ -1241,6 +1272,16 @@ def log_detail(
 
 
 LogPayloadPart = Literal["input", "prompt", "output"]
+
+
+@router.get("/logs/{log_id}/steps")
+def log_steps(log_id: int, db: Annotated[Session, Depends(get_db)], page: int = Query(1, ge=1),
+              page_size: int = Query(50, ge=1, le=100)):
+    if db.get(UsageLog, log_id) is None:
+        raise HTTPException(status_code=404, detail="日志不存在")
+    query = db.query(UsageLog).filter(UsageLog.parent_log_id == log_id)
+    rows = query.order_by(UsageLog.id).offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": [row.to_dict() for row in rows], "total": query.count(), "page": page, "page_size": page_size}
 
 
 @router.get("/logs/{log_id}/payload/{part}")

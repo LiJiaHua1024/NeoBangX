@@ -274,6 +274,26 @@ def test_limit_ignores_failed_calls():
     register_free_use(entry=entry, identity="fp:limit-failed")()
 
 
+@pytest.mark.parametrize("status,counted", [("success", True), ("error", True), ("cancelled", True), ("error", False)])
+def test_parallel_logs_count_only_parent_request(status, counted):
+    """真实落库后，成功/部分失败/停止各计一次，完全失败和子调用不额外占次数。"""
+    from app.services.request_log import record_usage_log
+
+    model, fingerprint = f"limit/{uuid4().hex}", uuid4().hex
+    for child_status in ("success", "error", "cancelled"):
+        assert record_usage_log(code_id=0, code="", model=model, fingerprint=fingerprint,
+                                status=child_status, counts_for_free_limit=False) is not None
+    assert record_usage_log(code_id=0, code="", model=model, fingerprint=fingerprint,
+                            status=status, counts_for_free_limit=counted) is not None
+    entry = {"id": model, "free_limits": {"minute": 1}}
+    if counted:
+        with pytest.raises(HTTPException) as exc:
+            register_free_use(entry=entry, identity=f"fp:{fingerprint}")
+        assert exc.value.detail["used"] == 1
+    else:
+        register_free_use(entry=entry, identity=f"fp:{fingerprint}")()
+
+
 def test_limit_counts_cancelled_calls():
     """用户中途停止 / 断线（cancelled）照常计入，防止「快结束就停止」白嫖。"""
     entry = {"id": "limit/cancelled", "name": "限额模型", "is_free": True,

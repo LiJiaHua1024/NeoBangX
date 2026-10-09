@@ -362,6 +362,14 @@ class FrameworkApplier:
     def _apply_mark(self, mtype: str, args: str, anchor: str) -> None:
         self.stats.marks_total += 1
         pos = self._find_anchor(anchor)
+        if pos is None and mtype == "GROUP" and re.fullmatch(r"[A-D]", anchor.strip()):
+            # 阅读篇章标题常独占一行。仅 GROUP 可用单字母标题，且前方必须唯一整行命中；
+            # 不放宽 Q / OPTIONS 的单字符规则，避免匹配正文或选项中的字母。
+            heading = anchor.strip()
+            candidates = [(i, len(line) - len(line.lstrip())) for i, line in enumerate(self._lines)
+                          if line.strip() == heading and (i, len(line) - len(line.lstrip())) >= self._cut]
+            if len(candidates) == 1:
+                pos = candidates[0]
         if pos is None and mtype == "Q":
             pos = self._find_anchor_backward(anchor)
             if pos is not None:
@@ -369,8 +377,28 @@ class FrameworkApplier:
                     "框架解析：Q %s 的锚点在游标后方（模型先标了材料再标题），已回插到要求处",
                     args.strip() or "?",
                 )
+        if pos is not None and mtype == "CUT" and self._region != "key" and self._derived_nos:
+            # 模型可能先 CUT 到答案正文，再 KEY 回指答案标题。先保护已跨过的明确答案标题，
+            # 避免把答案前半段混进末题语篇，随后又因 KEY 在游标后方而否定整份框架。
+            for i in range(self._cut[0], pos[0] + 1):
+                line = self._lines[i]
+                heading_pos = (i, len(line) - len(line.lstrip()))
+                if self._cut <= heading_pos <= pos and re.fullmatch(
+                    r"\s*(?:参考答案|答案(?:与解析)?|【答案】|answer\s*key|answers?)\s*[:：]?\s*", line, re.I
+                ):
+                    logger.warning("框架解析：CUT 越过答案标题，改在标题处保留答案区")
+                    mtype, args, pos = "KEY", "", heading_pos
+                    break
         if pos is None:
             self.stats.marks_skipped += 1
+            if mtype == "KEY" and not any(
+                re.search(r"参考答案|答案与解析|【答案】|^\s*答案|^\s*answer\s*key\b|^\s*answers?\s*[:：]?\s*$", line, re.I)
+                or (anchor.strip() and anchor.strip().casefold() in line.casefold())
+                for line in self._lines
+            ):
+                # 原卷没有答案区时，模型多发 KEY 属于可忽略的标记，不能销毁已提取的题目。
+                logger.warning("框架解析：原卷未找到答案区，忽略未命中的 KEY 标记")
+                return
             if mtype in {"GROUP", "PASSAGE", "Q", "OPTIONS", "KEY"}:
                 self.stats.structure_errors += 1
             return

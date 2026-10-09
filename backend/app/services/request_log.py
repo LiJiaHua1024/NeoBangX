@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -170,6 +171,10 @@ def record_usage_log(
     ip: str = "",
     user_agent: str = "",
     units: int = 0,
+    counts_for_free_limit: bool | None = None,
+    parent_log_id: int | None = None,
+    step_name: str = "",
+    step_meta: dict | None = None,
     input_text: str | None = None,
     rendered_prompt: str | None = None,
     output_text: str | None = None,
@@ -209,6 +214,10 @@ def record_usage_log(
                 ip=ip or "",
                 user_agent=user_agent or "",
                 units=max(0, int(units or 0)),
+                counts_for_free_limit=counts_for_free_limit,
+                parent_log_id=parent_log_id,
+                step_name=step_name[:160],
+                step_meta=json.dumps(step_meta, ensure_ascii=False) if step_meta is not None else None,
                 provider_id=(provider_id or "")[:64],
                 provider_name=(provider_name or "")[:128],
                 fallback_attempts=fallback_attempts,
@@ -241,11 +250,13 @@ def purge_expired_logs(db: Session, days: int) -> int:
     if days <= 0:
         return 0
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
-    expired_ids = select(UsageLog.id).where(UsageLog.created_at < cutoff)
+    expired_parents = select(UsageLog.id).where(UsageLog.created_at < cutoff, UsageLog.parent_log_id.is_(None))
+    expired = or_(UsageLog.created_at < cutoff, UsageLog.parent_log_id.in_(expired_parents))
+    expired_ids = select(UsageLog.id).where(expired)
     db.execute(delete(LogPayload).where(LogPayload.log_id.in_(expired_ids)))
     deleted = (
         db.query(UsageLog)
-        .filter(UsageLog.created_at < cutoff)
+        .filter(expired)
         .delete(synchronize_session=False)
     )
     db.commit()

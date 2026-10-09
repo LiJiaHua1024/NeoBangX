@@ -596,6 +596,11 @@ function adminApp() {
     logDetail: null,
     logDetailLoading: false,
     logDetailError: "",
+    logSteps: [],
+    logStepsPage: 1,
+    logStepsTotal: 0,
+    logStepsLoading: false,
+    logStepsError: "",
     logPayloadPageSize: 4096,
     logPayloadParts: [],
     // null = 尚未读取；决定日志页「未开启记录」提示是否展示
@@ -607,6 +612,7 @@ function adminApp() {
       models: [],
       chores_model: "",
       max_tokens: 4096,
+      visual_paper_concurrency: 3,
       timeout: 120,
       first_token_timeout: 30,
       max_visible_models: 0,
@@ -706,6 +712,7 @@ function adminApp() {
     modelModalOpen: false,
     modelModalIndex: null,
     modelForm: {
+      concurrency_mode: "default", visual_paper_concurrency: 3,
       id: "", name: "", description: "", score: null, reasoning_effort: "", extra_body: "",
       user_usable: true, ocr_usable: false, chores_usable: true, enabled: true,
       is_free: false, free_no_code: false,
@@ -1974,6 +1981,7 @@ function adminApp() {
           text: "", loaded: false, loadedPage: -1, loading: false, copying: false, error: "",
         })) : [];
         this.logDetail = detail;
+        if (detail.step_count) this.loadLogSteps(1);
         for (const part of this.logPayloadParts) {
           if (part.open) this.loadLogPayload(part);
         }
@@ -1997,11 +2005,42 @@ function adminApp() {
       logPayloadAborts.clear();
       this.logDetailOpen = false;
       this.logDetail = null;
+      this.logSteps = [];
+      this.logStepsPage = 1;
+      this.logStepsTotal = 0;
+      this.logStepsLoading = false;
+      this.logStepsError = "";
       this.logPayloadParts = [];
       this.logDetailLoading = false;
       this.logDetailError = "";
     },
 
+    async loadLogSteps(page = 1) {
+      if (!this.logDetail) return;
+      const request = logDetailRequest, id = this.logDetail.id;
+      logPayloadAborts.get("steps")?.abort();
+      const controller = new AbortController();
+      logPayloadAborts.set("steps", controller);
+      this.logStepsLoading = true;
+      this.logStepsError = "";
+      try {
+        const data = await this.api(`/api/admin/logs/${id}/steps?page=${page}`, { signal: controller.signal });
+        if (request !== logDetailRequest || logPayloadAborts.get("steps") !== controller) return;
+        this.logSteps = data.items || [];
+        this.logStepsPage = data.page;
+        this.logStepsTotal = data.total;
+      } catch (e) {
+        if (request === logDetailRequest && logPayloadAborts.get("steps") === controller && e.name !== "AbortError") this.logStepsError = e.message || "加载调用步骤失败";
+      } finally {
+        if (request === logDetailRequest && logPayloadAborts.get("steps") === controller) {
+          this.logStepsLoading = false;
+          logPayloadAborts.delete("steps");
+        }
+      }
+    },
+    logStepIssues(step) {
+      return Object.entries(step.step_meta?.issues || {}).map(([no, issues]) => `第 ${no} 题：${issues.join('、')}`).join('；');
+    },
     logPayloadPages(part) {
       return Math.max(1, Math.ceil(part.total / this.logPayloadPageSize));
     },
@@ -2424,6 +2463,7 @@ function adminApp() {
                 score: m.score ?? null,
                 reasoning_effort: m.reasoning_effort || null,
                 extra_body: m.extra_body || null,
+                visual_paper_concurrency: m.visual_paper_concurrency ?? null,
                 ...capsOf(m),
                 enabled: m.enabled !== false,
                 is_free: !!m.is_free,
@@ -2441,6 +2481,7 @@ function adminApp() {
           ocr_model: cfg.ocr_model || "",
           ocr_max_tokens: Number(cfg.ocr_max_tokens) || 8192,
           max_tokens: Number(cfg.max_tokens) || 4096,
+          visual_paper_concurrency: Number(cfg.visual_paper_concurrency) || 3,
           timeout: Number(cfg.timeout) || 120,
           first_token_timeout: Number(cfg.first_token_timeout) || 30,
           max_visible_models: Number(cfg.max_visible_models) || 0,
@@ -2510,6 +2551,7 @@ function adminApp() {
       this.modelModalIndex = null;
       this.modelForm = {
         id: "", name: "", description: "", score: null, reasoning_effort: "", extra_body: "",
+        concurrency_mode: "default", visual_paper_concurrency: this.configForm.visual_paper_concurrency,
         user_usable: true, ocr_usable: false, chores_usable: true, enabled: true,
         is_free: false, free_no_code: false,
         free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
@@ -2525,6 +2567,8 @@ function adminApp() {
       this.modelForm = {
         id: m.id,
         name: m.name || "",
+        concurrency_mode: m.visual_paper_concurrency == null ? "default" : "custom",
+        visual_paper_concurrency: m.visual_paper_concurrency ?? this.configForm.visual_paper_concurrency,
         description: m.description || "",
         score: m.score ?? null,
         reasoning_effort: m.reasoning_effort || "",
@@ -2640,6 +2684,11 @@ function adminApp() {
         return;
       }
       const effort = (this.modelForm.reasoning_effort || "").trim() || null;
+      const concurrency = this.modelForm.concurrency_mode === "custom" ? Number(this.modelForm.visual_paper_concurrency) : null;
+      if (concurrency !== null && (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16)) {
+        this.toast("试卷并发需为 1 到 16 的整数", "error");
+        return;
+      }
       const entry = {
         id,
         name: (this.modelForm.name || "").trim(),
@@ -2647,6 +2696,7 @@ function adminApp() {
         score: this.modelForm.score,
         reasoning_effort: effort,
         extra_body: extraBody,
+        visual_paper_concurrency: concurrency,
         user_usable: userUsable,
         ocr_usable: ocrUsable,
         chores_usable: choresUsable,
@@ -2947,6 +2997,11 @@ function adminApp() {
         this.toast("启用线路镜像需要填写两条线路地址", "error");
         return;
       }
+      const concurrency = Number(this.configForm.visual_paper_concurrency);
+      if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
+        this.toast("默认试卷并发需为 1 到 16 的整数", "error");
+        return;
+      }
       this.savingConfig = true;
       try {
         const body = {
@@ -2955,6 +3010,7 @@ function adminApp() {
           ocr_model: this.configForm.ocr_model || "",
           ocr_max_tokens: Math.max(256, Math.min(32768, Math.floor(Number(this.configForm.ocr_max_tokens) || 8192))),
           max_tokens: this.configForm.max_tokens,
+          visual_paper_concurrency: Number(this.configForm.visual_paper_concurrency),
           timeout: this.configForm.timeout,
           first_token_timeout: this.configForm.first_token_timeout,
           max_visible_models: Math.max(0, Math.min(50, Math.floor(Number(this.configForm.max_visible_models) || 0))),
@@ -2977,6 +3033,7 @@ function adminApp() {
             score: m.score ?? null,
             reasoning_effort: m.reasoning_effort || null,
             extra_body: m.extra_body || null,
+            visual_paper_concurrency: m.visual_paper_concurrency ?? null,
             user_usable: m.user_usable !== false,
             ocr_usable: !!m.ocr_usable,
             chores_usable: m.chores_usable !== false,
