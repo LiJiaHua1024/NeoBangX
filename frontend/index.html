@@ -960,11 +960,11 @@
                 <span x-html="icon('refresh','w-4 h-4')"></span>
                 <span x-text="vpRemaining > 0 ? '补全 ' + vpRemaining + ' 题的讲解' : '继续生成'"></span>
               </button>
-              <details x-show="vpMissingQuestions.length" class="text-xs text-dim w-full" style="max-width:48rem">
+              <details x-show="vpMissingQuestions.length" class="vp-missing text-xs text-dim w-full" style="max-width:48rem">
                 <summary class="cursor-pointer text-center" x-text="'查看 ' + vpMissingQuestions.length + ' 题待补内容（有答案不代表讲解和迁移已完整）'"></summary>
-                <div class="flex flex-wrap gap-2 mt-2" style="max-height:7rem;overflow:auto">
+                <div class="vp-missing-list scroll-thin flex flex-wrap gap-2 mt-2">
                   <template x-for="item in vpMissingQuestions" :key="item.no">
-                    <button class="btn-ghost text-xs" @click="vpSelectQuestionByNo(item.no)" x-text="'第 ' + item.no + ' 题：' + item.reasons.join('、')"></button>
+                    <button class="btn-ghost text-xs vp-missing-chip" @click="vpSelectQuestionByNo(item.no)" x-text="'第 ' + item.no + ' 题：' + item.reasons.join('、')"></button>
                   </template>
                 </div>
               </details>

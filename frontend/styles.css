@@ -2737,12 +2737,55 @@ mark, .vp-hl {
 
 /* ============================================================
    滚动条
+   全局统一为细滚动条，并彻底隐藏 WebKit 的上下箭头按钮
+   （Windows 下裸 overflow:auto 会露出系统默认宽滚动条 + ▲▼，非常不美观）。
+   业务里显式写 scroll-thin 的容器沿用同一套；漏网的 overflow:auto 也会被兜底。
    ============================================================ */
+/* Firefox / 新规范：全局细滚动条 */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+/* Chromium / WebKit：全局细滚动条 + 隐藏箭头按钮 */
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--text-faint); background-clip: content-box; }
+*::-webkit-scrollbar-button { display: none !important; width: 0 !important; height: 0 !important; }
+*::-webkit-scrollbar-corner { background: transparent; }
 .scroll-thin { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .scroll-thin::-webkit-scrollbar { width: 6px; height: 6px; }
 .scroll-thin::-webkit-scrollbar-track { background: transparent; }
 .scroll-thin::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
 .scroll-thin::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+.scroll-thin::-webkit-scrollbar-button { display: none !important; width: 0 !important; height: 0 !important; }
+
+/* —— 待补题目一览（续写条里的 details）：纵向细滚动，无原生箭头 —— */
+.vp-missing summary { list-style: none; }
+.vp-missing summary::-webkit-details-marker { display: none; }
+.vp-missing-list {
+  max-height: 7rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-gutter: stable;
+  padding: 2px 4px 2px 2px;
+  justify-content: center;
+}
+.vp-missing-list::-webkit-scrollbar { width: 6px; }
+.vp-missing-list::-webkit-scrollbar-track { background: transparent; }
+.vp-missing-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+.vp-missing-list::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+.vp-missing-list::-webkit-scrollbar-button { display: none !important; width: 0 !important; height: 0 !important; }
+/* 长原因文字允许换行、左对齐，不撑出横向滚动条 */
+.vp-missing-chip {
+  white-space: normal !important;
+  text-align: left;
+  justify-content: flex-start;
+  max-width: 100%;
+  line-height: 1.5;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+}
 
 /* ============================================================
    入场与微动效

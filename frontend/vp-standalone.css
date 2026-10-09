@@ -256,11 +256,19 @@ html[data-theme="sora"][data-sky="night"] {
 .vp-ic { width: 1.15rem; height: 1.15rem; flex: none; }
 .vp-pre { white-space: pre-wrap; word-break: break-word; }
 
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+*::-webkit-scrollbar-button { display: none !important; width: 0 !important; height: 0 !important; }
+*::-webkit-scrollbar-corner { background: transparent; }
 .scroll-thin { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .scroll-thin::-webkit-scrollbar { width: 6px; height: 6px; }
 .scroll-thin::-webkit-scrollbar-track { background: transparent; }
 .scroll-thin::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
 .scroll-thin::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+.scroll-thin::-webkit-scrollbar-button { display: none !important; width: 0 !important; height: 0 !important; }
 
 /* ============================================================
    基础组件（镜像 styles.css）
