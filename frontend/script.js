@@ -4823,7 +4823,8 @@ function nbx() {
     /* 输入坞的目标状态：未折叠且不在生成中才展开（「开始新题目」已移到状态条，坞里只有输入面板） */
     syncDocks() {
       this.$nextTick(() => {
-        this._animateDock(this.$refs.dockComposer, !this.inputCollapsed && !this.streaming);
+        const dock = this.isVisualPaperTool ? this.$refs.vpDockComposer : this.$refs.dockComposer;
+        this._animateDock(dock, !this.inputCollapsed && !this.streaming);
       });
     },
     autoGrow() {

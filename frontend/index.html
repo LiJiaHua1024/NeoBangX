@@ -1666,7 +1666,7 @@
             <!-- 输入区（复用通用输入：粘贴/Word）。只有这一个坞：有结果后整块收起，
                  下方不留任何常驻控件（本工具排版最挤，状态条与本区都已清空）。 -->
             <div x-show="!vpFullscreen" class="shrink-0">
-              <div class="dock" x-ref="dockComposer" x-init="dockMount($el, !inputCollapsed && !streaming)">
+              <div class="dock" x-ref="vpDockComposer" x-init="dockMount($el, !inputCollapsed && !streaming)">
                 <div class="p-3 sm:p-4 pt-2">
                   <div class="composer glass-soft rounded-2xl p-3" x-ref="composer" @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false" @drop.prevent="handleFileDrop($event)" :class="{ 'drag-over': dragOver }">
                     <div x-show="inputMode === 'file' && attachedFile" class="file-card">
