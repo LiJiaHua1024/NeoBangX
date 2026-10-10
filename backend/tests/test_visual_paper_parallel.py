@@ -634,3 +634,28 @@ def test_same_group_reopen_still_merges_explanations():
     assert q["reference"]["evidence"] == "原文第三行。"
     assert q["reference"]["reason"] == "因为如此。"
     assert data["groups"][0]["intro"] == "本组导语"
+
+
+def test_question_numbers_are_compared_normalised():
+    """"01"/" 1" 与 "1" 是同一题：不归一化会被判越界丢弃、白烧三轮重试，
+    前端发 "1" 而骨架是 "01" 时也会 400。"""
+    raw = skeleton(3).replace("@@Q@@ 1", "@@Q@@ 01").replace("@@Q@@ 2", "@@Q@@ 02")
+    jobs = plan_explanations(raw, LOADER, 1, ["1", "2"])
+    assert jobs and jobs[0].nos == ["1", "2"], jobs
+    # 模型输出带前导零的题号也不该被整块丢弃
+    blocks = QuestionBlocks(["1", "2"])
+    emitted = blocks.feed("@@Q@@ 01\n@@ANSWER@@\nA\n@@END_Q@@\n")
+    assert [no for no, _ in emitted] == ["1"]
+
+
+def test_one_unresolved_passage_does_not_disable_the_whole_batch():
+    """一题语篇引用未解析时，健康题照常并行，只有坏题退出。"""
+    raw = (
+        "@@TOTAL@@ 2\n@@PAPER@@ 测试卷\n"
+        "@@GROUP@@ reading|阅读理解|\n"
+        "@@Q@@ 1\n@@PASSAGE_REF@@ P9\n@@STEM@@\n第一题？\n@@OPTIONS@@\nA. a\nB. b\n@@ANSWER@@ A\n@@END_Q@@\n"
+        "@@Q@@ 2\n@@STEM@@\n第二题？\n@@OPTIONS@@\nA. c\nB. d\n@@ANSWER@@ B\n@@END_Q@@\n"
+    )
+    jobs = plan_explanations(raw, LOADER, 1)
+    assert len(jobs) == 1
+    assert jobs[0].nos == ["2"], "题 1 引用未解析应退出并行，题 2 照常"

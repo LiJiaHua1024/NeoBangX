@@ -126,6 +126,13 @@ class ExplainJob:
                 "issues": self.issues.copy(), "fallback": self.fallback, "retry_reason": self.retry_reason}
 
 
+def _norm_no(s: str) -> str:
+    """题号归一化：只比数字、去掉前导零。模型写 "01"/" 1" 与 "1" 是同一题，
+    不归一化会被判越界丢弃、白烧三轮重试；前端发 "1" 而骨架是 "01" 时也会 400。"""
+    d = re.sub(r"\D", "", str(s)).lstrip("0")
+    return d or "0"
+
+
 def plan_explanations(raw: str, loader, transfer_count: int, selected: list[str] | None = None) -> list[ExplainJob]:
     # 老客户端的自然语言工单仍交给原来的单流处理，不能把其剩余题清单猜成全卷。
     if selected is None and "【续写指令】" in raw:
@@ -136,20 +143,30 @@ def plan_explanations(raw: str, loader, transfer_count: int, selected: list[str]
         return []
     questions = [q for g in paper["groups"] for q in g["questions"]]
     nos = [q["no"] for q in questions]
-    if not nos or any(not re.fullmatch(r"\d{1,3}", n) or q.get("passageUnresolved") for n, q in zip(nos, questions)):
+    # 按题过滤，不再「一题坏整卷返回 []」：题号非数字或语篇引用未解析的题退出并行
+    # （交给单流/续写处理），健康题照常并行。旧逻辑一题中招就整卷静默降级单流。
+    usable = [q for q in questions
+              if re.fullmatch(r"\d{1,3}", q["no"]) and not q.get("passageUnresolved")]
+    if not usable:
         return []
-    if len(set(nos)) != len(nos):
+    usable_nos = [q["no"] for q in usable]
+    if len(set(usable_nos)) != len(usable_nos):
         return []
-    # 空列表与省略同义（都表示全量），不当作「题号为空」报错
-    if selected is not None and (len(set(selected)) != len(selected) or not set(selected) <= set(nos)):
-        raise ValueError("待补全题号为空、重复或不属于当前试卷")
-    wanted = set(selected) if selected else set(nos)
+    if selected is not None:
+        norm_selected = [_norm_no(s) for s in selected]
+        norm_usable = {_norm_no(n) for n in usable_nos}
+        if len(set(norm_selected)) != len(norm_selected) or not set(norm_selected) <= norm_usable:
+            raise ValueError("待补全题号为空、重复或不属于当前试卷")
+    # 归一化后的集合用于挑题；写回工单的题号保留骨架原样（显示与序列化都不变）
+    wanted = {_norm_no(s) for s in selected} if selected else {_norm_no(n) for n in usable_nos}
     jobs = []
     # 迁移题量越大，单次处理原题越少，降低单任务撞输出上限的概率。
     # tc>=3 时退化为单题一片；tc 为 0 时按 1 计，避免 3//0 在 max() 求值前抛错。
     size = max(1, 3 // (transfer_count or 1))
     for group in paper["groups"]:
-        targets = [q["no"] for q in group["questions"] if q["no"] in wanted]
+        # 全链路统一用归一化题号：挑题、工单、QuestionBlocks.allowed、publish 查找
+        # 都基于它，"01" 与 "1" 才是同一题。序列化回骨架时按原样题号匹配（见下方映射）
+        targets = [_norm_no(q["no"]) for q in group["questions"] if _norm_no(q["no"]) in wanted]
         if not targets:
             continue
         material = group_material(paper, group)
@@ -171,7 +188,9 @@ class QuestionBlocks:
     """每个流自持缓冲；白名单过滤结构改写/越界题号，半题永不进入共享文档。"""
 
     def __init__(self, nos: list[str]):
-        self.allowed = set(nos)
+        # allowed 用归一化题号：模型写 "01"/" 1" 与 "1" 是同一题，
+        # 不归一化会被判越界整块丢弃、白烧三轮重试
+        self.allowed = {_norm_no(n) for n in nos}
         self.seen: set[str] = set()
         self.buffer = ""
         self.no = ""
@@ -189,7 +208,10 @@ class QuestionBlocks:
             if m:
                 tag, value = m[1].upper(), m[3].strip()
                 if tag == "Q":
-                    self.no = value if value in self.allowed else ""
+                    # 题号归一化后再比 allowed：模型写 "01"/" 1" 与 "1" 是同一题，
+                    # 不归一化会被判越界、整块丢弃、白烧三轮重试
+                    norm = _norm_no(value) if value else ""
+                    self.no = norm if norm in self.allowed else ""
                     self.lines = [f"@@Q@@ {self.no}"] if self.no else []
                     self.keep = False
                     self.pending_no = not value
@@ -221,7 +243,8 @@ class QuestionBlocks:
             elif self.pending_no:
                 value = line.strip()
                 if value:
-                    self.no = value if value in self.allowed else ""
+                    norm = _norm_no(value)
+                    self.no = norm if norm in self.allowed else ""
                     # 题号有效：保留裸 @@Q@@ 之后暂存下来的分析字段，只把题号行补上；
                     # 题号越界时整块作废（与旧行为一致）
                     self.lines = [f"@@Q@@ {self.no}"] + self.lines if self.no else []
@@ -266,8 +289,10 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                 original = parse_custom_visual_paper(job.material)
                 if original is None:
                     raise ValueError("组材料解析失败")
-                questions = {q["no"]: q for g in original["groups"] for q in g["questions"]}
-                question_groups = {q["no"]: g["id"] for g in original["groups"] for q in g["questions"]}
+                # key 用归一化题号：与 QuestionBlocks.allowed / blocks.feed 返回的
+                # no 同口径，否则 "01" 与 "1" 会在 publish 的查找上对不上
+                questions = {_norm_no(q["no"]): q for g in original["groups"] for q in g["questions"]}
+                question_groups = {_norm_no(q["no"]): g["id"] for g in original["groups"] for q in g["questions"]}
             except Exception as exc:
                 logger.exception("可视化精讲：组材料解析失败，job 标记为 error")
                 job.state, job.error = "error", f"组材料解析失败：{exc}"
@@ -314,9 +339,11 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                                 expected = questions[no]
                                 qtype = "writing" if expected['qtype'] == "writing" else "choice" if expected.get("options") else "blank"
                                 block = re.sub(r"^@@QTYPE@@[^\n]*\n", "", block, flags=re.MULTILINE)
-                                block = block.replace(f"@@Q@@ {no}\n", f"@@Q@@ {no}\n@@QTYPE@@ {qtype}\n", 1)
+                                # 题号行用正则替换：block 里是模型写的原样题号（可能带
+                                # 前导零/空格），与归一化后的 no 不一定字面相同
+                                block = re.sub(r"^@@Q@@[^\n]*\n", f"@@Q@@ {no}\n@@QTYPE@@ {qtype}\n", block, count=1, flags=re.MULTILINE)
                                 parsed = parse_custom_visual_paper(job.material + block)
-                                question = next(q for g in parsed["groups"] for q in g["questions"] if q["no"] == no)
+                                question = next(q for g in parsed["groups"] for q in g["questions"] if _norm_no(q["no"]) == no)
                                 issues = question_missing(question, transfer_count, question_groups[no])
                                 # 正常 EOF 漏结束标记只修复结构上已完整的题，半题和超限截断不能冒充成功。
                                 if terminal and issues:
