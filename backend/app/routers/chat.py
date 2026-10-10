@@ -1024,6 +1024,25 @@ async def preview_prompt(
     if not prompt_filename:
         raise HTTPException(status_code=404, detail=f"Tool {req.tool_id} not found")
 
+    # 工具 13 与实际流式请求走同一套分支：输入是 @@TAG@@ 骨架时发精讲提示词，
+    # 否则可能走框架插标。预览接口漏了这段会显示与实际不同的模板。
+    if req.tool_id == VISUAL_PAPER_TOOL_ID:
+        if looks_like_tag_document(req.input):
+            preview_name = VISUAL_EXPLAIN_PROMPT
+        elif not req.continue_from and not split_work_order(req.input)[1]:
+            preview_name = VISUAL_FRAMEWORK_PROMPT
+        else:
+            preview_name = prompt_filename
+        if preview_name != prompt_filename:
+            switched = loader.render(
+                preview_name,
+                render_numbered_lines(req.input) if preview_name == VISUAL_FRAMEWORK_PROMPT else req.input,
+                {"transfer_count": req.transfer_count},
+            )
+            if switched is not None:
+                prompt_filename = preview_name
+                prompt = switched
+
     prompt = loader.render(
         prompt_filename,
         req.input,
@@ -1174,6 +1193,19 @@ async def chat_stream(
                 detail=f"续写指令文件 {CONTINUE_PROMPT_NAME}.md 未找到，无法继续生成",
             )
         continue_messages = _continue_messages(prompt, req.continue_from, continue_prompt)
+        # 工具 13 的精讲提示词假定材料末尾带【续写指令】工单（点名题号、禁输出结构行）。
+        # 这里借位成通用续写指令，模型照通用指令重发 @@TOTAL@@/@@GROUP@@ 就会在文档底部
+        # 长出重复空分组。补一句协议约束，避免新旧格式混流。
+        if req.tool_id == VISUAL_PAPER_TOOL_ID and prompt_filename == VISUAL_EXPLAIN_PROMPT:
+            continue_messages[-1] = {
+                "role": "user",
+                "content": continue_messages[-1]["content"] + (
+                    "\n\n另外：这是已标注好的试卷骨架，语篇/题干/选项已定稿。"
+                    "不要输出 @@TOTAL@@、@@PAPER@@、@@NOTICE@@、@@GROUP@@、@@GROUP_INTRO@@、"
+                    "@@PASSAGE_DEF@@、@@STEM@@、@@OPTIONS@@、@@KEY@@ 等结构行，"
+                    "只为还没有讲解的笔试题补写讲解字段；已生成过讲解的题不要重复输出。"
+                ),
+            }
 
     # 配置读取走短会话 + 线程池：不随 SSE 流占住连接池会话，也不阻塞事件循环
     cfg = await asyncio.to_thread(_load_cfg)
@@ -1276,9 +1308,17 @@ async def chat_stream(
     base_request_id = req.request_id or f"{req.tool_id}_{id(request)}"
     request_id = base_request_id
     existing = _stop_events.get(base_request_id)
+    # 同属主复用同一个 request_id 时也要换名：否则新注册会覆盖旧条目，旧流的
+    # stop_event 永远等不到 set（/stop 停不了它），而旧流结束时 finally 的 pop
+    # 会把新流的条目一起清掉（/stop 变成 not_found）
     if existing is not None and existing[1] != owner_key:
         # 同毫秒撞名时不覆盖他人注册（属主校验收口在 /stop）
         request_id = f"{base_request_id}_{owner_id}"
+    elif existing is not None:
+        seq = 2
+        while f"{base_request_id}_{seq}" in _stop_events:
+            seq += 1
+        request_id = f"{base_request_id}_{seq}"
     stop_event = asyncio.Event()
     _stop_events[request_id] = (stop_event, owner_key)
     reasoning_effort = model_entry.get("reasoning_effort") if model_entry else None

@@ -54,8 +54,21 @@ TAG_AT_LINE_START_RE = re.compile(
 
 
 def looks_like_tag_document(text: str) -> bool:
-    """输入是否是一份 @@TAG@@ 文档（有标签顶行出现），用于与「原文+简报」区分。"""
-    return bool(text) and bool(TAG_AT_LINE_START_RE.search(text))
+    """输入是否是一份 @@TAG@@ 文档，用于与「原文+简报」区分。
+
+    要求至少两个不同的标签顶行出现，或一个标签 + @@TOTAL@@ 声明。原卷正文里
+    顶格出现一行 @@NOTICE@@（教师备注、续写简报引用）就会把整份原卷误判成骨架，
+    随后提示词被整体换成精讲版、parse 返回 None、静默降级单流。
+    """
+    if not text:
+        return False
+    # group(0) 是整段匹配，标签名取其中的字母部分（group(1) 是定界符，不是标签名）
+    hits = set()
+    for m in TAG_AT_LINE_START_RE.finditer(text):
+        name = re.match(r"[ \t]*[＠@]{2,}\s*([A-Za-z_]+)", m.group(0))
+        if name:
+            hits.add(name.group(1).upper())
+    return len(hits) >= 2 or (len(hits) == 1 and "TOTAL" in hits)
 
 def _is_nonempty_str(v: Any) -> bool:
     return isinstance(v, str) and v.strip() != ""
