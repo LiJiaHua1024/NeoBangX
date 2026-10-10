@@ -21,6 +21,9 @@ ANALYSIS_TAGS = {
     "PATTERN_NAME", "PATTERN_STEPS", "TRANSFER_PASSAGE", "TRANSFER_STEM",
     "TRANSFER_OPTIONS", "TRANSFER_ANSWER", "TRANSFER_EXPL", "WRITING_POINTS",
     "WRITING_OUTLINE", "WRITING_SAMPLE",
+    # 阶段二允许为分组补写一句话导语；白名单漏了它，模型一输出就被静默丢弃，
+    # 而单流解析器是保留的——两条路径对同一输入给出不同结果
+    "GROUP_INTRO",
 }
 # 骨架自带的结构性标签。工单里不该出现它们；万一出现（模型把原题结构搬过来），
 # 要拦住它自己的正文，但不能把后面本该保留的分析字段一起断掉。
@@ -359,8 +362,12 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                             raise
                         except Exception as exc:
                             call["state"], call["error"] = "error", str(exc)
+                            # 不再把整批题号一网打尽地屏蔽：异常不带题号信息，
+                            # 同批里没出错的题本该还有机会。交给完整三轮重试，
+                            # 由 job.completed 自然收敛（撞 content_filter 时多等两轮，
+                            # 但不会让健康题被无辜放弃）。
                             if not is_retryable(exc):
-                                blocked.update(nos)
+                                logger.info("可视化精讲：不可重试错误转为按题重试，不整批屏蔽：%s", exc)
                         finally:
                             call["elapsed"] = monotonic() - call_started
                             used = getattr(job.llm, "provider_used", None) or getattr(job.llm, "last_provider", None) or {}

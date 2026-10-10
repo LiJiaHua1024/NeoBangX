@@ -325,8 +325,9 @@ def test_fallback_is_scoped_to_task_and_cleared_only_by_its_own_body():
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("stop_in_backoff", [False, True])
-def test_nonretryable_error_or_stop_in_backoff_does_not_call_again(stop_in_backoff):
+def test_stop_in_backoff_does_not_call_again():
+    """退避窗口内停止：不再发起下一次请求。不可重试错误（如超上下文）现在按题
+    重试而非整批屏蔽，所以只有停止这一支还保持「不再调用」。"""
     async def run():
         jobs = plan_explanations(skeleton(1), LOADER, 1)
         stop = asyncio.Event()
@@ -335,7 +336,7 @@ def test_nonretryable_error_or_stop_in_backoff_does_not_call_again(stop_in_backo
             async def chat_stream_with_stop(self, **kwargs):
                 nonlocal calls
                 calls += 1
-                raise RuntimeError("temporary failure" if stop_in_backoff else "context_length_exceeded")
+                raise RuntimeError("temporary failure")
                 yield ""
         async def consume():
             async for event, payload in stream_explanations(jobs, build_llm=Fake, stop_event=stop,
@@ -344,7 +345,31 @@ def test_nonretryable_error_or_stop_in_backoff_does_not_call_again(stop_in_backo
                     stop.set()
         await asyncio.wait_for(consume(), 1)
         assert calls == 1
-        assert jobs[0].state == ("cancelled" if stop_in_backoff else "error")
+        assert jobs[0].state == "cancelled"
+    asyncio.run(run())
+
+
+def test_nonretryable_error_retries_per_question_instead_of_blocking_the_batch():
+    """不可重试错误（如一家供应商的内容审核）不再把整批题号一网打尽：
+    同批里没出错的题本该还有机会，所以改为按题走完整三轮，由 completed 自然收敛。"""
+    async def run():
+        jobs = plan_explanations(skeleton(2), LOADER, 1)
+        calls = []
+        class Fake:
+            async def chat_stream_with_stop(self, **kwargs):
+                calls.append(kwargs.get("user_prompt", ""))
+                raise RuntimeError("context_length_exceeded")
+                yield ""
+        async def consume():
+            async for _event, _payload in stream_explanations(jobs, build_llm=Fake, stop_event=asyncio.Event(),
+                                                              transfer_count=1, stream_kwargs={}, retry_delay=0):
+                pass
+        await asyncio.wait_for(consume(), 10)
+        # 整批被屏蔽时只会调用 1 次（blocked 收下 ['1','2']，missing 立即为空）。
+        # 按题重试后：首轮整批 1 次 + 题1 两轮 + 题2 两轮 = 5 次，重试轮还拆成单题。
+        assert len(calls) == 5, calls
+        assert all(job.state == "error" for job in jobs)
+        assert all(not job.completed for job in jobs)
     asyncio.run(run())
 
 
