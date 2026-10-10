@@ -3295,6 +3295,14 @@ function nbx() {
       return null;
     },
     /* 题目级状态：'done'（已完成精讲）/ 'generating'（正在实时撰写中）/ 'pending'（排队等待精讲）/ 'idle'（已停止待续写） */
+    /* 选项标号比较：剥标点并大写。答案常写成 "A."/"a"（后端只 strip），
+       严格 === 会让屏幕上不高亮、遮罩也失效，而打印件用同一份数据却标了正确项。
+       与 vp-print.js / vp-standalone.js 的 sameLabel 同口径。 */
+    vpSameLabel(a, b) {
+      const strip = (v) => String(v == null ? "" : v).trim().replace(/[.．。、,，:：]/g, "").toUpperCase();
+      const x = strip(a);
+      return x !== "" && x === strip(b);
+    },
     /* 该题所属并行任务的重试原因（后端随 visual_task 下发，模板里零引用过） */
     vpTaskRetryReason(q) {
       if (!q || !this.vpParallel) return "";
@@ -9263,13 +9271,17 @@ function nbx() {
         const ans = String(this.vpFieldGet(ansPath) || "").trim().toUpperCase();
         const removed = String((arr[idx] && arr[idx].label) || "").trim().toUpperCase();
         // 删掉的正是正确项时先拦一下：否则答案会变成一个不存在的字母
-        if (ans && removed && ans === removed) {
+        // 用 sameLabel 比：答案常写成 "A."，严格 === 会漏判，删掉正确项还无提示
+        if (ans && removed && this.vpSameLabel(ans, removed)) {
           this.toast(`第 ${removed} 项是当前答案，先改答案再删它`, "warn");
           return;
         }
         arr.splice(idx, 1);
         arr.forEach((o, i) => { if (o && typeof o === "object") o.label = String.fromCharCode(65 + i); });
-        const oldIdx = ans ? ans.charCodeAt(0) - 65 : -1;
+        // 答案前移只在「单字母」形态下做：多段格式（"1. D 2. F"）首字符码点
+        // 远离 A-Z，算出来的 oldIdx 是天文数字，条件恒假——那种情况保持原样并提示
+        const single = /^[A-Za-z][.．。]?$/.test(String(ans || "").trim());
+        const oldIdx = single ? String(ans).trim().toUpperCase().charCodeAt(0) - 65 : -1;
         if (oldIdx > idx && oldIdx <= arr.length) this.vpSetField(ansPath, String.fromCharCode(64 + oldIdx));
       } else {
         arr.splice(idx, 1);

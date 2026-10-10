@@ -1196,7 +1196,7 @@
                             <!-- 选项网格 -->
                             <div x-show="vpCurrentQuestion.options && vpCurrentQuestion.options.length" class="vp-options-grid">
                               <template x-for="(opt, oi) in (vpCurrentQuestion.options || [])" :key="oi + '-' + (opt.label || '')">
-                                <div class="vp-option-card" :class="{ 'correct': vpCurrentQuestion.answer && opt.label === vpCurrentQuestion.answer, 'masked': maskOn && vpCurrentQuestion.answer && opt.label === vpCurrentQuestion.answer }">
+                                <div class="vp-option-card" :class="{ 'correct': vpCurrentQuestion.answer && vpSameLabel(opt.label, vpCurrentQuestion.answer), 'masked': maskOn && vpCurrentQuestion.answer && vpSameLabel(opt.label, vpCurrentQuestion.answer) }">
                                   <span class="vp-option-label" x-text="opt.label"></span>
                                   <span class="vp-option-text whitespace-pre-wrap" x-html="vpFmt(opt.text)"></span>
                                 </div>

@@ -723,7 +723,8 @@
       var ans = str(fieldGet(ansPath)).trim().toUpperCase();
       var removed = str(arr[idx] && arr[idx].label).trim().toUpperCase();
       // 删掉的正是正确项时先拦一下：否则答案会变成一个不存在的字母
-      if (ans && removed && ans === removed) {
+      // 用 sameLabel 比：答案常写成 "A."，严格 === 会漏判，删掉正确项还无提示
+      if (ans && removed && sameLabel(ans, removed)) {
         toast("第 " + removed + " 项是当前答案，先改答案再删它", "warn");
         return;
       }
@@ -1134,8 +1135,16 @@
       ansList.appendChild(chip);
     });
   }
+  /* 选项标号比较：剥标点并大写。答案常写成 "A."/"a"（后端只 strip），
+     严格 === 会让屏幕上不高亮、遮罩也失效，而打印件用同一份数据却标了正确项——
+     两处结论相反。与 vp-print.js 的 sameLabel 同口径。 */
+  function sameLabel(a, b) {
+    var strip = function (v) { return str(v).trim().replace(/[.．。、,，:：]/g, "").toUpperCase(); };
+    var x = strip(a);
+    return x !== "" && x === strip(b);
+  }
   function optionCard(opt, answer, masked) {
-    var correct = has(answer) && str(opt.label) === str(answer);
+    var correct = has(answer) && sameLabel(opt.label, answer);
     var card = el("div", "vp-option-card" + (correct ? " correct" : "") + (correct && masked ? " masked" : ""));
     card.dataset.correct = correct ? "1" : "0";
     card.appendChild(el("span", "vp-option-label", str(opt.label)));

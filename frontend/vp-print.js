@@ -1206,6 +1206,10 @@
     function onKey(e) {
       if (e.key === "Escape") { e.preventDefault(); close(); }
       else if (e.key === "Enter" && e.target && e.target.tagName !== "INPUT") { e.preventDefault(); run("print"); }
+      // 必须 stopPropagation：这是 capture 阶段监听，不拦的话事件继续冒泡到讲台的
+      // 全局 keydown——封面态焦点在弹窗 INPUT 上按 Enter 会直接 startPresentation()
+      // （弹窗还开着就进全屏），present 态按 Esc 会同时关弹窗和退回封面
+      e.stopPropagation();
     }
     document.addEventListener("keydown", onKey, true);
     wrap.addEventListener("mousedown", function (e) { if (e.target === wrap) close(); });
