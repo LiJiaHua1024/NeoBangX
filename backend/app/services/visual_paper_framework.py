@@ -171,6 +171,7 @@ class FrameworkApplier:
         self._group: Optional[dict] = None
         self._group_pos: tuple[int, int] = (0, 0)  # 当前分组头的插入位置（回插搜索的下界）
         self._group_pool: Optional[list[str]] = None
+        self._group_pool_range: Optional[tuple[int, int]] = None  # 组池适用的题号区间
         self._group_seq: dict[str, int] = {}   # 每个板块 id 已声明的分组数（消歧用）
         self._last_group_key: Optional[tuple[str, str]] = None
         # 开组时的语篇状态：读后续写的材料语篇在组内声明（要求行在前、原文在后），
@@ -411,8 +412,20 @@ class FrameworkApplier:
         if mtype == "Q":
             rng = _parse_range(args)
             if rng is not None:
-                # 区间声明：空在语篇里的题（语法填空等）。纯声明——不收口区域、
-                # 不推进游标，锚点即使打在语篇中间也不会把正文截断
+                # 区间声明：空在语篇里的题（语法填空等）。锚点即使打在语篇中间也不推进
+                # 游标（不截断正文），但**必须先收口当前题**：否则其后到来的原文会并进
+                # 上一题的选项区，把上题污染、让本段题块在文档末尾才派生，且
+                # structure_errors 还是 0——三道闸门同时失效。
+                if self._question is not None:
+                    # 区间声明不推进游标，所以当前区域到这里为止没有新内容可收；
+                    # 直接按空内容收口，把已开的题关掉
+                    self._close_region([])
+                    self._close_question()
+                # 同一区间重复声明会派生重复题号：去重（_last_mark 在 return 前不更新，
+                # 上方的同型同参检查对区间不生效，这里显式判重）
+                if rng in self._pending_q_ranges:
+                    self.stats.marks_skipped += 1
+                    return
                 self.stats.marks_applied += 1
                 self._pending_q_ranges.append(rng)
                 self._set_last_no(rng[1])
@@ -453,7 +466,11 @@ class FrameworkApplier:
             self._group_pos = pos
             # 记下本组开组时的语篇状态：组内后来声明过新语篇，才算这个组的材料
             self._group_passage_ref = self._passage_ref
+            # 新分组的语篇必须重新声明。不清上一组的 ref 时，转组后漏发 PASSAGE 的题
+            # 会挂上上一组的语篇编号——学生看语法填空题时挂着阅读理解原文。
+            self._passage_ref = None
             self._group_pool = None
+            self._group_pool_range = None
             self._emit([f"@@GROUP@@ {gid}|{title}|"])
             self._region = "noise"
         elif mtype == "PASSAGE":
@@ -522,8 +539,13 @@ class FrameworkApplier:
             if self._options_range is not None:
                 lo, hi = self._options_range
                 self._options_range = None
+                # 区间池到达时若还有题开着，先收口：否则 range 题块会插进那道题
+                # 的 STEM 之后、END_Q 之前形成嵌套，解析端把两道题一起丢掉
+                if self._question is not None:
+                    self._close_question()
                 if opts:
                     self._group_pool = opts
+                    self._group_pool_range = (lo, hi)
                     self.stats.pools += 1
                     self._emit_q_blocks(lo, hi, pool=opts)
                 else:
@@ -535,8 +557,10 @@ class FrameworkApplier:
                     self._question["options_emitted"] = True
                     self._emit(opts)
             elif opts:
-                # 池子印在题目前（共享池）：收进组池，随组内题目重复附带
+                # 池子印在题目前（共享池）：收进组池，随组内题目重复附带。
+                # 不记区间——这种池本就是整组通用的（七选五把池印在卷首）
                 self._group_pool = opts
+                self._group_pool_range = None
                 self.stats.pools += 1
         elif kind == "key":
             self._emit(content)
@@ -563,7 +587,16 @@ class FrameworkApplier:
             # 此刻的语篇就是本题的材料；组内没声明过则按「无独立语篇」处理
             self._emit([f"@@PASSAGE_REF@@ {self._passage_ref}"])
         if not q.get("options_emitted"):
-            opts = q.get("options") or self._group_pool
+            # 组池只在适用区间内顶上：区间声明收口的池属于那几道题，组内其他题
+            # OPTIONS 为空是「漏发选项」本身就该报的错，拿七选五的 A-G 顶上会张冠李戴
+            pool = self._group_pool
+            if pool is not None and self._group_pool_range is not None:
+                lo, hi = self._group_pool_range
+                no_digits = re.sub(r"\D", "", str(q.get("no", "")))
+                in_range = bool(no_digits) and lo <= int(no_digits) <= hi
+                if not in_range:
+                    pool = None
+            opts = q.get("options") or pool
             if opts:
                 self._emit(["@@OPTIONS@@"] + opts)
         self._emit(["@@END_Q@@"])
