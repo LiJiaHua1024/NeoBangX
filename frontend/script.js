@@ -2970,6 +2970,9 @@ function nbx() {
       out.answerMap = out.answerMap || {};
       out.groups = Array.isArray(out.groups) ? out.groups : [];
       out.total = out.total != null ? out.total : null;
+      // 记住总数是不是原文明写的：没有 @@TOTAL@@ 的卷子把 total 洗成题数后，
+      // vpComplete 的「声明 > 0」会变成恒真式，讲解一齐就伪造成已完成。
+      out.totalDeclared = out.total != null;
       if (out.total == null) {
         const cnt = out.groups.reduce((s,g)=>s + (g.questions||[]).length, 0);
         out.total = cnt || null;
@@ -3293,9 +3296,20 @@ function nbx() {
        模型也可能自己数错，卡死补全入口比多花一次生成更糟。 */
     get vpComplete() {
       if (this.streaming) return false;
-      const declared = Number(this.visualPaper && this.visualPaper.total);
-      if (!Number.isFinite(declared) || declared <= 0) return false;
-      if (this.vpQuestionCount < declared) return false;
+      const vp = this.visualPaper;
+      const declared = Number(vp && vp.total);
+      // 原文明写了总数：按声明核对（旧行为）
+      if (vp && vp.totalDeclared && Number.isFinite(declared) && declared > 0) {
+        if (this.vpQuestionCount < declared) return false;
+      } else if (vp && vp.totalDeclared === false) {
+        // 没有 @@TOTAL@@ 的卷子：total 已被洗成题数，「声明 > 0」只是恒真式。
+        // 改看讲解是否齐 + 没有在跑的任务，别再伪造成已完成。
+        if (this.vpQuestionCount === 0) return false;
+        if (this.vpTasks.some(t => t.state === "running" || t.state === "retrying" || t.state === "pending")) return false;
+      } else {
+        if (!Number.isFinite(declared) || declared <= 0) return false;
+        if (this.vpQuestionCount < declared) return false;
+      }
       if (this.vpAnalyzedCount < this.vpTotal) return false;
       // 讲解已全齐：done 与「用户主动停止但内容已写完」都算完成。
       // 只认 done 会让全齐后手停止的卷子永远挂着「待补全」入口，需空跑一轮才知道没得写。
@@ -9222,7 +9236,10 @@ function nbx() {
       const out = [];
       const paperKey = this.tryParseVisualPaper(this.output || vp.rawJson || "").data?.paperKey
         || this.tryParseVisualPaper(vp.frameworkRaw || "").data?.paperKey || "";
-      const total = Number(vp.total) > 0 ? Number(vp.total) : this.vpQuestionCount;
+      // 取声明与实际题数的较大值：声明可能只是被截断的数字前缀（虚低），
+      // 但也可能虚高（模型数错、或旧卷子带着多轮累积的错误总数）。
+      // 直接原样写回会把截断/虚高固化进续写输入与历史，多轮越攒越错。
+      const total = Math.max(Number(vp.total) > 0 ? Number(vp.total) : 0, this.vpQuestionCount);
       out.push(`@@TOTAL@@ ${total}`);
       out.push(`@@PAPER@@ ${flat(paper.title)}`);
       out.push(`@@NOTICE@@ ${flat(vp.notice)}`);

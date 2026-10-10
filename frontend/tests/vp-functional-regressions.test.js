@@ -501,3 +501,51 @@ test("校验失败时回滚 output：删到空卷不能留下被掏空的原始�
   assert.ok(data, "output 必须仍是可解析的卷子");
   assert.equal(data.groups[0].questions.length, 2);
 });
+
+const NO_TOTAL = `@@PAPER@@ Test
+@@GROUP@@ reading|Reading|
+@@Q@@ 1
+@@STEM@@
+Only question?
+@@OPTIONS@@
+A. One
+B. Two
+@@ANSWER@@ A
+@@END_Q@@
+`;
+
+test("没有 @@TOTAL@@ 声明的卷子：total 标记为未声明，不伪造成已完成", () => {
+  const c = component();
+  c.output = NO_TOTAL;
+  c.visualPaper = { ...c.newVisualPaperState(), ...c.normalizeVisualPaper(c.parseCustomVisualPaper(NO_TOTAL)) };
+  assert.equal(c.visualPaper.totalDeclared, false);
+  assert.equal(c.vpQuestionCount, 1);
+  c.vpRunState = "done";
+  // 讲解不齐时即使结构齐也不能完成（旧实现靠 total 被洗成 1 的恒真式放行）
+  assert.equal(c.vpComplete, false);
+  // 补齐讲解后可以完成
+  const q = c.visualPaper.groups[0].questions[0];
+  q.reference = { evidence: "e", reason: "r", distractor: "d" };
+  q.pitfalls = [{ title: "t", desc: "d" }];
+  q.pattern = { name: "n", steps: ["s"] };
+  q.transfers = [{ passage: "p", stem: "s", answer: "a", explanation: "e", options: [{ label: "A", text: "x" }, { label: "B", text: "y" }] }];
+  c.visualPaper.transferCount = 1;
+  assert.equal(c.vpComplete, true);
+  assert.equal(c.vpRemaining, 0);
+  // 生成中不完成
+  c.streaming = true;
+  assert.equal(c.vpComplete, false);
+});
+
+test("序列化不把虚高的 total 固化：取声明与实际题数的较大值", () => {
+  const c = component();
+  loadPaper(c);
+  // 虚高：声明 47 实际 2
+  c.visualPaper.total = 47;
+  const raw = c.vpSerializeRaw();
+  assert.ok(raw.startsWith("@@TOTAL@@ 47"), "声明高于实际时保留声明，别凭空改小");
+  // 虚低（被截断的数字前缀）：声明 1 实际 2
+  c.visualPaper.total = 1;
+  const raw2 = c.vpSerializeRaw();
+  assert.ok(raw2.startsWith("@@TOTAL@@ 2"), "声明低于实际时以实际为准");
+});
