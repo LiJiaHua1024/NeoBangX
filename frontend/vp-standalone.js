@@ -39,6 +39,21 @@
   function noticeText() { return str(DATA.notice); }
 
   var GROUPS = [];
+  /* 写作题判定：qtype 或所属分组 id。旧 JSON 里写作组的题 qtype 常是 blank/choice，
+     只看 qtype 会把写作题当客观题渲染（不出范文、学生版作答横线行数错）。
+     与主应用 vpIsWritingQuestion 同口径。 */
+  function isWriting(q) {
+    if (!q) return false;
+    if (isWriting(q)) return true;
+    for (var i = 0; i < GROUPS.length; i++) {
+      var g = GROUPS[i];
+      if ((g.questions || []).indexOf(q) >= 0) {
+        return g.id === "writing_app" || g.id === "writing_cont";
+      }
+    }
+    return false;
+  }
+
   var FLAT = [];
   (DATA.groups = DATA.groups || []).forEach(function (g) {
     if (!g) return;
@@ -301,13 +316,22 @@
     t.host[t.key] = value;
   }
   function deriveAnswerMap() {
+    // 空指导不算「有写作指导」：骨架期 writingGuide 是空壳，
+    // 显示「见范文」却找不到范文。内联定义以便单独抽取测试。
+    function hasWritingGuide(wg) {
+      if (wg == null || wg === "") return false;
+      if (typeof wg !== "object") return true;
+      return !!((wg.points && wg.points.length) || wg.outline || wg.sample);
+    }
     // 写作题的 answer 为空（答案在范文里），但速查表仍要给一个指引，
     // 与主应用和后端 visual_paper 的口径一致 —— 少了这条分支，写作题
     // 在讲台与打印件的答案速查里会整行消失。
     var m = {};
     FLAT.forEach(function (it) {
       if (has(it.q.answer)) m[str(it.q.no)] = it.q.answer;
-      else if (it.q.writingGuide != null && it.q.writingGuide !== "") m[str(it.q.no)] = "见范文";
+      // 空指导不配「见范文」：写作题总会带一个 writingGuide 对象，刚过阶段一的
+      // 骨架期它是空的，速查表显示「2: 见范文」但翻过去什么都没有
+      else if (hasWritingGuide(it.q.writingGuide)) m[str(it.q.no)] = "见范文";
     });
     return m;
   }
@@ -389,8 +413,8 @@
       obox.appendChild(addBtn("q.options", "+ 加一个选项"));
       qEditHead.appendChild(obox);
     }
-    if (q.qtype !== "writing") qEditHead.appendChild(cell("答案（选项字母，或填空文本）", "q.answer"));
-    if (q.qtype === "writing") {
+    if (!isWriting(q)) qEditHead.appendChild(cell("答案（选项字母，或填空文本）", "q.answer"));
+    if (isWriting(q)) {
       var wg = q.writingGuide || (q.writingGuide = { points: [], outline: "", sample: "" });
       wg.points = wg.points || [];
       var wbox = el("div", "vp-edit-cell");
@@ -459,7 +483,7 @@
     /* transfer（每题可多道：块内小标题 + 块级删除 + 底部「加一道」） */
     var transfers = q.transfers || (q.transfers = []);
     if (!transfers.length) {
-      tabPanel.appendChild(el("div", "vp-line dim", q.qtype === "writing"
+      tabPanel.appendChild(el("div", "vp-line dim", isWriting(q)
         ? "该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。"
         : "该题暂无迁移训练内容。"));
     } else {
@@ -1195,7 +1219,7 @@
     /* transfer（每题可多道：逐块渲染成卡） */
     var transfers = q.transfers || [];
     if (!transfers.length) {
-      tabPanel.appendChild(el("div", "vp-line dim", q.qtype === "writing"
+      tabPanel.appendChild(el("div", "vp-line dim", isWriting(q)
         ? "该题为写作题，不设迁移训练。请查看“参考答案”中的范文与框架。"
         : "该题暂无迁移训练内容。"));
       return;

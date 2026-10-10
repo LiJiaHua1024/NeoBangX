@@ -2979,6 +2979,12 @@ function nbx() {
       }
       return { data: null, error: "no valid custom or JSON found" };
     },
+    /* 写作指导是否有实质内容：空对象不算（骨架期总会带一个空壳） */
+    _vpHasWritingGuide(wg) {
+      if (wg == null || wg === "") return false;
+      if (typeof wg !== "object") return true;
+      return !!((wg.points && wg.points.length) || wg.outline || wg.sample);
+    },
     normalizeVisualPaper(data) {
       if (!data || typeof data !== "object") return null;
       // 入参恒为本轮新建的解析结果（自定义解析 / JSON.parse 产物），从未被共享；
@@ -3007,7 +3013,9 @@ function nbx() {
           // 被别的题顶掉的答案，而两个答案都对不上眼前的题
           if (key in am) continue;
           if (q.answer) am[key] = String(q.answer);
-          else if (q.writingGuide) am[key] = "见范文";
+          // 空指导不配「见范文」：写作题总会带一个 writingGuide 对象，刚过阶段一的
+          // 骨架期它是空的，速查表显示「2: 见范文」但翻过去什么都没有
+          else if (this._vpHasWritingGuide(q.writingGuide)) am[key] = "见范文";
         }
         out.answerMap = am;
       }

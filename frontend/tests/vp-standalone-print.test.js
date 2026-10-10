@@ -26,7 +26,7 @@ const PAYLOAD = {
     {
       title: "第二部分 写作",
       questions: [
-        { no: "2", qtype: "writing", stem: "Write an essay.", answer: "", writingGuide: { model: "Here is a model essay..." } },
+        { no: "2", qtype: "writing", stem: "Write an essay.", answer: "", writingGuide: { points: ["审题要点"], outline: "Outline", sample: "Here is a model essay..." } },
       ],
     },
     {

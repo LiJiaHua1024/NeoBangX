@@ -427,6 +427,13 @@
     return { title: t, alt: str(payload.title).trim(), subject: str(paper.subject).trim(), year: str(paper.year).trim() };
   }
   function answerMapOf(payload) {
+    // 空指导不算「有写作指导」：骨架期 writingGuide 是空壳，
+    // 显示「见范文」却找不到范文。内联定义以便单独抽取测试。
+    function hasWritingGuide(wg) {
+      if (wg == null || wg === "") return false;
+      if (typeof wg !== "object") return true;
+      return !!((wg.points && wg.points.length) || wg.outline || wg.sample);
+    }
     var m = payload.answerMap;
     var keys = m && typeof m === "object" ? Object.keys(m) : [];
     if (keys.length) return m;
@@ -437,7 +444,9 @@
     (payload.groups || []).forEach(function (g) {
       (g.questions || []).forEach(function (q) {
         if (has(q.answer)) out[str(q.no)] = detag(q.answer);
-        else if (q.writingGuide != null && q.writingGuide !== "") out[str(q.no)] = "见范文";
+        // 空指导不配「见范文」：刚过阶段一的骨架期 writingGuide 是空对象，
+        // 印「见范文」却找不到范文
+        else if (hasWritingGuide(q.writingGuide)) out[str(q.no)] = "见范文";
       });
     });
     return out;
@@ -489,10 +498,17 @@
     if (withIntro && has(g.intro)) h += '<div class="vpp-gh-intro">' + fmt(g.intro) + "</div>";
     return h;
   }
-  function qheadLines(q) {
+  function qheadLines(q, groupId) {
+    // 写作题判定：qtype 或所属分组 id。旧 JSON 里写作组的题 qtype 常是 blank/choice，
+    // 只看 qtype 会把写作题当客观题印（题头不标「写作」）。与主应用同口径。
+    function isWriting(qq, gid) {
+      if (!qq) return false;
+      if (qq.qtype === "writing") return true;
+      return gid === "writing_app" || gid === "writing_cont";
+    }
     var lines = textLines(q.stem);
     if (!lines.length) lines.push(line(""));
-    var tag = q.qtype === "writing" ? "写作" : (q.qtype === "blank" ? "填空" : "");
+    var tag = isWriting(q, groupId) ? "写作" : (q.qtype === "blank" ? "填空" : "");
     var no = str(q.no).replace(/[.．。]+$/, "");
     lines[0].pre = (lines[0].pre || "")
       + '<span class="vpp-qno">' + esc(no) + ".</span>"
@@ -639,7 +655,7 @@
       segments(g).forEach(function (seg) {
         if (seg.key) out.push(passageItem(seg.passage, gh));
         seg.questions.forEach(function (q) {
-          out.push(itemText("qhead", qheadLines(q), { header: gh, hang: hangOf(7, ctx), keepWith: mm(22), headLike: true, script: scriptOf(q.stem) }));
+          out.push(itemText("qhead", qheadLines(q, g.id), { header: gh, hang: hangOf(7, ctx), keepWith: mm(22), headLike: true, script: scriptOf(q.stem) }));
           if ((q.options || []).length) out.push(itemHtml("opts", optionsHtml(q.options, q.answer, true, ctx.contentW), { header: gh }));
           if (q.writingGuide) {
             var wgItems = [writingScaffold(q.writingGuide, gh), writingSample(q.writingGuide, gh)].filter(Boolean);
@@ -664,6 +680,11 @@
      不含答案、解析、易错点、考点范式、迁移训练答案与范文。
      老师把这一册整份发给学生时，纸上不会出现任何答案。 */
   function studentItems(payload, ctx) {
+    function isWriting(qq, gid) {
+      if (!qq) return false;
+      if (qq.qtype === "writing") return true;
+      return gid === "writing_app" || gid === "writing_cont";
+    }
     var o = ctx.o;
     var out = mastheadItems(payload, ctx);
     (payload.groups || []).forEach(function (g, gi) {
@@ -672,7 +693,7 @@
       segments(g).forEach(function (seg) {
         if (seg.key) out.push(passageItem(seg.passage, gh));
         seg.questions.forEach(function (q) {
-          out.push(itemText("qhead", qheadLines(q), { header: gh, hang: hangOf(7, ctx), keepWith: mm(20), headLike: true, script: scriptOf(q.stem) }));
+          out.push(itemText("qhead", qheadLines(q, g.id), { header: gh, hang: hangOf(7, ctx), keepWith: mm(20), headLike: true, script: scriptOf(q.stem) }));
           if ((q.options || []).length) out.push(itemHtml("opts", optionsHtml(q.options, q.answer, false, ctx.contentW), { header: gh }));
           if (q.writingGuide) {
             var sc = writingScaffold(q.writingGuide, gh);
@@ -680,7 +701,7 @@
           }
           if (o.transfers && (q.transfers || []).length) pushAll(out, transferItems(q.transfers, gh, ctx, true, false));
           if (q.qtype === "blank") out.push(itemHtml("wl", writeLinesHtml(3, "作答"), { header: gh, keepWith: mm(20) }));
-          else if (q.qtype === "writing") out.push(itemHtml("wl", writeLinesHtml(9, "作答"), { header: gh, keepWith: mm(28) }));
+          else if (isWriting(q, g.id)) out.push(itemHtml("wl", writeLinesHtml(9, "作答"), { header: gh, keepWith: mm(28) }));
         });
       });
     });
@@ -690,6 +711,11 @@
   /* 答案解析：只印答案、解析、易错点、考点范式、迁移训练答案与范文，不印题干与选项。
      单独成册，老师可以只发给做完题的学生，也可以自己留着核对。 */
   function answerItems(payload, ctx) {
+    function isWriting(qq, gid) {
+      if (!qq) return false;
+      if (qq.qtype === "writing") return true;
+      return gid === "writing_app" || gid === "writing_cont";
+    }
     var o = ctx.o;
     var out = mastheadItems(payload, ctx);
     out.push(itemHtml("part", '答案解析<span class="vpp-part-sub">答案、解析与范文　与学生练习版对照使用</span>',
@@ -714,11 +740,13 @@
           var sm = writingSample(q.writingGuide, gh);
           if (sm) { sm.chainEnd = true; subs.push(sm); }
         }
-        var tag = q.qtype === "writing" ? "写作" : (q.qtype === "blank" ? "填空" : "");
-        if (!has(q.answer) && !tag && !subs.length) return;
+        var tag = isWriting(q, g.id) ? "写作" : (q.qtype === "blank" ? "填空" : "");
+        // 完全没内容的题也留一个题头：整条跳过会让纸面题号断档，学生对着答案册
+        // 对不上号（缺的是第几题完全看不出来）
         var h = '<span class="vpp-qref-no">第 ' + esc(str(q.no).replace(/[.．。]+$/, "")) + " 题</span>";
         if (has(q.answer)) h += ansBox(q.answer);
         else if (tag) h += '<span class="vpp-qref-tag">' + tag + "题</span>";
+        else if (!subs.length) h += '<span class="vpp-qref-tag">讲解未完成</span>';
         out.push(itemHtml("qref", h, { header: gh, keepWith: mm(16), headLike: true }));
         pushAll(out, subs);
       });
