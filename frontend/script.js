@@ -9347,10 +9347,13 @@ function nbx() {
       if (!this.visualPaper || !this.visualPaper.groups || !this.visualPaper.groups.length) return;
       const before = this.vpQuestionCount;
       const over = this.vpEditOverLimit();
-      // 极端兜底用的结构快照：万一序列化出的文本解析不出题目，宁可回滚也不丢老师的内容
+      // 极端兜底用的结构快照：万一序列化出的文本解析不出题目，宁可回滚也不丢老师的内容。
+      // output/rawJson 也必须进快照——旧版只备份五项，校验失败时 this.output 已被写成
+      // 空文档，界面看着恢复了，导出/复制/续写读到的却是空卷子。
       const backup = JSON.parse(JSON.stringify({
         paper: this.visualPaper.paper, groups: this.visualPaper.groups,
         answerMap: this.visualPaper.answerMap, notice: this.visualPaper.notice, total: this.visualPaper.total,
+        output: this.output, rawJson: this.visualPaper.rawJson,
       }));
       const raw = this.vpSerializeRaw();
       this.output = raw;
@@ -9358,13 +9361,22 @@ function nbx() {
       this._outputDirty = true;
       this.vpDoRender();
       this._outputDirty = false;
-      if (before > 0 && this.vpQuestionCount === 0) {
-        // 校验未通过：回滚界面结构，且不写入历史（历史保持上一版，至少不会更差）
+      if (this.vpQuestionCount === 0) {
+        // 校验未通过：界面结构与 output 一起回滚，且不写入历史（历史保持上一版，至少不会更差）。
+        // 不要求 before > 0：序列化后解析不出题就该回滚，与进来时的题数无关。
         this.visualPaper.paper = backup.paper;
         this.visualPaper.groups = backup.groups;
         this.visualPaper.answerMap = backup.answerMap;
         this.visualPaper.notice = backup.notice;
         this.visualPaper.total = backup.total;
+        this.output = backup.output;
+        this.visualPaper.rawJson = backup.rawJson;
+        this._outputDirty = false;
+        // 回滚后必须重渲染：vpDoRender 刚用空文档渲染过一版，界面停在那个结果上，
+        // 只还数据不还画面会出现「结构回来了但题面是空的」
+        this._outputDirty = true;
+        this.vpDoRender();
+        this._outputDirty = false;
         this.toast("保存校验未通过，这次修改没有写入历史记录；请检查内容后重试", "error");
         return;
       }

@@ -478,3 +478,26 @@ test("框架中途停止不误报结构已锁定，主动停止续写不提示�
   await c.continueVisualPaper();
   assert.ok(!messages.some(text => text.includes("未返回新题目")));
 });
+
+
+test("校验失败时回滚 output：删到空卷不能留下被掏空的原始文本", () => {
+  const c = component();
+  loadPaper(c);
+  const rawBefore = c.output;
+  const jsonBefore = c.visualPaper.rawJson;
+  assert.equal(c.vpQuestionCount, 2);
+  // 编辑态把题目清空但保留一个组：vpCommitEdits 的守卫查的是 groups.length，
+  // 而序列化结果里一道题都没有，重解析后 vpQuestionCount 归零 → 触发校验失败分支
+  c.vpEditing = true;
+  c.visualPaper.groups = [{ id: "reading", title: "Reading", intro: "", questions: [] }];
+  c.vpCommitEdits();
+  // 界面结构已回滚
+  assert.equal(c.vpQuestionCount, 2);
+  // 关键是 output 也回滚了：旧版只备份五项，这里读到的是空文档
+  assert.equal(c.output, rawBefore);
+  assert.equal(c.visualPaper.rawJson, jsonBefore);
+  // 回滚后导出读到的仍是完整卷子
+  const { data } = c.tryParseVisualPaper(c.output);
+  assert.ok(data, "output 必须仍是可解析的卷子");
+  assert.equal(data.groups[0].questions.length, 2);
+});
