@@ -2521,8 +2521,9 @@ function nbx() {
           _pitfalls_raw: qObj.pitfalls || [],
           _pattern_name_raw: pattern.name || "",
           _pattern_steps_raw: pattern.steps || [],
-          // 重开时旧迁移块只作保底（_transfers_carry）：本轮重写出新块就整体替换，
-          // 一块新块都没有才沿用旧块。旧块若混进 _transfers_raw，提交时新旧叠加会翻倍
+          // 重开时旧迁移块只作保底（_transfers_carry）：本轮重写的新块与它按字段合并
+          // （新块缺的字段取旧块），一块新块都没有才整块沿用旧块。旧块若混进
+          // _transfers_raw，提交时新旧叠加会翻倍
           _transfers_carry: (qObj.transfers || []).filter((t) => t && typeof t === "object").map((t) => ({...t})),
           _transfers_raw: [],
         };
@@ -2689,9 +2690,25 @@ function nbx() {
               answer: d.answer || "",
               explanation: d.explanation || "",
             }));
-          // 同号重开时模型重写的迁移块整体替换旧块；一块都没重写才沿用重开前持有的旧块
-          if (fresh.length || !currentQ._transfers_carry) transfers = fresh;
-          else transfers = currentQ._transfers_carry.filter((t) => t && typeof t === "object").map((t) => ({...t}));
+          // 同号重开时按字段合并，而不是整体替换：模型漏写其余字段时（只重写
+          // @@TRANSFER_PASSAGE@@ 一行是常见漂移），旧块里已有的内容必须留下，
+          // 否则一个残缺块会顶掉之前的完整块。一块都没重写才沿用重开前持有的旧块。
+          const carry = currentQ._transfers_carry;
+          if (fresh.length && carry && carry.length) {
+            const merged = fresh.map((nb, i) => {
+              const ob = (i < carry.length && carry[i] && typeof carry[i] === "object") ? carry[i] : {};
+              return {
+                passage: nb.passage || ob.passage || "",
+                stem: nb.stem || ob.stem || "",
+                options: nb.options.length ? nb.options : (ob.options || []),
+                answer: nb.answer || ob.answer || "",
+                explanation: nb.explanation || ob.explanation || "",
+              };
+            });
+            // 重写只涉及前几块时，后面没被重开的旧块按原样接着排
+            transfers = merged.concat(carry.slice(fresh.length).filter((t) => t && typeof t === "object").map((t) => ({...t})));
+          } else if (fresh.length) transfers = fresh;
+          else transfers = (carry || []).filter((t) => t && typeof t === "object").map((t) => ({...t}));
         }
         const qObj = {
           no: String(no).trim(),
