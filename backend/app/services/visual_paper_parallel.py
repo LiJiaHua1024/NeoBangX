@@ -64,7 +64,9 @@ def question_complete(q: dict, transfer_count: int, group_id: str = "") -> bool:
 
 
 def _guard(value: str) -> str:
-    return re.sub(r"[＠@]{2,}", lambda m: m[0][0] + "\u200b" + m[0][1:], str(value or ""))
+    # 逐个 @ 后都插零宽空格：只在串首插一个时，长度 >=3 的串仍残留 2 个连续 @，
+    # 会被 TAG_FIND_RE 当成标签，导致语篇正文被截断。
+    return re.sub(r"[＠@]", lambda m: m[0] + "\u200b", str(value or ""))
 
 
 def group_material(paper: dict, group: dict) -> str:
@@ -134,7 +136,8 @@ def plan_explanations(raw: str, loader, transfer_count: int, selected: list[str]
     wanted = set(selected) if selected is not None else set(nos)
     jobs = []
     # 迁移题量越大，单次处理原题越少，降低单任务撞输出上限的概率。
-    size = max(1, 3 // transfer_count)
+    # tc>=3 时退化为单题一片；tc 为 0 时按 1 计，避免 3//0 在 max() 求值前抛错。
+    size = max(1, 3 // (transfer_count or 1))
     for group in paper["groups"]:
         targets = [q["no"] for q in group["questions"] if q["no"] in wanted]
         if not targets:
@@ -254,6 +257,12 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                                 "raw": [], "usage": {}, "llm": None, "elapsed": 0, "error": "", "state": "running"}
                         job.attempts.append(call)
                         call_started = monotonic()
+                        # queue.put 是让出点：停止可能恰好落在这里。此时 job.state 已是
+                        # running，直接 break 会把它留给 finally 兜底成 cancelled；同时要把
+                        # 本次调用记成 cancelled，否则分片日志会记成未发生的 ERROR。
+                        if stop_event.is_set():
+                            call["state"] = "cancelled"
+                            break
 
                         async def publish(items, *, terminal=False):
                             for no, block in items:
