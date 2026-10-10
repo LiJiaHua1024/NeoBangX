@@ -8677,8 +8677,15 @@ function nbx() {
         await this._runVisualStream(text, keepId);
         return;
       }
+      // 骨架齐不齐由「已解析题数 vs 声明总数」决定，但声明可能虚高（模型数错、
+      // 或多轮累积的错误 total）。虚高时 count>=total 恒假，本该走「骨架 + 结构化
+      // 缺题号」的近路会永远进不去，退回原卷重发并把教师改过的题干/语篇覆盖掉。
+      // 判据：声明远大于实际题数时按「结构已齐」处理（续写工单按缺失题号点名）。
+      const declaredTotal = Number(this.visualPaper && this.visualPaper.total) || 0;
+      const inflated = declaredTotal > 0 && this.vpQuestionCount < declaredTotal
+        && declaredTotal > this.vpQuestionCount * 2;
       const hasFramework = !!(this.visualPaper && this.visualPaper.frameworkRaw)
-        && this.vpQuestionCount >= this.vpTotal;
+        && (inflated || this.vpQuestionCount >= this.vpTotal);
       // 完整骨架不能按最后一个 END_Q 截断：KEY / TOTAL 可能在其后。
       // 从已解析快照重建可同时保住答案区、编辑内容，并丢弃本轮未提交的半题。
       if (hasFramework) {
@@ -8686,10 +8693,36 @@ function nbx() {
         this._outputDirty = true;
       }
       // 尾巴上的未完成片段（半道题、半句语篇、被截断的 @@GROUP@@ 头）在续写前整段丢掉：
-      // 它们既没进结构也没显示过，留着只会让重解析在同一个位置反复走死路
+      // 它们既没进结构也没显示过，留着只会让重解析在同一个位置反复走死路。
+      // 但 @@KEY@@ 答案区与文档头是已解析的全局字段：KEY 通常在所有 END_Q 之后，
+      // 一并裁掉会让重解析丢失 paperKey，后续序列化再也找不回答案区。
       const cut = this.vpLastCompleteEnd(this.output);
       if (!hasFramework && cut > 0) {
-        this.output = this.output.slice(0, cut);
+        // 先按最后一个 END_Q 裁掉尾巴，再把 @@KEY@@ 答案区拼回来。
+        // KEY 通常在所有 END_Q 之后，一并裁掉会让重解析丢失 paperKey，
+        // 后续序列化再也找不回答案区；拼回时只取 KEY 段自身，
+        // 它后面再出现的新题块残片仍然丢掉。
+        const head = this.output.slice(0, cut);
+        const tail = this.output.slice(cut);
+        const keyStart = tail.search(new RegExp(String.raw`[＠@]{2,}\s*KEY\s*` + _VP_TAG_DELIM, "i"));
+        let kept = "";
+        if (keyStart >= 0) {
+          const keyPart = tail.slice(keyStart);
+          // KEY 段在下一个结构标签处结束（其后的题块都是残片）。
+          // 从 KEY 标签自身结束之后开始找，避免又匹配到 @@KEY@@ 尾部的定界符。
+          const keyTagEnd = keyPart.search(new RegExp(
+            String.raw`^[＠@]{2,}\s*KEY\s*` + _VP_TAG_DELIM, "i"));
+          const afterKey = keyTagEnd >= 0 ? keyTagEnd + (keyPart.match(new RegExp(
+            String.raw`^[＠@]{2,}\s*KEY\s*` + _VP_TAG_DELIM, "i"))[0].length) : keyPart.length;
+          const rest = keyPart.slice(afterKey);
+          const nextBlock = rest.search(new RegExp(
+            String.raw`[＠@]{2,}\s*(?:Q|GROUP|PASSAGE_DEF|TOTAL|PAPER|NOTICE|STEM|OPTIONS|ANSWER|END_Q|PATTERN_NAME|PATTERN_STEPS|EVIDENCE|REASON|DISTRACTOR|PITFALLS|TRANSFER_PASSAGE|TRANSFER_STEM|TRANSFER_OPTIONS|TRANSFER_ANSWER|TRANSFER_EXPL|WRITING_POINTS|WRITING_OUTLINE|WRITING_SAMPLE|QTYPE|PASSAGE_REF|PASSAGE|GROUP_INTRO)\s*` + _VP_TAG_DELIM, "i"));
+          kept = nextBlock >= 0 ? keyPart.slice(0, afterKey + nextBlock) : keyPart;
+        }
+        // head 切在 END_Q 标签结束处，原文档里它与 @@KEY@@ 之间的换行被切掉了，
+        // 直接拼会把两个标签粘在一起（@@END_Q@@@@KEY@@）导致解析器认不出答案区
+        const sep = head && kept && !head.endsWith("\n") ? "\n" : "";
+        this.output = head + sep + kept;
         this._outputDirty = true;
       }
       if (this.output && !this.output.endsWith("\n")) this.output += "\n";

@@ -549,3 +549,45 @@ test("序列化不把虚高的 total 固化：取声明与实际题数的较大�
   const raw2 = c.vpSerializeRaw();
   assert.ok(raw2.startsWith("@@TOTAL@@ 2"), "声明低于实际时以实际为准");
 });
+
+test("总数虚高时不锁死结构化续写：仍走骨架近路而非原卷重发", async () => {
+  const c = component();
+  loadPaper(c);
+  // 模型数错/多轮累积：声明 47 实际 2
+  c.visualPaper.total = 47;
+  let input;
+  c._runVisualStream = async text => { input = text; };
+  await c.continueVisualPaper();
+  assert.ok(input.startsWith(SKELETON), "虚高时应发骨架，不能退回原卷把教师的修改覆盖掉");
+});
+
+test("总数真实偏少时仍回退原卷：残缺骨架走老路径", async () => {
+  const c = component();
+  loadPaper(c);
+  c.visualPaper.groups[0].questions.pop();
+  let input;
+  c._runVisualStream = async text => { input = text; };
+  await c.continueVisualPaper();
+  assert.ok(input.startsWith(c.submittedInput));
+});
+
+test("裁尾保留 @@KEY@@ 答案区，不把 paperKey 一起丢掉", async () => {
+  const c = component();
+  const withKey = SKELETON + "@@KEY@@" + "\n" + "1 A\n2 B\n";
+  c.output = withKey + "@@Q@@ 3\n@@STEM@@\n半道题";
+  c.visualPaper = { ...c.newVisualPaperState(), ...c.normalizeVisualPaper(c.parseCustomVisualPaper(withKey)), frameworkRaw: "" };
+  c.submittedInput = "Original paper";
+  c._runVisualStream = async () => {};
+  const before = c.output;
+  assert.equal(c.parseCustomVisualPaper(before).paperKey.trim(), "1 A\n2 B");
+  await c.continueVisualPaper();
+  // 未完成残片被裁掉
+  assert.ok(!c.output.includes("半道题"), "未完成残片应被裁掉");
+  // 答案区必须留在本地 output 里，否则重解析丢失 paperKey、后续序列化再也找不回
+  assert.ok(c.output.includes("@@KEY@@"), "答案区必须保留");
+  const parsed = c.parseCustomVisualPaper(c.output);
+  assert.equal(parsed.paperKey.trim(), "1 A\n2 B");
+  // 序列化时答案区仍能被找回
+  const raw = c.vpSerializeRaw();
+  assert.ok(raw.includes("@@KEY@@"));
+});
