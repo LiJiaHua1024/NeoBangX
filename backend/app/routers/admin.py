@@ -172,6 +172,15 @@ class ToolReasoningRuleEntry(BaseModel):
 
 class ConfigUpdateRequest(BaseModel):
     visual_paper_concurrency: Optional[int] = Field(None, ge=1, le=16, strict=True, description="试卷精讲默认并发，1-16")
+    framework_model: Optional[str] = Field(
+        None, description="试卷框架插标模型，留空跟随 chores_model"
+    )
+    framework_max_tokens: Optional[int] = Field(
+        None, ge=256, le=OCR_MAX_TOKENS_LIMIT, description="框架插标单次输出 tokens 上限，留空跟随全局"
+    )
+    visual_paper_framework: Optional[bool] = Field(
+        None, description="是否启用试卷可视化全解两阶段（框架插标 + 精讲）"
+    )
     default_model: Optional[str] = None
     models: Optional[List[ModelEntry]] = None
     chores_model: Optional[str] = None

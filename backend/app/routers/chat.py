@@ -293,6 +293,10 @@ def _hit_output_cap(usage: dict, limit: int) -> bool:
     """输出是否撞到上限（撞上就提示结果可能不完整，不静默交付半份转录）。"""
     if not limit:
         return False
+    # 结束原因是 length 时一律算撞上限：completion_tokens 可能被本地估算补出一个
+    # 偏低的值（换行/标签的 token 边界误差），只看用量会把截断的骨架判成完整的
+    if str(usage.get("finish_reason") or "").lower() == "length":
+        return True
     try:
         completion = int(usage.get("completion_tokens") or 0)
     except (TypeError, ValueError):
@@ -1458,16 +1462,31 @@ async def chat_stream(
                         "框架解析未产出可用骨架（%s）：stats=%s，回退单阶段",
                         request_id, visual_fw_stats.as_dict(),
                     )
+                    # 撞框架输出上限时要明说：否则用户以为拿到的是完整两阶段结果，
+                    # 实际是残缺骨架回退重跑的，缺哪些题无从判断
+                    if _hit_output_cap(visual_fw_usage, visual_framework_max_tokens):
+                        yield {
+                            "event": "truncated",
+                            "data": json.dumps({"limit": visual_framework_max_tokens}, ensure_ascii=False),
+                        }
                     prompt = base_prompt
-                discard_framework = not framework_usable and not client_disconnected and not stop_event.is_set()
+                # 残缺骨架不能参与日志正文：回退（重跑）与 stop/断线都要清掉。
+                # 旧版只在「回退且未停未断」时清，stop 落在框架阶段会把只吐了一半的
+                # 骨架当成品写进使用日志，用户拿到有语篇/题干、无讲解的半成品。
+                discard_framework = not framework_usable and not client_disconnected
                 if discard_framework:
-                    # 回退模型会从原卷重建结构，残缺骨架不能参与合并或日志正文。
                     output_parts.clear()
                 # framework 标志告诉前端是否真的存在两阶段骨架（false = 回退单阶段，
-                # 前端不做骨架快照，续写走老路径）
-                if not explain_jobs and not client_disconnected and not stop_event.is_set():
+                # 前端不做骨架快照，续写走老路径）。并行规划为空时补 fallback 标记：
+                # 否则前端看到 framework:true 又收不到 parallel，会以为两阶段成功、
+                # 把随后的单流输出 snapshot 成骨架快照，与真实情况相反。
+                # stop 时也要发：前端 vpStage 只由 stage 事件驱动，停在 framework 会让
+                # 第二步进度永为 0、续写入口不出现。reset 随 discard 一起给，
+                # 前端据此丢掉已推送的残骨架。
+                if not explain_jobs and not client_disconnected:
                     yield {"event": "stage", "data": json.dumps(
-                        {"name": "explain", "framework": framework_usable, "reset": discard_framework},
+                        {"name": "explain", "framework": framework_usable, "reset": discard_framework,
+                         "fallback": "single", "stopped": stop_event.is_set()},
                         ensure_ascii=False,
                     )}
 

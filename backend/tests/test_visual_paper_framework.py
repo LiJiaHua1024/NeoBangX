@@ -886,6 +886,7 @@ def test_partial_framework_falls_back_to_original_paper(monkeypatch, failure):
     assert resp.status_code == 200
     assert "[DONE]" in resp.text
     stages = [json.loads(block.split("data: ", 1)[1]) for block in resp.text.replace("\r\n", "\n").split("\n\n") if block.startswith("event: stage\n")]
-    assert stages[-1] == {"name": "explain", "framework": False, "reset": True}
+    assert stages[-1] == {"name": "explain", "framework": False, "reset": True,
+                          "fallback": "single", "stopped": False}
     assert _RAW_PAPER in captured["prompt"]
     assert "结构骨架" not in captured["prompt"].split("<material>")[0]

@@ -8519,7 +8519,11 @@ function nbx() {
             this._outputDirty = true;
             this.vpDoRender();
           }
-          if (name === "explain" && info.framework && !info.reuse_framework && this.visualPaper) {
+          // fallback:"single" 表示并行规划为空、走了单流兜底。此时不能把单流输出
+          // snapshot 成骨架快照——stage 协议说的是"有骨架"，实际讲解是单流写的，
+          // 快照会污染框架数据，让下一轮续写从原卷突变成骨架。
+          if (name === "explain" && info.framework && !info.reuse_framework
+              && info.fallback !== "single" && this.visualPaper) {
             this.vpDoRender();
             this.visualPaper.frameworkRaw = this.vpSerializeRaw({ frameworkOnly: true });
           }

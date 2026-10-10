@@ -23,6 +23,9 @@ CONFIG_KEYS = [
     "timeout",
     "first_token_timeout",
     "visual_paper_concurrency",
+    "framework_model",
+    "framework_max_tokens",
+    "visual_paper_framework",
     "max_visible_models",
     "log_payload",
     "log_retention_days",
@@ -489,6 +492,12 @@ def _env_defaults() -> dict[str, str]:
         "ocr_max_tokens": str(settings.ocr_max_tokens),
         "max_tokens": str(settings.max_tokens),
         "visual_paper_concurrency": str(DEFAULT_VISUAL_CONCURRENCY),
+        # 阶段一（框架插标）模型与预算：缺省沿用 chores_model 与全局 max_tokens，
+        # 但可配——chores 模型不适配长上下文时运维需要能换
+        "framework_model": "",
+        "framework_max_tokens": "",
+        # 两阶段总开关：on/off，缺省 on
+        "visual_paper_framework": "on",
         "timeout": str(settings.timeout),
         "max_visible_models": str(settings.max_visible_models),
         "log_payload": "true" if settings.log_payload else "false",
