@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from time import monotonic
 
 from app.services.visual_paper import TAG_LINE_RE, parse_custom_visual_paper
 from app.services.llm_router import is_retryable
+
+logger = logging.getLogger(__name__)
 
 PARALLELISM = 3
 MAX_ATTEMPTS = 3
@@ -19,6 +22,9 @@ ANALYSIS_TAGS = {
     "TRANSFER_OPTIONS", "TRANSFER_ANSWER", "TRANSFER_EXPL", "WRITING_POINTS",
     "WRITING_OUTLINE", "WRITING_SAMPLE",
 }
+# 骨架自带的结构性标签。工单里不该出现它们；万一出现（模型把原题结构搬过来），
+# 要拦住它自己的正文，但不能把后面本该保留的分析字段一起断掉。
+STRUCTURE_TAGS = {"STEM", "OPTIONS", "PASSAGE_REF", "PASSAGE_DEF", "PASSAGE", "GROUP", "GROUP_INTRO", "TOTAL", "PAPER", "NOTICE", "KEY"}
 
 
 def question_missing(q: dict, transfer_count: int, group_id: str = "") -> list[str]:
@@ -188,16 +194,34 @@ class QuestionBlocks:
                     if self.no and self.no not in self.seen and len(self.lines) > 1:
                         self.seen.add(self.no)
                         out.append((self.no, "\n".join(self.lines) + "\n@@END_Q@@\n"))
+                    elif self.lines and not self.no:
+                        # 收尾时仍没有有效题号：这块无法归属，只能丢。留一条日志，
+                        # 否则重试轮次白烧三轮也看不出是题号没写上。
+                        logger.warning("QuestionBlocks 丢弃无题号题块（%d 行）", len(self.lines))
                     self.no, self.lines, self.keep, self.pending_no = "", [], False, False
                 else:
-                    self.keep = bool(self.no) and tag in ANALYSIS_TAGS
+                    # 标签行本身不是题号：题号只可能紧跟在 @@Q@@ 之后的正文行。
+                    # 不清这个标志的话，@@Q@@ 后紧跟 @@QTYPE@@ 时后续内容会因 keep=False
+                    # 被整段丢弃，整题静默蒸发。
+                    self.pending_no = False
+                    if tag in ANALYSIS_TAGS:
+                        # 题号还没补上（裸 @@Q@@）也先收着：等下一行补号后再决定上报，
+                        # 否则紧跟标签的写法会让整题蒸发。END_Q 时 no 仍为空才丢弃。
+                        self.keep = True
+                    elif tag in STRUCTURE_TAGS:
+                        # 结构性标签：断当前字段收集，但不牵连后面的分析字段
+                        self.keep = False
+                    else:
+                        self.keep = False
                     if self.keep:
                         self.lines.append(f"@@{tag}@@" + (f" {_guard(value)}" if value else ""))
             elif self.pending_no:
                 value = line.strip()
                 if value:
                     self.no = value if value in self.allowed else ""
-                    self.lines = [f"@@Q@@ {self.no}"] if self.no else []
+                    # 题号有效：保留裸 @@Q@@ 之后暂存下来的分析字段，只把题号行补上；
+                    # 题号越界时整块作废（与旧行为一致）
+                    self.lines = [f"@@Q@@ {self.no}"] + self.lines if self.no else []
                     self.pending_no = False
             elif self.keep:
                 # 防止被正文中的行内标签重新打开其他题；正常标签均在行首。
