@@ -110,6 +110,36 @@ def _norm_group_title(s: str) -> str:
     return re.sub(r"\s+", "", s or "")
 
 
+def _merge_stray_fields(dst: dict, src: dict) -> None:
+    """把 src 草稿里攒到的字段并进 dst 草稿（同号重开的收尾兜底）。
+
+    只搬「有内容」的字段：src 是从已提交题播种出来的，空字段表示本轮没写，
+    不能把 dst 里已有的内容清掉。列表/字符串按非空判定，迁移块整列表替换。
+    """
+    scalar_keys = (
+        "stem", "passage", "_passage_ref", "_answer_raw", "_evidence_raw",
+        "_reason_raw", "_distractor_raw", "_pattern_name_raw",
+        "_writing_points_raw", "_writing_outline_raw", "_writing_sample_raw",
+    )
+    for key in scalar_keys:
+        val = src.get(key)
+        if isinstance(val, str) and val.strip():
+            dst[key] = val
+        elif isinstance(val, list) and val:
+            dst[key] = val
+    if src.get("_raw_options"):
+        dst["_raw_options"] = src["_raw_options"]
+    if src.get("_pitfalls_raw"):
+        dst["_pitfalls_raw"] = src["_pitfalls_raw"]
+    if src.get("_pattern_steps_raw"):
+        dst["_pattern_steps_raw"] = src["_pattern_steps_raw"]
+    if src.get("_transfers_raw"):
+        # 本轮新写的迁移块优先；没有新块时沿用 dst 的 carry（由 fresh/carry 逻辑决定）
+        dst["_transfers_raw"] = src["_transfers_raw"]
+    if src.get("_transfer_draft") and any(src["_transfer_draft"].values()):
+        dst["_transfer_draft"] = src["_transfer_draft"]
+
+
 def _draft_from_committed(q_obj: dict) -> dict:
     """把已提交的题对象重播种成解析草稿（字段键与首次解析一致），重开后续写字段即可。"""
     reference = q_obj.get("reference") or {}
@@ -608,10 +638,10 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                         title = parts[0]
                         intro = parts[1]
                     else:
-                        title = parts[1] if len(parts) > 1 else gid
+                        title = (parts[1] if len(parts) > 1 else gid).strip() or gid
                         intro = parts[2] if len(parts) > 2 else ""
                 else:
-                    title = parts[1] if len(parts) > 1 else gid
+                    title = (parts[1] if len(parts) > 1 else gid).strip() or gid
                     intro = parts[2] if len(parts) > 2 else ""
                 # 同 id 且标题（去空白归一化）相同的既有分组 = 同一板块被重复声明
                 # （续写/重讲解时模型又把 @@GROUP@@ 头写了一遍，字面常与骨架略有出入：
@@ -668,7 +698,9 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
             elif tag == "QTYPE":
                 if current_q is not None:
                     v = value.strip().lower()
-                    current_q["qtype"] = v if v in ALLOWED_QTYPES else v
+                    # 非法值不留着：置空让收尾的 qtype 推断接管（旧写法两分支相同，
+                    # 非法值原样放行，直到 validate 才拒，而 parse 路径不跑 validate）
+                    current_q["qtype"] = v if v in ALLOWED_QTYPES else ""
             elif tag == "PASSAGE_REF":
                 # 单行值标签：本题所属语篇的编号（写作题写 -）
                 if current_q is not None:
@@ -706,6 +738,17 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
     # 未遇 @@END_Q@@ 的题仍不 commit，写进 current_q 的内容随对象一起丢弃
     if current_field is not None:
         flush_field()
+    # 提前写出 @@END_Q@@ 后，模型又补了字段但流在此结束（没有第二个 END_Q 来触发并回）：
+    # 这些字段只可能属于刚提交的那道题，这里兜底并回，否则整段丢失。
+    # 走「重开合并」的既有路径：以已提交题为种子建草稿，再把 current_q 里攒到的
+    # 非空字段并上去，最后 commit 会原地更新那道题。
+    if current_q is not None and last_committed["q"] is not None:
+        reopened = _draft_from_committed(last_committed["q"])
+        reopened["_committed"] = last_committed["q"]
+        _merge_stray_fields(reopened, current_q)
+        current_q = reopened
+        current_group = last_committed["g"]
+        commit_question()
 
     # 结束时若有未提交的题（无 END_Q），丢弃（保证已提交的都是完整题）
     # 不 commit 不完整题

@@ -254,9 +254,24 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
             if stop_event.is_set():
                 return
             job.started = monotonic()
-            original = parse_custom_visual_paper(job.material)
-            questions = {q["no"]: q for g in original["groups"] for q in g["questions"]}
-            question_groups = {q["no"]: g["id"] for g in original["groups"] for q in g["questions"]}
+            # material 解析放在 try 内：它一旦返回 None，下一行 original["groups"] 会抛
+            # TypeError 跳出 for 循环，worker_done 再也不发，主生成器在 queue.get() 上
+            # 永久挂起，而该 job 停在 pending、管理台和前端都看不到失败提示。
+            # 当前 group_material 的契约保证不会发生，但这是唯一一个「一触发就挂死」
+            # 的点，加防护比依赖契约稳。
+            try:
+                original = parse_custom_visual_paper(job.material)
+                if original is None:
+                    raise ValueError("组材料解析失败")
+                questions = {q["no"]: q for g in original["groups"] for q in g["questions"]}
+                question_groups = {q["no"]: g["id"] for g in original["groups"] for q in g["questions"]}
+            except Exception as exc:
+                logger.exception("可视化精讲：组材料解析失败，job 标记为 error")
+                job.state, job.error = "error", f"组材料解析失败：{exc}"
+                job.attempts.append({"nos": list(job.nos), "round": 0, "state": "error",
+                                     "error": str(exc), "prompt": "", "raw": [], "usage": {},
+                                     "llm": None, "elapsed": 0})
+                continue
             blocked = set()
             previous_provider = None
             try:
