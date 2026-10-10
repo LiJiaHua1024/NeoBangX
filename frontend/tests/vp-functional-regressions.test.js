@@ -194,8 +194,11 @@ test("完整选择、填空和写作题可完成，停止时仍保留未确认�
     assert.equal(c.vpRemaining, 1);
     writing.writingGuide[field] = previous;
   }
+  // 讲解已全齐：done 与「用户主动停止但内容已写完」都算完成。
+  // 只认 done 会让全齐后手停止的卷子永远挂着「待补全」入口，需空跑一轮才知道没得写。
   c.vpRunState = "stopped";
-  assert.equal(c.vpComplete, false);
+  assert.equal(c.vpComplete, true);
+  assert.equal(c.vpRemaining, 0);
   c.streaming = true;
   assert.equal(c.vpGeneratingQuestionNo, null);
 });

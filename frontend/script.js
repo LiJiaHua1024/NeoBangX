@@ -2984,6 +2984,9 @@ function nbx() {
       }
       for (const g of out.groups) {
         g.intro = String(g.intro || "");
+        // 坏快照可能漏 questions 数组：这里补上空数组，
+        // 否则下面的 for...of 与模板里的 g.questions.length 都会抛 TypeError
+        if (!Array.isArray(g.questions)) g.questions = [];
         for (const q of g.questions) {
           if (q.qtype !== "choice" && q.qtype !== "blank" && q.qtype !== "writing") {
             if (g.id === "writing_app" || g.id === "writing_cont") q.qtype = "writing";
@@ -3038,7 +3041,9 @@ function nbx() {
     get vpCurrentGlobalIndex() {
       if (!this.visualPaper) return 0;
       let idx = 0;
-      for (let i = 0; i < this.visualPaper.currentGroupIdx; i++) {
+      // 组索引可能来自旧快照（组数已变少），越界时按钳制值算，别裸遍历抛 TypeError
+      const upto = Math.min(Math.max(this.visualPaper.currentGroupIdx, 0), this.visualPaper.groups.length);
+      for (let i = 0; i < upto; i++) {
         idx += (this.visualPaper.groups[i].questions || []).length;
       }
       idx += this.visualPaper.currentQIdx + 1;
@@ -3292,7 +3297,9 @@ function nbx() {
       if (!Number.isFinite(declared) || declared <= 0) return false;
       if (this.vpQuestionCount < declared) return false;
       if (this.vpAnalyzedCount < this.vpTotal) return false;
-      return this.vpRunState === "done";
+      // 讲解已全齐：done 与「用户主动停止但内容已写完」都算完成。
+      // 只认 done 会让全齐后手停止的卷子永远挂着「待补全」入口，需空跑一轮才知道没得写。
+      return this.vpRunState === "done" || this.vpRunState === "stopped";
     },
     /* 失败是否发生在正文已经开始输出之后。判据用 errorMsg + output：只有正文 token 会
        追加进 output，思考内容进的是 reasoning，所以在思考阶段就断掉的失败没有 output，
@@ -3309,7 +3316,8 @@ function nbx() {
     // 是否处于第一/最后一题（考虑跨组空组），供全屏角落按钮禁用
     get vpIsFirstQuestion() {
       if (!this.visualPaper) return true;
-      for (let i = this.visualPaper.currentGroupIdx - 1; i >= 0; i--) {
+      const from = Math.min(this.visualPaper.currentGroupIdx, this.visualPaper.groups.length) - 1;
+      for (let i = from; i >= 0; i--) {
         if ((this.visualPaper.groups[i].questions || []).length > 0) return false;
       }
       return this.visualPaper.currentQIdx <= 0;
@@ -3465,6 +3473,9 @@ function nbx() {
       this.$nextTick(() => {
         const el = this.$refs.vpRightPane;
         if (el) el.scrollTop = 0;
+        // 左栏语篇也要归位：只滚右栏会让翻题后语篇停在上一篇的滚动位置
+        const leftEl = this.$refs.vpLeftPane;
+        if (leftEl) leftEl.scrollTop = 0;
         this.vpMountAll();
       });
     },
@@ -3491,6 +3502,9 @@ function nbx() {
       this.$nextTick(() => {
         const el = this.$refs.vpRightPane;
         if (el) el.scrollTop = 0;
+        // 左栏语篇也要归位：只滚右栏会让翻题后语篇停在上一篇的滚动位置
+        const leftEl = this.$refs.vpLeftPane;
+        if (leftEl) leftEl.scrollTop = 0;
         this.vpMountAll();
       });
     },
@@ -4609,6 +4623,9 @@ function nbx() {
       this.resetReasoning();
       this.resetOcr();
       this.resetTranslate();
+      // 可视化全解也必须重置：vpCloseFullscreen 是恢复 documentElement 滚动锁的
+      // 唯一路径，漏掉它会让生成中回首页的页面永久不能滚，且 vpTasks/vpStage 残留。
+      this.resetVisualPaper();
       this.scheduleMascotCheck(80);
     },
 
@@ -8840,6 +8857,7 @@ function nbx() {
       if (!this.vpEditing) {
         if (!this.vpHasData) { this.toast("暂无可修改的内容", "error"); return; }
         if (this.streaming) { this.toast("生成中不能修改，请先停止生成", "warn"); return; }
+        this._vpMaskBeforeEdit = this.maskOn;   // 退出编辑时恢复，别让遮罩状态被静默改掉
         this.maskOn = false;                    // 边改边看得到答案
         this.vpEditing = true;
         this.vpEditDirty = false;
@@ -8855,6 +8873,10 @@ function nbx() {
       this._vpStopEditTimer();
       this.vpHideTools();
       this.vpCommitEdits();
+      if (this._vpMaskBeforeEdit !== undefined) {
+        this.maskOn = this._vpMaskBeforeEdit;
+        this._vpMaskBeforeEdit = undefined;
+      }
       this.toast("修改已保存");
     },
     _vpBindEditListeners() {
@@ -9146,6 +9168,11 @@ function nbx() {
       const raw = this.vpSerializeRaw();
       this.output = raw;
       this.visualPaper.rawJson = raw;
+      // 重解析一次：答案速查表/题量随最新编辑更新。否则修改模式里改了答案后
+      // 不退出就打印/下载，速查表印的还是旧答案（题干页却已是新答案）。
+      this._outputDirty = true;
+      this.vpDoRender();
+      this._outputDirty = false;
       this.vpRefreshFramework();
       this._vpPersistEdits();
     },

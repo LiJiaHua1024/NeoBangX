@@ -874,8 +874,8 @@
                 <!-- 浏览组：题号 + 答案显隐 + 翻题 -->
                 <span class="text-xs text-dim hidden sm:inline" x-text="'第 ' + vpCurrentGlobalIndex + ' / ' + vpQuestionCount + ' 题'"></span>
                 <button class="icon-btn" style="width:2rem;height:2rem" :class="{ 'on': maskOn }" @click="toggleMask()" :title="maskOn ? '显示答案' : '隐藏答案'" x-html="icon(maskOn ? 'eye-off' : 'eye','w-4 h-4')"></button>
-                <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpPrevQuestion()" :disabled="vpQuestionCount===0">上一题</button>
-                <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpNextQuestion()" :disabled="vpQuestionCount===0">下一题</button>
+                <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpPrevQuestion()" :disabled="vpQuestionCount===0 || vpIsFirstQuestion">上一题</button>
+                <button class="btn-ghost" style="padding:.35rem .7rem;font-size:.78rem" @click="vpNextQuestion()" :disabled="vpQuestionCount===0 || vpIsLastQuestion">下一题</button>
                 <span class="vp-bar-divider"></span>
                 <!-- 输出组：复制 / 导出 / 全屏讲题（退出全屏由全屏舞台顶栏负责，这里只有进入态） -->
                 <button class="icon-btn" style="width:2rem;height:2rem" @click="copyResult()"
@@ -946,6 +946,11 @@
                   <span x-show="streaming">每完成一道题即实时预览，中断也可继续生成</span>
                   <span x-show="!streaming" x-text="vpComplete ? '试卷全解已就绪，可随时打印或导出课件' : '部分题目待补全，可点击下方继续生成'"></span>
                   <span class="font-medium whitespace-nowrap ml-2" :class="vpComplete ? 'text-emerald-600' : 'text-dim'" x-text="vpProgressText"></span>
+                </div>
+                <!-- 两条进度同渐变，只靠透明度区分：没有图例时浅条秒满会被读成「快完成了」 -->
+                <div class="flex items-center gap-3 text-[10px] text-faint mt-0.5" x-show="vpTotal > 1">
+                  <span class="inline-flex items-center gap-1"><i class="vp-legend-swatch vp-legend-stage1"></i>结构 <span x-text="vpProgressPercent + '%'"></span></span>
+                  <span class="inline-flex items-center gap-1"><i class="vp-legend-swatch vp-legend-stage2"></i>讲解 <span x-text="vpExplainPercent + '%'"></span></span>
                 </div>
               </div>
             </div>
@@ -1144,7 +1149,7 @@
                       <div class="text-xs font-semibold mb-2">答案速查表<span class="text-faint font-normal" x-show="vpEditing">（随答案自动更新，无需手改）</span></div>
                       <div class="flex flex-wrap gap-1.5">
                         <template x-for="(ans, no) in (visualPaper.answerMap || {})" :key="no">
-                          <span class="chip neutral vp-ans-chip" :title="no + ': ' + vpDetag(ans)" x-text="no + ': ' + vpDetag(ans)"></span>
+                          <span class="chip neutral vp-ans-chip ans" :title="no + ': ' + vpDetag(ans)" x-text="no + ': ' + vpDetag(ans)"></span>
                         </template>
                       </div>
                     </div>
@@ -1279,7 +1284,7 @@
                               <div><span class="font-semibold">干扰项：</span><span class="whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.reference.distractor)"></span></div>
                             </div>
                             <!-- 待生成/生成中骨架屏 -->
-                            <div x-show="(!vpCurrentQuestion.reference || (!vpCurrentQuestion.reference.evidence && !vpCurrentQuestion.reference.reason && !vpCurrentQuestion.reference.distractor)) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
+                            <div x-show="(!vpCurrentQuestion.reference || (!vpCurrentQuestion.reference.evidence && !vpCurrentQuestion.reference.reason && !vpCurrentQuestion.reference.distractor)) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box" :data-vp-static="vpQuestionStatus(vpCurrentQuestion) !== 'generating' ? '1' : '0'">
                               <div class="vp-skeleton-tip">
                                 <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
                                 <span x-text="vpWaitingText(vpCurrentQuestion, '参考答案与依据')"></span>
@@ -1330,7 +1335,7 @@
                               </template>
                             </div>
                             <!-- 待生成/生成中骨架屏 -->
-                            <div x-show="!(vpCurrentQuestion.pitfalls && vpCurrentQuestion.pitfalls.length) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
+                            <div x-show="!(vpCurrentQuestion.pitfalls && vpCurrentQuestion.pitfalls.length) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box" :data-vp-static="vpQuestionStatus(vpCurrentQuestion) !== 'generating' ? '1' : '0'">
                               <div class="vp-skeleton-tip">
                                 <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
                                 <span x-text="vpWaitingText(vpCurrentQuestion, '易错点分析')"></span>
@@ -1382,7 +1387,7 @@
                               </ol>
                             </div>
                             <!-- 待生成/生成中骨架屏 -->
-                            <div x-show="!(vpCurrentQuestion.pattern && (vpCurrentQuestion.pattern.name || (vpCurrentQuestion.pattern.steps && vpCurrentQuestion.pattern.steps.length))) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
+                            <div x-show="!(vpCurrentQuestion.pattern && (vpCurrentQuestion.pattern.name || (vpCurrentQuestion.pattern.steps && vpCurrentQuestion.pattern.steps.length))) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box" :data-vp-static="vpQuestionStatus(vpCurrentQuestion) !== 'generating' ? '1' : '0'">
                               <div class="vp-skeleton-tip">
                                 <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
                                 <span x-text="vpWaitingText(vpCurrentQuestion, '考点范式')"></span>
@@ -1499,7 +1504,7 @@
                               </div>
                             </div>
                             <!-- 情况 2：非写作题，且正在生成或排队等待生成中 -->
-                            <div x-show="!vpIsWritingQuestion(vpCurrentQuestion) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box">
+                            <div x-show="!vpIsWritingQuestion(vpCurrentQuestion) && vpQuestionStatus(vpCurrentQuestion) !== 'done'" class="vp-skeleton-box" :data-vp-static="vpQuestionStatus(vpCurrentQuestion) !== 'generating' ? '1' : '0'">
                               <div class="vp-skeleton-tip">
                                 <span class="status-dot live" x-show="vpQuestionStatus(vpCurrentQuestion) === 'generating'"></span>
                                 <span x-text="vpWaitingText(vpCurrentQuestion, '迁移训练题')"></span>

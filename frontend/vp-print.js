@@ -797,8 +797,21 @@
     return m.title + suffix;
   }
   /* 三个版本常常先后来自同一个文件夹：文件名各自带版本名，后下的不会盖掉先下的 */
+  /* Windows 文件名不接受 / \ : * ? " < > | 与控制字符：标题带这些字符时 Chrome 会把
+     / 当路径分隔，下载直接失败。单文件讲台导出早已清洗，这里补上同一套规则。 */
+  function safeFileNamePart(name) {
+    var cleaned = str(name)
+      .replace(/[\\/:*?"<>|]/g, " ")
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80)
+      .replace(/[. ]+$/, "")
+      .trim();
+    return cleaned || "可视化试卷全解";
+  }
   function fileName(payload, o) {
-    var base = str(payload.title).trim() || paperMeta(payload).title;
+    var base = safeFileNamePart(str(payload.title).trim() || paperMeta(payload).title);
     return base + "打印版（" + MODE_LABEL[o.mode] + "）";
   }
   function safeJson(v) {

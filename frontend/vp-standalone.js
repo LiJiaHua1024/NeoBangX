@@ -910,6 +910,7 @@
     edit.on = true;
     edit.dirty = false;
     edit.sel = false;
+    edit.maskBefore = state.mask;       // 退出编辑时恢复，别让遮罩状态被静默改掉
     state.mask = false;                 // 边改边看得到答案
     if (state.overview) toggleOverview(false);
     state.topHidden = false;            // 编辑时顶栏不能自动隐藏（上面有「完成修改 / 保存文件」）
@@ -926,6 +927,7 @@
     writeBackEdited();
     edit.on = false;
     edit.sel = false;
+    if (edit.maskBefore !== undefined) { state.mask = edit.maskBefore; edit.maskBefore = undefined; }
     flushEdits();
     hideTools();
     syncEditChrome();
@@ -1483,6 +1485,7 @@
     dockMask.addEventListener("click", toggleMask);
     dockOverview.addEventListener("click", function () { toggleOverview(); });
     ovClose.addEventListener("click", function () { toggleOverview(false); });
+    setIcon(ovClose, "chevron-down");   // 与主应用总览收起键一致，否则按钮是空的、用户找不到
     ovMask.addEventListener("click", function () { toggleOverview(false); });
     wakeTopBtn.addEventListener("click", wakeTop);
     wakeBottomBtn.addEventListener("click", wakeBottom);
