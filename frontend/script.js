@@ -9302,7 +9302,14 @@ function nbx() {
         const trimmed = text.trim();
         const declaredRef = String(q.passageRef || "").trim();
         const key = vpNormPassageRef(declaredRef);
-        if (!trimmed) { out.push("@@PASSAGE_REF@@ -"); return; }
+        if (!trimmed) {
+          // 无语篇有两种成因，序列化必须区分：写 "-" 会被解析端当成「本就无语篇」，
+          // 把「引用未解析」的告警永久抹掉（老师进出一次修改模式就再也看不到它）。
+          // 未解析的题改写哨兵 "?"：归一化后仍非空、且不在 VP_NO_PASSAGE_REFS 里，
+          // 重解析时会因为没有对应 DEF 而重新标记 passageUnresolved。
+          out.push(`@@PASSAGE_REF@@ ${q.passageUnresolved ? "UNRESOLVED" : "-"}`);
+          return;
+        }
         if (key && defTextByRef.has(key)) {
           if (defTextByRef.get(key) === trimmed) { out.push(`@@PASSAGE_REF@@ ${declaredRef || key}`); return; }
           // 同编号但正文不同 = 这一题被单独改过：内联全文，不影响同篇其他题
@@ -9941,6 +9948,12 @@ function nbx() {
         this.toast("暂无可打印的讲解内容", "error");
         return;
       }
+      if (this.streaming) {
+        // 两阶段下「结构齐」不等于「讲解齐」：生成到第 12 题就导出会拿到大量
+        // 空字段的半成品，学生还照着作答横线做题。生成中一律拒绝。
+        this.toast(`正在生成中（已完成 ${this.vpAnalyzedCount}/${this.vpTotal} 题讲解），完成后可打印`, "warn");
+        return;
+      }
       if (!window.VPPrint) {
         this.toast("打印组件未加载，请检查网络后刷新", "error");
         return;
@@ -9957,6 +9970,11 @@ function nbx() {
     openVpExport() {
       if (!this.vpHasData) {
         this.toast("暂无可导出的讲解内容", "error");
+        return;
+      }
+      if (this.streaming) {
+        // 同 printVisualPaper：生成中导出只会拿到半成品
+        this.toast(`正在生成中（已完成 ${this.vpAnalyzedCount}/${this.vpTotal} 题讲解），完成后可导出`, "warn");
         return;
       }
       this.closeExportMenu();

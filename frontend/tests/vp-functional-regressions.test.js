@@ -591,3 +591,62 @@ test("裁尾保留 @@KEY@@ 答案区，不把 paperKey 一起丢掉", async () =
   const raw = c.vpSerializeRaw();
   assert.ok(raw.includes("@@KEY@@"));
 });
+
+test("序列化不抹掉「语篇引用未解析」告警：round-trip 后仍标记", () => {
+  const c = component();
+  const raw = `@@TOTAL@@ 1
+@@PAPER@@ Test
+@@GROUP@@ reading|Reading|
+@@Q@@ 1
+@@PASSAGE_REF@@ P9
+@@STEM@@
+Question?
+@@OPTIONS@@
+A. One
+B. Two
+@@ANSWER@@ A
+@@END_Q@@
+`;
+  c.output = raw;
+  c.visualPaper = { ...c.newVisualPaperState(), ...c.normalizeVisualPaper(c.parseCustomVisualPaper(raw)) };
+  const q = c.visualPaper.groups[0].questions[0];
+  assert.equal(q.passageUnresolved, true, "P9 没有对应 DEF，应标记未解析");
+  const out = c.vpSerializeRaw();
+  assert.ok(out.includes("@@PASSAGE_REF@@ UNRESOLVED"), "未解析的题必须写哨兵，不能写 '-'");
+  const reparsed = c.parseCustomVisualPaper(out);
+  assert.equal(reparsed.groups[0].questions[0].passageUnresolved, true, "round-trip 后告警必须还在");
+});
+
+test("本就无语篇的题仍写 '-'，不会被误标成未解析", () => {
+  const c = component();
+  loadPaper(c);
+  const q = c.visualPaper.groups[0].questions[0];
+  q.passage = "";
+  q.passageRef = "";
+  delete q.passageUnresolved;
+  const out = c.vpSerializeRaw();
+  assert.ok(out.includes("@@PASSAGE_REF@@ -"), "本就无语篇仍写 -");
+  const reparsed = c.parseCustomVisualPaper(out);
+  assert.ok(!reparsed.groups[0].questions[0].passageUnresolved);
+});
+
+test("生成中拒绝打印与导出半成品", () => {
+  const c = component();
+  loadPaper(c);
+  const toasts = [];
+  c.toast = (t) => toasts.push(t);
+  c.streaming = true;
+  c.printVisualPaper();
+  assert.ok(toasts.some(t => t.includes("正在生成中")), "生成中应提示而非打印");
+  toasts.length = 0;
+  c.openVpExport();
+  assert.ok(toasts.some(t => t.includes("正在生成中")), "生成中应提示而非导出");
+  assert.equal(c.vpExportOpen, false);
+  // 生成结束后不再拦（VPPrint 未加载会走另一条提示，但不再是「生成中」）
+  c.streaming = false;
+  toasts.length = 0;
+  c.printVisualPaper();
+  assert.ok(!toasts.some(t => t.includes("正在生成中")), "完成后应放行");
+  c.openVpExport();
+  assert.equal(c.vpExportOpen, true, "完成后导出面板应打开");
+});
