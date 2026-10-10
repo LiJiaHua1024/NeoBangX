@@ -1110,11 +1110,11 @@
                                       'active': vpIsCurrent(gIdx, qIdx),
                                       'generating': vpQuestionStatus(q) === 'generating',
                                       'pending': vpQuestionStatus(q) === 'pending',
-                                      'incomplete': !streaming && vpQuestionStatus(q) === 'idle',
+                                      'incomplete': (vpQuestionStatus(q) === 'idle' || vpQuestionStatus(q) === 'failed' || vpQuestionStatus(q) === 'incomplete' || vpQuestionStatus(q) === 'cancelled'),
                                       'done': vpQuestionStatus(q) === 'done'
                                     }"
                                     @click="vpSelectQuestion(gIdx, qIdx)"
-                                    :title="vpQuestionStatus(q) === 'generating' ? '正在生成第 ' + q.no + ' 题解析' : (vpQuestionStatus(q) === 'pending' ? '第 ' + q.no + ' 题排队等待生成' : (vpQuestionStatus(q) === 'idle' ? '待补：' + vpQuestionMissing(q).join('、') : '讲解已完整'))">
+                                    :title="vpTaskRetryReason(q) ? vpTaskRetryReason(q) : (vpQuestionStatus(q) === 'generating' ? '正在生成第 ' + q.no + ' 题解析' : (vpQuestionStatus(q) === 'pending' ? '第 ' + q.no + ' 题排队等待生成' : (vpQuestionStatus(q) === 'done' ? '讲解已完整' : '待补：' + vpQuestionMissing(q).join('、'))))">
                               <span x-text="q.no"></span>
                               <span class="vp-q-chip-ans" x-show="q.answer" :class="{ 'masked': maskOn }" x-text="vpDetag(q.answer)"></span>
                               <span class="vp-q-chip-dot" x-show="vpQuestionStatus(q) === 'generating'"></span>

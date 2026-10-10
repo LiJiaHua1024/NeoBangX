@@ -3197,7 +3197,11 @@ function nbx() {
     get vpStep2StatusText() {
       if (this.vpIsStage2Done) return `全卷 ${this.vpTotal} 题解析已完成`;
       if (this.vpIsStage2Active && this.vpParallel) {
-        const active = this.vpTasks.filter(t => t.state === "running").flatMap(t => (t.active_nos || t.nos).filter(n => !(t.completed || []).includes(n))).length;
+        // retrying 优先、与 active 互斥：后端第 2 轮起是 state="running" 且 attempt=2，
+        // 同一批题若两边都算，文案会变成「正在生成 3 题 · 自动补全 3 题」——
+        // 两个 3 是同一批题。attempt>1 的只算自动补全，不算正在生成。
+        const active = this.vpTasks.filter(t => t.state === "running" && !(t.attempt > 1))
+          .flatMap(t => (t.active_nos || t.nos).filter(n => !(t.completed || []).includes(n))).length;
         const retrying = this.vpTasks.filter(t => t.state === "retrying" || (t.state === "running" && t.attempt > 1))
           .flatMap(t => (t.active_nos || t.nos).filter(n => !(t.completed || []).includes(n))).length;
         return `已完成 ${this.vpAnalyzedCount}/${this.vpTotal} 题${active ? ` · 正在生成 ${active} 题` : ''}${retrying ? ` · 自动补全 ${retrying} 题` : ''}`;
@@ -3208,7 +3212,9 @@ function nbx() {
       return "待结构提取后生成";
     },
     get vpTaskFailures() {
-      return this.vpTasks.filter(t => t.state === "error" || t.state === "incomplete").length;
+      // cancelled 也要算：stop 中断时未启动/未完成的任务都被兜底成 cancelled，
+      // 旧实现只统计 error/incomplete，那种场景下一条提示都不出
+      return this.vpTasks.filter(t => t.state === "error" || t.state === "incomplete" || t.state === "cancelled").length;
     },
     vpApplyTask(info) {
       if (!this.vpParallel || !info || !info.id) return;
@@ -3281,6 +3287,12 @@ function nbx() {
       return null;
     },
     /* 题目级状态：'done'（已完成精讲）/ 'generating'（正在实时撰写中）/ 'pending'（排队等待精讲）/ 'idle'（已停止待续写） */
+    /* 该题所属并行任务的重试原因（后端随 visual_task 下发，模板里零引用过） */
+    vpTaskRetryReason(q) {
+      if (!q || !this.vpParallel) return "";
+      const task = this.vpTasks.find(t => (t.nos || []).includes(String(q.no)));
+      return (task && task.retry_reason) || "";
+    },
     vpQuestionStatus(q) {
       if (!q) return "idle";
       if (this.vpQuestionAnalyzed(q)) return "done";
@@ -3292,7 +3304,14 @@ function nbx() {
             if (!task) return "idle";
             if (task.state === "retrying") return "pending";
             if (task.state === "running") return (task.active_nos || task.nos).includes(String(q.no)) ? "generating" : "pending";
-            return task.state === "pending" ? "pending" : "idle";
+            if (task.state === "pending") return "pending";
+            // error/incomplete/cancelled 不能再一律落 idle：整条流还在跑时，
+            // 失败的任务在题库里必须看得见（旧实现把它们显示成「空闲」，
+            // 而 incomplete 样式又被 !streaming 门控，等于失败完全不可见）
+            if (task.state === "error") return "failed";
+            if (task.state === "incomplete") return "incomplete";
+            if (task.state === "cancelled") return "cancelled";
+            return "idle";
           }
           const genNo = this.vpGeneratingQuestionNo;
           if (genNo && String(q.no) === String(genNo)) return "generating";
@@ -8522,7 +8541,9 @@ function nbx() {
           // fallback:"single" 表示并行规划为空、走了单流兜底。此时不能把单流输出
           // snapshot 成骨架快照——stage 协议说的是"有骨架"，实际讲解是单流写的，
           // 快照会污染框架数据，让下一轮续写从原卷突变成骨架。
-          if (name === "explain" && info.framework && !info.reuse_framework
+          // reuse_framework（复用骨架续写）过去被排除在刷新之外，导致间隙编辑未落盘时
+          // 下一轮仍拿旧快照；现在一视同仁地刷新。
+          if (name === "explain" && info.framework
               && info.fallback !== "single" && this.visualPaper) {
             this.vpDoRender();
             this.visualPaper.frameworkRaw = this.vpSerializeRaw({ frameworkOnly: true });

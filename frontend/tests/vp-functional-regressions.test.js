@@ -283,7 +283,8 @@ test("并行任务按实际状态显示多题生成，失败题不占住其他�
   assert.ok(c.vpStep2StatusText.includes("正在生成 2 题"));
   c.vpApplyTask({ id: "a", state: "error" });
   assert.equal(c.vpGeneratingQuestionNo, "2");
-  assert.equal(c.vpQuestionStatus(qs[0]), "idle");
+  // error/incomplete/cancelled 不再一律落 idle：生成中也要看得见失败
+  assert.equal(c.vpQuestionStatus(qs[0]), "failed");
   assert.ok(c.vpStep2StatusText.includes("正在生成 1 题"));
   assert.ok(!c.vpStep2StatusText.includes("组"));
   c.streaming = false;
@@ -305,7 +306,9 @@ test("续写保留骨架尾部答案区，只发送缺失题号，不把讲解�
   await c.continueVisualPaper();
   assert.deepEqual(request.visualQuestionNos, ["1"]);
   assert.equal(c.parseCustomVisualPaper(c.output).paperKey, "1 A 2 B");
-  assert.equal(c.visualPaper.frameworkRaw, originalFramework);
+  // 复用续写也会刷新快照（旧实现不刷新，间隙编辑未落盘时下轮仍拿旧快照）；
+  // 但刷新后的快照只含结构，讲解字段不得塞进去
+  assert.notEqual(c.visualPaper.frameworkRaw, originalFramework);
   assert.ok(!c.visualPaper.frameworkRaw.includes("@@TRANSFER_STEM@@"));
   assert.equal(c.vpQuestionAnalyzed(c.parseCustomVisualPaper(c.output).groups[0].questions[1]), true);
 });
