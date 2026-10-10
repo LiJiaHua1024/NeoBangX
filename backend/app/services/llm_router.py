@@ -352,8 +352,14 @@ class LLMRouter:
         extra_body: Optional[dict] = None,
         usage_out: Optional[dict] = None,
         response_format: Optional[dict] = None,
+        providers_override: Optional[list[dict]] = None,
     ) -> AsyncGenerator[str | tuple[str, str] | tuple[str, dict], None]:
         """聚合路由的流式调用。
+
+        providers_override：本次调用使用的通道顺序。并发执行器要「避开上一家重试」，
+        旧做法是就地改 self.providers——那是一个共享列表，多个 worker 并发持有同一
+        个 router 实例时会互相干扰，分片日志的 provider 归属也会记成最后写入者。
+        改为传局部顺序，不动共享状态。
 
         产出三类值：
         - 正文：plain str
@@ -378,7 +384,8 @@ class LLMRouter:
             base_messages.append({"role": "user", "content": user_prompt})
 
         last_exc: Optional[Exception] = None
-        for idx, provider in enumerate(self.providers):
+        providers = providers_override if providers_override else self.providers
+        for idx, provider in enumerate(providers):
             self.attempts = idx + 1
             self.last_provider = provider
             kwargs = self._build_kwargs(

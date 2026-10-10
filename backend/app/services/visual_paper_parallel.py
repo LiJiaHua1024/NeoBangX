@@ -377,10 +377,19 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                             job.llm = call["llm"] = build_llm()
                             providers = getattr(job.llm, "providers", None)
                             # 出正文后不能拼接另一通道；新请求只为缺失题换通道重做。
+                            # 排序结果只作本次调用的局部参数传下去：就地改 llm.providers
+                            # 会写到一个共享列表（chat.py 让首个 worker 复用主 llm 对象），
+                            # 多个 worker 并发排序时互相干扰，分片日志的 provider 归属
+                            # 也会记成最后写入者。
+                            providers_override = None
                             if previous_provider and providers and len(providers) > 1:
-                                job.llm.providers = sorted(providers, key=lambda p: p.get("id") == previous_provider)
+                                providers_override = sorted(providers, key=lambda p: p.get("id") == previous_provider)
+                            # 记下本次实际使用的通道顺序：既供分片日志归属，也让
+                            # 「避开上一家」的策略可被验证
+                            call["providers"] = [p.get("id") for p in (providers_override or providers or [])]
                             async with aclosing(job.llm.chat_stream_with_stop(
-                                user_prompt=call["prompt"], stop_event=stop_event, usage_out=call["usage"], **stream_kwargs,
+                                user_prompt=call["prompt"], stop_event=stop_event, usage_out=call["usage"],
+                                providers_override=providers_override, **stream_kwargs,
                             )) as upstream:
                                 async for item in upstream:
                                     if stop_event.is_set():
@@ -416,8 +425,13 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                                 logger.info("可视化精讲：不可重试错误转为按题重试，不整批屏蔽：%s", exc)
                         finally:
                             call["elapsed"] = monotonic() - call_started
-                            used = getattr(job.llm, "provider_used", None) or getattr(job.llm, "last_provider", None) or {}
-                            previous_provider = used.get("id")
+                            # 只用「实际成功」的那家：last_provider 每轮都赋值（含失败的
+                            # 那家），拿它排序会把刚失败的通道提到最前，等于原地重试，
+                            # 与「换通道重做」的意图相反。本轮没有成功产出时保持上一轮
+                            # 的 previous_provider 不变（首次全失败则仍为 None，不排序）。
+                            used = getattr(job.llm, "provider_used", None)
+                            if used and used.get("id"):
+                                previous_provider = used.get("id")
                             for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens"):
                                 if call["usage"].get(key) is not None:
                                     job.usage[key] = job.usage.get(key, 0) + call["usage"][key]

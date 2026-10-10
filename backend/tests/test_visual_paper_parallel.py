@@ -245,10 +245,13 @@ def test_retries_only_missing_questions_rotate_provider_and_preserve_completed()
         class Fake:
             def __init__(self):
                 self.providers = [{"id": "a"}, {"id": "b"}]
-            async def chat_stream_with_stop(self, *, user_prompt, usage_out, **kwargs):
+            async def chat_stream_with_stop(self, *, user_prompt, usage_out, providers_override=None, **kwargs):
                 nos = requested_nos(user_prompt)
                 calls.append(nos)
-                self.provider_used = self.providers[0]
+                # 尊重 providers_override：执行器现在传局部顺序而不是就地改
+                # self.providers（共享列表会被并发 worker 互相干扰）
+                chain = providers_override or self.providers
+                self.provider_used = chain[0]
                 providers.append(self.provider_used["id"])
                 usage_out.update(total_tokens=10)
                 if len(calls) == 1:
