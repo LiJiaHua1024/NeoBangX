@@ -10017,6 +10017,10 @@ function nbx() {
         questions: (g.questions || []).map((q) => ({
           no: q.no,
           qtype: q.qtype || "",
+          // 语篇引用与解析状态：导出物要能区分「本就无语篇」和「引用未解析」，
+          // 否则讲台把未解析也说成无语篇，老师照着错信息排查
+          passageRef: q.passageRef || "",
+          passageUnresolved: !!q.passageUnresolved,
           passage: q.passage || "",
           stem: q.stem || "",
           options: options(q.options),
@@ -10052,6 +10056,10 @@ function nbx() {
         paper: { title: paper.title || "", subject: paper.subject || "", year: paper.year || "" },
         total: this.vpTotal,
         questionCount: this.vpQuestionCount,
+        // 完成度：半成卷子在独立文件/打印件里要能看出缺什么，
+        // 否则学生拿到的是「暂无参考答案」「该题暂无迁移训练内容」还以为是定稿
+        analyzedCount: this.vpAnalyzedCount,
+        missingNos: this.vpMissingQuestions.map((m) => m.no),
         answerMap: vp.answerMap || {},
         groups,
       };

@@ -1250,7 +1250,15 @@
     var passage = $("q-passage");
     setRich(passage, q.passage);
     passage.hidden = !has(q.passage);
-    $("q-nopassage").hidden = has(q.passage);
+    // 无语篇有两种成因，文案必须区分：引用未解析是故障态（该提示排查），
+    // 本就无语篇是正常态（写作题/语法填空）。旧版一律显示后者，误导排查。
+    var noPassage = $("q-nopassage");
+    noPassage.hidden = has(q.passage);
+    if (!has(q.passage)) {
+      noPassage.textContent = q.passageUnresolved
+        ? "本题的语篇引用未能解析（可能原卷漏标或编号对不上），请核对原卷"
+        : "该题无独立语篇（写作题或语法填空）";
+    }
 
     /* 选项 */
     var opts = $("q-options");
