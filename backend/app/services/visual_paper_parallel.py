@@ -133,11 +133,30 @@ def _norm_no(s: str) -> str:
     return d or "0"
 
 
+WORK_ORDER_MARK = "【续写指令】"
+
+
+def split_work_order(raw: str) -> tuple[str, bool]:
+    """把「材料正文」与「续写工单」分开。返回 (正文, 是否带工单)。
+
+    路由用行首匹配判定「这是旧历史+续写工单」，规划用双换行切分正文。两端口径
+    不一致时，单换行拼接的骨架会被路由认作续写、而规划切不开——工单整段进解析
+    材料，截断半题时污染末字段。这里统一成一处，两端都调它。
+    """
+    if WORK_ORDER_MARK not in raw:
+        return raw, False
+    # 工单标记可能被一个或多个换行引导；按它第一次出现的位置切开
+    idx = raw.find(WORK_ORDER_MARK)
+    body = raw[:idx].rstrip("\n")
+    return body, True
+
+
 def plan_explanations(raw: str, loader, transfer_count: int, selected: list[str] | None = None) -> list[ExplainJob]:
     # 老客户端的自然语言工单仍交给原来的单流处理，不能把其剩余题清单猜成全卷。
-    if selected is None and "【续写指令】" in raw:
+    body, has_order = split_work_order(raw)
+    if selected is None and has_order:
         return []
-    raw = raw.split("\n\n【续写指令】", 1)[0]
+    raw = body
     paper = parse_custom_visual_paper(raw)
     if not paper:
         return []

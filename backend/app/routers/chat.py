@@ -67,7 +67,7 @@ from app.services.visual_paper_framework import (
     FrameworkStats,
     render_numbered_lines,
 )
-from app.services.visual_paper_parallel import plan_explanations, stream_explanations
+from app.services.visual_paper_parallel import plan_explanations, split_work_order, stream_explanations
 from app.services.runtime_config import (
     visual_concurrency_for,
     find_model_entry,
@@ -1135,7 +1135,7 @@ async def chat_stream(
                 prompt = explain_prompt
                 # tool_name 由 prompt 文件名派生：续写轮次在用量日志里记为「…精讲」
                 prompt_filename = VISUAL_EXPLAIN_PROMPT
-        elif not req.continue_from and not re.search(r"(?m)^【续写指令】", req.input):
+        elif not req.continue_from and not split_work_order(req.input)[1]:
             # 旧历史没有完整骨架，只能按原卷 + 续写工单补写。
             # 重新提取骨架会丢掉工单，导致第二阶段从头覆盖已有讲解。
             visual_framework_prompt = loader.render(

@@ -8776,6 +8776,8 @@ function nbx() {
         this.toast("全部题目均已有完整讲解");
         return;
       }
+      // 工单必须用空行与材料分开：后端 split_work_order 按这个口径切分，
+      // 单换行拼接会让规划端切不开、工单整段混进解析材料
       const contInput = (hasFramework ? this.visualPaper.frameworkRaw : this.submittedInput)
         + "\n\n" + (hasFramework ? this.vpContinueBrief2() : this.vpContinueBrief());
       // 先显示讲解阶段，收到并行 stage 后再显示各任务；兼容不发 stage 的旧后端。
