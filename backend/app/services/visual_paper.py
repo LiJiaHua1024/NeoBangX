@@ -502,8 +502,25 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
         )
 
     # 逐行解析；一行内出现多个标签时逐段切分，前段文本归入当前字段
+    pending_q_no = False
     for raw_line in lines:
         work = raw_line.rstrip("\r")
+        # 模型偶尔把题号写到 @@Q@@ 的下一行：这一行若是独立的 1-3 位数字就当题号收下，
+        # 空行不算（跳过继续等），不是数字则放弃等待、交回正常流程。
+        # 不用 "1" 兜底：多道题都叫 1 会让答案速查表互相覆盖，静默给出错数据。
+        if pending_q_no and work.strip():
+            pending_q_no = False
+            bare = work.strip()
+            if re.fullmatch(r"\d{1,3}", bare) and current_q is not None:
+                committed_group, committed = _find_committed_question(groups, bare)
+                if committed is not None and current_q.get("no") == "?" and len(current_q) == 1:
+                    current_q = _draft_from_committed(committed)
+                    current_q["_committed"] = committed
+                    if committed_group is not None:
+                        current_group = committed_group
+                else:
+                    current_q["no"] = bare
+                continue
         while True:
             fm = TAG_FIND_RE.search(work)
             if fm is None:
@@ -522,6 +539,10 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     field_buf.append(work)
                 break
             tag = m.group(1).upper()
+            # 标签行本身不是题号：清掉等待状态（否则 @@Q@@ 后紧跟 @@QTYPE@@ 时，
+            # 后面的正文会被当成题号吞掉）
+            if tag != "Q":
+                pending_q_no = False
             # 同行值只取到下一个标签标记为止，行内剩余标签留给下一轮
             value = m.group(3)
             vm = TAG_FIND_RE.search(value)
@@ -592,7 +613,11 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     current_q = None
                     current_field = None
                     field_buf = []
-                no = value.strip() or "1"
+                no = value.strip()
+                if not no:
+                    # 题号可能写在下一行：先用占位符开题，等下一行补号
+                    no = "?"
+                    pending_q_no = True
                 committed_group, committed = _find_committed_question(groups, no)
                 if committed is not None:
                     # 两阶段：阶段二对同一题号重开——讲解字段并回已提交的题，
