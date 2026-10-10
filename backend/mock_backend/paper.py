@@ -266,11 +266,53 @@ class PaperBuilder:
 # ---------------------------------------------------------------- 对外接口
 
 
+# ---------------------------------------------------------------- 框架插标输出
+# 两阶段路径：阶段一收到框架提示词时输出 @@MARK@@ 插标指令而不是整份 @@TAG@@。
+# 少了这个分支，假后端只能走单阶段老路径——两阶段与并行链路在本地联调里
+# 完全没有覆盖面。
+
+
+def _is_framework_request(input_text: str) -> bool:
+    """这次请求是不是框架阶段（提示词里要求输出 @@MARK@@ 插标）。"""
+    text = input_text or ""
+    return "@@MARK" in text and "插标" in text
+
+
+def build_framework(plan: Any, req: dict, input_text: str) -> str:
+    """按原卷内容产出 @@MARK@@ 插标指令（阶段一）。"""
+    total = int(plan.paper_questions or 5)
+    done = int(plan.paper_done or 0) or total
+    out: list[str] = []
+    seen_group: set[str] = set()
+    seen_ref: set[str] = set()
+    for no in range(1, done + 1):
+        spec = _SHAPES[(no - 1) % len(_SHAPES)]
+        gid = spec["group"][0]
+        if gid not in seen_group:
+            seen_group.add(gid)
+            out.append(f"@@MARK GROUP {gid}|{spec['group'][1]}|\n")
+        ref = spec["ref"]
+        if ref and ref not in seen_ref:
+            seen_ref.add(ref)
+            # 锚点取语篇首句，锚文本必须真实存在于原卷
+            first = _PASSAGES[ref].split("\n")[0][:40]
+            out.append(f"@@MARK PASSAGE {ref}@@ {first}\n")
+        stem, _opts = _stems(no)
+        anchor_text = stem.split("?")[0][:24] or f"第 {no} 题"
+        out.append(f"@@MARK Q {no}@@ {anchor_text}\n")
+        if spec["opts"]:
+            out.append(f"@@MARK OPTIONS@@ {anchor_text}\n")
+    return "".join(out)
+
+
 def build_paper(plan: Any, req: dict, input_text: str) -> str:
     """按执行计划产出试卷正文；检测到【续写指令】时走续写分支。"""
     brief = parse_continue_brief(input_text or "")
     if brief:
         return build_resume(brief)
+    # 阶段一（框架插标）：输出 @@MARK@@ 指令，让假后端也能覆盖两阶段链路
+    if _is_framework_request(input_text):
+        return build_framework(plan, req, input_text)
     total = int(plan.paper_questions or 5)
     done = int(plan.paper_done or 0) or total
     builder = PaperBuilder(total)
