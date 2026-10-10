@@ -108,9 +108,13 @@ class FrameworkStats:
 
     @property
     def ok(self) -> bool:
-        """骨架是否值得交给阶段二：至少解析出一道题，且命中了不止一两条标记
-        （只命中一两处的骨架大概率是锚点大面积失配，不如回退老路径）。"""
-        return self.questions >= 1 and self.marks_applied >= 3 and not self.structure_errors
+        """骨架是否值得交给阶段二：至少解析出一道题，且命中标记数不少于题数
+        （每道题至少有一条 Q 标记才对上）。旧版固定要求 applied>=3，单题写作卷
+        （GROUP+Q 两条有效标记）会被误判成低质骨架、强制回退单阶段重跑整卷。
+
+        注意：放宽的前提是空锚点已被 F8 改成不计 applied——否则假锚点也会被放进来。
+        """
+        return self.questions >= 1 and self.marks_applied >= self.questions and not self.structure_errors
 
 
 def _trim_blank_edges(lines: list[str]) -> list[str]:
