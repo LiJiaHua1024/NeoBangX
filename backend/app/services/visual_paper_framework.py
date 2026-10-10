@@ -140,10 +140,11 @@ def _parse_q_no(args: str, anchor: str) -> Optional[str]:
     m = re.search(r"\d{1,3}", a)
     if m:
         return str(int(m.group()))
-    # 容错：题号忘写进参数时，从锚点开头的 "24. xxx" 里取
-    m = re.match(r"^\s*[\(（]?(\d{1,3})[\)）]?\s*[\.、．]", anchor.strip())
+    # 容错：题号忘写进参数时，从锚点开头取。接受三种写法：
+    # "(24) xxx"（括号题号）、"24. xxx"（带句点/顿号）、"24"（锚点就是数字行）
+    m = re.match(r"^\s*(?:[\(（](\d{1,3})[\)）]|(\d{1,3})\s*[\.、．]?)\s*(?:\S.*)?$", anchor.strip())
     if m:
-        return str(int(m.group(1)))
+        return str(int(m.group(1) or m.group(2)))
     return None
 
 
@@ -186,6 +187,7 @@ class FrameworkApplier:
         self._group_pos: tuple[int, int] = (0, 0)  # 当前分组头的插入位置（回插搜索的下界）
         self._group_pool: Optional[list[str]] = None
         self._group_pool_range: Optional[tuple[int, int]] = None  # 组池适用的题号区间
+        self._pending_passage_def: Optional[str] = None  # 已声明 ref、待收口时补发 DEF 行
         self._group_seq: dict[str, int] = {}   # 每个板块 id 已声明的分组数（消歧用）
         self._last_group_key: Optional[tuple[str, str]] = None
         # 开组时的语篇状态：读后续写的材料语篇在组内声明（要求行在前、原文在后），
@@ -492,7 +494,10 @@ class FrameworkApplier:
             ref = pending_passage_ref
             self._passage_ref = ref
             self.stats.passages += 1
-            self._emit([f"@@PASSAGE_DEF@@ {ref}"])
+            # DEF 行延迟到收口时再发：区域为空时（模型锚点与 Q 重合）不能留下一个
+            # 没有正文的 @@PASSAGE_DEF@@——解析端不登记它，随后的题会被标上
+            # passageUnresolved，而 plan_explanations 一题中招就整卷关闭并行
+            self._pending_passage_def = ref
             self._region = "passage"
         elif mtype == "Q":
             no = _parse_q_no(args, anchor) or self._next_no()
@@ -539,7 +544,15 @@ class FrameworkApplier:
                 if m:
                     self._unmarked_nos.add(int(m.group(1) or m.group(2)))
         if kind == "passage":
-            self._emit(self._drop_section_headers(content))
+            # 语篇区有正文才补发 DEF 行；空区域只留一个 ref 状态，不发空定义
+            if self._pending_passage_def is not None:
+                if content:
+                    self._emit([f"@@PASSAGE_DEF@@ {self._pending_passage_def}"])
+                    self._emit(self._drop_section_headers(content))
+                else:
+                    self.stats.marks_skipped += 1
+                    logger.info("框架解析：PASSAGE %s 区域为空，跳过定义行", self._pending_passage_def)
+                self._pending_passage_def = None
         elif kind == "stem":
             if self._question is not None:
                 stem_lines, rescued = self._clean_stem(
