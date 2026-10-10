@@ -593,3 +593,44 @@ def test_legacy_continuation_preserves_work_order_without_rebuilding_framework(a
     assert not any(e in {"stage", "visual_task"} for e, _ in emitted)
     assert len(prompts) == len(charges) == len(logs) == 1
     assert brief in prompts[0]
+
+
+def test_cross_group_duplicate_numbers_do_not_merge_into_one_question():
+    """原卷按节重新编号（每节都从 1 起）时，同号题分属不同大题：
+    旧实现全局按题号查找并「同号重开」，把后一组的题并进前一组，题干被覆盖、
+    整组被掏空。现在显式 @@GROUP@@ 之后的题只在本组内找重开对象。"""
+    raw = (
+        "@@TOTAL@@ 4\n@@PAPER@@ 测试卷\n"
+        "@@GROUP@@ reading|阅读理解|\n"
+        "@@PASSAGE_DEF@@ P1\n阅读材料。\n"
+        "@@Q@@ 1\n@@PASSAGE_REF@@ P1\n@@STEM@@\n阅读第一题？\n@@OPTIONS@@\nA. a\nB. b\n@@ANSWER@@ A\n@@END_Q@@\n"
+        "@@Q@@ 2\n@@PASSAGE_REF@@ P1\n@@STEM@@\n阅读第二题？\n@@OPTIONS@@\nA. c\nB. d\n@@ANSWER@@ B\n@@END_Q@@\n"
+        "@@GROUP@@ grammar|语法填空|\n"
+        "@@Q@@ 1\n@@STEM@@\n语法第一题？\n@@ANSWER@@ D\n@@END_Q@@\n"
+        "@@Q@@ 2\n@@STEM@@\n语法第二题？\n@@ANSWER@@ C\n@@END_Q@@\n"
+    )
+    data = parse_custom_visual_paper(raw)
+    reading, grammar = data["groups"][0], data["groups"][1]
+    assert [q["stem"] for q in reading["questions"]] == ["阅读第一题？", "阅读第二题？"]
+    assert [q["stem"] for q in grammar["questions"]] == ["语法第一题？", "语法第二题？"]
+    assert all(q.get("answer") for g in data["groups"] for q in g["questions"])
+
+
+def test_same_group_reopen_still_merges_explanations():
+    """阶段二同组重开照旧并回：带 @@GROUP@@ 头时讲解字段必须落到原题上。"""
+    skeleton = (
+        "@@TOTAL@@ 1\n@@PAPER@@ 测试卷\n"
+        "@@GROUP@@ reading|阅读理解|\n"
+        "@@PASSAGE_DEF@@ P1\n阅读材料。\n"
+        "@@Q@@ 1\n@@PASSAGE_REF@@ P1\n@@STEM@@\n阅读第一题？\n@@OPTIONS@@\nA. a\nB. b\n@@ANSWER@@ A\n@@END_Q@@\n"
+    )
+    data = parse_custom_visual_paper(skeleton + (
+        "@@NOTICE@@ \n@@GROUP_INTRO@@ 本组导语\n"
+        "@@GROUP@@ reading|阅读理解|\n"
+        "@@Q@@ 1\n@@EVIDENCE@@\n原文第三行。\n@@REASON@@\n因为如此。\n@@END_Q@@\n"
+    ))
+    q = data["groups"][0]["questions"][0]
+    assert q["stem"] == "阅读第一题？", "题干不能被重开清掉"
+    assert q["reference"]["evidence"] == "原文第三行。"
+    assert q["reference"]["reason"] == "因为如此。"
+    assert data["groups"][0]["intro"] == "本组导语"

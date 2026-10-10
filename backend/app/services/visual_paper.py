@@ -92,16 +92,26 @@ def _strip_own_leading_no(stem: str, no: Any) -> str:
     return stem[m.end():]
 
 
-def _find_committed_question(groups: list[dict], no: str) -> tuple[dict | None, dict | None]:
+def _find_committed_question(groups: list[dict], no: str, group: dict | None = None) -> tuple[dict | None, dict | None]:
     """按题号查已提交的题（两阶段模式：阶段二同号重开时把讲解字段并回去）。
 
     返回 (所在分组, 题对象)；重开时当前分组要跟随它，qtype 推断才不会
     拿着骨架最后一个分组误判写作题。
+
+    传入了 group 就**只**在该组内找，不做全局回退：那道题刚被显式归到该组，
+    原卷按节重新编号时每个组都从 1 起，全局回退会把前一组的同号题当成重开对象，
+    覆盖题干、掏空整组。不传 group 时才全局找，且只认唯一命中（多个分组撞同一
+    题号时分不清谁是谁，宁可新建）。
     """
-    for g in groups:
-        for q in g.get("questions", []):
+    if group is not None:
+        for q in group.get("questions", []):
             if str(q.get("no", "")).strip() == no:
-                return g, q
+                return group, q
+        return None, None
+    hits = [(g, q) for g in groups for q in g.get("questions", [])
+            if str(q.get("no", "")).strip() == no]
+    if len(hits) == 1:
+        return hits[0]
     return None, None
 
 
@@ -235,6 +245,9 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
     paper_key_parts: list[str] = []
     # 分组导语延迟挂载：@@GROUP_INTRO@@ 先于该组第一题到达，等下一道题解析出归属再挂
     pending_group_intro = ""
+    # 最近一次显式 @@GROUP@@ 之后是否还没遇到过题：那道题属于这个新组，
+    # 不能跨组重开合并（原卷按节重新编号时每个组都从 1 起）
+    group_fresh = False
     # 最近一次提交的题与所在组：模型偶尔把 @@END_Q@@ 提前写在一题字段中间（实测），
     # 落在其后的 ANSWER/迁移块只可能属于刚提交的那道题，靠它重开并入而不是丢弃
     last_committed: dict = {"q": None, "g": None}
@@ -565,6 +578,9 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
             pending_q_no = False
             bare = work.strip()
             if re.fullmatch(r"\d{1,3}", bare) and current_q is not None:
+                # 裸 @@Q@@ 补号：占位题撞上已提交题才转为重开合并。
+                # 不传 group——此刻没有「刚发过 @@GROUP@@」的信号，靠全局唯一命中判断，
+                # 多个分组撞同一题号时不合并（分不清是谁）
                 committed_group, committed = _find_committed_question(groups, bare)
                 if committed is not None and current_q.get("no") == "?" and len(current_q) == 1:
                     current_q = _draft_from_committed(committed)
@@ -621,6 +637,9 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
             elif tag == "NOTICE":
                 if value:
                     notice = value
+                # 讲解流常以 @@NOTICE@@ 开头：同 GROUP_INTRO，清掉 group_fresh，
+                # 让后续 @@Q@@ 恢复全局唯一命中（阶段二靠它跨组把讲解并回骨架）
+                group_fresh = False
             elif tag == "GROUP":
                 # flush 前一组的不完整题（若有）
                 if current_q is not None:
@@ -660,6 +679,10 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 else:
                     current_group = {"id": gid, "title": title, "intro": intro, "questions": []}
                     groups.append(current_group)
+                # 显式分组头之后到来的题属于这个组：不允许再跨组重开合并。
+                # 原卷按节重新编号时每个组都从 1 起，没有这道闸门就会把前一组的
+                # 同号题当成重开对象，题干被覆盖、整组被掏空。
+                group_fresh = True
             elif tag == "Q":
                 # 若上一题未 END_Q，丢弃
                 if current_q is not None:
@@ -671,7 +694,12 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     # 题号可能写在下一行：先用占位符开题，等下一行补号
                     no = "?"
                     pending_q_no = True
-                committed_group, committed = _find_committed_question(groups, no)
+                # 重开合并的查找范围：最近一个显式 @@GROUP@@ 之后（直到下一个 @@GROUP@@）
+                # 只在本组内找。原卷按节重新编号时每个组都从 1 起，跨组找会把前一组的
+                # 同号题当成重开对象，覆盖题干、掏空整组。没有新分组头时才允许全局唯一
+                # 命中——阶段二续写不重发 @@GROUP@@，靠它把讲解并回骨架里正确的题。
+                lookup_group = current_group if group_fresh else None
+                committed_group, committed = _find_committed_question(groups, no, lookup_group)
                 if committed is not None:
                     # 两阶段：阶段二对同一题号重开——讲解字段并回已提交的题，
                     # 不再新建（否则同一题在结构里出现两遍）
@@ -692,9 +720,12 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     pending_group_intro = ""
             elif tag == "GROUP_INTRO":
                 # 两阶段：阶段二为本组补写的一句话导语。讲解流开始时 current_group 还停在
-                # 骨架最后一个分组上，直接挂会挂错——挂到「下一道题」所属的分组
+                # 骨架最后一个分组上，直接挂会挂错——挂到「下一道题」所属的分组。
+                # 同时它标志讲解流开始：清掉 group_fresh，让后续 @@Q@@ 恢复全局唯一命中，
+                # 阶段二靠那个把讲解并回骨架里正确的题（哪怕跨组）。
                 if value:
                     pending_group_intro = value
+                    group_fresh = False
             elif tag == "QTYPE":
                 if current_q is not None:
                     v = value.strip().lower()
