@@ -64,13 +64,23 @@ OPT_LABEL_SPLIT_RE = re.compile(r"(?:^|(?<=\s))(?:[（(]([A-G])[\)）]|([A-G])[\
 # 选项行自带的题号前缀（完形填空的 "21. A. hoped B. wanted" 一行）
 OPT_LEAD_NO_RE = re.compile(r"^\s*[\(（]?\d{1,3}[\)）]?\s*[\.、．]\s*")
 # 大题头/节名（「第三部分 语言运用」「第一节」）：共享选项池的尾部常混入下一节的标题，
-# 选项内容在此截断，节名及之后的说明文字不并进最后一个选项
-SECTION_HEADER_RE = re.compile(r"第\s*[0-9０-９一二三四五六七八九十ⅠⅡⅢⅣⅤ]+\s*[部分节]")
+# 选项内容在此截断，节名及之后的说明文字不并进最后一个选项。
+# 必须锚定行首：选项/题干译文里含「第Ⅰ部分」这类字样时，行中匹配会把该行从中间
+# 截断，一行里的多个选项全丢（完形逐行卷最容易整题丢失）。
+SECTION_HEADER_RE = re.compile(r"^\s*第\s*[0-9０-９一二三四五六七八九十ⅠⅡⅢⅣⅤ]+\s*[部分节]")
 # 独立成行的节名（「第二节（满分25分）」「第四部分 写作（共两节，满分40分）」）：
 # 夹在上一区域结尾和下一个锚点之间的板块标题不属于任何题目，语篇/题干区直接丢弃；
 # 限定无句末标点且总长很短，防止误伤以「第二部分」开头的正文句
 SECTION_HEADER_LINE_RE = re.compile(
     r"^\s*第\s*[0-9０-９一二三四五六七八九十ⅠⅡⅢⅣⅤ]+\s*[部分节]\s*[^\n。！？]{0,20}$"
+)
+
+# 答案区标题：三处判定（CUT 转 KEY 的保护、漏标 KEY 的忽略判定、收尾告警）必须同一口径。
+# 旧版第二处比第一处窄，"答案解析"/"答案汇总"这类变体在切分时保不住、告警时也不报，
+# 答案整体丢失还静默通过。
+ANSWER_SECTION_RE = re.compile(
+    r"^\s*(?:参考答案|答案(?:与解析|汇总|与点拨|点拨)?|【答案】|answer\s*key|answers?)\s*[:：]?\s*$",
+    re.I,
 )
 _Q_RANGE_SEPS = str.maketrans({"～": "-", "—": "-", "–": "-", "~": "-"})
 
@@ -384,16 +394,14 @@ class FrameworkApplier:
             for i in range(self._cut[0], pos[0] + 1):
                 line = self._lines[i]
                 heading_pos = (i, len(line) - len(line.lstrip()))
-                if self._cut <= heading_pos <= pos and re.fullmatch(
-                    r"\s*(?:参考答案|答案(?:与解析)?|【答案】|answer\s*key|answers?)\s*[:：]?\s*", line, re.I
-                ):
+                if self._cut <= heading_pos <= pos and ANSWER_SECTION_RE.match(line):
                     logger.warning("框架解析：CUT 越过答案标题，改在标题处保留答案区")
                     mtype, args, pos = "KEY", "", heading_pos
                     break
         if pos is None:
             self.stats.marks_skipped += 1
             if mtype == "KEY" and not any(
-                re.search(r"参考答案|答案与解析|【答案】|^\s*答案|^\s*answer\s*key\b|^\s*answers?\s*[:：]?\s*$", line, re.I)
+                ANSWER_SECTION_RE.match(line)
                 or (anchor.strip() and anchor.strip().casefold() in line.casefold())
                 for line in self._lines
             ):
@@ -625,7 +633,10 @@ class FrameworkApplier:
     def _warn_if_answer_section_unmarked(self, extra_lines: Optional[list[str]]) -> None:
         """疑似答案区出现在噪声区或粘进普通区域（漏发 KEY）：讲解阶段将看不到参考答案。"""
         for line in self._noise_lines + list(extra_lines or []):
-            if any(t in line for t in ("参考答案", "答案与解析", "【答案】")):
+            # 整行是答案标题，或行内含答案标题字样（答案被粘进题干区时标题不在行首）
+            if ANSWER_SECTION_RE.match(line) or "答案" in line and re.search(
+                r"参考答案|答案与解析|答案汇总|【答案】|answer\s*key", line, re.I
+            ):
                 logger.warning(
                     "框架解析：未标注文字中出现疑似答案区（%r），但未收到 KEY 标记——"
                     "答案区可能被当作噪声丢弃或粘进题目，讲解阶段将无法核对答案",
