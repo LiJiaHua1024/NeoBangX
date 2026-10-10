@@ -283,7 +283,10 @@ class FrameworkApplier:
     def _find_anchor(self, anchor: str) -> Optional[tuple[int, int]]:
         a = anchor.strip()
         if not a:
-            return self._cut  # 空锚点：就地插标（协议要求必填，这里兜底不炸）
+            # 空锚点是协议违规，不是「就地插标」的许可：旧版返回当前切点并计入
+            # marks_applied，于是连续多条空锚点能造出空题块、把题干整段挤进选项区，
+            # 而 stats.ok 照样为真。返回 None 让它走未命中分支。
+            return None
         if len(a) < 2:
             # 单字符锚点（篇标 "A"、孤立数字）几乎必然误配到正文/选项标号里，直接拒收
             return None
@@ -539,7 +542,9 @@ class FrameworkApplier:
                     self._drop_section_headers(content), self._question["no"]
                 )
                 if rescued and not self._question.get("options"):
-                    self._question["options"] = rescued
+                    # 必须过 _normalize_options：一行印两个选项时（"A. xxx B. yyy"），
+                    # 直接赋值会让解析端只认行首那个，B 选项消失还多出一个缝合怪选项
+                    self._question["options"] = self._normalize_options(rescued)
                 if stem_lines:
                     self._emit(["@@STEM@@"] + stem_lines)
         elif kind == "options":
@@ -697,12 +702,23 @@ class FrameworkApplier:
                         lines.insert(0, rest)
                     elif not lines:
                         lines = []
-        # 尾部连续 ≥2 行选项样式 = 模型漏发 OPTIONS 标记，把选项从题干里接回来
+        # 尾部连续选项样式行 = 模型漏发 OPTIONS 标记，把选项从题干里接回来。
+        # 门槛是 ≥1 而不是 ≥2：扫描版/紧凑排版把 4 个选项印在同一行时，region 只有
+        # 一行，要求两行会让选择题一个选项都救不回来、qtype 被判成 blank。
         i = len(lines)
         while i > 0 and OPT_LABEL_START_RE.match(lines[i - 1]):
             i -= 1
-        if len(lines) - i >= 2:
+        if i < len(lines):
             return lines[:i], lines[i:]
+        # 选项与题干挤在同一行（"Why...? A. a B. b C. c D. d"）：按行内标号切一刀。
+        # 至少两个命中才算——单个命中多半是正文里的 "A. " 引用。
+        for idx, ln in enumerate(lines):
+            hits = list(OPT_LABEL_SPLIT_RE.finditer(ln))
+            if len(hits) >= 2:
+                head = ln[: hits[0].start()].rstrip()
+                tail = ln[hits[0].start():]
+                stem = lines[:idx] + ([head] if head else [])
+                return stem, [tail]
         return lines, []
 
     @staticmethod
