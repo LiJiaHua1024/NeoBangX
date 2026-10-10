@@ -2584,7 +2584,12 @@ function nbx() {
           }
           currentQ.passage = finalPassage;
         }
-        else if (cf === "STEM") currentQ.stem = stripOwnLeadingNo(content, currentQ.no);
+        // 迁移块里也可能出现 @@STEM@@（模型把原题结构搬过来）：那时它属于迁移题，
+        // 不能覆盖原题题干。其余字段都有这道守卫，唯独 STEM 漏了（后端同罪，已同步修）。
+        else if (cf === "STEM") {
+          if (inTransfer) { beginTransferField("stem"); draft.stem = stripOwnLeadingNo(content, currentQ.no); }
+          else currentQ.stem = stripOwnLeadingNo(content, currentQ.no);
+        }
         else if (cf === "OPTIONS") {
           const opts = [];
           for (const l of content.split("\n")) {

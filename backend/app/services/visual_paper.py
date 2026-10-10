@@ -282,7 +282,13 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 passage_defs[key] = {"ref": pending_def_ref.strip(), "text": text}
             pending_def_ref = ""
         elif cf == "STEM":
-            current_q["stem"] = _strip_own_leading_no(content, current_q.get("no", ""))
+            # 迁移块里也可能出现 @@STEM@@（模型把原题结构搬过来）：那时它属于迁移题，
+            # 不能覆盖原题题干。其余字段都有这道守卫，唯独 STEM 漏了。
+            if in_transfer:
+                begin_transfer_field("stem")
+                draft["stem"] = _strip_own_leading_no(content, current_q.get("no", ""))
+            else:
+                current_q["stem"] = _strip_own_leading_no(content, current_q.get("no", ""))
         elif cf == "OPTIONS":
             # 每行一个选项，形如 "A. text"；非选择题此段为空
             opts = []
