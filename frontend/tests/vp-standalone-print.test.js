@@ -142,3 +142,27 @@ test("讲台：deriveAnswerMap 覆盖写作题的「见范文」", () => {
   assert.strictEqual(map["2"], "见范文", "写作题必须给出指引，而不是整行消失");
   assert.strictEqual(map["3"], "B");
 });
+test("讲台：isWriting 不递归，且按分组兜底旧记录", () => {
+  const src = fs.readFileSync(path.join(FRONTEND, "vp-standalone.js"), "utf8");
+  const start = src.indexOf("function isWriting(q) {");
+  const end = src.indexOf("\n  }", start) + 4;
+  assert.ok(start >= 0 && end > start, "脚本结构变了：找不到 isWriting");
+  const body = src.slice(start, end);
+  // 曾经的回归：函数体里写成 `if (isWriting(q)) return true;` —— 无限递归
+  assert.ok(!/if\s*\(\s*isWriting\(/.test(body), "isWriting 不能自调用");
+
+  const GROUPS = [
+    { id: "reading", questions: [] },
+    { id: "writing_app", questions: [] },
+  ];
+  const env = { GROUPS, str: (v) => (v == null ? "" : String(v)) };
+  vm.createContext(env);
+  vm.runInContext(body + "\n; isWriting", env);
+
+  assert.strictEqual(env.isWriting({ qtype: "writing" }), true);
+  assert.strictEqual(env.isWriting({ qtype: "choice" }), false);
+  // 旧 JSON：写作组的题 qtype 是 blank/choice，也要判成写作题
+  const legacy = { qtype: "blank" };
+  GROUPS[1].questions.push(legacy);
+  assert.strictEqual(env.isWriting(legacy), true, "写作组里的 blank 题应按写作题处理");
+});

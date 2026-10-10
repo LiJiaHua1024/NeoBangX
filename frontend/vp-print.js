@@ -144,13 +144,20 @@
     _ctx2d.font = font;
     return _ctx2d.measureText(text).width;
   }
-  var OPT_FONT = '10.5pt "Times New Roman","SimSun",serif';
-  function chooseCols(list, width) {
+  /* 量宽用的字号必须跟实际渲染一致：正文由 fontPt 滑块经 typeVars/typeScale
+     整体缩放，写死 10.5pt 会在 12-16pt 时把「排不下两栏」的选项判成排得下，
+     挤成折行，而 cols 已写进 HTML、重排不会纠正 */
+  function optFont(pt) {
+    var base = 10.5;
+    var scale = (pt && pt > 0) ? (pt / base) : 1;
+    return (base * scale).toFixed(2) + 'pt "Times New Roman","SimSun",serif';
+  }
+  function chooseCols(list, width, pt) {
     if (list.length < 3 || list.length > 4) return 1;
     var half = (width - mm(6)) / 2 - mm(7.5);       /* 减栏间距与选项字母位 */
     if (half <= 0) return 1;
     for (var i = 0; i < list.length; i++) {
-      if (textWidth(detag(list[i].text), OPT_FONT) > half) return 1;
+      if (textWidth(detag(list[i].text), optFont(pt)) > half) return 1;
     }
     return 2;
   }
@@ -392,6 +399,15 @@
       }
       if (cur.length) newPage();
       cur.push(it); used += h;
+      // 这个块比一页还高：used 已超过 capacity，若原样保留，后续每个 text 块都会
+      // 命中 newPage 且剩余空间算出来是 0、一个都放不下，走硬放兜底——整页近空白
+      // 被 overflow:hidden 静默裁掉。截到 capacity 让分页继续正常工作。
+      if (h > capacity) {
+        used = capacity;
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn("打印分页：有内容块高度超过一页，该块可能被裁切", h, capacity);
+        }
+      }
       movedHeads = false;
     });
     return pages;
@@ -460,11 +476,20 @@
      绝不会张冠李戴。编号引用没解析出来的题 passage 为空，key 为空即跳过，不印占位符。 */
   function segments(g) {
     var out = [];
+    var seen = {};   /* 已印过的语篇正文 → 段索引：同大题共享一篇语篇时，
+                        中间夹一道 passage 为空的题（引用未解析）不该让后半批
+                        把同一篇长语篇再印一遍 */
     (g.questions || []).forEach(function (q) {
       var key = str(q.passage).replace(/\s+/g, " ").trim();
       var last = out[out.length - 1];
-      if (last && last.key === key) last.questions.push(q);
-      else out.push({ key: key, passage: q.passage, questions: [q] });
+      if (last && last.key === key) { last.questions.push(q); return; }
+      if (key && Object.prototype.hasOwnProperty.call(seen, key)) {
+        // 正文与某一段相同：并进那一段，不新开一段（避免重复印同一篇）
+        out[seen[key]].questions.push(q);
+        return;
+      }
+      out.push({ key: key, passage: q.passage, questions: [q] });
+      if (key) seen[key] = out.length - 1;
     });
     return out;
   }
@@ -479,10 +504,10 @@
   /* 正确项只用浅底标记，不加边框也不加内边距：盒模型与其它选项完全一致，
      字母和正文才会横竖都对齐。左粗线 + √ 的老做法会把正确项整体推右 3mm、推下 0.6mm，
      而且左粗线是语篇块（.vpp-passage）的身份标记，套在选项上会被读成引用块。 */
-  function optionsHtml(list, answer, highlight, width) {
+  function optionsHtml(list, answer, highlight, width, pt) {
     var opts = (list || []).filter(function (o) { return o && has(o.text); });
     if (!opts.length) return "";
-    var cols = chooseCols(opts, width);
+    var cols = chooseCols(opts, width, pt);
     var h = '<div class="vpp-ogrid" data-cols="' + cols + '">';
     opts.forEach(function (o) {
       var ok = highlight && has(answer) && sameLabel(o.label, answer);
@@ -629,7 +654,7 @@
         if (has(tr.passage)) subs.push(itemText("tr", textLines(tr.passage), { header: header, script: scriptOf(tr.passage) }));
         if (has(tr.stem)) subs.push(itemText("tr", textLines(tr.stem), { header: header, script: scriptOf(tr.stem) }));
         if ((tr.options || []).length) {
-          subs.push(itemHtml("tr", optionsHtml(tr.options, tr.answer, false, ctx.contentW - mm(5)), { header: header }));
+          subs.push(itemHtml("tr", optionsHtml(tr.options, tr.answer, false, ctx.contentW - mm(5), ctx.o.fontPt), { header: header }));
         }
       } else {
         subs.push(itemHtml("tr", '<div class="vpp-chain-cap">迁移训练' + (n > 1 ? " " + (ti + 1) + " / " + n : "") + "</div>", { header: header }));
@@ -650,13 +675,16 @@
     var out = mastheadItems(payload, ctx);
     if (o.ansmap) pushAll(out, ansmapItems(payload, MODE_LABEL[o.mode]));
     (payload.groups || []).forEach(function (g, gi) {
+      // 0 题组不印组头：纸上出现「二、xxx 共 0 题」的孤立标题，勾了「大题另起一页」
+      // 还会独占一整页；答案册本来就跳过，三册统一才不致编号跳号
+      if (!(g.questions || []).length) return;
       var gh = groupTitle(g, gi);
       out.push(itemHtml("group", groupHeadHtml(g, gi, true), { header: gh, pageBreak: !!o.groupBreak && gi > 0, keepWith: mm(45), headLike: true }));
       segments(g).forEach(function (seg) {
         if (seg.key) out.push(passageItem(seg.passage, gh));
         seg.questions.forEach(function (q) {
           out.push(itemText("qhead", qheadLines(q, g.id), { header: gh, hang: hangOf(7, ctx), keepWith: mm(22), headLike: true, script: scriptOf(q.stem) }));
-          if ((q.options || []).length) out.push(itemHtml("opts", optionsHtml(q.options, q.answer, true, ctx.contentW), { header: gh }));
+          if ((q.options || []).length) out.push(itemHtml("opts", optionsHtml(q.options, q.answer, true, ctx.contentW, ctx.o.fontPt), { header: gh }));
           if (q.writingGuide) {
             var wgItems = [writingScaffold(q.writingGuide, gh), writingSample(q.writingGuide, gh)].filter(Boolean);
             if (wgItems.length) {
@@ -688,13 +716,15 @@
     var o = ctx.o;
     var out = mastheadItems(payload, ctx);
     (payload.groups || []).forEach(function (g, gi) {
+      // 0 题组不印组头，理由同教师版：三册统一才不致编号跳号
+      if (!(g.questions || []).length) return;
       var gh = groupTitle(g, gi);
       out.push(itemHtml("group", groupHeadHtml(g, gi, false), { header: gh, pageBreak: !!o.groupBreak && gi > 0, keepWith: mm(45), headLike: true }));
       segments(g).forEach(function (seg) {
         if (seg.key) out.push(passageItem(seg.passage, gh));
         seg.questions.forEach(function (q) {
           out.push(itemText("qhead", qheadLines(q, g.id), { header: gh, hang: hangOf(7, ctx), keepWith: mm(20), headLike: true, script: scriptOf(q.stem) }));
-          if ((q.options || []).length) out.push(itemHtml("opts", optionsHtml(q.options, q.answer, false, ctx.contentW), { header: gh }));
+          if ((q.options || []).length) out.push(itemHtml("opts", optionsHtml(q.options, q.answer, false, ctx.contentW, ctx.o.fontPt), { header: gh }));
           if (q.writingGuide) {
             var sc = writingScaffold(q.writingGuide, gh);
             if (sc) { sc.chainEnd = true; out.push(sc); }

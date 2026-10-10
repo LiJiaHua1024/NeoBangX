@@ -29,6 +29,9 @@
       var saved = JSON.parse(raw);
       if (!saved || !saved.data) return;
       if ((Number(saved.rev) || 0) < DOC_REV) return;
+      // 形状校验：只查真值不查类型时，字符串/数组会让下一行 DATA.paper = {} 在
+      // 严格模式下抛 TypeError，boot() 不再执行，页面永久白屏且无任何提示
+      if (typeof saved.data !== "object" || Array.isArray(saved.data)) return;
       DATA = saved.data;
       DOC_REV = Number(saved.rev) || 0;
     } catch (e) {}
@@ -44,7 +47,7 @@
      与主应用 vpIsWritingQuestion 同口径。 */
   function isWriting(q) {
     if (!q) return false;
-    if (isWriting(q)) return true;
+    if (q.qtype === "writing") return true;
     for (var i = 0; i < GROUPS.length; i++) {
       var g = GROUPS[i];
       if ((g.questions || []).indexOf(q) >= 0) {
