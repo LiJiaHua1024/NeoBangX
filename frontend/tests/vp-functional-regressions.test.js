@@ -383,7 +383,8 @@ test("语篇内填空不误报空题干，未完成清单与全屏总览说明�
   qs[1].options = Array.from("ABCDEFG", label => ({ label, text: label }));
   qs[1].transfers[0].options = qs[1].options.slice(0, 4);
   assert.equal(c.vpRemaining, 1);
-  assert.deepEqual(c.vpMissingQuestions, [{ no: "2", reasons: ["迁移 1：选项不足（4/7）"] }]);
+  assert.deepEqual(c.vpMissingQuestions.map(m => ({ no: m.no, reasons: m.reasons })),
+                [{ no: "2", reasons: ["迁移 1：选项不足（4/7）"] }]);
   assert.equal(c.vpOverviewGroups[0].questions[1].missing, "迁移 1：选项不足（4/7）");
 });
 
@@ -649,4 +650,51 @@ test("生成中拒绝打印与导出半成品", () => {
   assert.ok(!toasts.some(t => t.includes("正在生成中")), "完成后应放行");
   c.openVpExport();
   assert.equal(c.vpExportOpen, true, "完成后导出面板应打开");
+});
+
+test("无题号题不互相覆盖：速查表保留先到的答案，清单按索引跳转", () => {
+  const c = component();
+  const raw = `@@TOTAL@@ 3
+@@PAPER@@ Test
+@@GROUP@@ reading|Reading|
+@@Q@@ 1
+@@STEM@@
+First?
+@@OPTIONS@@
+A. One
+B. Two
+@@ANSWER@@ A
+@@END_Q@@
+@@Q@@
+@@STEM@@
+Bare one?
+@@OPTIONS@@
+A. x
+B. y
+@@ANSWER@@ B
+@@END_Q@@
+@@Q@@
+@@STEM@@
+Bare two?
+@@OPTIONS@@
+A. p
+B. q
+@@ANSWER@@ C
+@@END_Q@@
+`;
+  c.output = raw;
+  c.visualPaper = { ...c.newVisualPaperState(), ...c.normalizeVisualPaper(c.parseCustomVisualPaper(raw)) };
+  const qs = c.visualPaper.groups[0].questions;
+  assert.equal(qs.length, 3);
+  assert.equal(qs[1].no, "?");
+  assert.equal(qs[2].no, "?");
+  // 速查表不能因同号互相覆盖而只剩一个 "?"
+  assert.equal(c.visualPaper.answerMap["1"], "A");
+  assert.ok("?" in c.visualPaper.answerMap);
+  // 缺失清单带索引，点击按索引定位而不是 findIndex 落第一道
+  const missing = c.vpMissingQuestions;
+  assert.ok(missing.length >= 2);
+  assert.ok(missing.every(m => typeof m.gIdx === "number" && typeof m.qIdx === "number"));
+  assert.equal(missing[1].qIdx, 1, "第二道缺题必须指向索引 1");
+  assert.equal(missing[2].qIdx, 2, "第三道缺题必须指向索引 2");
 });

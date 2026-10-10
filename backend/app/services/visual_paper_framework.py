@@ -575,7 +575,8 @@ class FrameworkApplier:
 
     def _warn_if_no_regression(self, no: str) -> None:
         """题号相对前一大幅回跳：多半是模型把「第一节/第二节」当题号重新编了号
-        （正确做法是接着前面笔试题顺延）。只告警不纠正——编号以模型声明为准。"""
+        （正确做法是接着前面笔试题顺延）。除告警外记一条结构错误——答案速查表会与
+        卷面对不上，续写工单也会点错题号，放过去比回退单阶段更糟。"""
         try:
             cur = int(re.sub(r"\D", "", str(no)) or 0)
         except ValueError:
@@ -586,6 +587,7 @@ class FrameworkApplier:
                 "课件答案速查表将与卷面对不上",
                 self._last_no, cur,
             )
+            self.stats.structure_errors += 1
 
     def _warn_if_answer_section_unmarked(self, extra_lines: Optional[list[str]]) -> None:
         """疑似答案区出现在噪声区或粘进普通区域（漏发 KEY）：讲解阶段将看不到参考答案。"""

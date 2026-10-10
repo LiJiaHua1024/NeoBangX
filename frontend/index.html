@@ -968,8 +968,8 @@
               <details x-show="vpMissingQuestions.length" class="vp-missing text-xs text-dim w-full" style="max-width:48rem">
                 <summary class="cursor-pointer text-center" x-text="'查看 ' + vpMissingQuestions.length + ' 题待补内容（有答案不代表讲解和迁移已完整）'"></summary>
                 <div class="vp-missing-list scroll-thin flex flex-wrap gap-2 mt-2">
-                  <template x-for="item in vpMissingQuestions" :key="item.no">
-                    <button class="btn-ghost text-xs vp-missing-chip" @click="vpSelectQuestionByNo(item.no)" x-text="'第 ' + item.no + ' 题：' + item.reasons.join('、')"></button>
+                  <template x-for="(item, mi) in vpMissingQuestions" :key="mi + '-' + item.no">
+                    <button class="btn-ghost text-xs vp-missing-chip" @click="vpSelectQuestionAt(item.gIdx, item.qIdx)" x-text="'第 ' + item.no + ' 题：' + item.reasons.join('、')"></button>
                   </template>
                 </div>
               </details>
@@ -1104,7 +1104,7 @@
                           </div>
                         </template>
                         <div class="flex flex-wrap gap-1.5">
-                          <template x-for="(q, qIdx) in (g.questions || [])" :key="q.no">
+                          <template x-for="(q, qIdx) in (g.questions || [])" :key="gIdx + '-' + qIdx">
                             <button class="vp-q-chip"
                                     :class="{
                                       'active': vpIsCurrent(gIdx, qIdx),
@@ -1195,7 +1195,7 @@
                             <div class="vp-stem font-medium text-sm leading-relaxed mb-3 whitespace-pre-wrap" x-html="vpFmt(vpCurrentQuestion.stem)"></div>
                             <!-- 选项网格 -->
                             <div x-show="vpCurrentQuestion.options && vpCurrentQuestion.options.length" class="vp-options-grid">
-                              <template x-for="opt in (vpCurrentQuestion.options || [])" :key="opt.label">
+                              <template x-for="(opt, oi) in (vpCurrentQuestion.options || [])" :key="oi + '-' + (opt.label || '')">
                                 <div class="vp-option-card" :class="{ 'correct': vpCurrentQuestion.answer && opt.label === vpCurrentQuestion.answer, 'masked': maskOn && vpCurrentQuestion.answer && opt.label === vpCurrentQuestion.answer }">
                                   <span class="vp-option-label" x-text="opt.label"></span>
                                   <span class="vp-option-text whitespace-pre-wrap" x-html="vpFmt(opt.text)"></span>
@@ -1435,7 +1435,7 @@
                                 <div class="text-sm leading-relaxed whitespace-pre-wrap mb-3" x-html="vpFmt(tr.passage)"></div>
                                 <div class="font-medium text-sm mb-2 whitespace-pre-wrap" x-html="vpFmt(tr.stem)"></div>
                                 <div class="vp-options-grid">
-                                  <template x-for="opt in (tr.options || [])" :key="opt.label">
+                                  <template x-for="(opt, ti) in (tr.options || [])" :key="ti + '-' + (opt.label || '')">
                                     <div class="vp-option-card" :class="{ 'correct': opt.label === tr.answer, 'masked': maskOn && opt.label === tr.answer }">
                                       <span class="vp-option-label" x-text="opt.label"></span>
                                       <span class="vp-option-text whitespace-pre-wrap" x-html="vpFmt(opt.text)"></span>

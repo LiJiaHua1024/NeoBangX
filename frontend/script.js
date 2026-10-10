@@ -3002,8 +3002,12 @@ function nbx() {
       if (!out.answerMap || !Object.keys(out.answerMap).length) {
         const am = {};
         for (const g of out.groups) for (const q of g.questions) {
-          if (q.answer) am[String(q.no)] = String(q.answer);
-          else if (q.writingGuide) am[String(q.no)] = "见范文";
+          const key = String(q.no);
+          // 同号（跨组重号或 "?"）时保留先到的答案：后写覆盖会让学生查到一个
+          // 被别的题顶掉的答案，而两个答案都对不上眼前的题
+          if (key in am) continue;
+          if (q.answer) am[key] = String(q.answer);
+          else if (q.writingGuide) am[key] = "见范文";
         }
         out.answerMap = am;
       }
@@ -3130,8 +3134,15 @@ function nbx() {
       return this.vpQuestionMissing(q).length === 0;
     },
     get vpMissingQuestions() {
-      return this.vpGroups.flatMap(g => g.questions || []).map(q => ({ no: String(q.no), reasons: this.vpQuestionMissing(q) }))
-        .filter(q => q.reasons.length);
+      // 带上 gIdx/qIdx：题号可能重复（跨组同号）或为 "?"，按题号查找会永远落到第一道
+      const out = [];
+      this.vpGroups.forEach((g, gIdx) => {
+        (g.questions || []).forEach((q, qIdx) => {
+          const reasons = this.vpQuestionMissing(q);
+          if (reasons.length) out.push({ no: String(q.no), gIdx, qIdx, reasons });
+        });
+      });
+      return out;
     },
     /* 讲解完成数。两阶段下结构（第一轮）很快跑满，这才是第二轮真正在动的数字 */
     get vpAnalyzedCount() {
@@ -3292,6 +3303,13 @@ function nbx() {
       return "idle";
     },
     /* 一键根据题号切换题目 */
+    /* 按「组索引-题索引」定位：题号重复或为 "?" 时唯一可靠的跳转方式 */
+    vpSelectQuestionAt(gIdx, qIdx) {
+      if (!this.visualPaper) return;
+      const g = this.visualPaper.groups[gIdx];
+      if (!g || !(g.questions || []).length) return;
+      this.vpSelectQuestion(gIdx, Math.max(0, Math.min(qIdx, g.questions.length - 1)));
+    },
     vpSelectQuestionByNo(targetNo) {
       if (!this.visualPaper || targetNo == null) return;
       for (let gIdx = 0; gIdx < this.visualPaper.groups.length; gIdx++) {
