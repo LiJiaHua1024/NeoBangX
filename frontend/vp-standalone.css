@@ -1160,3 +1160,127 @@ mark, .vp-hl {
 .vp-toast.warn { color: #e0a24c; }
 .vp-toast.error { color: #e5604c; }
 
+
+/* ============================================================
+   原生打印（Ctrl+P）
+   讲台是 position:fixed 的全屏投影，直接 Ctrl+P 只会打出当前视口一屏，
+   深色主题下还会糊成一片。补一套最小 print 规则：白底黑字、隐藏封面与
+   控制台、内容改为文档流。正式的「打印」按钮走 vp-print.js 三册排版，
+   这里只是兜底，别让用户拿到底版不可读的打印件。
+   ============================================================ */
+@media print {
+  html, body {
+    overflow: visible !important;
+    background: #fff !important;
+    color: #111 !important;
+  }
+  .cover, .vp-dock, .vp-top, .vp-bottom, .vp-tools, .vp-stage-handle,
+  .vp-toast, .vp-overview, .vp-jump, #wake-top, #wake-bottom {
+    display: none !important;
+  }
+  .vp-present {
+    position: static !important;
+    overflow: visible !important;
+    inset: auto !important;
+    padding: 0 !important;
+    background: #fff !important;
+    color: #111 !important;
+  }
+  .vp-stage, .vp-main, .vp-body, .vp-pane, .vp-scroll {
+    position: static !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    width: auto !important;
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+  .vp-card, .vp-panel, .vp-box {
+    background: #fff !important;
+    border-color: #ccc !important;
+    box-shadow: none !important;
+    color: #111 !important;
+  }
+  /* 隐藏答案的遮罩在纸上没有意义：打印前应已由用户决定显隐 */
+  .masked, .ans { filter: none !important; opacity: 1 !important; }
+  .vp-passage, .vp-stem, .vp-line, .vp-opt-text, .vp-ref, .vp-tip {
+    color: #111 !important;
+  }
+  .vp-qhead { break-after: avoid; }
+  .vp-qcard { break-inside: avoid; }
+}
+
+/* ============================================================
+   状态类（与主应用 styles.css 对齐）
+   导出 payload 已带上 passageRef / passageUnresolved / missingNos，
+   独立视图原先没有承载这些状态的样式，补上后讲台才能显示
+   「语篇引用未解析」这类提示。
+   ============================================================ */
+.vp-passage-badge {
+  display: inline-block;
+  padding: 0.05rem 0.42rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  letter-spacing: 0.03rem;
+}
+.vp-passage-warn {
+  margin-bottom: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--panel-soft);
+  font-size: 0.78rem;
+  line-height: 1.65;
+}
+.vp-q-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.vp-q-status-badge.generating { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.vp-q-status-badge.pending { color: var(--text-dim); }
+.vp-q-status-badge.incomplete { color: #e0a24c; border-color: color-mix(in srgb, #e0a24c 55%, var(--border)); }
+.vp-q-status-badge.failed { color: #e5604c; border-color: color-mix(in srgb, #e5604c 55%, var(--border)); }
+.vp-skeleton-box {
+  padding: 0.9rem 1rem;
+  border-radius: 0.85rem;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  margin-top: 0.5rem;
+}
+.vp-skeleton-tip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 0.8rem;
+}
+.vp-skeleton-lines { display: flex; flex-direction: column; gap: 0.55rem; }
+.skel {
+  border-radius: 0.7rem;
+  background: linear-gradient(100deg, var(--panel-soft) 40%, var(--hover-bg) 50%, var(--panel-soft) 60%);
+  background-size: 200% 100%;
+  animation: vp-skel-slide 1.4s ease infinite;
+}
+@keyframes vp-skel-slide {
+  from { background-position: 180% 0; }
+  to { background-position: -20% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel { animation: none; }
+}
