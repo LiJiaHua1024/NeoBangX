@@ -9976,8 +9976,11 @@ function nbx() {
       const theme = THEMES.some((t) => t.id === this.theme) ? this.theme : "paper";
       const hour = new Date().getHours();
       const sky = theme === "sora" ? (hour >= 6 && hour < 22 ? "day" : "night") : "";
-      // JSON 里的 < 全部转义：内容中若出现 </script> 会提前闭合数据块
-      const data = JSON.stringify(payload).replace(/</g, "\\u003c");
+      // JSON 里的 < 全部转义：内容中若出现 </script> 会提前闭合数据块；
+      // {{ 同样转义：put() 是顺序替换，数据块里的 {{VP_JS}} 等字面量会在后续
+      // 替换 JS/CSS 时被一起替换，把整份运行时灌进 data 块导致 JSON.parse 失败。
+      // \u007b 是合法 JSON 转义，JSON.parse 会还原成 {，但 HTML 文本层不存在该 token。
+      const data = JSON.stringify(payload).replace(/</g, "\\u003c").replace(/\{\{/g, "\\u007b\\u007b");
       // 用函数式替换：CSS/JS 里的 $& $' 等序列不会被当成替换模式
       const put = (tpl, token, value) => tpl.replace(token, () => value);
       let out = assets.html;
