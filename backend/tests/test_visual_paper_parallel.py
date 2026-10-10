@@ -501,12 +501,32 @@ def test_invalid_selection_rejected_before_upstream_and_charge(api, monkeypatch)
     def unexpected(*args, **kwargs):
         pytest.fail("invalid selection must never call a model")
     monkeypatch.setattr(chat, "_build_llm", unexpected)
-    for selected in [["99"], ["1", "1"], []]:
+    # 越界题号与重复题号仍然拒绝；空列表是「全量」的合法写法，不再算无效输入
+    for selected in [["99"], ["1", "1"]]:
         response = client.post("/api/chat/stream", json={
             "tool_id": "13", "input": skeleton(), "visual_question_nos": selected,
         })
         assert response.status_code in (400, 422)
     assert charges == []
+
+
+def test_empty_selection_means_all_questions(api, monkeypatch):
+    """空 visual_question_nos 与省略同义：前端曾因 [].every() 恒真而发出空数组，
+    后端 min_length=1 直接 422。现在两端都约定空 = 全量。"""
+    client, chat, logs, charges = api
+    seen = {}
+    class Fake:
+        def __init__(self, *a, **k): pass
+        async def chat_stream_with_stop(self, *, stop_event, **kwargs):
+            seen["prompt"] = kwargs.get("user_prompt", "")
+            yield "@@TOTAL@@ 1\n"
+            stop_event.set()
+    monkeypatch.setattr(chat, "_build_llm", lambda *a, **k: Fake())
+    response = client.post("/api/chat/stream", json={
+        "tool_id": "13", "input": skeleton(), "visual_question_nos": [],
+    })
+    assert response.status_code == 200
+    assert "1" in seen.get("prompt", "") or seen.get("prompt")
 
 
 def test_stop_in_framework_does_not_call_explain_model(api, monkeypatch):

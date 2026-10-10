@@ -8710,9 +8710,13 @@ function nbx() {
       this.vpStage = "explain";
       const missingNos = hasFramework ? this.vpGroups.flatMap(g => g.questions || [])
         .filter(q => !this.vpQuestionAnalyzed(q)).map(q => String(q.no)) : undefined;
+      // 空数组的 every() 恒真，会把 visual_question_nos: [] 发出去，后端该字段
+      // min_length=1 直接 422。空名单时改为不发字段，让后端按「全量」处理。
+      const structuredNos = (missingNos && missingNos.length
+        && missingNos.every(n => /^\d{1,3}$/.test(n))) ? missingNos : undefined;
       const baseLen = this.output.length;
       const expectedSeq = this._runSeq + 1;
-      await this._runVisualStream(contInput, keepId, missingNos?.every(n => /^\d{1,3}$/.test(n)) ? missingNos : undefined);
+      await this._runVisualStream(contInput, keepId, structuredNos);
       // 若续写未新增任何内容（模型未按指令），提示
       if (this._runSeq === expectedSeq && this.vpRunState === "done" && this.output.length === baseLen) {
         this.toast("续写未返回新题目，请重试", "warn");

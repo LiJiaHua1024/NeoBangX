@@ -131,9 +131,10 @@ def plan_explanations(raw: str, loader, transfer_count: int, selected: list[str]
         return []
     if len(set(nos)) != len(nos):
         return []
-    if selected is not None and (not selected or len(set(selected)) != len(selected) or not set(selected) <= set(nos)):
+    # 空列表与省略同义（都表示全量），不当作「题号为空」报错
+    if selected is not None and (len(set(selected)) != len(selected) or not set(selected) <= set(nos)):
         raise ValueError("待补全题号为空、重复或不属于当前试卷")
-    wanted = set(selected) if selected is not None else set(nos)
+    wanted = set(selected) if selected else set(nos)
     jobs = []
     # 迁移题量越大，单次处理原题越少，降低单任务撞输出上限的概率。
     # tc>=3 时退化为单题一片；tc 为 0 时按 1 计，避免 3//0 在 max() 求值前抛错。

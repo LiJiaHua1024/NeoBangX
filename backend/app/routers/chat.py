@@ -562,7 +562,7 @@ class ChatRequest(BaseModel):
         None, ge=1, le=5, description="试卷可视化全解：每道笔试题的迁移训练题量（默认 1）"
     )
     visual_question_nos: Optional[list[Annotated[str, StringConstraints(pattern=r"^\d{1,3}$")]]] = Field(
-        None, min_length=1, max_length=1000, description="工具 13 骨架续写：只补全这些题号"
+        None, max_length=1000, description="工具 13 骨架续写：只补全这些题号（省略或空列表均表示全量）"
     )
     continue_from: Optional[str] = Field(
         None,
