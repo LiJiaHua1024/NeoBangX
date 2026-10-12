@@ -728,6 +728,74 @@ test("逐题补全时当前生成指针只指向 active_nos", () => {
   assert.match(c.vpStep2StatusText, /已完成 0\/2 题.*自动补全 1 题/);
 });
 
+test("同一任务各题独立显示重试次数、排队与失败状态", () => {
+  const c = component();
+  loadPaper(c);
+  c.streaming = true; c.vpStage = "explain"; c.vpParallel = true;
+  c.vpTasks = [{ id: "a", nos: ["1", "2"], completed: [], state: "running", attempt: 3,
+    question_states: {
+      "1": { state: "running", attempt: 2, retry_reason: "正在补全未完成的讲解" },
+      "2": { state: "retrying", attempt: 3, retry_reason: "正在补全未完成的讲解" },
+    } }];
+  const [first, second] = c.visualPaper.groups[0].questions;
+  assert.equal(c.vpGeneratingQuestionNo, "1");
+  assert.equal(c.vpQuestionStatus(first), "generating");
+  assert.equal(c.vpQuestionStatus(second), "pending");
+  assert.match(c.vpStep2StatusText, /自动补全 2 题/);
+  assert.equal(c.vpRecoveryItems.length, 2);
+  assert.match(c.vpRecoveryItems[0].text, /第 1 题：.*第 2\/3 次尝试/);
+  assert.match(c.vpRecoveryItems[1].text, /第 2 题：.*第 3\/3 次尝试/);
+  c.vpApplyTask({ id: "a", question_states: {
+    "1": { state: "error", attempt: 3, retry_reason: "" },
+    "2": { state: "running", attempt: 3, retry_reason: "正在补全未完成的讲解" },
+  } });
+  assert.equal(c.vpQuestionStatus(first), "failed");
+  assert.equal(c.vpQuestionStatus(second), "generating");
+  assert.equal(c.vpGeneratingQuestionNo, "2");
+  assert.equal(c.vpTaskRetryReason(first), "");
+  assert.match(c.vpStep2StatusText, /自动补全 1 题/);
+});
+
+test("同一任务其他题完成不会清掉在途题目的通道恢复提示", () => {
+  const c = component();
+  loadPaper(c);
+  c.streaming = true; c.vpStage = "explain"; c.vpParallel = true;
+  const fallback = { failed_index: 1, next_index: 2, total: 2, reason: "timeout" };
+  c.vpTasks = [{ id: "a", nos: ["1", "2"], completed: [], state: "running", attempt: 2,
+    question_states: {
+      "1": { state: "running", attempt: 2, fallback },
+      "2": { state: "running", attempt: 2, fallback: null },
+    } }];
+  assert.equal(c.vpRecoveryItems.length, 2);
+  c.vpApplyTask({ id: "a", completed: ["2"] });
+  assert.equal(c.vpRecoveryItems.length, 1);
+  assert.match(c.vpRecoveryItems[0].text, /第 1 题：/);
+  assert.equal(c.vpRecoveryItems[0].dots.length, 2);
+  assert.equal(c.vpQuestionStatus(c.visualPaper.groups[0].questions[1]), "done");
+});
+
+test("停止收尾同时清理逐题状态和重试提示，保留已完成与失败题", () => {
+  const c = component();
+  loadPaper(c);
+  c.currentTool = { id: "13", name: "试卷可视化全解" };
+  c.streaming = true; c.vpStage = "explain"; c.vpParallel = true;
+  c.vpTasks = [{ id: "a", nos: ["1", "2", "3"], completed: ["2"], state: "running",
+    question_states: {
+      "1": { state: "running", attempt: 2, retry_reason: "正在补全未完成的讲解",
+        fallback: { failed_index: 1, next_index: 2, total: 2, reason: "timeout" } },
+      "2": { state: "done", attempt: 1, retry_reason: "", fallback: null },
+      "3": { state: "error", attempt: 3, retry_reason: "", fallback: null },
+    } }];
+  c.finalizeVisualPaper("stopped");
+  assert.equal(c.vpTasks[0].state, "cancelled");
+  assert.equal(c.vpTasks[0].question_states["1"].state, "cancelled");
+  assert.equal(c.vpTasks[0].question_states["2"].state, "done");
+  assert.equal(c.vpTasks[0].question_states["3"].state, "error");
+  assert.equal(c.vpTaskRetryReason(c.visualPaper.groups[0].questions[0]), "");
+  assert.equal(c.vpGeneratingQuestionNo, null);
+  assert.ok(Object.values(c.vpTasks[0].question_states).every(info => !info.fallback && !info.retry_reason));
+});
+
 test("阶段切换清除框架 Fallback，精讲恢复事件独立接管", async () => {
   const c = component();
   loadPaper(c);

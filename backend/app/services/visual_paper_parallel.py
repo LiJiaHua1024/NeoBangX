@@ -11,6 +11,7 @@ from time import monotonic
 
 from app.services.visual_paper import TAG_LINE_RE, parse_custom_visual_paper
 from app.services.llm_router import is_retryable
+from app.services.async_cleanup import await_cleanup
 
 logger = logging.getLogger(__name__)
 
@@ -119,12 +120,37 @@ class ExplainJob:
     attempt: int = 0
     fallback: dict | None = None
     retry_reason: str = ""
+    question_states: dict = field(default_factory=dict)
+    max_attempts: int = MAX_ATTEMPTS
 
     def progress(self) -> dict:
         return {"id": self.id, "nos": self.nos, "state": self.state, "completed": self.completed.copy(),
-                "active_nos": self.active_nos.copy(), "attempt": self.attempt, "max_attempts": MAX_ATTEMPTS,
-                "issues": self.issues.copy(), "fallback": self.fallback,
+                "active_nos": self.active_nos.copy(), "attempt": self.attempt, "max_attempts": self.max_attempts,
+                "issues": {no: items.copy() for no, items in self.issues.items()}, "fallback": self.fallback,
+                "question_states": {no: {**info, "fallback": info["fallback"].copy() if info.get("fallback") else None}
+                                    for no, info in self.question_states.items()},
                 "retry_reason": self.retry_reason if self.state in {"running", "retrying"} else ""}
+
+
+def explanation_concurrency(jobs, configured: int) -> int:
+    """请求槽位按题数封顶；初始 Job 数不能限制后续拆单的并发。"""
+    total = sum(len(job.nos) for job in jobs)
+    return min(configured, total) if configured > 0 else total
+
+
+async def _cancel_and_wait(tasks) -> bool:
+    """隔离回收协程，重复取消调用者不能再取消正在关闭连接的子任务。
+
+    返回回收期间是否收到新的取消；调用者先完成状态/用量结算，再传播取消。
+    """
+    async def cleanup():
+        for task in tasks:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    _, cancelled = await await_cleanup(asyncio.create_task(cleanup()))
+    return cancelled
 
 
 def _norm_no(s: str) -> str:
@@ -275,238 +301,341 @@ class QuestionBlocks:
         return out
 
 
-def _attempt_prompt(job, nos, questions):
+def _attempt_prompt(job, nos, questions, issues=None):
+    issues = job.issues if issues is None else issues
     base = job.prompt.split("\n\n【并行任务】", 1)[0]
     lines = ["\n\n【并行任务】", f"本次只为这些题号生成完整讲解：{','.join(nos)}。其他题只作同篇上下文，不输出。"]
     for no in nos:
         count = len(questions[no].get("options") or [])
         if count:
             lines.append(f"第 {no} 题的原题选项池共 {count} 项；每道迁移必须保留同型的 {count} 项完整选项池，不能缩成四选一。")
-        if job.issues.get(no):
-            lines.append(f"第 {no} 题上次未通过：{'、'.join(job.issues[no])}。重新输出该题完整讲解，特别核对这些缺失项。")
+        if issues.get(no):
+            lines.append(f"第 {no} 题上次未通过：{'、'.join(issues[no])}。重新输出该题完整讲解，特别核对这些缺失项。")
     lines.append("每题的最后一行必须为 @@END_Q@@，包括本次输出的最后一道题。不要省略结束标记。")
     return base + "\n".join(lines)
 
 
 async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, stream_kwargs,
                               concurrency=PARALLELISM, max_attempts=MAX_ATTEMPTS, retry_delay=0.5):
-    """有界并发；只重试缺失题，最多三轮。停止/断连回收请求和重试等待。"""
-    concurrency = min(concurrency, len(jobs)) if concurrency > 0 else len(jobs)
-    queue = asyncio.Queue(maxsize=concurrency * 4)
-    pending = iter(jobs)
+    """请求级限流；首轮合批，缺失题独立重试。共享 Job 仅由事件消费端更新。"""
+    if not jobs:
+        return
+    limit = max(1, explanation_concurrency(jobs, concurrency))
+    slots = asyncio.Semaphore(limit)
+    queue = asyncio.Queue(maxsize=limit * 4)
+    calls = []
+    collected = set()
+    ended = set()
 
-    async def worker():
-        for job in pending:
+    for job in jobs:
+        job.max_attempts = max_attempts
+        job.question_states = {
+            no: {"state": "done" if no in job.completed else "pending", "attempt": 0,
+                 "fallback": None, "retry_reason": ""}
+            for no in job.nos
+        }
+
+    async def emit(kind, job, payload=None):
+        await queue.put((kind, job, payload))
+
+    def register_call(job, call):
+        if not any(existing is call for existing in job.attempts):
+            job.attempts.append(call)
+
+    def collect_call(job, call):
+        register_call(job, call)
+        if id(call) in collected:
+            return
+        collected.add(id(call))
+        job.raw.extend(call["raw"])
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens"):
+            if call["usage"].get(key) is not None:
+                job.usage[key] = job.usage.get(key, 0) + call["usage"][key]
+        if call["usage"].get("estimated"):
+            job.usage["estimated"] = True
+        for no in call["nos"]:
+            if no not in job.completed:
+                job.issues[no] = call["issues"].get(no, ["未返回完整讲解"]).copy()
+
+    def refresh(job):
+        states = job.question_states
+        job.attempt = max((info["attempt"] for info in states.values()), default=0)
+        job.active_nos = [no for no, info in states.items() if info["state"] == "running"]
+        job.fallback = next((info["fallback"] for info in states.values()
+                             if info["state"] == "running" and info["fallback"]), None)
+        job.retry_reason = "正在补全未完成的讲解" if any(
+            info["retry_reason"] for info in states.values()) else ""
+        if id(job) not in ended:
+            if job.active_nos:
+                job.state = "running"
+            elif any(info["state"] == "retrying" or (
+                info["state"] == "pending" and info["attempt"] > 1) for info in states.values()):
+                job.state = "retrying"
+            else:
+                # 题块验收后上游可能尚未关闭；终态由协调协程的结束事件确认。
+                job.state = "running" if all(no in job.completed for no in job.nos) else "pending"
+        if job.state in {"done", "error", "incomplete", "cancelled"}:
+            job.active_nos, job.fallback, job.retry_reason = [], None, ""
+
+    def reduce_event(item):
+        kind, job, payload = item
+        output = []
+        if kind == "job_start":
+            job.started = payload
+        elif kind in {"waiting", "retry_wait", "call_start"}:
+            if kind == "call_start":
+                register_call(job, payload)
+            state = {"waiting": "pending", "retry_wait": "retrying", "call_start": "running"}[kind]
+            for no in payload["nos"]:
+                if no not in job.completed:
+                    job.question_states[no].update(
+                        state=state, attempt=payload["round"], fallback=None,
+                        retry_reason="正在补全未完成的讲解" if payload["round"] > 1 else "")
+        elif kind == "fallback":
+            nos, fallback = payload
+            for no in nos:
+                if no not in job.completed:
+                    job.question_states[no]["fallback"] = fallback
+        elif kind == "block":
+            no, block, issues = payload
+            if no in job.completed:
+                return []
+            job.issues[no] = issues
+            if not issues:
+                job.completed.append(no)
+                job.question_states[no].update(state="done", fallback=None, retry_reason="")
+                output.append(("token", block))
+        elif kind == "call_finish":
+            collect_call(job, payload)
+            for no in payload["nos"]:
+                if no not in job.completed:
+                    state = "retrying" if payload["round"] < max_attempts else payload["state"]
+                    job.question_states[no].update(
+                        state=state, fallback=None,
+                        retry_reason="正在补全未完成的讲解" if state == "retrying" else "")
+        elif kind == "job_error":
+            collect_call(job, payload)
+            job.state, job.error = "error", payload["error"]
+            for no in job.nos:
+                if no not in job.completed:
+                    job.question_states[no].update(state="error", fallback=None, retry_reason="")
+            ended.add(id(job))
+            job.elapsed = monotonic() - job.started
+        elif kind == "job_finish":
+            ended.add(id(job))
+            failed = [no for no in job.nos if no not in job.completed]
+            # 结束事件在生产端确认；不能因消费它时别的 Job 被停止而改写终态。
+            job.state = "done" if not failed else (
+                "error" if any(job.question_states[no]["state"] == "error" for no in failed) else "incomplete")
+            job.error = "" if not failed else next(
+                (call["error"] for call in reversed(job.attempts)
+                 if call["error"] and any(no in failed for no in call["nos"])), "讲解未完整")
+            job.elapsed = monotonic() - job.started
+        refresh(job)
+        output.append(("visual_task", job.progress()))
+        return output
+
+    async def run_request(job, nos, round_no, questions, question_groups, previous=None):
+        previous = previous or {}
+        await emit("waiting", job, {"nos": nos, "round": round_no})
+        # 排队和退避不占槽位；槽位覆盖建连、读流和关闭上游的整个生命周期。
+        async with slots:
+            if stop_event.is_set():
+                return None
+            call = {"nos": nos.copy(), "round": round_no,
+                    "prompt": _attempt_prompt(job, nos, questions, previous.get("issues", {})),
+                    "raw": [], "usage": {}, "llm": None, "elapsed": 0, "error": "", "state": "running",
+                    "completed": [], "issues": {no: items.copy() for no, items in previous.get("issues", {}).items()
+                                              if no in nos}, "provider_id": None}
+            calls.append((job, call))
+            call_started = monotonic()
+            blocks = QuestionBlocks(nos)
+            fallback = None
+
+            async def publish(items):
+                for no, block in items:
+                    if no in call["completed"]:
+                        continue
+                    expected = questions[no]
+                    qtype = "writing" if expected["qtype"] == "writing" else "choice" if expected.get("options") else "blank"
+                    block = re.sub(r"^@@QTYPE@@[^\n]*\n", "", block, flags=re.MULTILINE)
+                    block = re.sub(r"^@@Q@@[^\n]*\n", f"@@Q@@ {no}\n@@QTYPE@@ {qtype}\n",
+                                   block, count=1, flags=re.MULTILINE)
+                    parsed = parse_custom_visual_paper(job.material + block)
+                    question = next(q for g in parsed["groups"] for q in g["questions"] if _norm_no(q["no"]) == no)
+                    issues = question_missing(question, transfer_count, question_groups[no])
+                    # 每次请求独立验收，残缺版本永不进入共享文档。
+                    call["issues"][no] = issues
+                    await emit("block", job, (no, block, issues))
+                    if not issues:
+                        call["completed"].append(no)
+
+            try:
+                await emit("call_start", job, call)
+                if stop_event.is_set():
+                    call["state"] = "cancelled"
+                else:
+                    llm = call["llm"] = build_llm()
+                    providers = getattr(llm, "providers", None)
+                    previous_provider = previous.get("provider_id")
+                    providers_override = None
+                    if previous_provider and providers and len(providers) > 1:
+                        providers_override = sorted(providers, key=lambda p: p.get("id") == previous_provider)
+                    call["providers"] = [p.get("id") for p in (providers_override or providers or [])]
+                    async with aclosing(llm.chat_stream_with_stop(
+                        user_prompt=call["prompt"], stop_event=stop_event, usage_out=call["usage"],
+                        providers_override=providers_override, **stream_kwargs,
+                    )) as upstream:
+                        async for item in upstream:
+                            if stop_event.is_set():
+                                break
+                            if isinstance(item, tuple):
+                                if item[0] == "fallback":
+                                    fallback = item[1]
+                                    await emit("fallback", job, (nos, fallback))
+                                continue
+                            if fallback:
+                                fallback = None
+                                await emit("fallback", job, (nos, None))
+                            call["raw"].append(item)
+                            await publish(blocks.feed(item))
+                        if not stop_event.is_set():
+                            await publish(blocks.feed("", final=True))
+                            if blocks.no and blocks.no not in blocks.seen and call["usage"].get("finish_reason") not in {"length", "content_filter"}:
+                                await publish([(blocks.no, "\n".join(blocks.lines) + "\n@@END_Q@@\n")])
+                    call["state"] = "cancelled" if stop_event.is_set() else (
+                        "done" if all(no in call["completed"] for no in nos) else "incomplete")
+                    if call["state"] == "incomplete":
+                        call["error"] = "讲解未完整，已记录具体缺失项"
+            except asyncio.CancelledError:
+                if stop_event.is_set() or asyncio.current_task().cancelling():
+                    call["state"] = "cancelled"
+                    raise
+                # 上游自行抛出的取消与真正的任务取消分开处理。
+                call["state"], call["error"] = "error", "上游讲解请求异常取消"
+            except Exception as exc:
+                call["state"], call["error"] = "error", str(exc)
+                if not is_retryable(exc):
+                    logger.info("可视化精讲：不可重试错误转为按题重试，不整批屏蔽：%s", exc)
+            finally:
+                call["elapsed"] = monotonic() - call_started
+                used = getattr(call["llm"], "provider_used", None) or getattr(call["llm"], "last_provider", None)
+                call["provider_id"] = used.get("id") if used else previous.get("provider_id")
+                call["issues"] = {
+                    no: call["issues"].get(no) or ["未返回完整讲解"]
+                    for no in nos if no not in call["completed"]
+                }
+        # 关闭连接后立即释放请求槽位，日志/进度队列的背压不阻塞其他请求。
+        # 真正取消时不在 finally 中等待有界队列，由消费端统一补收调用记录。
+        await emit("call_finish", job, call)
+        return call
+
+    async def retry_question(job, no, first, questions, question_groups):
+        previous = first
+        for round_no in range(2, max_attempts + 1):
             if stop_event.is_set():
                 return
-            job.started = monotonic()
-            # material 解析放在 try 内：它一旦返回 None，下一行 original["groups"] 会抛
-            # TypeError 跳出 for 循环，worker_done 再也不发，主生成器在 queue.get() 上
-            # 永久挂起，而该 job 停在 pending、管理台和前端都看不到失败提示。
-            # 当前 group_material 的契约保证不会发生，但这是唯一一个「一触发就挂死」
-            # 的点，加防护比依赖契约稳。
-            try:
-                original = parse_custom_visual_paper(job.material)
-                if original is None:
-                    raise ValueError("组材料解析失败")
-                # key 用归一化题号：与 QuestionBlocks.allowed / blocks.feed 返回的
-                # no 同口径，否则 "01" 与 "1" 会在 publish 的查找上对不上
-                questions = {_norm_no(q["no"]): q for g in original["groups"] for q in g["questions"]}
-                question_groups = {_norm_no(q["no"]): g["id"] for g in original["groups"] for q in g["questions"]}
-            except Exception as exc:
-                logger.exception("可视化精讲：组材料解析失败，job 标记为 error")
-                job.state, job.error = "error", f"组材料解析失败：{exc}"
-                job.attempts.append({"nos": list(job.nos), "round": 0, "state": "error",
-                                     "error": str(exc), "prompt": "", "raw": [], "usage": {},
-                                     "llm": None, "elapsed": 0})
-                continue
-            blocked = set()
-            previous_provider = None
-            try:
-                for round_no in range(1, max_attempts + 1):
-                    missing = [n for n in job.nos if n not in job.completed and n not in blocked]
-                    if not missing or stop_event.is_set():
-                        break
-                    job.attempt = round_no
-                    if round_no > 1:
-                        job.state, job.active_nos, job.fallback = "retrying", missing, None
-                        job.retry_reason = "正在补全未完成的讲解"
-                        await queue.put(("visual_task", job.progress()))
-                        await asyncio.sleep(retry_delay * (2 ** (round_no - 2)))
-                    # 首轮按计划分片，后续拆为单题，避免某一长题再次拖累同批其他题。
-                    batches = [missing] if round_no == 1 else [[no] for no in missing]
-                    for nos in batches:
-                        if stop_event.is_set():
-                            break
-                        job.state, job.active_nos, job.fallback = "running", nos, None
-                        await queue.put(("visual_task", job.progress()))
-                        blocks = QuestionBlocks(nos)
-                        call = {"nos": nos, "round": round_no, "prompt": _attempt_prompt(job, nos, questions),
-                                "raw": [], "usage": {}, "llm": None, "elapsed": 0, "error": "", "state": "running"}
-                        job.attempts.append(call)
-                        call_started = monotonic()
-                        # queue.put 是让出点：停止可能恰好落在这里。此时 job.state 已是
-                        # running，直接 break 会把它留给 finally 兜底成 cancelled；同时要把
-                        # 本次调用记成 cancelled，否则分片日志会记成未发生的 ERROR。
-                        if stop_event.is_set():
-                            call["state"] = "cancelled"
-                            break
+            await emit("retry_wait", job, {"nos": [no], "round": round_no})
+            await asyncio.sleep(retry_delay * (2 ** (round_no - 2)))
+            result = await run_request(job, [no], round_no, questions, question_groups, previous)
+            if result is None or no in result["completed"]:
+                return
+            previous = result
 
-                        async def publish(items, *, terminal=False):
-                            for no, block in items:
-                                if no in job.completed:
-                                    continue
-                                expected = questions[no]
-                                qtype = "writing" if expected['qtype'] == "writing" else "choice" if expected.get("options") else "blank"
-                                block = re.sub(r"^@@QTYPE@@[^\n]*\n", "", block, flags=re.MULTILINE)
-                                # 题号行用正则替换：block 里是模型写的原样题号（可能带
-                                # 前导零/空格），与归一化后的 no 不一定字面相同
-                                block = re.sub(r"^@@Q@@[^\n]*\n", f"@@Q@@ {no}\n@@QTYPE@@ {qtype}\n", block, count=1, flags=re.MULTILINE)
-                                parsed = parse_custom_visual_paper(job.material + block)
-                                question = next(q for g in parsed["groups"] for q in g["questions"] if _norm_no(q["no"]) == no)
-                                issues = question_missing(question, transfer_count, question_groups[no])
-                                # 每次调用独立验收。残缺重试块不能进入共享文档，
-                                # 否则前端会把不同版本的材料、答案和解析拼成伪完整题。
-                                job.issues[no] = issues
-                                if issues:
-                                    await queue.put(("visual_task", job.progress()))
-                                    continue
-                                job.completed.append(no)
-                                await queue.put(("token", block))
-                                await queue.put(("visual_task", job.progress()))
+    async def coordinate(job):
+        children = []
+        try:
+            await emit("job_start", job, monotonic())
+            original = parse_custom_visual_paper(job.material)
+            if original is None:
+                raise ValueError("组材料解析失败")
+            questions = {_norm_no(q["no"]): q for g in original["groups"] for q in g["questions"]}
+            question_groups = {_norm_no(q["no"]): g["id"] for g in original["groups"] for q in g["questions"]}
+            nos = [no for no in job.nos if no not in job.completed]
+            if nos and max_attempts > 0:
+                first = await run_request(job, nos, 1, questions, question_groups)
+                if first is None or stop_event.is_set():
+                    return
+                # 各题独立推进；gather 只等待 Job 收尾，不形成重试轮次屏障。
+                children = [asyncio.create_task(retry_question(job, no, first, questions, question_groups))
+                            for no in nos if no not in first["completed"]]
+                await asyncio.gather(*children)
+            if stop_event.is_set():
+                return
+            await emit("job_finish", job)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("可视化精讲：任务协调失败")
+            call = {"nos": list(job.nos), "round": 0, "state": "error", "error": str(exc),
+                    "prompt": "", "raw": [], "usage": {}, "llm": None, "elapsed": 0,
+                    "issues": {no: ["组材料解析或任务调度失败"] for no in job.nos}}
+            calls.append((job, call))
+            await emit("job_error", job, call)
+        finally:
+            # gather 的子任务异常/取消不会自动回收所有兄弟任务，显式关闭。
+            for child in children:
+                if not child.done() and not child.cancelling():
+                    child.cancel()
+            await asyncio.gather(*children, return_exceptions=True)
 
-                        try:
-                            job.llm = call["llm"] = build_llm()
-                            providers = getattr(job.llm, "providers", None)
-                            # 出正文后不能拼接另一通道；新请求只为缺失题换通道重做。
-                            # 排序结果只作本次调用的局部参数传下去：就地改 llm.providers
-                            # 会写到一个共享列表（chat.py 让首个 worker 复用主 llm 对象），
-                            # 多个 worker 并发排序时互相干扰，分片日志的 provider 归属
-                            # 也会记成最后写入者。
-                            providers_override = None
-                            if previous_provider and providers and len(providers) > 1:
-                                providers_override = sorted(providers, key=lambda p: p.get("id") == previous_provider)
-                            # 记下本次实际使用的通道顺序：既供分片日志归属，也让
-                            # 「避开上一家」的策略可被验证
-                            call["providers"] = [p.get("id") for p in (providers_override or providers or [])]
-                            async with aclosing(job.llm.chat_stream_with_stop(
-                                user_prompt=call["prompt"], stop_event=stop_event, usage_out=call["usage"],
-                                providers_override=providers_override, **stream_kwargs,
-                            )) as upstream:
-                                async for item in upstream:
-                                    if stop_event.is_set():
-                                        break
-                                    if isinstance(item, tuple):
-                                        if item[0] == "fallback":
-                                            job.fallback = item[1]
-                                            await queue.put(("visual_task", job.progress()))
-                                        continue
-                                    if job.fallback:
-                                        job.fallback = None
-                                        await queue.put(("visual_task", job.progress()))
-                                    call["raw"].append(item)
-                                    job.raw.append(item)
-                                    await publish(blocks.feed(item))
-                                if not stop_event.is_set():
-                                    await publish(blocks.feed("", final=True))
-                                    if blocks.no and blocks.no not in blocks.seen and call["usage"].get("finish_reason") not in {"length", "content_filter"}:
-                                        await publish([(blocks.no, "\n".join(blocks.lines) + "\n@@END_Q@@\n")], terminal=True)
-                            call["state"] = "cancelled" if stop_event.is_set() else "done" if all(n in job.completed for n in nos) else "incomplete"
-                            if call["state"] == "incomplete":
-                                call["error"] = "讲解未完整，已记录具体缺失项"
-                        except asyncio.CancelledError:
-                            if stop_event.is_set() or asyncio.current_task().cancelling():
-                                call["state"] = "cancelled"
-                                raise
-                            # 上游可独立抛出 CancelledError，但未取消当前 worker。
-                            # 将它作为单次调用失败重试，避免拖垮其他分片。
-                            call["state"], call["error"] = "error", "上游讲解请求异常取消"
-                        except Exception as exc:
-                            call["state"], call["error"] = "error", str(exc)
-                            # 不再把整批题号一网打尽地屏蔽：异常不带题号信息，
-                            # 同批里没出错的题本该还有机会。交给完整三轮重试，
-                            # 由 job.completed 自然收敛（撞 content_filter 时多等两轮，
-                            # 但不会让健康题被无辜放弃）。
-                            if not is_retryable(exc):
-                                logger.info("可视化精讲：不可重试错误转为按题重试，不整批屏蔽：%s", exc)
-                        finally:
-                            call["elapsed"] = monotonic() - call_started
-                            # 排序 key 把匹配项排在末尾（False < True）：记录本轮尝试过（无论成功还是
-                            # 失败）的通道，下一轮重试即可避开该通道、优先使用备用通道
-                            used = getattr(job.llm, "provider_used", None) or getattr(job.llm, "last_provider", None)
-                            if used and used.get("id"):
-                                previous_provider = used.get("id")
-                            for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens"):
-                                if call["usage"].get(key) is not None:
-                                    job.usage[key] = job.usage.get(key, 0) + call["usage"][key]
-                            if call["usage"].get("estimated"):
-                                job.usage["estimated"] = True
-                            for no in nos:
-                                if no not in job.completed and not job.issues.get(no):
-                                    job.issues[no] = ["未返回完整讲解"]
-                            call["issues"] = {n: job.issues.get(n, []).copy() for n in nos if n not in job.completed}
-                            job.error = call["error"]
-                    if all(n in job.completed for n in job.nos):
-                        break
-                job.state = "cancelled" if stop_event.is_set() else "done" if len(job.completed) == len(job.nos) else (
-                    "error" if job.attempts and job.attempts[-1]["state"] == "error" else "incomplete")
-                if job.state == "done":
-                    job.error = ""
-            except asyncio.CancelledError:
-                job.state = "cancelled"
-                raise
-            except Exception as exc:
-                job.state, job.error = "error", str(exc)
-            finally:
-                job.elapsed = monotonic() - job.started
-                job.active_nos, job.fallback = [], None
-                job.retry_reason = ""
-            await queue.put(("visual_task", job.progress()))
-
-    workers = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(jobs)))]
+    workers = [asyncio.create_task(coordinate(job)) for job in jobs]
     stop_wait = asyncio.create_task(stop_event.wait())
     next_item = None
     try:
         remaining = set(workers)
-        while (remaining or not queue.empty()) and not stop_event.is_set():
+        while remaining or not queue.empty():
             next_item = asyncio.create_task(queue.get())
             await asyncio.wait([next_item, stop_wait, *remaining], return_when=asyncio.FIRST_COMPLETED)
-            if stop_event.is_set():
-                if next_item.done():
-                    event, payload = next_item.result()
-                    next_item = None
-                    yield event, payload
-                while not queue.empty():
-                    try:
-                        event, payload = queue.get_nowait()
-                        yield event, payload
-                    except asyncio.QueueEmpty:
-                        break
-                break
             finished = {task for task in remaining if task.done()}
-            for task in finished:
-                # 监听任务本身的结束，不能依赖 worker 在正常路径发送结束哨兵。
-                # 非用户停止的取消/崩溃必须退出等待，由路由保存已有结果并报告失败。
-                if task.cancelled():
-                    raise RuntimeError("并发讲解任务异常取消")
-                if task.exception() is not None:
-                    raise RuntimeError("并发讲解任务异常结束") from task.exception()
+            failure = cause = None
+            if not stop_event.is_set():
+                for task in finished:
+                    if task.cancelled():
+                        failure = RuntimeError("并发讲解任务异常取消")
+                        break
+                    if task.exception() is not None:
+                        failure, cause = RuntimeError("并发讲解任务异常结束"), task.exception()
+                        break
+            if stop_event.is_set() or failure is not None:
+                if await _cancel_and_wait(workers):
+                    raise asyncio.CancelledError
+                # 停止与异常退出都保留已入队的完整题块；回收后不再有新事件。
+                if next_item.done():
+                    for output in reduce_event(next_item.result()):
+                        yield output
+                    next_item = None
+                while not queue.empty():
+                    for output in reduce_event(queue.get_nowait()):
+                        yield output
+                if failure is not None and not stop_event.is_set():
+                    raise failure from cause
+                break
             remaining -= finished
             if next_item.done():
-                event, payload = next_item.result()
+                for output in reduce_event(next_item.result()):
+                    yield output
                 next_item = None
-                yield event, payload
             else:
                 next_item.cancel()
                 await asyncio.gather(next_item, return_exceptions=True)
                 next_item = None
     finally:
         tasks = workers + [stop_wait] + ([next_item] if next_item else [])
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        cancelled = await _cancel_and_wait(tasks)
+        # 取消可能中断 call_finish 入队；每次请求的用量和日志仍只汇总一次。
+        for job, call in calls:
+            collect_call(job, call)
         for job in jobs:
-            if job.state in {"pending", "running", "retrying"}:
+            if id(job) not in ended:
                 job.state = "cancelled"
-            job.retry_reason = ""
+                ended.add(id(job))
+                job.elapsed = monotonic() - job.started if job.started else 0
+                for no, info in job.question_states.items():
+                    if no not in job.completed:
+                        info["state"] = "cancelled"
+            for info in job.question_states.values():
+                info["fallback"], info["retry_reason"] = None, ""
+            refresh(job)
+        if cancelled:
+            raise asyncio.CancelledError

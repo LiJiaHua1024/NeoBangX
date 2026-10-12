@@ -3219,13 +3219,12 @@ function nbx() {
     get vpStep2StatusText() {
       if (this.vpIsStage2Done) return `全卷 ${this.vpTotal} 题解析已完成`;
       if (this.vpIsStage2Active && this.vpParallel) {
-        // retrying 优先、与 active 互斥：后端第 2 轮起是 state="running" 且 attempt=2，
-        // 同一批题若两边都算，文案会变成「正在生成 3 题 · 自动补全 3 题」——
-        // 两个 3 是同一批题。attempt>1 的只算自动补全，不算正在生成。
-        const active = this.vpTasks.filter(t => t.state === "running" && !(t.attempt > 1))
-          .flatMap(t => (t.active_nos || t.nos).filter(n => !(t.completed || []).includes(n))).length;
-        const retrying = this.vpTasks.filter(t => t.state === "retrying" || (t.state === "running" && t.attempt > 1))
-          .flatMap(t => (t.active_nos || t.nos).filter(n => !(t.completed || []).includes(n))).length;
+        // 同一 Job 的各题可能处于不同尝试次数，按题统计且不重复计数。
+        const questions = this.vpTasks.flatMap(t => (t.nos || [])
+          .filter(n => !(t.completed || []).includes(n)).map(n => this.vpTaskQuestionInfo(t, n)));
+        const active = questions.filter(q => q.state === "running" && !(q.attempt > 1)).length;
+        const retrying = questions.filter(q => q.state === "retrying"
+          || (["running", "pending"].includes(q.state) && q.attempt > 1)).length;
         return `已完成 ${this.vpAnalyzedCount}/${this.vpTotal} 题${active ? ` · 正在生成 ${active} 题` : ''}${retrying ? ` · 自动补全 ${retrying} 题` : ''}`;
       }
       if (this.vpIsStage2Active) return `正在生成第 ${this.vpGeneratingQuestionNo || "…"} 题解析`;
@@ -3245,6 +3244,17 @@ function nbx() {
       this.vpTasks = this.vpTasks.map((t, i) => i === index ? { ...t, fallback: null, ...info } : t);
       if (this.thinking) { this.thinking = false; this.stopThinkTimer(); }
     },
+    vpTaskQuestionInfo(task, no) {
+      no = String(no);
+      if ((task.completed || []).includes(no)) return { state: "done", attempt: 0, fallback: null, retry_reason: "" };
+      if (task.question_states?.[no]) return task.question_states[no];
+      // 兼容旧服务端的 Job 级事件；未参与当前请求的题仍显示排队。
+      const waiting = task.state === "running" && !(task.active_nos || task.nos || []).includes(no);
+      const state = waiting ? "pending" : task.state;
+      const inFlight = ["running", "retrying"].includes(state);
+      return { state, attempt: waiting ? 0 : task.attempt || 0, fallback: inFlight ? task.fallback : null,
+        retry_reason: inFlight ? task.retry_reason || "" : "" };
+    },
     get vpRecoveryItems() {
       if (!this.streaming) return [];
       const items = [];
@@ -3252,15 +3262,24 @@ function nbx() {
         items.push({ id: "stage", text: (this.vpStage === "framework" ? "框架提取：" : "试题解析：") + this.fallbackText, dots: this.fallbackDots });
       }
       for (const task of this.vpTasks) {
-        if (!["running", "retrying"].includes(task.state)) continue;
-        const nos = (task.active_nos?.length ? task.active_nos : task.nos).filter(n => !(task.completed || []).includes(n));
-        if (!nos.length) continue;
-        const label = `第 ${nos.join('、')} 题：`;
-        if (task.fallback) {
-          const info = { total: task.fallback.total, failed: task.fallback.failed_index, current: task.fallback.next_index, reason: task.fallback.reason };
-          items.push({ id: task.id, text: label + this.formatFallbackText(info), dots: this.formatFallbackDots(info) });
-        } else if (task.state === "retrying" || task.attempt > 1) {
-          items.push({ id: task.id, text: `${label}自动补全中（第 ${task.attempt}/${task.max_attempts || 3} 次尝试），已完成题目保留`, dots: ["active"] });
+        const groups = new Map();
+        for (const no of task.nos || []) {
+          const info = this.vpTaskQuestionInfo(task, no);
+          if (!["running", "retrying", "pending"].includes(info.state)) continue;
+          if (!info.fallback && !(info.attempt > 1) && info.state !== "retrying") continue;
+          const key = JSON.stringify([info.attempt, info.fallback || null]);
+          if (!groups.has(key)) groups.set(key, { nos: [], info });
+          groups.get(key).nos.push(no);
+        }
+        for (const { nos, info } of groups.values()) {
+          const label = `第 ${nos.join('、')} 题：`;
+          const id = `${task.id}:${nos.join(',')}`;
+          if (info.fallback) {
+            const fallback = { total: info.fallback.total, failed: info.fallback.failed_index, current: info.fallback.next_index, reason: info.fallback.reason };
+            items.push({ id, text: label + this.formatFallbackText(fallback), dots: this.formatFallbackDots(fallback) });
+          } else {
+            items.push({ id, text: `${label}自动补全中（第 ${info.attempt}/${task.max_attempts || 3} 次尝试），已完成题目保留`, dots: ["active"] });
+          }
         }
       }
       return items;
@@ -3305,8 +3324,11 @@ function nbx() {
     get vpGeneratingQuestionNo() {
       if (!this.visualPaper) return null;
       if (this.vpParallel) {
-        const task = this.vpTasks.find(t => t.state === "running" && (t.active_nos || t.nos).some(n => !(t.completed || []).includes(n)));
-        return task ? (task.active_nos || task.nos).find(n => !(task.completed || []).includes(n)) : null;
+        for (const task of this.vpTasks) {
+          const no = (task.nos || []).find(n => this.vpTaskQuestionInfo(task, n).state === "running");
+          if (no != null) return no;
+        }
+        return null;
       }
       for (const g of this.visualPaper.groups) {
         for (const q of (g.questions || [])) {
@@ -3328,9 +3350,8 @@ function nbx() {
     vpTaskRetryReason(q) {
       if (!q || !this.vpParallel) return "";
       const task = this.vpTasks.find(t => (t.nos || []).includes(String(q.no)));
-      // 兼容仍携带旧 retry_reason 的服务端；终态与已完成题不能显示在途重试文案。
-      return task && ["running", "retrying"].includes(task.state)
-        && !(task.completed || []).includes(String(q.no)) ? task.retry_reason || "" : "";
+      const info = task ? this.vpTaskQuestionInfo(task, q.no) : null;
+      return info && ["running", "retrying", "pending"].includes(info.state) ? info.retry_reason || "" : "";
     },
     vpQuestionStatus(q, groupId) {
       if (!q) return "idle";
@@ -3341,15 +3362,16 @@ function nbx() {
           if (this.vpParallel) {
             const task = this.vpTasks.find(t => t.nos.includes(String(q.no)));
             if (!task) return "idle";
-            if (task.state === "retrying") return "pending";
-            if (task.state === "running") return (task.active_nos || task.nos).includes(String(q.no)) ? "generating" : "pending";
-            if (task.state === "pending") return "pending";
+            const state = this.vpTaskQuestionInfo(task, q.no).state;
+            if (state === "done") return "done";
+            if (state === "running") return "generating";
+            if (state === "retrying" || state === "pending") return "pending";
             // error/incomplete/cancelled 不能再一律落 idle：整条流还在跑时，
             // 失败的任务在题库里必须看得见（旧实现把它们显示成「空闲」，
             // 而 incomplete 样式又被 !streaming 门控，等于失败完全不可见）
-            if (task.state === "error") return "failed";
-            if (task.state === "incomplete") return "incomplete";
-            if (task.state === "cancelled") return "cancelled";
+            if (state === "error") return "failed";
+            if (state === "incomplete") return "incomplete";
+            if (state === "cancelled") return "cancelled";
             return "idle";
           }
           const genNo = this.vpGeneratingQuestionNo;
@@ -8602,7 +8624,14 @@ function nbx() {
       this.streaming = false;
       // 收尾方式决定「继续生成」入口是否保留，必须先于渲染落定
       this.vpRunState = state;
-      this.vpTasks = this.vpTasks.map(t => ["pending", "running", "retrying"].includes(t.state) ? { ...t, state: "cancelled", fallback: null } : t);
+      this.vpTasks = this.vpTasks.map(t => ({ ...t,
+        state: ["pending", "running", "retrying"].includes(t.state) ? "cancelled" : t.state,
+        active_nos: [], fallback: null, retry_reason: "",
+        ...(t.question_states ? { question_states: Object.fromEntries(Object.entries(t.question_states).map(([no, info]) =>
+          [no, { ...info, state: (t.completed || []).includes(no) ? "done"
+            : ["pending", "running", "retrying"].includes(info.state) ? "cancelled" : info.state,
+          fallback: null, retry_reason: "" }])) } : {}),
+      }));
       this.thinking = false;
       this.fallbackInfo = null;
       this.stopTimer();

@@ -107,7 +107,7 @@ def test_bounded_concurrency_out_of_order_and_partial_failure():
         assert jobs[1].state == "error"
         assert all(j.state == "done" for j in [jobs[0], *jobs[2:]])
         tokens = [p for e, p in emitted if e == "token"]
-        assert "@@Q@@ 7" in tokens[0]  # 后面的任务先交付，不能被首个慢任务挡住
+        assert int(re.search(r"@@Q@@ (\d+)", tokens[0])[1]) >= 7  # 后面的任务先交付，不被首个慢任务挡住。
         data = parse_custom_visual_paper(skeleton(11) + "".join(tokens))
         qs = data["groups"][0]["questions"]
         assert [q["no"] for q in qs] == [str(n) for n in range(1, 12)]
@@ -258,6 +258,8 @@ def test_actual_worker_cancellation_ends_consumer_and_closes_other_calls():
                         await asyncio.sleep(0)
                     yield ""
                 finally:
+                    # 模拟关闭连接中的异步清理，重复 cancel 不能中断它。
+                    await asyncio.sleep(0)
                     closed.append(nos)
 
         async def consume():
@@ -309,6 +311,7 @@ def test_terminal_tasks_clear_retry_message_but_keep_missing_issues(terminal):
         assert any(e == "visual_task" and p["state"] == "retrying" and p["retry_reason"] for e, p in emitted)
         assert all(not p["retry_reason"] for e, p in emitted
                    if e == "visual_task" and p["state"] in {"error", "incomplete", "done", "cancelled"})
+        assert all(p["max_attempts"] == 2 for e, p in emitted if e == "visual_task")
         if terminal in {"error", "incomplete"}:
             assert jobs[0].issues["1"]
 
@@ -401,8 +404,9 @@ def test_retries_only_missing_questions_rotate_provider_and_preserve_completed()
         async for event in stream_explanations(jobs, build_llm=Fake, stop_event=asyncio.Event(),
                                                transfer_count=1, stream_kwargs={}, retry_delay=0):
             emitted.append(event)
-        assert calls == [["1", "2", "3"], ["2"], ["3"]]
-        assert providers == ["a", "b", "a"]
+        assert calls[0] == ["1", "2", "3"] and sorted(calls[1:]) == [["2"], ["3"]]
+        # 两题各自继承首轮失败通道，不能因另一题先完成而改变轮换策略。
+        assert providers == ["a", "b", "b"]
         assert jobs[0].state == "done" and jobs[0].usage["total_tokens"] == 30
         body = "".join(p for e, p in emitted if e == "token")
         assert body.count("@@Q@@ 1\n") == 1 and "MUST NOT OVERWRITE" not in body
@@ -435,6 +439,410 @@ def test_configured_concurrency_bounds_actual_requests(limit):
             pass
         assert peak == expected and active == 0
         assert all(j.state == "done" for j in jobs)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("limit", [1, 2, 8, 0, -1])
+def test_single_job_retries_use_all_available_request_slots(limit):
+    async def run():
+        jobs = plan_explanations(skeleton(3), LOADER, 1)
+        expected = min(limit, 3) if limit > 0 else 3
+        active = peak = 0
+        entered = asyncio.Event()
+        calls = []
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, **kwargs):
+                nonlocal active, peak
+                nos = requested_nos(user_prompt)
+                calls.append(nos)
+                if len(nos) > 1:
+                    yield ""  # 首轮失败，三题均需独立补全。
+                    return
+                active += 1
+                peak = max(peak, active)
+                if active == expected:
+                    entered.set()
+                try:
+                    await entered.wait()
+                    yield analysis(nos[0])
+                finally:
+                    active -= 1
+
+        async def consume():
+            return [item async for item in stream_explanations(
+                jobs, build_llm=Fake, stop_event=asyncio.Event(), transfer_count=1,
+                stream_kwargs={}, concurrency=limit, retry_delay=0,
+            )]
+
+        emitted = await asyncio.wait_for(consume(), 2)
+        assert peak == expected and active == 0
+        assert len(calls) == 4 and jobs[0].state == "done"
+        assert sorted(jobs[0].completed) == ["1", "2", "3"]
+        assert len([p for e, p in emitted if e == "token"]) == 3
+        assert any(len(p["active_nos"]) == expected for e, p in emitted if e == "visual_task")
+
+    asyncio.run(run())
+
+
+def test_retry_advances_without_waiting_for_slow_sibling():
+    async def run():
+        jobs = plan_explanations(skeleton(3), LOADER, 1)
+        third_started = asyncio.Event()
+        counts = {}
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, **kwargs):
+                nos = requested_nos(user_prompt)
+                if len(nos) > 1:
+                    yield ""
+                    return
+                no = nos[0]
+                counts[no] = counts.get(no, 0) + 1
+                if no == "1":
+                    await third_started.wait()  # 等题 2 开始第三次尝试才能结束第二次。
+                elif no == "2":
+                    if counts[no] == 1:
+                        yield ""
+                        return
+                    third_started.set()
+                yield analysis(no)
+
+        async def consume():
+            return [item async for item in stream_explanations(
+                jobs, build_llm=Fake, stop_event=asyncio.Event(), transfer_count=1,
+                stream_kwargs={}, concurrency=3, retry_delay=0,
+            )]
+
+        emitted = await asyncio.wait_for(consume(), 2)
+        assert counts == {"1": 1, "2": 2, "3": 1}
+        assert jobs[0].state == "done"
+        assert any(p["question_states"]["1"]["state"] == "running"
+                   and p["question_states"]["1"]["attempt"] == 2
+                   and p["question_states"]["2"]["attempt"] == 3
+                   for e, p in emitted if e == "visual_task")
+        assert all(p["max_attempts"] == 3 for e, p in emitted if e == "visual_task")
+
+    asyncio.run(run())
+
+
+def test_initial_and_retry_requests_share_the_same_limit():
+    async def run():
+        jobs = plan_explanations(skeleton(9), LOADER, 1)
+        retry_entered = asyncio.Event()
+        active = peak = 0
+        overlap = False
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, **kwargs):
+                nonlocal active, peak, overlap
+                nos = requested_nos(user_prompt)
+                active += 1
+                peak = max(peak, active)
+                try:
+                    if nos == ["1", "2", "3"]:
+                        yield ""
+                        return
+                    if nos == ["4", "5", "6"]:
+                        await retry_entered.wait()
+                    elif len(nos) == 1:
+                        overlap |= active == 2
+                        retry_entered.set()
+                    for no in nos:
+                        yield analysis(no)
+                finally:
+                    active -= 1
+
+        async def consume():
+            async for _ in stream_explanations(
+                jobs, build_llm=Fake, stop_event=asyncio.Event(), transfer_count=1,
+                stream_kwargs={}, concurrency=2, retry_delay=0,
+            ):
+                pass
+
+        await asyncio.wait_for(consume(), 2)
+        assert peak == 2 and active == 0 and overlap
+        assert all(job.state == "done" for job in jobs)
+
+    asyncio.run(run())
+
+
+def test_fallback_is_isolated_between_retries_in_the_same_job():
+    async def run():
+        jobs = plan_explanations(skeleton(3), LOADER, 1)
+        release = asyncio.Event()
+        blocked = asyncio.Event()
+        fallback = {"failed_index": 1, "next_index": 2, "total": 2, "reason": "timeout"}
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, **kwargs):
+                nos = requested_nos(user_prompt)
+                if len(nos) > 1:
+                    yield ""
+                    return
+                if nos == ["1"]:
+                    yield ("fallback", fallback)
+                    blocked.set()
+                    await release.wait()
+                else:
+                    await blocked.wait()
+                yield analysis(nos[0])
+
+        async def consume():
+            async for event, payload in stream_explanations(
+                jobs, build_llm=Fake, stop_event=asyncio.Event(), transfer_count=1,
+                stream_kwargs={}, concurrency=3, retry_delay=0,
+            ):
+                if event == "token" and "@@Q@@ 2" in payload:
+                    assert jobs[0].question_states["1"]["fallback"] == fallback
+                    assert jobs[0].question_states["2"]["fallback"] is None
+                    release.set()
+
+        await asyncio.wait_for(consume(), 2)
+        assert jobs[0].state == "done"
+        assert all(info["fallback"] is None for info in jobs[0].question_states.values())
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("close", [False, True])
+def test_stop_or_disconnect_reclaims_running_and_queued_single_question_retries(close):
+    async def run():
+        jobs = plan_explanations(skeleton(3), LOADER, 1)
+        stop = asyncio.Event()
+        entered = asyncio.Event()
+        running, closed, tasks = [], [], []
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, **kwargs):
+                nos = requested_nos(user_prompt)
+                if len(nos) > 1:
+                    yield ""
+                    return
+                running.append(nos)
+                tasks.append(asyncio.current_task())
+                if len(running) == 2:
+                    entered.set()
+                try:
+                    await asyncio.Event().wait()
+                    yield "unreachable"
+                finally:
+                    await asyncio.sleep(0)  # 同 Job 的兄弟请求必须等异步关闭完成。
+                    closed.append(nos)
+
+        async def consume():
+            async with aclosing(stream_explanations(
+                jobs, build_llm=Fake, stop_event=stop, transfer_count=1,
+                stream_kwargs={}, concurrency=2, retry_delay=0,
+            )) as stream:
+                async for event, payload in stream:
+                    if event == "visual_task" and len(payload["active_nos"]) == 2:
+                        await entered.wait()
+                        if close:
+                            break
+                        stop.set()
+
+        await asyncio.wait_for(consume(), 2)
+        assert len(running) == len(closed) == 2
+        assert all(task.done() for task in tasks)
+        assert jobs[0].state == "cancelled"
+        assert all(info["state"] == "cancelled" for info in jobs[0].question_states.values())
+        assert all(call["state"] == "cancelled" for call in jobs[0].attempts if call["round"] > 1)
+        assert jobs[0].active_nos == [] and jobs[0].retry_reason == ""
+
+    asyncio.run(run())
+
+
+def test_stop_drains_accepted_retry_blocks_and_collects_each_call_usage_once():
+    async def run():
+        jobs = plan_explanations(skeleton(3), LOADER, 1)
+        stop = asyncio.Event()
+        all_started = asyncio.Event()
+        started = []
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, usage_out, **kwargs):
+                nos = requested_nos(user_prompt)
+                if len(nos) > 1:
+                    usage_out["total_tokens"] = 1
+                    yield ""
+                    return
+                no = nos[0]
+                usage_out["total_tokens"] = int(no) * 10
+                started.append(no)
+                if len(started) == 3:
+                    all_started.set()
+                try:
+                    await all_started.wait()
+                    if no == "1":
+                        yield analysis(no)
+                        stop.set()
+                    await asyncio.Event().wait()
+                finally:
+                    usage_out["cached_tokens"] = int(no)
+
+        async def consume():
+            return [item async for item in stream_explanations(
+                jobs, build_llm=Fake, stop_event=stop, transfer_count=1,
+                stream_kwargs={}, concurrency=3, retry_delay=0,
+            )]
+
+        emitted = await asyncio.wait_for(consume(), 2)
+        tokens = [p for e, p in emitted if e == "token"]
+        assert len(tokens) == 1 and "@@Q@@ 1" in tokens[0]
+        assert jobs[0].completed == ["1"] and jobs[0].state == "cancelled"
+        assert jobs[0].question_states["1"]["state"] == "done"
+        assert jobs[0].usage == {"total_tokens": 61, "cached_tokens": 6}
+        assert len(jobs[0].attempts) == 4
+        assert len({id(call["llm"]) for call in jobs[0].attempts}) == 4
+        assert all(call["state"] == "cancelled" for call in jobs[0].attempts if call["round"] > 1)
+
+    asyncio.run(run())
+
+
+def test_bad_material_does_not_hang_or_block_healthy_jobs():
+    async def run():
+        jobs = plan_explanations(skeleton(4), LOADER, 1)
+        jobs[0].material = "unparseable material"
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, **kwargs):
+                assert requested_nos(user_prompt) == ["4"]
+                yield analysis("4")
+
+        async def consume():
+            return [item async for item in stream_explanations(
+                jobs, build_llm=Fake, stop_event=asyncio.Event(), transfer_count=1, stream_kwargs={},
+            )]
+
+        emitted = await asyncio.wait_for(consume(), 2)
+        assert jobs[0].state == "error" and jobs[1].state == "done"
+        assert jobs[0].attempts[0]["round"] == 0
+        assert any(e == "visual_task" and p["id"] == jobs[0].id and p["state"] == "error"
+                   for e, p in emitted)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("stop_first", [False, True])
+def test_repeated_disconnect_cancellation_waits_for_close_and_usage_collection(stop_first):
+    async def run():
+        jobs = plan_explanations(skeleton(1), LOADER, 1)
+        entered = asyncio.Event()
+        closing = asyncio.Event()
+        release_close = asyncio.Event()
+        stop = asyncio.Event()
+        closed = []
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, usage_out, **kwargs):
+                entered.set()
+                try:
+                    await asyncio.Event().wait()
+                    yield "unreachable"
+                finally:
+                    closing.set()
+                    await release_close.wait()
+                    usage_out.update(total_tokens=13, cached_tokens=2)
+                    closed.append(True)
+
+        async def consume():
+            async with aclosing(stream_explanations(
+                jobs, build_llm=Fake, stop_event=stop, transfer_count=1, stream_kwargs={},
+            )) as stream:
+                async for _ in stream:
+                    pass
+
+        consumer = asyncio.create_task(consume())
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            if stop_first:
+                stop.set()
+            else:
+                consumer.cancel()
+            await asyncio.wait_for(closing.wait(), 1)
+            consumer.cancel()  # 连接仍在异步关闭，再次取消不能打断回收。
+            release_close.set()
+            with pytest.raises(asyncio.CancelledError):
+                await consumer
+            assert closed == [True]
+            assert jobs[0].state == "cancelled" and jobs[0].active_nos == []
+            assert jobs[0].usage == {"total_tokens": 13, "cached_tokens": 2}
+            assert len(jobs[0].attempts) == 1 and jobs[0].attempts[0]["state"] == "cancelled"
+        finally:
+            release_close.set()
+            if not consumer.done():
+                consumer.cancel()
+            await asyncio.gather(consumer, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_abnormal_worker_cancellation_drains_accepted_healthy_blocks():
+    async def run():
+        jobs = plan_explanations(skeleton(4), LOADER, 1)
+        healthy_posted = asyncio.Event()
+        allow_failure = asyncio.Event()
+        failed = asyncio.Event()
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, **kwargs):
+                nos = requested_nos(user_prompt)
+                if nos == ["4"]:
+                    yield analysis("4")
+                    healthy_posted.set()
+                    await asyncio.Event().wait()
+                else:
+                    await healthy_posted.wait()
+                    await allow_failure.wait()
+                    asyncio.current_task().add_done_callback(lambda task: failed.set())
+                    asyncio.current_task().cancel()
+                    await asyncio.sleep(0)
+
+        tokens = []
+        async with aclosing(stream_explanations(
+            jobs, build_llm=Fake, stop_event=asyncio.Event(), transfer_count=1, stream_kwargs={},
+        )) as stream:
+            await anext(stream)  # 暂停消费，让健康题块与异常结束同时待处理。
+            allow_failure.set()
+            await asyncio.wait_for(failed.wait(), 1)
+            with pytest.raises(RuntimeError, match="并发讲解任务异常取消"):
+                async for event, payload in stream:
+                    if event == "token":
+                        tokens.append(payload)
+        assert len(tokens) == 1 and "@@Q@@ 4" in tokens[0]
+        assert jobs[1].completed == ["4"]
+
+    asyncio.run(run())
+
+
+def test_stop_keeps_jobs_that_finished_before_the_stop_done():
+    async def run():
+        jobs = plan_explanations(skeleton(4), LOADER, 1)
+        stop = asyncio.Event()
+        healthy_finished = asyncio.Event()
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, **kwargs):
+                nos = requested_nos(user_prompt)
+                if nos == ["4"]:
+                    asyncio.current_task().add_done_callback(lambda task: healthy_finished.set())
+                    yield analysis("4")
+                else:
+                    await asyncio.Event().wait()
+                    yield "unreachable"
+
+        async with aclosing(stream_explanations(
+            jobs, build_llm=Fake, stop_event=stop, transfer_count=1, stream_kwargs={},
+        )) as stream:
+            await anext(stream)
+            await asyncio.wait_for(healthy_finished.wait(), 1)
+            stop.set()  # 健康 Job 已完成，但它的 job_finish 事件仍在队列里。
+            async for _ in stream:
+                pass
+        assert jobs[0].state == "cancelled" and jobs[1].state == "done"
+        assert jobs[1].completed == ["4"]
+
     asyncio.run(run())
 
 
@@ -582,7 +990,7 @@ def test_route_partial_failure_logs_each_call_and_charges_once(api, monkeypatch)
     assert ("done", "[DONE]") in emitted
     assert not any(e == "error" for e, p in emitted)
     stage = next(p for e, p in emitted if e == "stage")
-    assert stage["parallel"] and stage["reuse_framework"] and stage["concurrency"] == 2
+    assert stage["parallel"] and stage["reuse_framework"] and stage["concurrency"] == 3
     assert any(e == "visual_task" and p["state"] == "error" for e, p in emitted)
     assert "secret upstream" not in response.text
     assert len(charges) == 1 and charges[0]["units"] == 1
@@ -595,6 +1003,314 @@ def test_route_partial_failure_logs_each_call_and_charges_once(api, monkeypatch)
     assert all(row["counts_for_free_limit"] is False for row in logs if row is not parent)
     assert all(row["parent_log_id"] == 1 for row in logs if row is not parent)
     assert "vp-partial" not in chat._stop_events
+
+
+def test_route_concurrent_retries_keep_provider_and_usage_logs_separate(api, monkeypatch):
+    from app.services.llm_router import LLMRouter
+
+    client, chat, logs, charges = api
+    second_finished = asyncio.Event()
+
+    class FakeRouter(LLMRouter):
+        def __init__(self):
+            super().__init__([{"id": "a", "name": "A"}, {"id": "b", "name": "B"}], "test")
+
+        async def chat_stream_with_stop(self, *, user_prompt, usage_out, providers_override=None, **kwargs):
+            nos = requested_nos(user_prompt)
+            chain = providers_override or self.providers
+            if len(nos) > 1:
+                self.provider_used = chain[0]
+                self.attempts = 1
+                usage_out["total_tokens"] = 10
+                yield analysis("1")
+            elif nos == ["2"]:
+                self.provider_used = chain[0]
+                self.attempts = 1
+                usage_out["total_tokens"] = 20
+                await second_finished.wait()
+                yield analysis("2")
+            else:
+                self.provider_used = chain[1]
+                self.attempts = 2
+                usage_out["total_tokens"] = 30
+                yield analysis("3")
+                second_finished.set()
+
+    monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: FakeRouter())
+    response = client.post("/api/chat/stream", json={
+        "tool_id": "13", "input": skeleton(3), "request_id": "vp-concurrent-logs",
+        "visual_question_nos": ["1", "2", "3"],
+    })
+    assert response.status_code == 200 and ("done", "[DONE]") in events(response)
+    parent = next(row for row in logs if row["request_id"] == "vp-concurrent-logs")
+    by_no = {tuple(row["step_meta"]["nos"]): row for row in logs if row is not parent}
+    assert by_no[("2",)]["provider_id"] == "b" and by_no[("2",)]["fallback_attempts"] == 1
+    assert by_no[("3",)]["provider_id"] == "a" and by_no[("3",)]["fallback_attempts"] == 2
+    assert by_no[("2",)]["usage"]["total_tokens"] == 20
+    assert by_no[("3",)]["usage"]["total_tokens"] == 30
+    assert parent["status"] == "success" and parent["usage"] == {}
+    assert len(logs) == 4 and sum(row["usage"].get("total_tokens", 0) for row in logs) == 60
+    assert len({row["request_id"] for row in logs}) == 4
+    assert len(charges) == 1 and charges[0]["units"] == 1
+    assert all(row["units"] == 0 and row["counts_for_free_limit"] is False for row in by_no.values())
+
+
+@pytest.mark.parametrize("mode", ["stop", "disconnect"])
+def test_asgi_stop_and_disconnect_close_retries_and_settle_logs_once(api, monkeypatch, mode):
+    from app.main import app
+
+    _, chat, logs, charges = api
+
+    async def run():
+        disconnect = asyncio.Event()
+        started, closed = [], []
+        request_id = f"vp-asgi-{mode}"
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, usage_out, stop_event, **kwargs):
+                nos = requested_nos(user_prompt)
+                if len(nos) > 1:
+                    usage_out["total_tokens"] = 1
+                    yield ""
+                    return
+                no = nos[0]
+                started.append(no)
+                usage_out["total_tokens"] = int(no) * 10
+                try:
+                    if len(started) == 3:
+                        if mode == "stop":
+                            stop_event.set()
+                        else:
+                            disconnect.set()
+                    await asyncio.Event().wait()
+                    yield "unreachable"
+                finally:
+                    await asyncio.sleep(0)
+                    usage_out["cached_tokens"] = int(no)
+                    closed.append(no)
+
+        monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
+        body = json.dumps({"tool_id": "13", "input": skeleton(3), "request_id": request_id,
+                           "visual_question_nos": ["1", "2", "3"]}).encode()
+        received = False
+
+        async def receive():
+            nonlocal received
+            if not received:
+                received = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await disconnect.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            pass
+
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/api/chat/stream", "raw_path": b"/api/chat/stream",
+                 "query_string": b"", "root_path": "", "headers": [(b"content-type", b"application/json")],
+                 "client": ("127.0.0.1", 12345), "server": ("test", 80)}
+        await asyncio.wait_for(app(scope, receive, send), 3)
+        assert sorted(started) == sorted(closed) == ["1", "2", "3"]
+        assert request_id not in chat._stop_events
+
+    asyncio.run(run())
+    parent = next(row for row in logs if row["request_id"] == f"vp-asgi-{mode}")
+    children = [row for row in logs if row is not parent]
+    assert parent["status"] == "cancelled" and parent["units"] == 1, {
+        "parent_units": parent["units"], "charged_units": [row["units"] for row in charges],
+    }
+    assert parent["usage"] == {} and parent["counts_for_free_limit"] is True
+    assert len(charges) == 1 and charges[0]["units"] == 1
+    assert len(logs) == 5 and len({row["request_id"] for row in logs}) == 5
+    assert sum(row["usage"].get("total_tokens", 0) for row in children) == 61
+    assert sum(row["usage"].get("cached_tokens", 0) for row in children) == 6
+    assert all(row["units"] == 0 and row["counts_for_free_limit"] is False for row in children)
+    assert sum(row["status"] == "cancelled" for row in children) == 3
+
+
+def test_asgi_disconnect_while_sending_closes_suspended_generator_immediately(api, monkeypatch):
+    from app.main import app
+
+    _, chat, logs, charges = api
+    contents = []
+    original_response = chat.EventSourceResponse
+
+    def response(content, **kwargs):
+        contents.append(content)
+        return original_response(content, **kwargs)
+
+    monkeypatch.setattr(chat, "EventSourceResponse", response)
+
+    async def run():
+        entered = asyncio.Event()
+        disconnect = asyncio.Event()
+        closed = []
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, usage_out, **kwargs):
+                entered.set()
+                try:
+                    await asyncio.Event().wait()
+                    yield "unreachable"
+                finally:
+                    await asyncio.sleep(0)
+                    usage_out["total_tokens"] = 13
+                    closed.append(True)
+
+        monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
+        body = json.dumps({"tool_id": "13", "input": skeleton(3), "request_id": "vp-send-disconnect",
+                           "visual_question_nos": ["1", "2", "3"]}).encode()
+        received = False
+
+        async def receive():
+            nonlocal received
+            if not received:
+                received = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await disconnect.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and b"event: visual_task" in message.get("body", b""):
+                await entered.wait()
+                disconnect.set()
+                await asyncio.Event().wait()  # HTTP 发送处取消，生成器停在 yield 而非 await。
+
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/api/chat/stream", "raw_path": b"/api/chat/stream",
+                 "query_string": b"", "root_path": "", "headers": [(b"content-type", b"application/json")],
+                 "client": ("127.0.0.1", 12345), "server": ("test", 80)}
+        try:
+            await asyncio.wait_for(app(scope, receive, send), 3)
+            assert closed == [True]
+            assert "vp-send-disconnect" not in chat._stop_events
+        finally:
+            # 旧实现失败时也回收捕获的生成器，不把探针的在途请求留给后续测试。
+            for content in contents:
+                await content.aclose()
+
+    asyncio.run(run())
+    assert len(logs) == 2 and len(charges) == 1
+    assert logs[0]["status"] == "cancelled" and logs[0]["units"] == 1
+    assert logs[1]["status"] == "cancelled" and logs[1]["usage"]["total_tokens"] == 13
+
+
+def test_asgi_disconnect_during_charge_does_not_double_charge_or_lose_log_units(api, monkeypatch):
+    import threading
+    from app.main import app
+
+    _, chat, logs, charges = api
+
+    async def run():
+        charging = asyncio.Event()
+        disconnecting = asyncio.Event()
+        release_charge = threading.Event()
+        loop = asyncio.get_running_loop()
+
+        class Fake:
+            async def chat_stream_with_stop(self, *, user_prompt, **kwargs):
+                for no in requested_nos(user_prompt):
+                    yield analysis(no)
+
+        def charge(**kwargs):
+            charges.append(kwargs)
+            loop.call_soon_threadsafe(charging.set)
+            assert release_charge.wait(2), "扣费线程未释放"
+            return kwargs["units"]
+
+        monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
+        monkeypatch.setattr(chat, "_charge_usage", charge)
+        body = json.dumps({"tool_id": "13", "input": skeleton(3), "request_id": "vp-charge-disconnect",
+                           "visual_question_nos": ["1", "2", "3"]}).encode()
+        received = False
+
+        async def receive():
+            nonlocal received
+            if not received:
+                received = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await charging.wait()
+            disconnecting.set()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            pass
+
+        async def release():
+            await disconnecting.wait()
+            await asyncio.sleep(0)
+            release_charge.set()
+
+        releaser = asyncio.create_task(release())
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/api/chat/stream", "raw_path": b"/api/chat/stream",
+                 "query_string": b"", "root_path": "", "headers": [(b"content-type", b"application/json")],
+                 "client": ("127.0.0.1", 12345), "server": ("test", 80)}
+        try:
+            await asyncio.wait_for(app(scope, receive, send), 3)
+            assert "vp-charge-disconnect" not in chat._stop_events
+        finally:
+            release_charge.set()
+            if not releaser.done():
+                releaser.cancel()
+            await asyncio.gather(releaser, return_exceptions=True)
+
+    asyncio.run(run())
+    parent = next(row for row in logs if row["request_id"] == "vp-charge-disconnect")
+    assert len(charges) == 1 and charges[0]["units"] == parent["units"] == 1
+    assert parent["status"] == "cancelled"
+
+
+def test_asgi_disconnect_before_generator_starts_releases_free_reservation(api, monkeypatch):
+    from app.main import app
+
+    _, chat, logs, charges = api
+    reserved, released, called = [], [], []
+    monkeypatch.setattr(chat, "is_free_model", lambda entry: True)
+
+    def reserve(**kwargs):
+        reserved.append(True)
+        return lambda: released.append(True)
+
+    monkeypatch.setattr(chat, "register_free_use", reserve)
+
+    class Fake:
+        async def chat_stream_with_stop(self, **kwargs):
+            called.append(True)
+            yield "unreachable"
+
+    monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
+
+    async def run():
+        disconnect = asyncio.Event()
+        body = json.dumps({"tool_id": "13", "input": skeleton(3), "request_id": "vp-before-start",
+                           "visual_question_nos": ["1", "2", "3"]}).encode()
+        received = False
+
+        async def receive():
+            nonlocal received
+            if not received:
+                received = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await disconnect.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                disconnect.set()
+                await asyncio.Event().wait()
+
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/api/chat/stream", "raw_path": b"/api/chat/stream",
+                 "query_string": b"", "root_path": "", "headers": [(b"content-type", b"application/json")],
+                 "client": ("127.0.0.1", 12345), "server": ("test", 80)}
+        await asyncio.wait_for(app(scope, receive, send), 3)
+        assert "vp-before-start" not in chat._stop_events
+
+    asyncio.run(run())
+    assert reserved == released == [True] and called == [] and charges == []
+    assert len(logs) == 1 and logs[0]["status"] == "cancelled"
+    assert logs[0]["units"] == 0 and logs[0]["counts_for_free_limit"] is False
 
 
 @pytest.mark.parametrize("marks_variant", ["normal", "letter_heading", "extra_key"])

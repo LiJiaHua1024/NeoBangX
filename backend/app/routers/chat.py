@@ -12,6 +12,7 @@ from typing import Annotated, Callable, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, StringConstraints
 from sse_starlette.sse import EventSourceResponse
+from starlette.background import BackgroundTask
 
 from app.config import settings
 from app.database import SessionLocal
@@ -40,6 +41,7 @@ from app.services.free_access import (
     register_free_use,
 )
 from app.services.llm import LLMService, count_text_tokens
+from app.services.async_cleanup import await_cleanup
 from app.services.llm_router import DEFAULT_FIRST_TOKEN_TIMEOUT, EmptyResponseError, LLMRouter
 from app.services.migration import (
     MIGRATION_ANALYSIS_PROMPT_NAME,
@@ -67,7 +69,7 @@ from app.services.visual_paper_framework import (
     FrameworkStats,
     render_numbered_lines,
 )
-from app.services.visual_paper_parallel import plan_explanations, split_work_order, stream_explanations
+from app.services.visual_paper_parallel import explanation_concurrency, plan_explanations, split_work_order, stream_explanations
 from app.services.runtime_config import (
     visual_concurrency_for,
     find_model_entry,
@@ -1374,8 +1376,12 @@ async def chat_stream(
     # 试卷可视化全解使用自定义分隔格式，无需 JSON mode，兼容性更强（忠于原始模型配置，不强制覆盖 reasoning/max_tokens）
     visual_response_format = None
 
+    stream_started = False
+    stream_created = monotonic()
+
     async def event_generator():
-        nonlocal prompt  # 阶段一会把它换成讲解提示词或回退单阶段；不声明会变成局部变量
+        nonlocal prompt, stream_started
+        stream_started = True
         charged = False
         migration_finished = False
         client_disconnected = False
@@ -1533,8 +1539,7 @@ async def chat_stream(
             if explain_jobs and not stop_event.is_set() and not client_disconnected:
                 yield {"event": "stage", "data": json.dumps({
                     "name": "explain", "framework": True, "parallel": True,
-                    "concurrency": min(visual_concurrency_for(cfg, model_used), len(explain_jobs))
-                    if visual_concurrency_for(cfg, model_used) > 0 else len(explain_jobs),
+                    "concurrency": explanation_concurrency(explain_jobs, visual_concurrency_for(cfg, model_used)),
                     "tasks": [job.progress() for job in explain_jobs],
                     # 续写已有骨架，不能把历史的骨架+讲解重新保存成骨架。
                     "reuse_framework": bool(visual_jobs),
@@ -1635,12 +1640,8 @@ async def chat_stream(
                 )
                 migration_finished = True
                 if charge_units > 0:
-                    units = await asyncio.to_thread(
-                        _charge_usage,
-                        code_id=owner_id,
-                        units=charge_units,
-                        request_id=req.batch_id or request_id,
-                    )
+                    units = await _charge_guarded(owner_id, charge_units, req.batch_id or request_id)
+                completed = completed and not asyncio.current_task().cancelling()
                 if not completed:
                     status = STATUS_CANCELLED
                 yield {
@@ -1665,13 +1666,10 @@ async def chat_stream(
                         ),
                     }
                 if not charged:
-                    units = await asyncio.to_thread(
-                        _charge_usage,
-                        code_id=owner_id,
-                        units=quota_units,
-                        request_id=request_id,
-                    )
                     charged = True
+                    units = await _charge_guarded(owner_id, quota_units, request_id)
+                if asyncio.current_task().cancelling():
+                    status = STATUS_CANCELLED
                 yield {"event": "done", "data": "[CANCELLED]" if status == STATUS_CANCELLED else "[DONE]"}
         except GeneratorExit:
             # 流被 aclose 关掉时走这里：GeneratorExit 继承 BaseException，
@@ -1711,22 +1709,12 @@ async def chat_stream(
                     )
                     migration_finished = True
                     if charge_units > 0:
-                        units = await asyncio.to_thread(
-                            _charge_usage,
-                            code_id=owner_id,
-                            units=charge_units,
-                            request_id=req.batch_id or request_id,
-                        )
+                        units = await _charge_guarded(owner_id, charge_units, req.batch_id or request_id)
                 yield {"event": "done", "data": "[CANCELLED]"}
             else:
                 if not charged:
-                    units = await asyncio.to_thread(
-                        _charge_usage,
-                        code_id=owner_id,
-                        units=quota_units,
-                        request_id=request_id,
-                    )
                     charged = True
+                    units = await _charge_guarded(owner_id, quota_units, request_id)
                 yield {"event": "done", "data": "[CANCELLED]"}
         except Exception as e:
             logger.error(f"Stream error for {request_id}: {e}")
@@ -1835,16 +1823,54 @@ async def chat_stream(
             # 额度预留会一直留在内存里；每次生成收尾顺手扫一遍，代价可忽略
             _cleanup_migration_batches()
 
+    body_stream = event_generator()
+
+    async def close_response_stream():
+        # 断连可能取消的是 HTTP send，此时生成器暂停在 yield，没有收到取消。
+        # SSE 任务组退出后显式关闭，立即回收上游和结算，不依赖 GC finalizer。
+        cancelled = False
+        try:
+            _, cancelled = await await_cleanup(asyncio.create_task(body_stream.aclose()))
+        finally:
+            current = _stop_events.get(request_id)
+            if current is not None and current[0] is stop_event:
+                # 响应头发送时就断开，生成器尚未开始，内部 finally 不会执行。
+                _stop_events.pop(request_id, None)
+                release_free_slot()
+                if migration_batch and not stream_started:
+                    _finish_migration_stream(
+                        batch_id=req.batch_id or "", batch_index=req.batch_index or 0,
+                        owner_id=owner_id, delivered=False,
+                    )
+                if not stream_started:
+                    request.state.usage_logged = True
+                    # 尚未调用模型：只留取消元数据，不计费用或免费用量。
+                    try:
+                        _, log_cancelled = await await_cleanup(asyncio.create_task(asyncio.to_thread(
+                            _log_llm_call, code=code, tool_id=req.tool_id, tool_name=tool_name,
+                            model=model_used, request_id=request_id, status=STATUS_CANCELLED,
+                            started=stream_created, usage={}, units=0, counts_for_free_limit=False,
+                            client=(client_ip, user_agent), log_payload=log_payload_enabled,
+                            input_text=req.input if not is_ocr else f"[图片 {len(ocr_images)} 张]",
+                            rendered_prompt=prompt, output_text="", fingerprint=fp_hash, device_summary=fp_summary,
+                        )))
+                        cancelled |= log_cancelled
+                    except Exception:
+                        logger.exception("Request log failed before stream start (%s)", request_id)
+        if cancelled:
+            raise asyncio.CancelledError
+
     return EventSourceResponse(
-        event_generator(),
+        body_stream,
         media_type="text/event-stream",
+        background=BackgroundTask(close_response_stream),
         # sse-starlette 的 ping 单位是「秒」；配置值为毫秒，需换算
         ping=max(1, settings.sse_retry_timeout // 1000),
     )
 
 
 async def _charge_guarded(code_id: int, units: int, request_id: str) -> int:
-    """在流收尾的异常路径上扣费，失败只记日志不外抛。
+    """一次扣费执行与结果接收都完成后再收尾，断连的重复取消不能打断结算。
 
     GeneratorExit 的 await 可能撞上事件循环关闭（shutdown_asyncgens），
     此时抛出的 RuntimeError 会盖掉 GeneratorExit 本身、把整条日志冲掉。
@@ -1853,9 +1879,10 @@ async def _charge_guarded(code_id: int, units: int, request_id: str) -> int:
     if units <= 0:
         return 0
     try:
-        return await asyncio.to_thread(
+        result, _ = await await_cleanup(asyncio.create_task(asyncio.to_thread(
             _charge_usage, code_id=code_id, units=units, request_id=request_id
-        )
+        )))
+        return result
     except Exception as e:
         logger.warning(f"Charge failed during stream teardown ({request_id}): {e}")
         return 0
