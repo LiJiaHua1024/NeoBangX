@@ -270,6 +270,26 @@ test("格式化答案保存后仍识别正确项，删除正确项被拦截，�
   }
 });
 
+test("迁移题大小写、标点和格式化答案经回放后正确高亮，遮罩只作用于正确项", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const expression = html.match(/class="vp-option-card" :class="([^"]*tr\.answer[^"]*)"/)[1];
+  const classes = new Function("vpSameLabel", "opt", "tr", "maskOn", `return (${expression});`);
+  for (const answer of ["B", "B.", "b", "B、", "**==b.==**"]) {
+    const c = component(), q = fullQuestion();
+    q.transfers[0].answer = answer;
+    c.visualPaper = { ...c.newVisualPaperState(), total: 1, transferCount: 1,
+      groups: [{ id: "reading", title: "Reading", questions: [q] }] };
+    c.output = c.vpSerializeRaw();
+    c._outputDirty = true;
+    c.vpDoRender();
+    const tr = c.vpCurrentQuestion.transfers[0];
+    assert.equal(tr.answer, answer, "样式修复不得修改生成的原答案");
+    assert.deepEqual(classes(c.vpSameLabel, tr.options[1], tr, false), { correct: true, masked: false });
+    assert.deepEqual(classes(c.vpSameLabel, tr.options[1], tr, true), { correct: true, masked: true });
+    assert.deepEqual(classes(c.vpSameLabel, tr.options[0], tr, true), { correct: false, masked: false });
+  }
+});
+
 test("多行易错点经自动保存、完成修改和历史原文重解析保留段落", () => {
   const c = component(), q = fullQuestion();
   c.visualPaper = { ...c.newVisualPaperState(), total: 1, transferCount: 1,
