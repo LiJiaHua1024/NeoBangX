@@ -1172,8 +1172,8 @@
                         </button>
                       </div>
 
-                      <div x-show="vpQuestionStatus(vpCurrentQuestion) === 'idle'" class="vp-q-status-badge pending">
-                        <span class="text-xs text-dim" x-text="'本题待补：' + vpQuestionMissing(vpCurrentQuestion).join('、') + (streaming ? '。其他题目继续生成' : '。可点击补全讲解')"></span>
+                      <div x-show="['idle', 'failed', 'incomplete', 'cancelled'].includes(vpQuestionStatus(vpCurrentQuestion))" class="vp-q-status-badge pending">
+                        <span class="text-xs text-dim" x-text="vpQuestionRecoveryText(vpCurrentQuestion)"></span>
                       </div>
 
                       <!-- 题干 + 选项 2x2 -->

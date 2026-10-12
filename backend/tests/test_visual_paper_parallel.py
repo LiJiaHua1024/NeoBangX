@@ -272,6 +272,49 @@ def test_actual_worker_cancellation_ends_consumer_and_closes_other_calls():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("terminal", ["error", "incomplete", "done", "cancelled"])
+def test_terminal_tasks_clear_retry_message_but_keep_missing_issues(terminal):
+    async def run():
+        jobs = plan_explanations(skeleton(1), LOADER, 1)
+        calls = 0
+        stop = asyncio.Event()
+        retry_seen = asyncio.Event()
+
+        class Fake:
+            async def chat_stream_with_stop(self, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls > 1 and terminal == "done":
+                    yield analysis("1")
+                elif calls > 1 and terminal == "cancelled":
+                    await retry_seen.wait()
+                    stop.set()
+                elif terminal == "error":
+                    raise ConnectionResetError("upstream lost")
+                else:
+                    yield "@@Q@@ 1\n@@ANSWER@@ is\n@@END_Q@@\n"
+
+        emitted = []
+        async for item in stream_explanations(
+            jobs, build_llm=Fake, stop_event=stop, transfer_count=1,
+            stream_kwargs={}, retry_delay=0, max_attempts=2,
+        ):
+            emitted.append(item)
+            if item[0] == "visual_task" and item[1]["state"] == "retrying":
+                retry_seen.set()
+        assert calls == 2
+        assert jobs[0].state == terminal
+        assert jobs[0].retry_reason == ""
+        assert jobs[0].progress()["retry_reason"] == ""
+        assert any(e == "visual_task" and p["state"] == "retrying" and p["retry_reason"] for e, p in emitted)
+        assert all(not p["retry_reason"] for e, p in emitted
+                   if e == "visual_task" and p["state"] in {"error", "incomplete", "done", "cancelled"})
+        if terminal in {"error", "incomplete"}:
+            assert jobs[0].issues["1"]
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("finish,throws,complete", [("stop", False, True), (None, False, True), ("length", False, False), ("content_filter", False, False), ("stop", True, False)])
 def test_missing_end_marker_only_salvaged_on_complete_normal_eof(finish, throws, complete):
     async def run():

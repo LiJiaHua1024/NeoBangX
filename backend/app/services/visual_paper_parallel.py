@@ -123,7 +123,8 @@ class ExplainJob:
     def progress(self) -> dict:
         return {"id": self.id, "nos": self.nos, "state": self.state, "completed": self.completed.copy(),
                 "active_nos": self.active_nos.copy(), "attempt": self.attempt, "max_attempts": MAX_ATTEMPTS,
-                "issues": self.issues.copy(), "fallback": self.fallback, "retry_reason": self.retry_reason}
+                "issues": self.issues.copy(), "fallback": self.fallback,
+                "retry_reason": self.retry_reason if self.state in {"running", "retrying"} else ""}
 
 
 def _norm_no(s: str) -> str:
@@ -461,6 +462,7 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
             finally:
                 job.elapsed = monotonic() - job.started
                 job.active_nos, job.fallback = [], None
+                job.retry_reason = ""
             await queue.put(("visual_task", job.progress()))
 
     workers = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(jobs)))]
@@ -499,3 +501,4 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
         for job in jobs:
             if job.state in {"pending", "running", "retrying"}:
                 job.state = "cancelled"
+            job.retry_reason = ""

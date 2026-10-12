@@ -533,6 +533,37 @@ test("并行任务按实际状态显示多题生成，失败题不占住其他�
   assert.ok(!c.vpWaitingText(qs[1], "参考答案").includes("排队"));
 });
 
+test("并发任务终态立即显示缺失详情，不残留正在补全提示", () => {
+  const c = component();
+  loadPaper(c);
+  c.streaming = true;
+  c.vpParallel = true;
+  c.vpStage = "explain";
+  c.vpTasks = [
+    { id: "a", nos: ["1"], completed: [], state: "retrying", retry_reason: "正在补全未完成的讲解" },
+    { id: "b", nos: ["2"], completed: [], state: "running" },
+  ];
+  const q = c.vpCurrentQuestion;
+  assert.equal(c.vpTaskRetryReason(q), "正在补全未完成的讲解");
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const condition = html.match(/x-show="([^"]+)" class="vp-q-status-badge pending">\s*<span[^>]*x-text="vpQuestionRecoveryText/)[1];
+  const visible = new Function("vpQuestionStatus", "vpCurrentQuestion", `return (${condition});`);
+  for (const state of ["error", "incomplete", "cancelled"]) {
+    // 模拟旧服务端没有清理 retry_reason 的终态事件。
+    c.vpApplyTask({ id: "a", state });
+    assert.equal(c.vpTaskRetryReason(q), "");
+    assert.equal(visible(c.vpQuestionStatus.bind(c), q), true);
+    assert.ok(c.vpQuestionRecoveryText(q).includes("参考答案"));
+    assert.ok(c.vpQuestionRecoveryText(q).includes("其他题目继续生成"));
+    if (state === "error") assert.ok(c.vpQuestionRecoveryText(q).includes("生成失败"));
+    assert.equal(c.vpQuestionStatus(c.vpGroups[0].questions[1]), "generating");
+  }
+  c.vpApplyTask({ id: "a", state: "running", completed: ["1"] });
+  assert.equal(c.vpTaskRetryReason(q), "", "同任务内已完成题不得提示继续重试");
+  c.streaming = false;
+  assert.ok(c.vpQuestionRecoveryText(q).includes("可点击补全讲解"));
+});
+
 test("续写保留骨架尾部答案区，只发送缺失题号，不把讲解塞进骨架", async () => {
   const c = component();
   loadPaper(c, SKELETON + "@@KEY@@\n1 A 2 B\n");

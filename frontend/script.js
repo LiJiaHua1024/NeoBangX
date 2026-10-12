@@ -3271,6 +3271,13 @@ function nbx() {
       if (state === "pending") return `排队等待生成${label}`;
       return `${label}待补全，可继续生成`;
     },
+    vpQuestionRecoveryText(q) {
+      const state = this.vpQuestionStatus(q);
+      const prefix = state === "failed" ? "本题生成失败，待补："
+        : state === "cancelled" ? "本题生成已中断，待补：" : "本题待补：";
+      return prefix + this.vpQuestionMissing(q).join('、')
+        + (this.streaming ? "。其他题目继续生成" : "。可点击补全讲解");
+    },
     /* 准确判断某道题是否是写作题 */
     vpIsWritingQuestion(q, groupId) {
       if (!q) return false;
@@ -3321,7 +3328,9 @@ function nbx() {
     vpTaskRetryReason(q) {
       if (!q || !this.vpParallel) return "";
       const task = this.vpTasks.find(t => (t.nos || []).includes(String(q.no)));
-      return (task && task.retry_reason) || "";
+      // 兼容仍携带旧 retry_reason 的服务端；终态与已完成题不能显示在途重试文案。
+      return task && ["running", "retrying"].includes(task.state)
+        && !(task.completed || []).includes(String(q.no)) ? task.retry_reason || "" : "";
     },
     vpQuestionStatus(q, groupId) {
       if (!q) return "idle";
