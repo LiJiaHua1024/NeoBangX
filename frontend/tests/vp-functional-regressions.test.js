@@ -221,6 +221,25 @@ test("导出速查表跟随清空的答案和新增写作范文，不沿用旧�
   assert.deepEqual(c.vpExportPayload("Test").answerMap, { "2": "见范文" });
 });
 
+test("修改答案后立即复制，正文与速查表都使用当前答案", () => {
+  const c = component(), q = fullQuestion();
+  c.currentTool = { id: "13" };
+  c.visualPaper = { ...c.newVisualPaperState(), total: 1, answerMap: { "1": "A" },
+    groups: [{ id: "reading", title: "Reading", questions: [q] }] };
+  c.output = c.vpSerializeRaw();
+  c.vpEditing = true;
+  c.vpSetField("q.answer", "B");
+  const copied = c.getExportMarkdown();
+  assert.ok(copied.includes("| 1 | B |"));
+  assert.ok(copied.includes("**答案：B**"));
+  assert.ok(!copied.includes("| 1 | A |"));
+  assert.equal(c.vpCurrentQuestion, q);
+  assert.equal(c.vpEditDirty, true, "复制不得取消待自动保存的改动");
+  c._vpStopEditTimer();
+  q.answer = "";
+  assert.ok(!c.getExportMarkdown().includes("答案速查表"), "清空答案后不得复制旧答案");
+});
+
 test("多行易错点经自动保存、完成修改和历史原文重解析保留段落", () => {
   const c = component(), q = fullQuestion();
   c.visualPaper = { ...c.newVisualPaperState(), total: 1, transferCount: 1,

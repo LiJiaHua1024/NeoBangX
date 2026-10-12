@@ -8942,10 +8942,11 @@ function nbx() {
       let md = `# ${vp.paper?.title || "试卷可视化全解"}\n\n`;
       if (vp.notice) md += `> ${vp.notice}\n\n`;
       // 答案速查表
-      if (vp.answerMap && Object.keys(vp.answerMap).length) {
+      const answerMap = this.vpBuildAnswerMap();
+      if (Object.keys(answerMap).length) {
         md += `## 答案速查表\n\n`;
         md += `| 题号 | 答案 |\n|---|---|\n`;
-        for (const [k, v] of Object.entries(vp.answerMap)) md += `| ${k} | ${v} |\n`;
+        for (const [k, v] of Object.entries(answerMap)) md += `| ${k} | ${v} |\n`;
         md += `\n`;
       }
       for (const g of vp.groups) {
