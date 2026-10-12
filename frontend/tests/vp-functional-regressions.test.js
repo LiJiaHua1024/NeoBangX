@@ -240,6 +240,36 @@ test("修改答案后立即复制，正文与速查表都使用当前答案", ()
   assert.ok(!c.getExportMarkdown().includes("答案速查表"), "清空答案后不得复制旧答案");
 });
 
+test("格式化答案保存后仍识别正确项，删除正确项被拦截，前移保留格式", () => {
+  for (const format of [letter => `**${letter}**`, letter => `==${letter}==`, letter => `**==${letter}==**`]) {
+    for (const list of ["q.options", "q.transfers.0.options"]) {
+      const c = component(), q = fullQuestion();
+      q.answer = format("B");
+      q.transfers[0].answer = format("B");
+      c.visualPaper = { ...c.newVisualPaperState(), total: 1, transferCount: 1,
+        groups: [{ id: "reading", title: "Reading", questions: [q] }] };
+      c.vpCommitEdits();
+      const ansPath = list.replace(/\.options$/, ".answer");
+      assert.equal(c.vpSameLabel("B", c.vpFieldGet(ansPath)), true);
+      assert.equal(c.vpSameLabel("A", c.vpFieldGet(ansPath)), false);
+      c.vpEditing = true;
+      c.vpEditBeforeLeave = () => {};
+      c.vpRemountList = () => {};
+      const notices = [];
+      c.toast = message => notices.push(message);
+      c.vpRemoveItem(list, 1);
+      assert.equal(c.vpFieldGet(list).length, 2, "格式化的正确答案不得绕过删除拦截");
+      assert.ok(notices.some(message => message.includes("是当前答案")));
+      c.vpRemoveItem(list, 0);
+      c._vpStopEditTimer();
+      assert.equal(c.vpFieldGet(list).length, 1);
+      assert.equal(c.vpFieldGet(list)[0].text, list === "q.options" ? "Two" : "Four");
+      assert.equal(c.vpFieldGet(ansPath), format("A"));
+      assert.equal(c.vpSameLabel("A", c.vpFieldGet(ansPath)), true);
+    }
+  }
+});
+
 test("多行易错点经自动保存、完成修改和历史原文重解析保留段落", () => {
   const c = component(), q = fullQuestion();
   c.visualPaper = { ...c.newVisualPaperState(), total: 1, transferCount: 1,

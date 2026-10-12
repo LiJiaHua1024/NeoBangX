@@ -723,7 +723,8 @@
     if (path.slice(-7) === "options") {
       // 选项所属的答案字段：q.options → q.answer，q.transfers.2.options → q.transfers.2.answer
       var ansPath = path.replace(/\.options$/, ".answer");
-      var ans = str(fieldGet(ansPath)).trim().toUpperCase();
+      var rawAnswer = str(fieldGet(ansPath));
+      var ans = rawAnswer.replace(/\*\*|==/g, "").trim().toUpperCase();
       var removed = str(arr[idx] && arr[idx].label).trim().toUpperCase();
       // 删掉的正是正确项时先拦一下：否则答案会变成一个不存在的字母
       // 用 sameLabel 比：答案常写成 "A."，严格 === 会漏判，删掉正确项还无提示
@@ -733,8 +734,8 @@
       }
       arr.splice(idx, 1);
       relabelOptions(arr);
-      var oldIdx = ans ? ans.charCodeAt(0) - 65 : -1;
-      if (oldIdx > idx && oldIdx <= arr.length) fieldSet(ansPath, String.fromCharCode(64 + oldIdx));
+      var oldIdx = /^[A-Z][.．。]?$/.test(ans) ? ans.charCodeAt(0) - 65 : -1;
+      if (oldIdx > idx && oldIdx <= arr.length) fieldSet(ansPath, rawAnswer.replace(/[A-Za-z]/, String.fromCharCode(64 + oldIdx)));
     } else {
       arr.splice(idx, 1);
     }
@@ -1142,7 +1143,7 @@
      严格 === 会让屏幕上不高亮、遮罩也失效，而打印件用同一份数据却标了正确项——
      两处结论相反。与 vp-print.js 的 sameLabel 同口径。 */
   function sameLabel(a, b) {
-    var strip = function (v) { return str(v).trim().replace(/[.．。、,，:：]/g, "").toUpperCase(); };
+    var strip = function (v) { return str(v).trim().replace(/\*\*|==|[.．。、,，:：]/g, "").toUpperCase(); };
     var x = strip(a);
     return x !== "" && x === strip(b);
   }

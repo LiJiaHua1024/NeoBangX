@@ -3306,11 +3306,11 @@ function nbx() {
       return null;
     },
     /* 题目级状态：'done'（已完成精讲）/ 'generating'（正在实时撰写中）/ 'pending'（排队等待精讲）/ 'idle'（已停止待续写） */
-    /* 选项标号比较：剥标点并大写。答案常写成 "A."/"a"（后端只 strip），
+    /* 选项标号比较：剥加粗/高亮标记与标点并大写。答案常写成 "A."/"a"（后端只 strip），
        严格 === 会让屏幕上不高亮、遮罩也失效，而打印件用同一份数据却标了正确项。
        与 vp-print.js / vp-standalone.js 的 sameLabel 同口径。 */
     vpSameLabel(a, b) {
-      const strip = (v) => String(v == null ? "" : v).trim().replace(/[.．。、,，:：]/g, "").toUpperCase();
+      const strip = (v) => String(v == null ? "" : v).trim().replace(/\*\*|==|[.．。、,，:：]/g, "").toUpperCase();
       const x = strip(a);
       return x !== "" && x === strip(b);
     },
@@ -9280,7 +9280,8 @@ function nbx() {
       if (path.endsWith("options")) {
         // 选项所属的答案字段：q.options → q.answer，q.transfers.2.options → q.transfers.2.answer
         const ansPath = path.replace(/\.options$/, ".answer");
-        const ans = String(this.vpFieldGet(ansPath) || "").trim().toUpperCase();
+        const rawAnswer = String(this.vpFieldGet(ansPath) || "");
+        const ans = rawAnswer.replace(/\*\*|==/g, "").trim().toUpperCase();
         const removed = String((arr[idx] && arr[idx].label) || "").trim().toUpperCase();
         // 删掉的正是正确项时先拦一下：否则答案会变成一个不存在的字母
         // 用 sameLabel 比：答案常写成 "A."，严格 === 会漏判，删掉正确项还无提示
@@ -9294,7 +9295,7 @@ function nbx() {
         // 远离 A-Z，算出来的 oldIdx 是天文数字，条件恒假——那种情况保持原样并提示
         const single = /^[A-Za-z][.．。]?$/.test(String(ans || "").trim());
         const oldIdx = single ? String(ans).trim().toUpperCase().charCodeAt(0) - 65 : -1;
-        if (oldIdx > idx && oldIdx <= arr.length) this.vpSetField(ansPath, String.fromCharCode(64 + oldIdx));
+        if (oldIdx > idx && oldIdx <= arr.length) this.vpSetField(ansPath, rawAnswer.replace(/[A-Za-z]/, String.fromCharCode(64 + oldIdx)));
       } else {
         arr.splice(idx, 1);
       }

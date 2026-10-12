@@ -120,7 +120,7 @@
   }
   function hangOf(baseMm, ctx) { return round2(baseMm * typeScale(ctx.o)) + "mm"; }
   function fmtPt(v) { return round2(v) + "pt"; }
-  function stripTags(v) { return str(v).trim().replace(/[.．。、,，:：]/g, "").toUpperCase(); }
+  function stripTags(v) { return str(v).trim().replace(/\*\*|==|[.．。、,，:：]/g, "").toUpperCase(); }
   function sameLabel(a, b) { var x = stripTags(a); return x !== "" && x === stripTags(b); }
 
   /* 中文为主的行两端对齐、英文为主的行左对齐：浏览器不做英文连字符，
