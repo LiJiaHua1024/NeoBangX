@@ -78,7 +78,6 @@ FREE_LIMIT_MAX = 1_000_000
 # 用户端模型下拉最大显示数的取值上限（0 = 不折叠，保留全量显示）
 MAX_VISIBLE_MODELS_LIMIT = 50
 DEFAULT_VISUAL_CONCURRENCY = 3
-MAX_VISUAL_CONCURRENCY = 16
 
 
 def normalize_visual_concurrency(value, default=None):
@@ -88,7 +87,7 @@ def normalize_visual_concurrency(value, default=None):
         number = int(value)
         if str(number) != str(value).strip():
             return default
-        return number if 1 <= number <= MAX_VISUAL_CONCURRENCY else default
+        return number
     except (ValueError, TypeError):
         return default
 

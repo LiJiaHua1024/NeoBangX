@@ -29,10 +29,15 @@ test("并发可跟随默认或模型覆盖，编辑取消和其他模型设置�
   assert.equal(app.configForm.models[0].score, 7);
   app.openEditModel(0);
   assert.equal(app.modelForm.concurrency_mode, "custom");
-  app.modelForm.visual_paper_concurrency = 17;
+  for (const value of [17, 1000000, 0, -1, -2]) {
+    app.modelForm.visual_paper_concurrency = value;
+    await app.saveModelModal();
+    assert.equal(app.configForm.models[0].visual_paper_concurrency, value);
+  }
+  app.modelForm.visual_paper_concurrency = 1.5;
   await app.saveModelModal();
-  assert.equal(app.configForm.models[0].visual_paper_concurrency, 5);
-  assert.match(errors.at(-1), /1 到 16/);
+  assert.equal(app.configForm.models[0].visual_paper_concurrency, -2);
+  assert.match(errors.at(-1), /需为整数/);
   app.modelForm.concurrency_mode = "default";
   await app.saveModelModal();
   assert.equal(app.configForm.models[0].visual_paper_concurrency, null);
@@ -53,7 +58,14 @@ test("后台配置加载保存往返携带默认并发与模型空值，非法�
   assert.equal(saved.visual_paper_concurrency, 8);
   assert.equal(saved.models[0].visual_paper_concurrency, 5);
   assert.equal(saved.models[1].visual_paper_concurrency, null);
+  for (const value of [17, 1000000, 0, -1, -2]) {
+    config.visual_paper_concurrency = String(value);
+    await app.loadConfig();
+    assert.equal(app.configForm.visual_paper_concurrency, value);
+    await app.saveConfig();
+    assert.equal(saved.visual_paper_concurrency, value);
+  }
   app.configForm.visual_paper_concurrency = 1.5;
   await app.saveConfig();
-  assert.equal(writes, 1);
+  assert.equal(writes, 6);
 });

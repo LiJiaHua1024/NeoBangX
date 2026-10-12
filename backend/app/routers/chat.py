@@ -1533,7 +1533,8 @@ async def chat_stream(
             if explain_jobs and not stop_event.is_set() and not client_disconnected:
                 yield {"event": "stage", "data": json.dumps({
                     "name": "explain", "framework": True, "parallel": True,
-                    "concurrency": min(visual_concurrency_for(cfg, model_used), len(explain_jobs)),
+                    "concurrency": min(visual_concurrency_for(cfg, model_used), len(explain_jobs))
+                    if visual_concurrency_for(cfg, model_used) > 0 else len(explain_jobs),
                     "tasks": [job.progress() for job in explain_jobs],
                     # 续写已有骨架，不能把历史的骨架+讲解重新保存成骨架。
                     "reuse_framework": bool(visual_jobs),

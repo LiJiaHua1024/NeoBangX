@@ -410,10 +410,11 @@ def test_retries_only_missing_questions_rotate_provider_and_preserve_completed()
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("limit", [1, 5])
+@pytest.mark.parametrize("limit", [1, 5, 17, 1000000, 0, -1, -2])
 def test_configured_concurrency_bounds_actual_requests(limit):
     async def run():
-        jobs = plan_explanations(skeleton(15), LOADER, 1)
+        jobs = plan_explanations(skeleton(60), LOADER, 1)
+        expected = min(limit, len(jobs)) if limit > 0 else len(jobs)
         active = peak = 0
         entered = asyncio.Event()
         class Fake:
@@ -421,7 +422,7 @@ def test_configured_concurrency_bounds_actual_requests(limit):
                 nonlocal active, peak
                 active += 1
                 peak = max(peak, active)
-                if active == limit:
+                if active == expected:
                     entered.set()
                 try:
                     await asyncio.wait_for(entered.wait(), 1)
@@ -432,7 +433,7 @@ def test_configured_concurrency_bounds_actual_requests(limit):
         async for _ in stream_explanations(jobs, build_llm=Fake, stop_event=asyncio.Event(),
                                            transfer_count=1, stream_kwargs={}, concurrency=limit):
             pass
-        assert peak == limit and active == 0
+        assert peak == expected and active == 0
         assert all(j.state == "done" for j in jobs)
     asyncio.run(run())
 

@@ -291,7 +291,7 @@ def _attempt_prompt(job, nos, questions):
 async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, stream_kwargs,
                               concurrency=PARALLELISM, max_attempts=MAX_ATTEMPTS, retry_delay=0.5):
     """有界并发；只重试缺失题，最多三轮。停止/断连回收请求和重试等待。"""
-    concurrency = max(1, min(16, concurrency))
+    concurrency = min(concurrency, len(jobs)) if concurrency > 0 else len(jobs)
     queue = asyncio.Queue(maxsize=concurrency * 4)
     pending = iter(jobs)
 

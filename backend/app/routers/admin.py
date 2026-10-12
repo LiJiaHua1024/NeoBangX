@@ -111,7 +111,7 @@ class FreeLimitsEntry(BaseModel):
 
 
 class ModelEntry(BaseModel):
-    visual_paper_concurrency: Optional[int] = Field(None, ge=1, le=16, strict=True, description="试卷精讲并发；null 跟随默认")
+    visual_paper_concurrency: Optional[int] = Field(None, strict=True, description="试卷精讲并发；非正整数不限并发，null 跟随默认")
     id: str = Field(..., min_length=1, description="LiteLLM 格式模型 ID")
     name: str = Field("", max_length=100, description="显示名称，留空回退模型 ID")
     description: str = Field("", max_length=200, description="用户端展示的模型描述，替代模型 ID 显示")
@@ -171,7 +171,7 @@ class ToolReasoningRuleEntry(BaseModel):
 
 
 class ConfigUpdateRequest(BaseModel):
-    visual_paper_concurrency: Optional[int] = Field(None, ge=1, le=16, strict=True, description="试卷精讲默认并发，1-16")
+    visual_paper_concurrency: Optional[int] = Field(None, strict=True, description="试卷精讲默认并发；非正整数不限并发")
     framework_model: Optional[str] = Field(
         None, description="试卷框架插标模型，留空跟随 chores_model"
     )

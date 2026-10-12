@@ -2481,7 +2481,7 @@ function adminApp() {
           ocr_model: cfg.ocr_model || "",
           ocr_max_tokens: Number(cfg.ocr_max_tokens) || 8192,
           max_tokens: Number(cfg.max_tokens) || 4096,
-          visual_paper_concurrency: Number(cfg.visual_paper_concurrency) || 3,
+          visual_paper_concurrency: Number(cfg.visual_paper_concurrency ?? 3),
           timeout: Number(cfg.timeout) || 120,
           first_token_timeout: Number(cfg.first_token_timeout) || 30,
           max_visible_models: Number(cfg.max_visible_models) || 0,
@@ -2685,8 +2685,8 @@ function adminApp() {
       }
       const effort = (this.modelForm.reasoning_effort || "").trim() || null;
       const concurrency = this.modelForm.concurrency_mode === "custom" ? Number(this.modelForm.visual_paper_concurrency) : null;
-      if (concurrency !== null && (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16)) {
-        this.toast("试卷并发需为 1 到 16 的整数", "error");
+      if (concurrency !== null && !Number.isInteger(concurrency)) {
+        this.toast("试卷并发需为整数，0 或负数表示不限并发", "error");
         return;
       }
       const entry = {
@@ -2998,8 +2998,8 @@ function adminApp() {
         return;
       }
       const concurrency = Number(this.configForm.visual_paper_concurrency);
-      if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
-        this.toast("默认试卷并发需为 1 到 16 的整数", "error");
+      if (!Number.isInteger(concurrency)) {
+        this.toast("默认试卷并发需为整数，0 或负数表示不限并发", "error");
         return;
       }
       this.savingConfig = true;

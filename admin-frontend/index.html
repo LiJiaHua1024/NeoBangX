@@ -1186,8 +1186,8 @@
             </label>
             <label class="field">
               <span>试卷全解默认并发</span>
-              <input type="number" x-model.number="configForm.visual_paper_concurrency" min="1" max="16" step="1">
-              <span class="field-hint">第二步同时生成的请求数，默认 3。各模型可在编辑菜单中跟随此值或单独设置。</span>
+              <input type="number" x-model.number="configForm.visual_paper_concurrency" step="1">
+              <span class="field-hint">第二步同时生成的请求数，默认 3；0 或负数（如 -1）表示不限并发。各模型可跟随此值或单独设置。</span>
             </label>
             <label class="field">
               <span>Timeout（秒）</span>
@@ -1660,8 +1660,8 @@
               <button class="preset-chip" :class="{ on: modelForm.concurrency_mode !== 'custom' }" @click="modelForm.concurrency_mode = 'default'" x-text="'跟随默认（' + configForm.visual_paper_concurrency + '）'"></button>
               <button class="preset-chip" :class="{ on: modelForm.concurrency_mode === 'custom' }" @click="modelForm.concurrency_mode = 'custom'">自定义</button>
             </div>
-            <input x-show="modelForm.concurrency_mode === 'custom'" type="number" min="1" max="16" step="1" x-model.number="modelForm.visual_paper_concurrency">
-            <span class="field-hint">每份试卷第二步同时发起的请求数，自动补全共用此上限。1 为串行；保存配置后对新请求生效。</span>
+            <input x-show="modelForm.concurrency_mode === 'custom'" type="number" step="1" x-model.number="modelForm.visual_paper_concurrency">
+            <span class="field-hint">每份试卷第二步同时发起的请求数，自动补全共用此设置。1 为串行，0 或负数（如 -1）表示不限并发；保存配置后对新请求生效。</span>
           </div>
           <label class="field mb-3">
             <span>推荐评分（0-10）</span>

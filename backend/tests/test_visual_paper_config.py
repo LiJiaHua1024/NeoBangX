@@ -15,7 +15,10 @@ def test_legacy_models_inherit_and_bad_stored_values_fall_back():
     assert visual_concurrency_for(cfg, "custom") == 5
     assert visual_concurrency_for(cfg, "default") == 7
     assert visual_concurrency_for(cfg, "unknown") == 7
-    for invalid in [0, -1, 17, True, "bad", 2.5]:
+    for valid in [0, -1, -2, 17, 1000000]:
+        cfg["models"][0]["visual_paper_concurrency"] = valid
+        assert visual_concurrency_for(cfg, "custom") == valid
+    for invalid in [True, "bad", 2.5]:
         cfg["visual_paper_concurrency"] = invalid
         cfg["models"][0]["visual_paper_concurrency"] = invalid
         assert visual_concurrency_for(cfg, "custom") == 3
@@ -26,7 +29,7 @@ def test_admin_concurrency_config_roundtrip_and_validation():
     with SessionLocal() as db:
         old = get_config_map(db)
         try:
-            for invalid in [0, -1, 17, True, "4", 2.5]:
+            for invalid in [True, "4", 2.5]:
                 assert client.put("/api/admin/config", json={"visual_paper_concurrency": invalid}).status_code == 422
                 assert client.put("/api/admin/config", json={"models": [{"id": "test", "visual_paper_concurrency": invalid}]}).status_code == 422
             # 保留原有模型选择，避免变更默认/辅助模型带来的校验与此测试无关。
@@ -41,6 +44,15 @@ def test_admin_concurrency_config_roundtrip_and_validation():
             returned = client.get("/api/admin/config").json()["config"]
             assert int(returned["visual_paper_concurrency"]) == 8
             assert returned["models"][0]["visual_paper_concurrency"] == 5
+            for valid in [0, -1, -2, 17, 1000000]:
+                models[0]["visual_paper_concurrency"] = valid
+                response = client.put("/api/admin/config", json={"visual_paper_concurrency": valid, "models": models})
+                assert response.status_code == 200, response.text
+                returned = client.get("/api/admin/config").json()["config"]
+                assert int(returned["visual_paper_concurrency"]) == valid
+                assert returned["models"][0]["visual_paper_concurrency"] == valid
+                assert visual_concurrency_for(resolve_llm_settings(db), model_id) == valid
+            assert client.put("/api/admin/config", json={"visual_paper_concurrency": 8}).status_code == 200
             models[0]["visual_paper_concurrency"] = None
             assert client.put("/api/admin/config", json={"models": models}).status_code == 200
             assert visual_concurrency_for(resolve_llm_settings(db), model_id) == 8
