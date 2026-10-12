@@ -515,3 +515,29 @@ def test_stray_fields_after_early_endq_reopened_into_committed_question():
     assert q["reference"]["evidence"] == "Para 2: evidence."
     assert len(q["transfers"]) == 1
     assert q["transfers"][0]["passage"] == "Stray transfer."
+
+
+def test_cross_group_question_reopen_with_key_merges_into_original_group():
+    """多分组试卷附带 @@KEY@@ 时，阶段二或续写对前面分组题目的讲解必须并入原分组，
+    不得作为新题错误追加在最后一个分组中。"""
+    skeleton = (
+        "@@TOTAL@@ 2\n@@PAPER@@ 测试卷\n"
+        "@@GROUP@@ cloze|完形填空|\n@@Q@@ 41\n@@STEM@@\n完形41题干\n@@OPTIONS@@\nA. a\nB. b\n@@END_Q@@\n"
+        "@@GROUP@@ reading|阅读理解|\n@@Q@@ 46\n@@STEM@@\n阅读46题干\n@@OPTIONS@@\nA. c\nB. d\n@@END_Q@@\n"
+        "@@KEY@@\n41. A 46. C\n"
+    )
+    explanation_41 = (
+        "@@Q@@ 41\n@@QTYPE@@ choice\n@@ANSWER@@\nA\n@@EVIDENCE@@\n依据\n@@REASON@@\n推理\n"
+        "@@DISTRACTOR@@\n干扰\n@@PITFALLS@@\n陷阱::说明\n@@PATTERN_NAME@@\n考点\n@@PATTERN_STEPS@@\n步骤\n"
+        "@@TRANSFER_STEM@@\n迁移干\n@@TRANSFER_OPTIONS@@\nA. 1\nB. 2\n@@TRANSFER_ANSWER@@\nA\n@@TRANSFER_EXPL@@\n析\n@@END_Q@@\n"
+    )
+    data = parse_custom_visual_paper(skeleton + explanation_41)
+    groups = data["groups"]
+    assert len(groups) == 2
+    cloze_qs = groups[0]["questions"]
+    reading_qs = groups[1]["questions"]
+    assert [q["no"] for q in cloze_qs] == ["41"]
+    assert [q["no"] for q in reading_qs] == ["46"], "题41不得错误追加在阅读理解分组中"
+    assert cloze_qs[0]["answer"] == "A"
+    assert cloze_qs[0]["stem"] == "完形41题干"
+

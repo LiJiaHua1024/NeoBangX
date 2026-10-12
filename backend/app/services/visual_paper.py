@@ -730,6 +730,18 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 # 命中——阶段二续写不重发 @@GROUP@@，靠它把讲解并回骨架里正确的题。
                 lookup_group = current_group if group_fresh else None
                 committed_group, committed = _find_committed_question(groups, no, lookup_group)
+                if committed is None and lookup_group is not None and current_group is not None and len(current_group.get("questions", [])) > 0:
+                    global_group, global_committed = _find_committed_question(groups, no, None)
+                    if global_committed is not None:
+                        all_committed_nos = [str(q.get("no", "")).strip() for g in groups for q in g.get("questions", [])]
+                        is_globally_unique = len(all_committed_nos) == len(set(all_committed_nos))
+                        curr_nos = [int(re.sub(r"\D", "", str(q.get("no", "")))) for q in current_group.get("questions", [])
+                                    if re.sub(r"\D", "", str(q.get("no", "")))]
+                        target_digits = re.sub(r"\D", "", str(no))
+                        is_backtrack = bool(curr_nos and target_digits and int(target_digits) <= max(curr_nos))
+                        if is_globally_unique or is_backtrack:
+                            committed_group, committed = global_group, global_committed
+                            group_fresh = False
                 if committed is not None:
                     # 两阶段：阶段二对同一题号重开——讲解字段并回已提交的题，
                     # 不再新建（否则同一题在结构里出现两遍）
@@ -785,6 +797,8 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                     current_q["_committed"] = last_committed["q"]
                     current_group = last_committed["g"]
                 current_field = tag
+                if tag == "KEY":
+                    group_fresh = False
                 field_buf = []
                 # 若 value 非空（同行有内容），视为首行内容
                 if value:
