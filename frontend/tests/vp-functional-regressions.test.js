@@ -221,6 +221,37 @@ test("导出速查表跟随清空的答案和新增写作范文，不沿用旧�
   assert.deepEqual(c.vpExportPayload("Test").answerMap, { "2": "见范文" });
 });
 
+test("多行易错点经自动保存、完成修改和历史原文重解析保留段落", () => {
+  const c = component(), q = fullQuestion();
+  c.visualPaper = { ...c.newVisualPaperState(), total: 1, transferCount: 1,
+    groups: [{ id: "reading", title: "Reading", questions: [q] }] };
+  const desc = '第一段 **重点**\n\n第二段："引文"，字面量 \\n 和 :: 分隔符\n第三段';
+  c.vpEditing = true;
+  c.vpSetField("q.pitfalls.0.desc", desc);
+  c.vpFlushEdits();
+  assert.equal(c.vpCurrentQuestion.pitfalls[0].desc, desc);
+  c.vpEditing = false;
+  c.vpCommitEdits();
+  assert.equal(c.vpCurrentQuestion.pitfalls[0].desc, desc);
+  const restored = c.normalizeVisualPaper(c.tryParseVisualPaper(c.output).data);
+  assert.equal(restored.groups[0].questions[0].pitfalls[0].desc, desc);
+  assert.equal(c.vpExportPayload("Test").groups[0].questions[0].pitfalls[0].desc, desc);
+});
+
+test("易错点换行编码兼容普通旧说明、字面量编码前缀和损坏数据", () => {
+  const c = component(), q = fullQuestion();
+  q.pitfalls = [
+    { title: "Old", desc: "普通说明" },
+    { title: "Literal", desc: '@json:"这是用户原文"' },
+    { title: "Broken", desc: "@json:{bad}" },
+  ];
+  c.visualPaper = { ...c.newVisualPaperState(), total: 1,
+    groups: [{ id: "reading", title: "Reading", questions: [q] }] };
+  assert.deepEqual(c.parseCustomVisualPaper(c.vpSerializeRaw()).groups[0].questions[0].pitfalls, q.pitfalls);
+  const legacy = c.vpSerializeRaw().replace('@json:"@json:{bad}"', '@json:{bad}');
+  assert.equal(c.parseCustomVisualPaper(legacy).groups[0].questions[0].pitfalls[2].desc, "@json:{bad}");
+});
+
 test("历史重解析后导航持有旧题目引用时，语篇题的完成标记仍与整卷一致", () => {
   const c = component();
   const groups = ["cloze7", "cloze", "grammar", "reading"].map(id => {

@@ -1,5 +1,6 @@
 """试卷可视化全解：多道迁移块的解析 / 归一化、语篇编号复用，以及 Prompt 变量渲染。"""
 
+import json
 from pathlib import Path
 
 from app.services.prompt_loader import PromptLoader
@@ -59,6 +60,38 @@ D. d{idx}
 @@TRANSFER_EXPL@@
 解析 {idx}
 """
+
+
+def test_pitfall_multiline_description_from_editor_preserves_paragraphs():
+    desc = '第一段 **重点**\n\n第二段："引文"，字面量 \\n 和 :: 分隔符\n第三段'
+    encoded = "@json:" + json.dumps(desc, ensure_ascii=False)
+    raw = _raw(_transfer_block(1)).replace(
+        "原词重现::学生看到同词就选，忽略上下文",
+        f"原词重现::{encoded}",
+    )
+    parsed = parse_custom_visual_paper(raw)
+    assert parsed["groups"][0]["questions"][0]["pitfalls"] == [
+        {"title": "原词重现", "desc": desc}
+    ]
+    normalized = normalize_visual_paper(parsed)
+    assert normalized["groups"][0]["questions"][0]["pitfalls"][0]["desc"] == desc
+
+
+def test_pitfall_description_encoding_keeps_legacy_and_invalid_text():
+    literal = '@json:"这是用户原文"'
+    content = "\n".join([
+        "旧格式::普通说明",
+        "字面前缀::@json:" + json.dumps(literal, ensure_ascii=False),
+        "损坏编码::@json:{bad}",
+        "错误类型::@json:[]",
+    ])
+    raw = _raw(_transfer_block(1)).replace(
+        "原词重现::学生看到同词就选，忽略上下文", content
+    )
+    parsed = parse_custom_visual_paper(raw)
+    assert [p["desc"] for p in parsed["groups"][0]["questions"][0]["pitfalls"]] == [
+        "普通说明", literal, "@json:{bad}", "@json:[]"
+    ]
 
 
 def _raw(*blocks: str, end: bool = True) -> str:

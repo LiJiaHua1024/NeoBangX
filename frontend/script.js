@@ -2627,6 +2627,15 @@ function nbx() {
               else pits.push({title: line, desc: ""});
             } else pits.push({title: line, desc: ""});
           }
+          // 编辑保存的多行说明使用带标记的 JSON 字符串，避免段落被当成新易错点。
+          // 旧版普通说明保持原样；损坏的编码也保留原文供用户修改。
+          for (const pit of pits) {
+            if (!pit.desc.startsWith("@json:")) continue;
+            try {
+              const desc = JSON.parse(pit.desc.slice(6));
+              if (typeof desc === "string") pit.desc = desc;
+            } catch {}
+          }
           currentQ._pitfalls_raw = pits;
         } else if (cf === "PATTERN_NAME") {
           if (!inTransfer) currentQ._pattern_name_raw = content.trim();
@@ -9455,8 +9464,11 @@ function nbx() {
           for (const p of (q.pitfalls || [])) {
             if (!p) continue;
             const title = flat(p.title).replace(/::/g, "：");
-            const desc = flat(p.desc).replace(/::/g, "：");
-            out.push(desc ? `${title}::${desc}` : title);
+            const desc = block(p.desc);
+            // 仅多行或与编码前缀冲突的说明需要编码，兼容已有的单行契约。
+            const savedDesc = /[\r\n]/.test(desc) || desc.startsWith("@json:")
+              ? "@json:" + JSON.stringify(desc) : desc;
+            out.push(savedDesc ? `${title}::${savedDesc}` : title);
           }
           out.push("@@PATTERN_NAME@@");
           out.push(flat(q.pattern ? q.pattern.name : ""));

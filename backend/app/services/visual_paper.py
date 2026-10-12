@@ -401,6 +401,17 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                         pits.append({"title": line, "desc": ""})
                 else:
                     pits.append({"title": line, "desc": ""})
+            # 前端保存的多行说明用带标记的 JSON 字符串保留换行，
+            # 续生成时与前端回放采用同一解码口径；普通旧说明不变。
+            for pit in pits:
+                if not pit["desc"].startswith("@json:"):
+                    continue
+                try:
+                    desc = json.loads(pit["desc"][6:])
+                    if isinstance(desc, str):
+                        pit["desc"] = desc
+                except ValueError:
+                    pass
             current_q["_pitfalls_raw"] = pits
         elif cf == "PATTERN_NAME":
             if not in_transfer:
