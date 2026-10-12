@@ -864,3 +864,20 @@ def test_queue_tokens_drained_on_stop_without_losing_completed_data():
     asyncio.run(run())
 
 
+def test_incomplete_framework_discarded_on_client_disconnect(api, monkeypatch):
+    """阶段一断线或停止时，残缺骨架不得作为 output_text 写入日志正文。"""
+    client, chat, logs, charges = api
+
+    class Fake:
+        async def chat_stream_with_stop(self, *, stop_event, **kwargs):
+            yield "@@TOTAL@@ 10\n@@PAPER@@ T\n@@GROUP@@ cloze|G|\n@@Q@@ 1\n"
+            stop_event.set()
+
+    monkeypatch.setattr(chat, "_build_llm", lambda *a, **k: Fake())
+    response = client.post("/api/chat/stream", json={"tool_id": "13", "input": "Orig"})
+    assert response.status_code == 200
+    parent_log = next(log for log in logs if log.get("parent_log_id") is None and log.get("tool_id") == "13")
+    assert parent_log.get("output_text") == "", "残缺骨架在中断时必须清空，不得作为父记录输出正文"
+
+
+

@@ -1513,7 +1513,7 @@ async def chat_stream(
                 # 残缺骨架不能参与日志正文：回退（重跑）与 stop/断线都要清掉。
                 # 旧版只在「回退且未停未断」时清，stop 落在框架阶段会把只吐了一半的
                 # 骨架当成品写进使用日志，用户拿到有语篇/题干、无讲解的半成品。
-                discard_framework = not framework_usable and not client_disconnected
+                discard_framework = not framework_usable
                 if discard_framework:
                     output_parts.clear()
                 # framework 标志告诉前端是否真的存在两阶段骨架（false = 回退单阶段，
