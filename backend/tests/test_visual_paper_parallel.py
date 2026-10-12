@@ -837,3 +837,30 @@ def test_provider_rotation_on_failure_prioritizes_fallback_provider():
 
     asyncio.run(run())
 
+
+def test_queue_tokens_drained_on_stop_without_losing_completed_data():
+    """用户点击停止时，队列中已经验收合格的题目 token 必须排空输出，不能丢失已完成成果。"""
+    async def run():
+        jobs = plan_explanations(skeleton(2), LOADER, 1)
+        stop = asyncio.Event()
+
+        class FakeLLM:
+            async def chat_stream_with_stop(self, user_prompt, stop_event, usage_out, **kwargs):
+                yield analysis("1")
+                stop.set()
+                await asyncio.sleep(0.01)
+
+        tokens = []
+        async for ev, payload in stream_explanations(
+            jobs, build_llm=FakeLLM, stop_event=stop,
+            transfer_count=1, stream_kwargs={}, retry_delay=0,
+        ):
+            if ev == "token":
+                tokens.append(payload)
+
+        assert any("@@Q@@ 1" in t for t in tokens), "题 1 已验收通过，stop 时排空队列必须保留"
+        assert "1" in jobs[0].completed
+
+    asyncio.run(run())
+
+

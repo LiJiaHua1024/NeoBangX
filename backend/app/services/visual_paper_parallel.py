@@ -472,6 +472,16 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
             next_item = asyncio.create_task(queue.get())
             await asyncio.wait([next_item, stop_wait, *remaining], return_when=asyncio.FIRST_COMPLETED)
             if stop_event.is_set():
+                if next_item.done():
+                    event, payload = next_item.result()
+                    next_item = None
+                    yield event, payload
+                while not queue.empty():
+                    try:
+                        event, payload = queue.get_nowait()
+                        yield event, payload
+                    except asyncio.QueueEmpty:
+                        break
                 break
             finished = {task for task in remaining if task.done()}
             for task in finished:
