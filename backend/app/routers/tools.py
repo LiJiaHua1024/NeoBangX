@@ -29,6 +29,12 @@ EXCLUSIVE_TOOLS = [
         "icon": "migration",
         "description": "锁定本质错因，讲懂方法并生成高质量迁移练习",
     },
+    {
+        "id": "34",
+        "name": "语篇结构与主旨反推",
+        "icon": "git-branch",
+        "description": "基于高考典型结构图谱，判定语篇类型、拆解篇章骨架并反推主旨",
+    },
 ]
 
 TEACHING_TOOLS = [
@@ -172,6 +178,7 @@ def _resolve_prompt_filename(tool_id: str) -> str:
         "32": OCR_MODE_PROMPTS[DEFAULT_OCR_MODE],
         TRANSLATE_TOOL_ID: TRANSLATE_TOOL_NAME,
         MIGRATION_TOOL_ID: MIGRATION_TOOL_NAME,
+        "34": "语篇结构与主旨反推",
     }
     return mapping.get(tool_id, "")
 
