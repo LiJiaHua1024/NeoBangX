@@ -431,11 +431,9 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                                 logger.info("可视化精讲：不可重试错误转为按题重试，不整批屏蔽：%s", exc)
                         finally:
                             call["elapsed"] = monotonic() - call_started
-                            # 只用「实际成功」的那家：last_provider 每轮都赋值（含失败的
-                            # 那家），拿它排序会把刚失败的通道提到最前，等于原地重试，
-                            # 与「换通道重做」的意图相反。本轮没有成功产出时保持上一轮
-                            # 的 previous_provider 不变（首次全失败则仍为 None，不排序）。
-                            used = getattr(job.llm, "provider_used", None)
+                            # 排序 key 把匹配项排在末尾（False < True）：记录本轮尝试过（无论成功还是
+                            # 失败）的通道，下一轮重试即可避开该通道、优先使用备用通道
+                            used = getattr(job.llm, "provider_used", None) or getattr(job.llm, "last_provider", None)
                             if used and used.get("id"):
                                 previous_provider = used.get("id")
                             for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens"):

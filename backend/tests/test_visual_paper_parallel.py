@@ -802,3 +802,38 @@ def test_one_unresolved_passage_does_not_disable_the_whole_batch():
     jobs = plan_explanations(raw, LOADER, 1)
     assert len(jobs) == 1
     assert jobs[0].nos == ["2"], "题 1 引用未解析应退出并行，题 2 照常"
+
+
+def test_provider_rotation_on_failure_prioritizes_fallback_provider():
+    """首轮通道调用失败时，下一轮重试必须记录该失败通道并将其排在末尾，优先调用备用通道。"""
+    async def run():
+        jobs = plan_explanations(skeleton(1), LOADER, 1)
+        history = []
+
+        class FakeRouter:
+            def __init__(self):
+                self.providers = [{"id": "p1"}, {"id": "p2"}]
+                self.provider_used = None
+                self.last_provider = None
+
+            async def chat_stream_with_stop(self, user_prompt, stop_event, usage_out, providers_override=None, **kwargs):
+                providers = providers_override if providers_override else self.providers
+                self.last_provider = providers[0]
+                history.append([p["id"] for p in providers])
+                if len(history) == 1:
+                    raise RuntimeError("p1 connection error")
+                self.provider_used = providers[0]
+                yield analysis("1")
+
+        async for _ in stream_explanations(
+            jobs, build_llm=FakeRouter, stop_event=asyncio.Event(),
+            transfer_count=1, stream_kwargs={}, retry_delay=0,
+        ):
+            pass
+
+        assert len(history) == 2
+        assert history[0] == ["p1", "p2"]
+        assert history[1] == ["p2", "p1"], "第 2 轮重试必须避开刚失败的 p1，把 p2 提到最前"
+
+    asyncio.run(run())
+
