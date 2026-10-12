@@ -2699,19 +2699,22 @@ function nbx() {
               answer: d.answer || "",
               explanation: d.explanation || "",
             }));
-          // 同号重开时按字段合并，而不是整体替换：模型漏写其余字段时（只重写
-          // @@TRANSFER_PASSAGE@@ 一行是常见漂移），旧块里已有的内容必须留下，
-          // 否则一个残缺块会顶掉之前的完整块。一块都没重写才沿用重开前持有的旧块。
+          // 同号重开只在迁移题材料未变时补缺字段。材料改写后不得沿用旧题的
+          // 答案和解析，否则会把不同版本拼成伪完整题。没有重写迁移则保留旧块。
           const carry = currentQ._transfers_carry;
           if (fresh.length && carry && carry.length) {
             const merged = fresh.map((nb, i) => {
               const ob = (i < carry.length && carry[i] && typeof carry[i] === "object") ? carry[i] : {};
+              const changed = (nb.passage && nb.passage !== ob.passage)
+                || (nb.stem && nb.stem !== ob.stem)
+                || (nb.options.length && JSON.stringify(nb.options) !== JSON.stringify(ob.options || []));
+              if (changed) return nb;
               return {
                 passage: nb.passage || ob.passage || "",
                 stem: nb.stem || ob.stem || "",
                 options: nb.options.length ? nb.options : (ob.options || []),
                 answer: nb.answer || ob.answer || "",
-                explanation: nb.explanation || ob.explanation || "",
+                explanation: nb.explanation || (nb.answer && nb.answer !== ob.answer ? "" : ob.explanation) || "",
               };
             });
             // 重写只涉及前几块时，后面没被重开的旧块按原样接着排

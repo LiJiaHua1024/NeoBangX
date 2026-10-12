@@ -94,6 +94,22 @@ def test_pitfall_description_encoding_keeps_legacy_and_invalid_text():
     ]
 
 
+def test_transfer_retry_changed_material_does_not_reuse_old_answer():
+    original = _raw(_transfer_block(1))
+    raw = original + ("@@Q@@ 1\n@@TRANSFER_PASSAGE@@ New material.\n"
+                      "@@TRANSFER_EXPL@@ New explanation.\n@@END_Q@@\n")
+    transfer = parse_custom_visual_paper(raw)["groups"][0]["questions"][0]["transfers"][0]
+    assert transfer["passage"] == "New material."
+    assert transfer["answer"] == ""
+    assert transfer["stem"] == ""
+    assert transfer["options"] == []
+    unchanged = original + ("@@Q@@ 1\n@@TRANSFER_PASSAGE@@ Transfer passage 1.\n"
+                            "@@TRANSFER_EXPL@@ Improved explanation.\n@@END_Q@@\n")
+    transfer = parse_custom_visual_paper(unchanged)["groups"][0]["questions"][0]["transfers"][0]
+    assert transfer["answer"] == "C"
+    assert transfer["explanation"] == "Improved explanation."
+
+
 def _raw(*blocks: str, end: bool = True) -> str:
     text = _QUESTION_HEAD + "".join(blocks)
     return text + ("@@END_Q@@\n" if end else "")

@@ -170,8 +170,40 @@ def test_truncated_and_empty_streams_are_incomplete_not_done():
         ):
             if event == "token":
                 tokens.append(payload)
-        assert len(tokens) == 1 and "lost" not in tokens[0]
+        assert tokens == []  # 结束标签齐全也不能交付缺少讲解字段的题。
         assert jobs[0].state == "incomplete" and jobs[0].completed == []
+        assert "解题推理" in jobs[0].issues["1"]
+
+    asyncio.run(run())
+
+
+def test_incomplete_retry_versions_never_enter_shared_document():
+    async def run():
+        jobs = plan_explanations(skeleton(2), LOADER, 1)
+        calls = 0
+
+        class Fake:
+            async def chat_stream_with_stop(self, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    yield analysis("2") + analysis("1").replace("@@TRANSFER_EXPL@@ Explanation\n", "")
+                else:
+                    yield ("@@Q@@ 1\n@@TRANSFER_PASSAGE@@ Yesterday he ____ at home.\n"
+                           "@@TRANSFER_EXPL@@ Correct answer is was.\n@@END_Q@@\n")
+
+        tokens = [p async for e, p in stream_explanations(
+            jobs, build_llm=Fake, stop_event=asyncio.Event(), transfer_count=1,
+            stream_kwargs={}, retry_delay=0,
+        ) if e == "token"]
+        assert calls == 3
+        assert jobs[0].state == "incomplete" and jobs[0].completed == ["2"]
+        assert len(tokens) == 1 and "@@Q@@ 2" in tokens[0]
+        paper = parse_custom_visual_paper(skeleton(2) + "".join(tokens))
+        q1, q2 = paper["groups"][0]["questions"]
+        assert not question_complete(q1, 1, "grammar")
+        assert question_complete(q2, 1, "grammar")
+        assert q1["transfers"] == []
 
     asyncio.run(run())
 

@@ -526,20 +526,26 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
                 for d in drafts
                 if d.get("passage") or d.get("stem") or d.get("options") or d.get("answer")
             ]
-            # 同号重开时按字段合并，而不是整体替换：模型漏写其余字段时（只重写
-            # @@TRANSFER_PASSAGE@@ 一行是常见漂移），旧块里已有的内容必须留下，
-            # 否则一个残缺块会顶掉之前的完整块。一块都没重写才沿用重开前持有的旧块。
+            # 只有材料未变的迁移题才允许补缺字段；改写材料后不能复用旧答案/解析。
             carry = current_q.get("_transfers_carry")
             if fresh and carry:
                 merged = []
                 for i, new_blk in enumerate(fresh):
                     old_blk = carry[i] if i < len(carry) and isinstance(carry[i], dict) else {}
+                    changed = any(new_blk[key] and new_blk[key] != old_blk.get(key)
+                                  for key in ("passage", "stem", "options"))
+                    if changed:
+                        merged.append(new_blk)
+                        continue
                     merged.append({
                         "passage": new_blk["passage"] or old_blk.get("passage") or "",
                         "stem": new_blk["stem"] or old_blk.get("stem") or "",
                         "options": new_blk["options"] or old_blk.get("options") or [],
                         "answer": new_blk["answer"] or old_blk.get("answer") or "",
-                        "explanation": new_blk["explanation"] or old_blk.get("explanation") or "",
+                        "explanation": new_blk["explanation"] or (
+                            "" if new_blk["answer"] and new_blk["answer"] != old_blk.get("answer")
+                            else old_blk.get("explanation") or ""
+                        ),
                     })
                 # 重写只涉及前几块时，后面没被重开的旧块按原样接着排
                 transfers = merged + [dict(t) for t in carry[len(fresh):] if isinstance(t, dict)]

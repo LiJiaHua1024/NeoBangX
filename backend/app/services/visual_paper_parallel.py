@@ -364,12 +364,13 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                                 parsed = parse_custom_visual_paper(job.material + block)
                                 question = next(q for g in parsed["groups"] for q in g["questions"] if _norm_no(q["no"]) == no)
                                 issues = question_missing(question, transfer_count, question_groups[no])
-                                # 正常 EOF 漏结束标记只修复结构上已完整的题，半题和超限截断不能冒充成功。
-                                if terminal and issues:
-                                    continue
+                                # 每次调用独立验收。残缺重试块不能进入共享文档，
+                                # 否则前端会把不同版本的材料、答案和解析拼成伪完整题。
                                 job.issues[no] = issues
-                                if not issues:
-                                    job.completed.append(no)
+                                if issues:
+                                    await queue.put(("visual_task", job.progress()))
+                                    continue
+                                job.completed.append(no)
                                 await queue.put(("token", block))
                                 await queue.put(("visual_task", job.progress()))
 

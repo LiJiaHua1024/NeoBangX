@@ -307,6 +307,31 @@ test("多行易错点经自动保存、完成修改和历史原文重解析保�
   assert.equal(c.vpExportPayload("Test").groups[0].questions[0].pitfalls[0].desc, desc);
 });
 
+test("残缺重试改写迁移题材料时不拼接旧答案，也不误报完成", () => {
+  const c = component(), q = fullQuestion();
+  c.visualPaper = { ...c.newVisualPaperState(), total: 1, transferCount: 1,
+    groups: [{ id: "reading", title: "Reading", questions: [q] }] };
+  const original = c.vpSerializeRaw();
+  c.output = original + "@@Q@@ 1\n@@TRANSFER_PASSAGE@@ New material.\n@@TRANSFER_EXPL@@ New explanation.\n@@END_Q@@\n";
+  c._outputDirty = true;
+  c.vpDoRender();
+  c.vpRunState = "done";
+  const transfer = c.vpCurrentQuestion.transfers[0];
+  assert.equal(transfer.passage, "New material.");
+  assert.equal(transfer.answer, "");
+  assert.equal(transfer.stem, "");
+  assert.equal(transfer.options.length, 0);
+  assert.equal(c.vpComplete, false);
+  assert.equal(c.vpRemaining, 1);
+  assert.ok(c.vpMissingQuestions[0].reasons.includes("迁移 1：答案"));
+  // 同一材料只是补充解析，可以沿用该材料自己的答案。
+  c.output = original + "@@Q@@ 1\n@@TRANSFER_PASSAGE@@ Transfer passage\n@@TRANSFER_EXPL@@ Improved explanation.\n@@END_Q@@\n";
+  c._outputDirty = true;
+  c.vpDoRender();
+  assert.equal(c.vpCurrentQuestion.transfers[0].answer, "B");
+  assert.equal(c.vpComplete, true);
+});
+
 test("易错点换行编码兼容普通旧说明、字面量编码前缀和损坏数据", () => {
   const c = component(), q = fullQuestion();
   q.pitfalls = [
