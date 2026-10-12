@@ -1103,16 +1103,16 @@
                             <button class="vp-q-chip"
                                     :class="{
                                       'active': vpIsCurrent(gIdx, qIdx),
-                                      'generating': vpQuestionStatus(q) === 'generating',
-                                      'pending': vpQuestionStatus(q) === 'pending',
-                                      'incomplete': (vpQuestionStatus(q) === 'idle' || vpQuestionStatus(q) === 'failed' || vpQuestionStatus(q) === 'incomplete' || vpQuestionStatus(q) === 'cancelled'),
-                                      'done': vpQuestionStatus(q) === 'done'
+                                      'generating': vpQuestionStatus(q, g.id) === 'generating',
+                                      'pending': vpQuestionStatus(q, g.id) === 'pending',
+                                      'incomplete': (vpQuestionStatus(q, g.id) === 'idle' || vpQuestionStatus(q, g.id) === 'failed' || vpQuestionStatus(q, g.id) === 'incomplete' || vpQuestionStatus(q, g.id) === 'cancelled'),
+                                      'done': vpQuestionStatus(q, g.id) === 'done'
                                     }"
                                     @click="vpSelectQuestion(gIdx, qIdx)"
-                                    :title="vpTaskRetryReason(q) ? vpTaskRetryReason(q) : (vpQuestionStatus(q) === 'generating' ? '正在生成第 ' + q.no + ' 题解析' : (vpQuestionStatus(q) === 'pending' ? '第 ' + q.no + ' 题排队等待生成' : (vpQuestionStatus(q) === 'done' ? '讲解已完整' : '待补：' + vpQuestionMissing(q).join('、'))))">
+                                    :title="vpTaskRetryReason(q) ? vpTaskRetryReason(q) : (vpQuestionStatus(q, g.id) === 'generating' ? '正在生成第 ' + q.no + ' 题解析' : (vpQuestionStatus(q, g.id) === 'pending' ? '第 ' + q.no + ' 题排队等待生成' : (vpQuestionStatus(q, g.id) === 'done' ? '讲解已完整' : '待补：' + vpQuestionMissing(q, g.id).join('、'))))">
                               <span x-text="q.no"></span>
                               <span class="vp-q-chip-ans" x-show="q.answer" :class="{ 'masked': maskOn }" x-text="vpDetag(q.answer)"></span>
-                              <span class="vp-q-chip-dot" x-show="vpQuestionStatus(q) === 'generating'"></span>
+                              <span class="vp-q-chip-dot" x-show="vpQuestionStatus(q, g.id) === 'generating'"></span>
                             </button>
                           </template>
                         </div>

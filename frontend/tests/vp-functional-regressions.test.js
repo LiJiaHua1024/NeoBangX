@@ -147,6 +147,48 @@ function fullQuestion(no = "1", count = 1) {
     transfers: Array.from({ length: count }, () => ({ passage: "Transfer passage", stem: "Transfer question?", options: [{ label: "A", text: "Three" }, { label: "B", text: "Four" }], answer: "B", explanation: "Explanation" })) };
 }
 
+test("历史重解析后导航持有旧题目引用时，语篇题的完成标记仍与整卷一致", () => {
+  const c = component();
+  const groups = ["cloze7", "cloze", "grammar", "reading"].map(id => {
+    // 同号跨组，不能用题号猜所属分组。
+    const q = fullQuestion("1");
+    q.transfers[0].stem = "";
+    if (id === "cloze7" || id === "cloze") {
+      q.options = [...(id === "cloze7" ? "ABCDEFG" : "ABCD")].map(label => ({ label, text: "Option " + label }));
+      q.transfers[0].options = structuredClone(q.options);
+    }
+    if (id === "grammar") { q.qtype = "blank"; q.options = []; q.transfers[0].options = []; }
+    return { id, title: id, questions: [q] };
+  });
+  c.visualPaper = { ...c.newVisualPaperState(), total: 4, transferCount: 1, groups };
+  c.output = JSON.stringify(c.visualPaper);
+  c.vpRunState = "done";
+  const navigationGroups = c.vpGroups;
+  c._outputDirty = true;
+  c.vpDoRender();
+  assert.notEqual(c.vpGroups[0].questions[0], navigationGroups[0].questions[0]);
+  for (const g of navigationGroups.slice(0, 3)) {
+    assert.deepEqual(c.vpQuestionMissing(g.questions[0], g.id), []);
+    assert.equal(c.vpQuestionStatus(g.questions[0], g.id), "done");
+  }
+  assert.deepEqual(c.vpQuestionMissing(navigationGroups[3].questions[0], "reading"), ["迁移 1：题干"]);
+  assert.equal(c.vpQuestionStatus(navigationGroups[3].questions[0], "reading"), "idle");
+  assert.equal(c.vpRemaining, 1, JSON.stringify(c.vpMissingQuestions));
+  assert.equal(c.vpComplete, false);
+  c.vpGroups[3].questions[0].transfers[0].stem = "Question?";
+  assert.equal(c.vpComplete, true);
+  assert.equal(c.vpRemaining, 0);
+  // 真正缺失的内容仍须显示待补，不因明确分组而放宽其他检查。
+  const broken = structuredClone(navigationGroups[0].questions[0]);
+  broken.transfers[0].explanation = "";
+  assert.deepEqual(c.vpQuestionMissing(broken, "cloze7"), ["迁移 1：解析"]);
+  assert.equal(c.vpQuestionStatus(broken, "cloze7"), "idle");
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  assert.ok(html.includes("vpQuestionStatus(q, g.id)"));
+  assert.ok(html.includes("vpQuestionMissing(q, g.id)"));
+  assert.ok(!html.includes("vpQuestionStatus(q)"));
+});
+
 test("只有答案或缺少任一维度、迁移配额时仍可续写", async () => {
   const variants = [
     { no: "1", qtype: "choice", answer: "A" },

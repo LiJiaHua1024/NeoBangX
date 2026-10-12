@@ -3104,11 +3104,11 @@ function nbx() {
       return Math.min(100, Math.round((this.vpQuestionCount / this.vpTotal) * 100));
     },
     /* 完成计数、题目状态与续写工单共用内容完整性判定，答案落笔不等于全解完成。 */
-    vpQuestionMissing(q) {
+    vpQuestionMissing(q, groupId) {
       if (!q) return ["未返回完整讲解"];
       const text = v => typeof v === "string" && !!v.trim();
       const list = v => Array.isArray(v) && v.length > 0 && v.every(text);
-      if (this.vpIsWritingQuestion(q)) {
+      if (this.vpIsWritingQuestion(q, groupId)) {
         const guide = q.writingGuide || {};
         return [["points", "写作要点"], ["outline", "写作框架"], ["sample", "范文"]]
           .filter(([key]) => !(key === "points" ? list(guide[key]) : text(guide[key]))).map(([,label]) => label);
@@ -3121,8 +3121,10 @@ function nbx() {
       if (!q.pitfalls?.length || !q.pitfalls.every(p => p && text(p.title) && text(p.desc))) missing.push("易错点");
       if (!text(pat.name) || !list(pat.steps)) missing.push("考点范式");
       const choice = q.qtype === "choice" || (q.options || []).length > 0;
-      const owner = this.vpGroups.find(g => (g.questions || []).includes(q));
-      const embedded = ["cloze7", "cloze", "grammar"].includes(owner?.id);
+      // x-for 在重解析后可能暂时持有旧题目对象，导航应直接传入所属分组，
+      // 避免引用查找失败把语篇内设问误判为缺少迁移题干。
+      const ownerId = groupId ?? this.vpGroups.find(g => (g.questions || []).includes(q))?.id;
+      const embedded = ["cloze7", "cloze", "grammar"].includes(ownerId);
       const transfers = Array.isArray(q.transfers) ? q.transfers : [];
       if (transfers.length < this.vpLockedTransferCount) missing.push("迁移题数量（" + transfers.length + "/" + this.vpLockedTransferCount + "）");
       transfers.forEach((tr, i) => {
@@ -3138,8 +3140,8 @@ function nbx() {
       });
       return missing;
     },
-    vpQuestionAnalyzed(q) {
-      return this.vpQuestionMissing(q).length === 0;
+    vpQuestionAnalyzed(q, groupId) {
+      return this.vpQuestionMissing(q, groupId).length === 0;
     },
     get vpMissingQuestions() {
       // 带上 gIdx/qIdx：题号可能重复（跨组同号）或为 "?"，按题号查找会永远落到第一道
@@ -3258,12 +3260,12 @@ function nbx() {
       return `${label}待补全，可继续生成`;
     },
     /* 准确判断某道题是否是写作题 */
-    vpIsWritingQuestion(q) {
+    vpIsWritingQuestion(q, groupId) {
       if (!q) return false;
       if (q.qtype === "writing") return true;
       // 遍历全卷时 q 不一定是当前题；旧记录缺少 qtype 时也只能查它自己的分组。
-      const group = this.vpGroups.find(g => (g.questions || []).includes(q));
-      return !!group && (group.id === "writing_app" || group.id === "writing_cont");
+      const ownerId = groupId ?? this.vpGroups.find(g => (g.questions || []).includes(q))?.id;
+      return ownerId === "writing_app" || ownerId === "writing_cont";
     },
     /* 判定某题是否已有讲解内容生成 */
     vpHasAnalysis(q) {
@@ -3309,9 +3311,9 @@ function nbx() {
       const task = this.vpTasks.find(t => (t.nos || []).includes(String(q.no)));
       return (task && task.retry_reason) || "";
     },
-    vpQuestionStatus(q) {
+    vpQuestionStatus(q, groupId) {
       if (!q) return "idle";
-      if (this.vpQuestionAnalyzed(q)) return "done";
+      if (this.vpQuestionAnalyzed(q, groupId)) return "done";
       if (this.streaming) {
         if (this.vpStage === "framework") return "pending";
         if (this.vpStage === "explain") {
