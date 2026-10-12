@@ -472,7 +472,7 @@ data: [DONE]
 | `visual_task` | JSON 字符串 `{"id":"1","nos":["21","22"],"active_nos":["22"],"state":"running","completed":["21"],"attempt":2,"max_attempts":3,"issues":{},"fallback":null}` | **工具 13**：题目进度。状态为 `pending` / `running` / `retrying` / `done` / `incomplete` / `error` / `cancelled`；`completed` 为完整题号，`issues` 为按题号列出的缺失字段。`fallback` 格式同全局事件且不含供应商信息，由该任务自己的正文或结束事件清除 |
 | `error` | JSON 字符串 `{"message": "...", "model": "..."}` | 生成过程中发生错误（含全部 Provider 均失败）；`model` 供前端失败归因 |
 
-**Provider 切换（fallback）：** 同一逻辑模型可绑定多个 Provider（管理后台按优先级排序）。默认切换策略是**除「上下文超限」「内容审核」这类换谁都一样的错误外，任何 Provider 失败都切下一家**——包含 401/403（key 失效、欠费）、404（该家没有这个模型）、400/422（该家不支持某个参数）等「某一家自己的问题」。流式生成中，单家 Provider 等待**第一个数据块**的上限由全局配置 `first_token_timeout`（默认 30 秒，管理后台「全局调用参数」可改）决定，超时即判该家失效并切下一家；首个数据块到达后改由 `timeout` 按块判定，不会掐断正在出字的流。已经吐出正文后再失败则不切换（避免两家内容拼接），直接以 `error` 事件结束。
+**Provider 切换（fallback）：** 同一逻辑模型可绑定多个 Provider（管理后台按优先级排序）。切换判定分三层：① 精确程序化——异常类名（litellm 已解析）、数字 HTTP 状态码、空响应/超时语义完全确定的，直接判定，不问 Jev（如 401/403/404/429/5xx 直接切；超限/审核异常类、413 直接不切；400/422 性质存疑除外）；② Jev 决策模型（管理后台「Jev 错误判定」可配：开关 + 端点 + 模型名 + 超时，默认关闭）——只问真正模糊的，一次请求内并行问两道 Noul（是否超限、是否被过滤），只有比较确信（> 0.7）是"换谁都一样"才不切，拿不准一律切；③ Jev 关闭、未配齐、超时（默认 4 秒，可配 2~30 秒）、报错或回包无法解析时**立刻回退到程序化启发式**（与 Jev 规则同义的关键词匹配），不重试 Jev、不阻塞主流程。判定是 await 住的：结论出来前不产生任何 SSE 事件，前端停留在加载/切换进度态，只是晚几秒收到结论——`error` 事件永远只发一条，不存在先收到一个错误又变成另一个的突变。流式生成中，单家 Provider 等待**第一个数据块**的上限由全局配置 `first_token_timeout`（默认 30 秒，管理后台「全局调用参数」可改）决定，超时即判该家失效并切下一家；首个数据块到达后改由 `timeout` 按块判定，不会掐断正在出字的流。已经吐出正文后再失败则不切换（避免两家内容拼接），直接以 `error` 事件结束。标题后台任务的「稍后重试还是直接失败」同样三层（状态码表先行；模糊的并行问四道：瞬态必须明确成立且三类否决明确不成立才重试），不可用时回退状态码规则。
 
 智能错题迁移的同一批请求共享 `batch_id`。整批价为 `max(1, floor(batch_size / 2))`，按**已交付卡片数**等比摊分：每张卡片交付时立刻扣掉摊到自己头上的那部分增量，累计摊到第 k 张的值为 `max(1, floor(charge_units × 已交付数 / batch_size))`，整批收齐时正好等于整批价。中途停止、客户端断开或只请求了部分卡片，都只是不再累加——**已产出正文的卡片照扣**，因为正文已经推给前端并写进了历史，收不回来；一个字都没产出就失败的卡片不扣费。免费模型的批次整批按 0 次结算；若生成途中部分卡片命中免费限额转为按次计费，**整批升级为付费批**并按上式扣减（额度不足支付整批时该卡返回 403 结构化 detail `{message, required, remaining}`，批次不扣费）；已升级的批次不会因限额窗口滚动再降回免费。
 
@@ -1028,7 +1028,12 @@ data: [DONE]
     "log_retention_days": "0",
     "tool_reasoning_rules": [],
     "mirror_enabled": "false",
-    "mirror_origins": []
+    "mirror_origins": [],
+    "jev_enabled": "false",
+    "jev_base_url": "https://api.typesafe.ai/v1/systemone",
+    "jev_api_key": "sk-t****7890",
+    "jev_model": "jev-latest",
+    "jev_timeout": "4"
   },
   "keys": [ ... ],
   "reasoning_efforts": ["high", "low", "medium", "minimal", "none"],
@@ -1041,7 +1046,9 @@ data: [DONE]
 `config` 中的 `models` / `tool_reasoning_rules` / `mirror_origins` 已在服务端
 从存储字符串还原为对象或数组，前端无需二次解析；模型的三项用途能力位恒存在。
 `log_payload` 以字符串 `"true"` / `"false"` 存储；`log_retention_days` 为
-天数字符串，`"0"` 表示永久保留。旧的单 URL 配置键（`llm_base_url` / `llm_api_key` /
+天数字符串，`"0"` 表示永久保留。`jev_api_key` 回显为脱敏值（含 `****`），
+保存时原样送回表示不修改（与 Provider Key 的约定一致）；`jev_enabled` 同为
+字符串开关。旧的单 URL 配置键（`llm_base_url` / `llm_api_key` /
 `llm_model` / `chores_base_url` / `chores_api_key`）已不再由配置读写，仅作为环境变量兜底存在。
 
 ### 11.8 更新配置

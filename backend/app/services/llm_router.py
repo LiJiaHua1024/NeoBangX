@@ -1,15 +1,23 @@
-"""LLM Router：按模型的 Provider 优先级链自动 fallback。"""
+"""LLM Router：按模型的 Provider 优先级链自动 fallback。
+
+Provider 切换判定由 Jev 决策模型优先执行（见 `app.services.jev_judge`），
+规则以自然语言写在判定问题里；Jev 不可用时立刻回退到程序化启发式，
+`is_retryable` 即该同步回退入口（保持旧名供测试与调用方使用）。
+判定是 `await` 住的：流式路径在结论出来前不产生任何 SSE 事件，前端只是
+多等一会儿，不会收到多次错误或突变的消息。
+"""
 
 from __future__ import annotations
 
 import asyncio
 import copy
 import logging
-from typing import AsyncGenerator, AsyncIterator, Optional
+from typing import Any, AsyncGenerator, AsyncIterator, Optional
 
 import litellm
 from litellm import acompletion
 
+from app.services.jev_judge import a_should_retry_provider, heuristic_is_retryable
 from app.services.llm import (
     estimate_missing_usage,
     extract_reasoning_from_delta,
@@ -28,10 +36,8 @@ DEFAULT_FIRST_TOKEN_TIMEOUT = 30
 # 单家错误摘要的长度上限：多家串起来要能塞进使用日志的 500 字 error_message
 _MAX_ATTEMPT_ERROR_CHARS = 110
 
-# 「换任何 Provider 结果都一样」的错误：命中就不切换，直接抛出，免得白等后面的家。
-# 其余失败一律切换 —— 401/403（key 失效、欠费）、404（该家没有这个模型）、
-# 400/422（该家不支持某个参数）都是「某一家自己的问题」，正是备用家该顶上的场景，
-# 与管理后台优先级链「首位优先，失败自动 fallback 到下一位」的语义一致。
+# 「换任何 Provider 结果都一样」的错误判定主体已搬迁至 `app.services.jev_judge`
+# （Jev 优先、启发式回退）。此处保留同名同步入口：纯启发式，供测试与无需 Jev 的调用方使用。
 _NON_RETRYABLE_CLASSES = {"ContextWindowExceededError", "ContentPolicyViolationError"}
 _NON_RETRYABLE_KEYWORDS = (
     # 上下文超限
@@ -63,18 +69,18 @@ class EmptyResponseError(RuntimeError):
 
 
 def is_retryable(exc: Exception) -> bool:
-    """该异常是否应切换到下一 Provider。
+    """该异常是否应切换到下一 Provider（同步启发式回退入口）。
 
     默认切换；只有上下文超限与内容审核这两类「换谁都一样」的错误不切 ——
     再试下一家必然同样失败，只会把用户的等待拖得更长。
+    Jev 启用时实际走 `LLMRouter._should_retry`（Jev 优先、失败回退到本函数）。
     """
-    name = exc.__class__.__name__ or ""
-    if name in _NON_RETRYABLE_CLASSES:
-        return False
-    msg = str(exc).lower()
-    if any(keyword in msg for keyword in _NON_RETRYABLE_KEYWORDS):
-        return False
-    return True
+    return heuristic_is_retryable(exc)
+
+
+async def a_is_retryable(exc: Exception, jev_cfg: dict | None = None, **context: Any) -> bool:
+    """该异常是否应切换到下一 Provider（Jev 优先、不可用立刻回退启发式）。"""
+    return await a_should_retry_provider(exc, jev_cfg, **context)
 
 
 def _is_timeout_error(exc: Exception) -> bool:
@@ -105,11 +111,14 @@ class LLMRouter:
         max_tokens: int = 4096,
         timeout: int = 120,
         first_token_timeout: float = DEFAULT_FIRST_TOKEN_TIMEOUT,
+        jev_config: dict | None = None,
     ):
         self.providers = list(providers_for_model or [])
         self.default_model = default_model
         self.max_tokens = max_tokens
         self.timeout = timeout
+        # Jev 判定配置（管理后台可配）：None/未启用时直接走启发式，不碰网络
+        self.jev_config = dict(jev_config) if isinstance(jev_config, dict) else None
         # 下限取 0.05 秒只为便于测试注入极小值；配置层限制在 5~600 秒
         try:
             self.first_token_timeout = max(0.05, float(first_token_timeout or DEFAULT_FIRST_TOKEN_TIMEOUT))
@@ -141,6 +150,21 @@ class LLMRouter:
         detail = " ".join(str(exc).split()) or exc.__class__.__name__
         self.attempt_errors.append(
             (self._provider_label(provider), detail[:_MAX_ATTEMPT_ERROR_CHARS])
+        )
+
+    async def _should_retry(self, exc: Exception, provider: dict, idx: int, total: int, model_id: str = "") -> bool:
+        """该失败是否值得切下一家：Jev 优先判定，不可用立刻回退启发式。
+
+        调用方在结论出来前不 yield 任何事件（Jev 往返期间前端停留在加载态），
+        结论出来后要么 fallback 要么 raise，terminal error 永远只发一次。
+        """
+        return await a_should_retry_provider(
+            exc,
+            self.jev_config,
+            model_id=model_id or self.default_model,
+            provider_label=self._provider_label(provider),
+            provider_index=idx + 1,
+            provider_total=total,
         )
 
     @property
@@ -323,8 +347,9 @@ class LLMRouter:
                 last_exc = e
                 self._last_error = e
                 self._remember_failure(provider, e)
-                # 判断是否可重试到下一 Provider
-                if idx < len(self.providers) - 1 and is_retryable(e):
+                # 判断是否可重试到下一 Provider（Jev 优先、不可用回退启发式；
+                # await 期间不产生任何事件，前端停留在加载态等结论）
+                if idx < len(self.providers) - 1 and await self._should_retry(e, provider, idx, len(self.providers), model_id):
                     logger.warning(
                         "LLM chat fallback: model=%s provider=%s (%s) 失败，将尝试下一优先级: %s",
                         model_id, provider.get("id"), provider.get("name"), e,
@@ -458,7 +483,8 @@ class LLMRouter:
                     logger.error(f"LLM stream error after yield (provider={provider.get('id')}): {e}")
                     raise
                 # 首 token 前失败且可重试且有下一家，则 fallback
-                if idx < len(self.providers) - 1 and is_retryable(e):
+                # （Jev 判定期间不 yield，前端停留在加载/切换进度态等结论）
+                if idx < len(self.providers) - 1 and await self._should_retry(e, provider, idx, len(providers), model_id):
                     if isinstance(e, EmptyResponseError):
                         reason = "empty"
                     elif _is_timeout_error(e):

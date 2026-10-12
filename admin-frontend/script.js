@@ -622,7 +622,17 @@ function adminApp() {
       // 线路镜像：开关 + 两条线路地址（顺序无关，两条线路是对等的）
       mirror_enabled: false,
       mirror_origins: ["", ""],
+      // Jev 决策模型（错误重试判定）：开关 + 端点 + Key + 模型名 + 超时。
+      // api_key 存脱敏值（含 ****）时保存跳过该字段，后端保持原密钥
+      jev_enabled: false,
+      jev_base_url: "",
+      jev_api_key: "",
+      jev_model: "jev-latest",
+      jev_timeout: 4,
     },
+    // Jev 测试状态（与 Provider 测试相互独立）
+    testingJev: false,
+    jevTestResult: "",
     // 后端解析出的镜像状态（含 ready / reason），仅用于面板上的状态提示
     mirror: null,
     savingConfig: false,
@@ -2488,6 +2498,12 @@ function adminApp() {
           log_payload: /^(1|true|yes|on)$/i.test(String(cfg.log_payload ?? "")),
           log_retention_days: Number(cfg.log_retention_days) || 0,
           mirror_enabled: /^(1|true|yes|on)$/i.test(String(cfg.mirror_enabled ?? "")),
+          // Jev 决策模型：Key 以脱敏形式回显（含 ****），保存时原样送回、后端跳过不覆盖
+          jev_enabled: /^(1|true|yes|on)$/i.test(String(cfg.jev_enabled ?? "")),
+          jev_base_url: String(cfg.jev_base_url ?? ""),
+          jev_api_key: String(cfg.jev_api_key ?? ""),
+          jev_model: String(cfg.jev_model ?? "") || "jev-latest",
+          jev_timeout: Math.max(2, Math.min(30, Math.floor(Number(cfg.jev_timeout) || 4))),
           // 固定补齐两个输入框，避免数组短于 2 时 x-model 写到越界下标
           mirror_origins: (() => {
             const list = Array.isArray(cfg.mirror_origins) ? cfg.mirror_origins.map(String) : [];
@@ -2997,6 +3013,22 @@ function adminApp() {
         this.toast("启用线路镜像需要填写两条线路地址", "error");
         return;
       }
+      // Jev 判定：启用就必须配齐端点 + 模型名；Key 允许用已保存的（脱敏值含 **** 即视为已有）
+      if (this.configForm.jev_enabled) {
+        if (!String(this.configForm.jev_base_url || "").trim()) {
+          this.toast("启用 Jev 需要填写端点地址", "error");
+          return;
+        }
+        if (!String(this.configForm.jev_model || "").trim()) {
+          this.toast("启用 Jev 需要填写模型名", "error");
+          return;
+        }
+        const jevKey = String(this.configForm.jev_api_key || "");
+        if (!jevKey.trim()) {
+          this.toast("启用 Jev 需要填写 API Key", "error");
+          return;
+        }
+      }
       const concurrency = Number(this.configForm.visual_paper_concurrency);
       if (!Number.isInteger(concurrency)) {
         this.toast("默认试卷并发需为整数，0 或负数表示不限并发", "error");
@@ -3020,6 +3052,10 @@ function adminApp() {
           mirror_origins: (this.configForm.mirror_origins || [])
             .map((s) => String(s || "").trim())
             .filter(Boolean),
+          jev_enabled: !!this.configForm.jev_enabled,
+          jev_base_url: String(this.configForm.jev_base_url || "").trim(),
+          jev_model: String(this.configForm.jev_model || "").trim(),
+          jev_timeout: Math.max(2, Math.min(30, Math.floor(Number(this.configForm.jev_timeout) || 4))),
           tool_reasoning_rules: this.configForm.tool_reasoning_rules.map((r) => ({
             id: r.id || "",
             tool_ids: r.tool_ids.map(String),
@@ -3049,6 +3085,9 @@ function adminApp() {
             },
           })),
         };
+        // Jev Key 脱敏值（含 ****）表示未修改：不发送，后端保持原密钥；清空则传空串清掉
+        const jevKeyInput = String(this.configForm.jev_api_key || "");
+        if (!jevKeyInput.includes("****")) body.jev_api_key = jevKeyInput;
         await this.api("/api/admin/config", {
           method: "PUT",
           body: JSON.stringify(body),
@@ -3249,6 +3288,30 @@ function adminApp() {
     },
     // 兼容旧调用（若有外部直接调 testProvider）
     async testProvider(p) { this.openTestProvider(p); },
+
+    /* ============ Jev 决策模型（错误重试判定） ============ */
+    async testJev() {
+      // 用表单当前值测试（Key 为脱敏值时后端自动用已保存的），便于「先测试再保存」
+      const keyInput = String(this.configForm.jev_api_key || "");
+      const payload = {
+        base_url: String(this.configForm.jev_base_url || "").trim(),
+        model: String(this.configForm.jev_model || "").trim(),
+        timeout: Math.max(2, Math.min(30, Math.floor(Number(this.configForm.jev_timeout) || 4))),
+      };
+      if (!keyInput.includes("****")) payload.api_key = keyInput;
+      this.testingJev = true;
+      this.jevTestResult = "";
+      try {
+        const data = await this.api("/api/admin/jev/test", { method: "POST", body: JSON.stringify(payload) });
+        this.jevTestResult = `连通正常（${data.latency_ms}ms，模型 ${data.model}）`;
+        this.toast(`Jev 测试成功（${data.latency_ms}ms）`, "ok");
+      } catch (e) {
+        this.jevTestResult = "";
+        this.toast(e.message || "Jev 测试失败", "error");
+      } finally {
+        this.testingJev = false;
+      }
+    },
 
     /* ============ 模型 Provider 绑定（每模型独立优先级 + per-provider model id） ============ */
     openModelProviders(modelId) {

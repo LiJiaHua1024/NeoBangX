@@ -210,6 +210,13 @@ class ConfigUpdateRequest(BaseModel):
         max_length=MAX_MIRROR_ORIGINS,
         description="参与镜像的线路地址（纯 origin，如 https://a.example.com）",
     )
+    jev_enabled: Optional[bool] = Field(None, description="是否启用 Jev 决策模型做错误重试判定；关闭时直接走程序化启发式")
+    jev_base_url: Optional[str] = Field(
+        None, max_length=512, description="Jev 端点（完整地址，直接 POST，如官方 https://api.typesafe.ai/v1/systemone）"
+    )
+    jev_api_key: Optional[str] = Field(None, max_length=2048, description="Jev API Key（TypeSafe 官方 Key；含 **** 表示不修改）")
+    jev_model: Optional[str] = Field(None, max_length=256, description="Jev 模型名，可自定义（如官方 jev-latest）")
+    jev_timeout: Optional[int] = Field(None, ge=2, le=30, description="单次 Jev 判定等待上限（秒），超时立刻回退启发式")
 
 
 class ProviderCreateRequest(BaseModel):
@@ -244,6 +251,13 @@ class ProviderTestRequest(BaseModel):
     model: Optional[str] = Field(None, max_length=128, description="用于测试的模型，不填则用该 Provider 绑定的首个模型")
     prompt: Optional[str] = Field(None, max_length=2000, description="测试 prompt")
     provider_model_id: Optional[str] = Field(None, max_length=256, description="指定测试时使用的 provider_model_id")
+
+
+class JevTestRequest(BaseModel):
+    base_url: Optional[str] = Field(None, max_length=512, description="本次测试用的端点，留空用已保存配置")
+    api_key: Optional[str] = Field(None, max_length=2048, description="本次测试用的 Key，留空/含 **** 用已保存配置")
+    model: Optional[str] = Field(None, max_length=256, description="本次测试用的模型名，留空用已保存配置")
+    timeout: Optional[int] = Field(None, ge=2, le=30, description="本次测试的等待上限（秒），留空用已保存配置")
 
 
 @router.get("/stats")
@@ -2079,6 +2093,26 @@ async def update_admin_config(
         if key == "mirror_enabled":
             updates[key] = "true" if value else "false"
             continue
+        if key == "jev_enabled":
+            updates[key] = "true" if value else "false"
+            continue
+        if key == "jev_base_url":
+            from app.services.provider_config import _validate_base_url
+
+            try:
+                updates[key] = _validate_base_url(str(value or ""))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Jev 端点地址不合法：{exc}") from exc
+            continue
+        if key == "jev_api_key":
+            # 含 **** 视为未修改（与 Provider / MinerU 的约定一致），不写入
+            if "****" in str(value or ""):
+                continue
+            updates[key] = str(value or "")
+            continue
+        if key == "jev_model":
+            updates[key] = str(value or "").strip()
+            continue
         if key == "mirror_origins":
             try:
                 updates[key] = serialize_mirror_origins(value)
@@ -2185,6 +2219,27 @@ async def update_admin_config(
                 status_code=400,
                 detail=f"启用线路镜像需要配置 {MAX_MIRROR_ORIGINS} 条线路地址（当前 {len(_final_origins)} 条）",
             )
+
+    # Jev 判定：启用时必须配齐端点 + Key + 模型名，否则每次判定都会因缺配置而回退，
+    # 等于开着开关却没干活。按「本次提交 + 存量配置」合并后的最终值判断。
+    if "jev_enabled" in raw or "jev_base_url" in raw or "jev_api_key" in raw or "jev_model" in raw:
+        if "jev_enabled" in raw:
+            _final_jev_on = bool(raw.get("jev_enabled"))
+        else:
+            _final_jev_on = (_old_cfg.get("jev_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
+        if _final_jev_on:
+            _final_jev_base = (updates.get("jev_base_url") if "jev_base_url" in updates
+                               else (_old_cfg.get("jev_base_url") or "").strip())
+            _final_jev_key = (updates.get("jev_api_key") if "jev_api_key" in updates
+                              else (_old_cfg.get("jev_api_key") or "").strip())
+            _final_jev_model = (updates.get("jev_model") if "jev_model" in updates
+                                else (_old_cfg.get("jev_model") or "").strip())
+            if not _final_jev_base:
+                raise HTTPException(status_code=400, detail="启用 Jev 需要填写端点地址")
+            if not _final_jev_key:
+                raise HTTPException(status_code=400, detail="启用 Jev 需要填写 API Key")
+            if not _final_jev_model:
+                raise HTTPException(status_code=400, detail="启用 Jev 需要填写模型名")
 
     if not updates:
         cfg = get_config_map(db)
@@ -2344,6 +2399,49 @@ async def test_provider_api(provider_id: str, req: ProviderTestRequest, db: Anno
         out = await llm.chat(user_prompt=prompt, model=actual_model, max_tokens=16)
         latency = int((monotonic() - started) * 1000)
         return {"status": "ok", "model": model, "provider_model_id": actual_model, "latency_ms": latency, "output": out[:200]}
+    except Exception as e:
+        latency = int((monotonic() - started) * 1000)
+        raise HTTPException(status_code=502, detail=f"测试失败（{latency}ms）：{e}") from e
+
+
+# ---- Jev 决策模型：重试判定配置的连通性测试 ----
+
+@router.post("/jev/test")
+async def test_jev_api(req: JevTestRequest, db: Annotated[Session, Depends(get_db)]):
+    """测试 Jev 端点是否可用：发一道无意义的 noul 探测题，只验证接口通与回包可解析。
+
+    字段留空（Key 含 **** 也算留空）时用已保存配置，便于「先保存再测试」；
+    填了就用本次提交的值，便于「先测试再保存」。不扣费、无副作用。
+    """
+    from time import monotonic
+
+    from app.services.jev_judge import a_probe_jev
+    from app.services.runtime_config import (
+        DEFAULT_JEV_BASE_URL,
+        DEFAULT_JEV_MODEL,
+        DEFAULT_JEV_TIMEOUT,
+        get_config_value,
+    )
+
+    base_url = (req.base_url or "").strip() or (get_config_value(db, "jev_base_url", "") or "").strip() or DEFAULT_JEV_BASE_URL
+    raw_key = req.api_key or ""
+    api_key = "" if "****" in raw_key else raw_key.strip()
+    if not api_key:
+        api_key = (get_config_value(db, "jev_api_key", "") or "").strip()
+    model = (req.model or "").strip() or (get_config_value(db, "jev_model", "") or "").strip() or DEFAULT_JEV_MODEL
+    if req.timeout is not None:
+        timeout = req.timeout
+    else:
+        try:
+            timeout = int(get_config_value(db, "jev_timeout", "") or DEFAULT_JEV_TIMEOUT)
+        except ValueError:
+            timeout = DEFAULT_JEV_TIMEOUT
+    started = monotonic()
+    try:
+        decided, latency_ms = await a_probe_jev(
+            {"enabled": True, "base_url": base_url, "api_key": api_key, "model": model, "timeout": timeout}
+        )
+        return {"status": "ok", "model": model, "latency_ms": latency_ms, "probe_retryable": decided}
     except Exception as e:
         latency = int((monotonic() - started) * 1000)
         raise HTTPException(status_code=502, detail=f"测试失败（{latency}ms）：{e}") from e

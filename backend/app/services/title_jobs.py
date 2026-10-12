@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database import SessionLocal
 from app.models import TitleJob, utcnow
-from app.services.llm_router import EmptyResponseError, is_retryable
+from app.services.jev_judge import a_should_retry_title, heuristic_is_title_retryable
 
 logger = logging.getLogger(__name__)
 
@@ -365,49 +365,24 @@ def purge_terminal_title_jobs() -> int:
         return int(deleted)
 
 
-def _exception_status(exc: BaseException) -> int | None:
-    for candidate in (
-        getattr(exc, "status_code", None),
-        getattr(exc, "code", None),
-        getattr(getattr(exc, "response", None), "status_code", None),
-    ):
-        try:
-            value = int(candidate)
-        except (TypeError, ValueError):
-            continue
-        if 100 <= value <= 599:
-            return value
-    return None
-
-
 def is_title_retryable(exc: BaseException) -> bool:
-    """标题任务层重试分类；单次尝试内部仍由 LLMRouter 做 Provider fallback。"""
-    if isinstance(exc, TitleJobPermanentError):
-        return False
-    if isinstance(exc, EmptyResponseError):
-        return True
-    if not is_retryable(exc):  # type: ignore[arg-type]
-        return False
+    """标题任务层重试分类；单次尝试内部仍由 LLMRouter 做 Provider fallback。
 
-    status = _exception_status(exc)
-    if status is not None:
-        if status in {400, 401, 402, 403, 404, 405, 409, 422}:
-            return False
-        return status in {408, 425, 429} or status >= 500
+    同步启发式入口（Jev 不可用时的回退）：Jev 启用时走 `a_is_title_retryable`。
+    """
+    return heuristic_is_title_retryable(exc)
 
-    name = exc.__class__.__name__.lower()
-    message = str(exc).lower()
-    permanent_markers = (
-        "authentication",
-        "permission",
-        "notfound",
-        "badrequest",
-        "未绑定任何可用 provider",
-        "模型不可用",
-        "模型已禁用",
-        "未配置",
-    )
-    return not any(marker in name or marker in message for marker in permanent_markers)
+
+async def a_is_title_retryable(exc: BaseException, jev_cfg: dict | None = None) -> bool:
+    """标题任务层重试分类（Jev 优先、不可用立刻回退启发式）。"""
+    return await a_should_retry_title(exc, jev_cfg)
+
+
+def _load_jev_cfg_sync() -> dict | None:
+    """在线程池里读一次 Jev 配置（失败路径专用，平时不走）。"""
+    from app.services.jev_judge import load_jev_config_sync
+
+    return load_jev_config_sync()
 
 
 def _retry_delay(exc: BaseException, attempts: int) -> float:
@@ -440,7 +415,10 @@ async def _execute_title_job(
         await asyncio.to_thread(release_title_job, work.id)
         raise
     except Exception as exc:  # noqa: BLE001 - worker 必须把任何失败都写回任务状态
-        retryable = is_title_retryable(exc)
+        # Jev 优先判定「稍后重试是否有意义」，不可用立刻回退启发式。
+        # 后台任务不面向用户实时等待，多等一次 Jev 往返无妨；判定本身绝不抛异常。
+        jev_cfg = await asyncio.to_thread(_load_jev_cfg_sync)
+        retryable = await a_is_title_retryable(exc, jev_cfg)
         logger.warning(
             "标题任务失败：job=%s attempt=%s/%s retryable=%s error=%s",
             work.client_job_id,

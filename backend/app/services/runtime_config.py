@@ -35,6 +35,11 @@ CONFIG_KEYS = [
     "tool_reasoning_rules",
     "mirror_enabled",
     "mirror_origins",
+    "jev_enabled",
+    "jev_base_url",
+    "jev_api_key",
+    "jev_model",
+    "jev_timeout",
 ]
 
 # 线路镜像：参与镜像的线路条数上限。
@@ -49,7 +54,7 @@ MINERU_MODES = {"precision", "agent"}
 MINERU_MODELS = {"pipeline", "vlm"}
 
 # 敏感字段：列表接口可脱敏（旧键保留仅为兼容读取，不再写入）
-SENSITIVE_KEYS = {"llm_api_key", "chores_api_key", "openrouter_api_key", "mineru_token"}
+SENSITIVE_KEYS = {"llm_api_key", "chores_api_key", "openrouter_api_key", "mineru_token", "jev_api_key"}
 
 # 常见推理强度标识（off/none/instant/minimal/low/medium/high/xhigh/max 等）
 REASONING_EFFORTS = {"off", "none", "instant", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -78,6 +83,15 @@ FREE_LIMIT_MAX = 1_000_000
 # 用户端模型下拉最大显示数的取值上限（0 = 不折叠，保留全量显示）
 MAX_VISIBLE_MODELS_LIMIT = 50
 DEFAULT_VISUAL_CONCURRENCY = 3
+
+# Jev 决策模型默认值与超时钳制区间（秒）
+# TypeSafe 官方 System One 接口（见 https://docs.typesafe.ai/introduction/quickstart）：
+# POST {state, model, questions} 到 /v1/systemone；模型名用 jev-latest（默认）/ jev-1.13.0 / jev-preview
+DEFAULT_JEV_BASE_URL = "https://api.typesafe.ai/v1/systemone"
+DEFAULT_JEV_MODEL = "jev-latest"
+DEFAULT_JEV_TIMEOUT = 4
+JEV_TIMEOUT_MIN = 2
+JEV_TIMEOUT_MAX = 30
 
 
 def normalize_visual_concurrency(value, default=None):
@@ -506,6 +520,11 @@ def _env_defaults() -> dict[str, str]:
         "mineru_token": settings.mineru_token,
         "mirror_enabled": "true" if settings.mirror_enabled else "false",
         "mirror_origins": settings.mirror_origins,
+        "jev_enabled": "true" if settings.jev_enabled else "false",
+        "jev_base_url": settings.jev_base_url,
+        "jev_api_key": settings.jev_api_key,
+        "jev_model": settings.jev_model,
+        "jev_timeout": str(settings.jev_timeout),
     }
 
 
@@ -688,6 +707,30 @@ def parse_log_settings(cfg: dict[str, str]) -> tuple[bool, int]:
     except ValueError:
         log_retention_days = 0
     return log_payload, max(0, log_retention_days)
+
+
+def parse_jev_settings(cfg: dict[str, str]) -> dict:
+    """解析 Jev 决策模型配置（管理后台可改，环境变量给默认值）。
+
+    返回 dict {enabled, base_url, api_key(原文，未脱敏，仅内部使用),
+    model, timeout}。enabled 为 False 时调用方直接走启发式，不碰网络。
+    """
+    enabled = (cfg.get("jev_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
+    base_url = (cfg.get("jev_base_url") or "").strip() or DEFAULT_JEV_BASE_URL
+    api_key = (cfg.get("jev_api_key") or "").strip()
+    model = (cfg.get("jev_model") or "").strip() or DEFAULT_JEV_MODEL
+    try:
+        timeout = int(cfg.get("jev_timeout") or DEFAULT_JEV_TIMEOUT)
+    except ValueError:
+        timeout = DEFAULT_JEV_TIMEOUT
+    timeout = max(JEV_TIMEOUT_MIN, min(JEV_TIMEOUT_MAX, timeout))
+    return {
+        "enabled": enabled,
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": model,
+        "timeout": timeout,
+    }
 
 
 def resolve_llm_settings(db: Session) -> dict:
@@ -904,4 +947,5 @@ def resolve_llm_settings(db: Session) -> dict:
             "has_token": bool(mineru_token),
         },
         "tool_reasoning_rules": tool_reasoning_rules,
+        "jev": parse_jev_settings(cfg),
     }

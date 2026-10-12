@@ -108,6 +108,20 @@ class Settings(BaseSettings):
     # SSE 配置
     sse_retry_timeout: int = 30000  # 客户端重连时间（毫秒）
 
+    # Jev 决策模型（Provider 错误重试判定）：TypeSafe 官方 System One 接口。
+    # Jev 是 TypeSafe 的决策模型（不是聊天模型）：POST {state, model, questions}
+    # 到 /v1/systemone，拿回 {answers} 做结构化判定。其它实现同一协议的
+    # decisions 兼容端点（如 Command Code 网关）同样可填在自定义端点里。
+    # 默认关闭：关闭时直接走程序化启发式判定；开启后每次判定先问 Jev，
+    # Jev 不可用（超时/报错/回包无法解析）则立刻回退到启发式，不阻塞主流程。
+    jev_enabled: bool = False
+    # 完整端点地址（直接 POST，如官方 https://api.typesafe.ai/v1/systemone）
+    jev_base_url: str = "https://api.typesafe.ai/v1/systemone"
+    jev_api_key: str = ""
+    jev_model: str = "jev-latest"
+    # 单次判定等待上限（秒）：超时即回退启发式，前端最多多等这么久
+    jev_timeout: int = 4
+
     @property
     def model_list(self) -> List[str]:
         return [m.strip() for m in self.models.split(",") if m.strip()]

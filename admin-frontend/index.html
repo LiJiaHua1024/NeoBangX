@@ -1268,6 +1268,56 @@
           </div>
         </div>
 
+        <div class="glass card">
+          <div>
+            <h2 class="card-title">Jev 错误判定</h2>
+            <p class="muted">Provider 报错后换不换下一家，先由程序判断能确定的情况，剩下的再问 Jev，不再靠关键词猜。判定在后台等出结果后才继续，用户最多晚几秒收到结果，不会收到重复或前后不一致的错误。Jev 不可用时自动按内置规则判断，生成不受影响。</p>
+          </div>
+          <div class="switch-row mt-3">
+            <label class="switch" :class="{ disabled: savingConfig }">
+              <input type="checkbox" x-model="configForm.jev_enabled" :disabled="savingConfig">
+              <span class="switch-slider"></span>
+            </label>
+            <div class="switch-copy">
+              <div class="switch-title">启用 Jev 判定</div>
+              <div class="field-hint">
+                关闭后只按内置规则判断：只有超限和内容审核不切换，其余都切换。默认关闭。
+              </div>
+            </div>
+          </div>
+          <div class="form-grid form-grid--compact mt-3">
+            <label class="field field--full">
+              <span>端点地址</span>
+              <input type="text" x-model="configForm.jev_base_url" :disabled="savingConfig"
+                     placeholder="https://api.typesafe.ai/v1/systemone">
+              <span class="field-hint">默认填 TypeSafe 官方地址；其它兼容的判定服务也可以填，要写完整地址</span>
+            </label>
+            <label class="field">
+              <span>API Key</span>
+              <input type="password" x-model="configForm.jev_api_key" :disabled="savingConfig"
+                     placeholder="未配置" autocomplete="off">
+              <span class="field-hint">在 TypeSafe 后台申请。已保存的显示为星号，不动它不会覆盖；清空输入框会删除密钥</span>
+            </label>
+            <label class="field">
+              <span>模型名</span>
+              <input type="text" x-model="configForm.jev_model" :disabled="savingConfig"
+                     placeholder="jev-latest">
+              <span class="field-hint">一般填 jev-latest，也可以填其它决策模型</span>
+            </label>
+            <label class="field">
+              <span>最长等待（秒）</span>
+              <input type="number" x-model.number="configForm.jev_timeout" min="2" max="30" :disabled="savingConfig">
+              <span class="field-hint">超过此时长还没返回，就按内置规则判断</span>
+            </label>
+          </div>
+          <div class="form-actions" style="margin-top:1rem; border-top:1px solid var(--border); padding-top:1rem">
+            <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存配置</button>
+            <button class="btn-ghost" @click="testJev()" :disabled="testingJev || savingConfig" x-text="testingJev ? '测试中…' : '测试连接'"></button>
+            <button class="btn-ghost" @click="loadConfig()">重新加载</button>
+          </div>
+          <p class="field-hint mt-2" x-show="jevTestResult" x-text="jevTestResult"></p>
+        </div>
+
       </section></template>
 
       <!-- 文档解析 -->

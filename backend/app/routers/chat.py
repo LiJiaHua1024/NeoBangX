@@ -421,6 +421,8 @@ def _build_llm(cfg: dict, model: Optional[str] = None, chores: bool = False) -> 
         max_tokens=max_tokens,
         timeout=cfg["timeout"],
         first_token_timeout=cfg.get("first_token_timeout") or DEFAULT_FIRST_TOKEN_TIMEOUT,
+        # Jev 重试判定配置：未启用/未配齐时 Router 内部直接走启发式，不碰网络
+        jev_config=cfg.get("jev") if isinstance(cfg.get("jev"), dict) else None,
     )
     return router
 
