@@ -947,11 +947,6 @@
                   <span x-show="!streaming" x-text="vpComplete ? '试卷全解已就绪，可随时打印或导出课件' : '部分题目待补全，可点击下方继续生成'"></span>
                   <span class="font-medium whitespace-nowrap ml-2" :class="vpComplete ? 'text-emerald-600' : 'text-dim'" x-text="vpProgressText"></span>
                 </div>
-                <!-- 两条进度同渐变，只靠透明度区分：没有图例时浅条秒满会被读成「快完成了」 -->
-                <div class="flex items-center gap-3 text-[10px] text-faint mt-0.5" x-show="vpTotal > 1">
-                  <span class="inline-flex items-center gap-1"><i class="vp-legend-swatch vp-legend-stage1"></i>结构 <span x-text="vpProgressPercent + '%'"></span></span>
-                  <span class="inline-flex items-center gap-1"><i class="vp-legend-swatch vp-legend-stage2"></i>讲解 <span x-text="vpExplainPercent + '%'"></span></span>
-                </div>
               </div>
             </div>
 
