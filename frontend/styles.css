@@ -1108,7 +1108,8 @@ html[data-theme="sora"][data-sky="night"] .ms-menu { --panel-strong: color-mix(i
   color: var(--text-faint);
 }
 .vp-cfg-tip { font-size: 0.7rem; line-height: 1.6; color: var(--text-faint); }
-.vp-cfg-reset {
+.vp-cfg-reset,
+.settings-reset {
   align-self: flex-start;
   padding: 0.32rem 0.6rem;
   border-radius: 0.6rem;
@@ -1119,8 +1120,10 @@ html[data-theme="sora"][data-sky="night"] .ms-menu { --panel-strong: color-mix(i
   background: var(--panel-soft);
   transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
-.vp-cfg-reset:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); background: var(--hover-bg); }
-.vp-cfg-reset:disabled { opacity: 0.5; cursor: default; }
+.vp-cfg-reset:hover:not(:disabled),
+.settings-reset:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); background: var(--hover-bg); }
+.vp-cfg-reset:disabled,
+.settings-reset:disabled { opacity: 0.5; cursor: default; }
 .vp-cfg-anim { transition: transform 0.4s var(--ease-spring), opacity 0.28s ease; }
 .vp-cfg-anim-from { opacity: 0; transform: scale(0.92) translateY(10px); }
 .vp-cfg-anim-to { opacity: 1; transform: scale(1) translateY(0); }
@@ -2990,6 +2993,15 @@ mark, .vp-hl {
   transition: background 0.18s ease;
 }
 .settings-row:hover { background: var(--hover-bg); }
+/* 竖排变体：标题/说明在上，滑块铺满一行（内容字号） */
+.settings-row-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55rem;
+  cursor: default;
+}
+.settings-row-stack:hover { background: transparent; }
+.settings-row-stack .settings-copy { flex: none; }
 .settings-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
 .settings-title { font-size: 0.86rem; font-weight: 650; color: var(--text); }
 .settings-desc { font-size: 0.72rem; color: var(--text-faint); }

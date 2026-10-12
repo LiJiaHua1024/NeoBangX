@@ -2121,6 +2121,12 @@ function nbx() {
     settingsOpen: false,
     fxOn: true,
     mascotHidden: false,
+    /* 内容字号：工作区整体缩放百分比（zoom 作用在 <main> 上，侧栏与弹窗不受影响） */
+    contentScale: 100,
+    CONTENT_SCALE_MIN: 80,
+    CONTENT_SCALE_MAX: 160,
+    CONTENT_SCALE_STEP: 10,
+    CONTENT_SCALE_DEFAULT: 100,
     finePointer: matchMedia("(pointer: fine)").matches,
     _tilt: null,
 
@@ -4215,6 +4221,10 @@ function nbx() {
       this.rightTab = ui.rightTab === "fav" ? "fav" : "history";
       this.vpChromePinned = !!ui.vpChromePinned;
       this.mascotHidden = !!ui.mascotHidden;
+      // 内容字号：范围外/脏数据回落默认，避免脏值把工作区缩到看不见
+      const _cs = Number(ui.contentScale);
+      this.contentScale = (Number.isFinite(_cs) && _cs >= this.CONTENT_SCALE_MIN && _cs <= this.CONTENT_SCALE_MAX)
+        ? _cs : this.CONTENT_SCALE_DEFAULT;
       // 点击特效的用户开关由 click-fx.js 自己落盘（nbx_fx_off），这里只读不写
       try { this.fxOn = localStorage.getItem("nbx_fx_off") !== "1" && !!window.NbxClickFx; } catch { this.fxOn = !!window.NbxClickFx; }
 
@@ -4494,6 +4504,22 @@ function nbx() {
     },
     applyMascotSetting() {
       if (this.mascotHidden) this.retreatMascot(); else this.reconcileMascot();
+      this.persistUI();
+    },
+
+    /* ---- 内容字号：zoom 等比缩放 <main>（工作区），侧栏与弹窗在 main 之外不受影响 ----
+       用 computed 而不是命令式改 DOM：x-model 更新 contentScale 即实时重渲染（拖动即预览）。
+       全屏讲解模式例外——它把面板转为 position:fixed 覆盖视口，zoom 会连 fixed 后代一起缩放
+       导致盖不满；且该模式自带放大排版（.vp-fullscreen-active），故回到 1:1。 */
+    get wsZoomStyle() {
+      if (this.vpFullscreen && this.isVisualPaperTool) return { zoom: 1 };
+      return { zoom: this.contentScale / 100 };
+    },
+    applyContentSize() {
+      this.persistUI();
+    },
+    resetContentSize() {
+      this.contentScale = this.CONTENT_SCALE_DEFAULT;
       this.persistUI();
     },
 
@@ -4915,6 +4941,7 @@ function nbx() {
         rightTab: this.rightTab,
         vpChromePinned: this.vpChromePinned,
         mascotHidden: this.mascotHidden,
+        contentScale: this.contentScale,
       });
     },
     setRightTab(tab) {

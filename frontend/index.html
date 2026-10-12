@@ -154,7 +154,8 @@
     </aside>
 
     <!-- ==================== 中栏：主内容区 ==================== -->
-    <main class="flex-1 min-w-0 min-h-0 flex flex-col">
+    <!-- zoom：设置里的「内容字号」等比缩放整个工作区（文字+间距），侧栏与弹窗在 main 之外不受影响 -->
+    <main class="flex-1 min-w-0 min-h-0 flex flex-col" :style="wsZoomStyle">
 
       <!-- 主面板 -->
       <section x-ref="mainPanel" class="glass rounded-[1.4rem] flex-1 min-h-0 flex flex-col overflow-hidden relative" :class="(vpFullscreen && isVisualPaperTool) ? 'vp-fullscreen-active' : ''">
@@ -2986,6 +2987,26 @@
                 <span class="switch-slider"></span>
               </span>
             </label>
+            <!-- 内容字号：复用导出菜单那套自绘滑块（.export-size-row/.export-slider/.export-size-num），
+                 不用浏览器原生样式。zoom 作用在 <main>（工作区）上，左右侧栏与弹窗不受影响 -->
+            <div class="settings-row settings-row-stack">
+              <div class="settings-copy">
+                <span class="settings-title">内容字号</span>
+                <span class="settings-desc">放大或缩小工作区里的文字，侧栏与弹窗保持不变</span>
+              </div>
+              <div class="export-size-row">
+                <span class="export-size-label">小</span>
+                <input type="range" class="export-slider"
+                       :min="CONTENT_SCALE_MIN" :max="CONTENT_SCALE_MAX" :step="CONTENT_SCALE_STEP"
+                       x-model.number="contentScale" @change="applyContentSize()"
+                       :aria-label="'内容字号 ' + contentScale + '%'">
+                <span class="export-size-label">大</span>
+                <span class="export-size-num" x-text="contentScale + '%'"></span>
+              </div>
+              <button type="button" class="settings-reset" @click="resetContentSize()"
+                      :disabled="contentScale === CONTENT_SCALE_DEFAULT"
+                      x-text="'恢复默认（' + CONTENT_SCALE_DEFAULT + '%）'"></button>
+            </div>
           </div>
         </div>
       </div>
