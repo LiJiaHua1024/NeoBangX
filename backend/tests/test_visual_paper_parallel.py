@@ -208,6 +208,70 @@ def test_incomplete_retry_versions_never_enter_shared_document():
     asyncio.run(run())
 
 
+def test_upstream_internal_cancellation_finishes_without_blocking_healthy_jobs():
+    async def run():
+        jobs = plan_explanations(skeleton(4), LOADER, 1)
+        calls = []
+        stop = asyncio.Event()
+
+        class Fake:
+            async def chat_stream_with_stop(self, user_prompt, **kwargs):
+                nos = requested_nos(user_prompt)
+                calls.append(nos)
+                if "4" not in nos:
+                    raise asyncio.CancelledError("upstream cancelled its own request")
+                yield analysis("4")
+
+        async def consume():
+            return [item async for item in stream_explanations(
+                jobs, build_llm=Fake, stop_event=stop, transfer_count=1,
+                stream_kwargs={}, retry_delay=0,
+            )]
+
+        emitted = await asyncio.wait_for(consume(), 1)
+        assert not stop.is_set()
+        assert jobs[0].state == "error" and jobs[1].state == "done"
+        assert jobs[1].completed == ["4"]
+        assert any(e == "visual_task" and p["state"] == "error" for e, p in emitted)
+        assert any(e == "token" and "@@Q@@ 4" in p for e, p in emitted)
+        assert len(calls) == 8  # 首轮整批 + 两轮逐题重试 + 健康任务。
+
+    asyncio.run(run())
+
+
+def test_actual_worker_cancellation_ends_consumer_and_closes_other_calls():
+    async def run():
+        jobs = plan_explanations(skeleton(4), LOADER, 1)
+        entered = asyncio.Event()
+        closed = []
+
+        class Fake:
+            async def chat_stream_with_stop(self, user_prompt, **kwargs):
+                nos = requested_nos(user_prompt)
+                try:
+                    if "4" in nos:
+                        entered.set()
+                        await asyncio.Event().wait()
+                    else:
+                        await entered.wait()
+                        asyncio.current_task().cancel()
+                        await asyncio.sleep(0)
+                    yield ""
+                finally:
+                    closed.append(nos)
+
+        async def consume():
+            async for _ in stream_explanations(jobs, build_llm=Fake, stop_event=asyncio.Event(),
+                                                transfer_count=1, stream_kwargs={}, retry_delay=0):
+                pass
+
+        with pytest.raises(RuntimeError, match="并发讲解任务异常取消"):
+            await asyncio.wait_for(consume(), 1)
+        assert len(closed) == 2
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("finish,throws,complete", [("stop", False, True), (None, False, True), ("length", False, False), ("content_filter", False, False), ("stop", True, False)])
 def test_missing_end_marker_only_salvaged_on_complete_normal_eof(finish, throws, complete):
     async def run():

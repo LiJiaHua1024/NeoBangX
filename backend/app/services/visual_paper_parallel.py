@@ -414,8 +414,12 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                             if call["state"] == "incomplete":
                                 call["error"] = "讲解未完整，已记录具体缺失项"
                         except asyncio.CancelledError:
-                            call["state"] = "cancelled"
-                            raise
+                            if stop_event.is_set() or asyncio.current_task().cancelling():
+                                call["state"] = "cancelled"
+                                raise
+                            # 上游可独立抛出 CancelledError，但未取消当前 worker。
+                            # 将它作为单次调用失败重试，避免拖垮其他分片。
+                            call["state"], call["error"] = "error", "上游讲解请求异常取消"
                         except Exception as exc:
                             call["state"], call["error"] = "error", str(exc)
                             # 不再把整批题号一网打尽地屏蔽：异常不带题号信息，
@@ -458,24 +462,34 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                 job.elapsed = monotonic() - job.started
                 job.active_nos, job.fallback = [], None
             await queue.put(("visual_task", job.progress()))
-        await queue.put(("worker_done", None))
 
     workers = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(jobs)))]
     stop_wait = asyncio.create_task(stop_event.wait())
     next_item = None
     try:
-        remaining = len(workers)
-        while remaining and not stop_event.is_set():
+        remaining = set(workers)
+        while (remaining or not queue.empty()) and not stop_event.is_set():
             next_item = asyncio.create_task(queue.get())
-            await asyncio.wait([next_item, stop_wait], return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait([next_item, stop_wait, *remaining], return_when=asyncio.FIRST_COMPLETED)
             if stop_event.is_set():
                 break
-            event, payload = next_item.result()
-            next_item = None
-            if event == "worker_done":
-                remaining -= 1
-            else:
+            finished = {task for task in remaining if task.done()}
+            for task in finished:
+                # 监听任务本身的结束，不能依赖 worker 在正常路径发送结束哨兵。
+                # 非用户停止的取消/崩溃必须退出等待，由路由保存已有结果并报告失败。
+                if task.cancelled():
+                    raise RuntimeError("并发讲解任务异常取消")
+                if task.exception() is not None:
+                    raise RuntimeError("并发讲解任务异常结束") from task.exception()
+            remaining -= finished
+            if next_item.done():
+                event, payload = next_item.result()
+                next_item = None
                 yield event, payload
+            else:
+                next_item.cancel()
+                await asyncio.gather(next_item, return_exceptions=True)
+                next_item = None
     finally:
         tasks = workers + [stop_wait] + ([next_item] if next_item else [])
         for task in tasks:
