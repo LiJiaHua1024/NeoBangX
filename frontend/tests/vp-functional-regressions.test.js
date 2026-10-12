@@ -10,9 +10,9 @@ const storage = () => {
   return { getItem: k => values.get(k) || null, setItem: (k, v) => values.set(k, String(v)), removeItem: k => values.delete(k) };
 };
 global.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-function component() {
+function component(hostWindow = {}) {
   const factory = new Function("window", "document", "localStorage", "sessionStorage", "location", "navigator", "performance", "requestAnimationFrame", "MutationObserver", "IntersectionObserver", "NbxMirror", "NbxVersions", "NbxMirrorStore", "NbxMirrorPeer", SRC + "\nreturn nbx;");
-  const c = factory({ matchMedia: global.matchMedia }, undefined, storage(), storage(), { hostname: "test" }, undefined, undefined, undefined, undefined, undefined, NbxMirror, undefined, undefined, undefined)();
+  const c = factory({ matchMedia: global.matchMedia, ...hostWindow }, undefined, storage(), storage(), { hostname: "test" }, undefined, undefined, undefined, undefined, undefined, NbxMirror, undefined, undefined, undefined)();
   c.toast = () => {};
   c.$nextTick = () => {};
   c.ensureCanRun = () => true;
@@ -187,6 +187,38 @@ test("编辑自动保存仍刷新速查表，并保留空写作指导的未完�
   c.vpFlushEdits();
   assert.deepEqual(c.visualPaper.answerMap, { "1": "B" });
   assert.equal(c.vpQuestionAnalyzed(c.vpGroups[1].questions[0]), false);
+});
+
+test("修改答案后立即打印，速查表与正文一致且不丢编辑草稿", () => {
+  let printed;
+  const c = component({ VPPrint: { openDialog: payload => { printed = payload; } } });
+  const q = fullQuestion();
+  c.visualPaper = { ...c.newVisualPaperState(), paper: { title: "Test" }, total: 1,
+    answerMap: { "1": "A" }, groups: [{ id: "reading", questions: [q] }] };
+  c.vpEditing = true;
+  c.closeExportMenu = () => {};
+  c.vpSetField("q.answer", "B");
+  q.transfers.push({ passage: "", stem: "", options: [], answer: "", explanation: "" });
+  c.printVisualPaper();
+  assert.equal(printed.groups[0].questions[0].answer, "B");
+  assert.deepEqual(printed.answerMap, { "1": "B" });
+  assert.equal(c.vpCurrentQuestion, q);
+  assert.equal(q.transfers.length, 2);
+  assert.equal(c.vpEditing, true);
+  assert.equal(c.vpEditDirty, true, "打印不得取消待自动保存的改动");
+  c._vpStopEditTimer();
+});
+
+test("导出速查表跟随清空的答案和新增写作范文，不沿用旧快照", () => {
+  const c = component(), q = fullQuestion();
+  const writing = { no: "2", qtype: "writing", writingGuide: { points: [], outline: "", sample: "" } };
+  c.visualPaper = { ...c.newVisualPaperState(), total: 2, answerMap: { "1": "A" }, groups: [
+    { id: "reading", questions: [q] }, { id: "writing_app", questions: [writing] },
+  ] };
+  q.answer = "";
+  assert.deepEqual(c.vpExportPayload("Test").answerMap, {});
+  writing.writingGuide.sample = "New sample";
+  assert.deepEqual(c.vpExportPayload("Test").answerMap, { "2": "见范文" });
 });
 
 test("历史重解析后导航持有旧题目引用时，语篇题的完成标记仍与整卷一致", () => {

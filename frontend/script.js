@@ -10158,7 +10158,9 @@ function nbx() {
         // 否则学生拿到的是「暂无参考答案」「该题暂无迁移训练内容」还以为是定稿
         analyzedCount: this.vpAnalyzedCount,
         missingNos: this.vpMissingQuestions.map((m) => m.no),
-        answerMap: vp.answerMap || {},
+        // 编辑后可能尚未触发自动保存，导出快照必须从当前题目派生答案，
+        // 保证速查表与这一份快照中的题目正文一致。
+        answerMap: this.vpBuildAnswerMap(),
         groups,
       };
     },
