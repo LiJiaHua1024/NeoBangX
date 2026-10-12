@@ -147,6 +147,48 @@ function fullQuestion(no = "1", count = 1) {
     transfers: Array.from({ length: count }, () => ({ passage: "Transfer passage", stem: "Transfer question?", options: [{ label: "A", text: "Three" }, { label: "B", text: "Four" }], answer: "B", explanation: "Explanation" })) };
 }
 
+test("编辑自动保存保留未填写的新增条目，停顿后仍可接着填写", () => {
+  for (const list of ["q.transfers", "q.pitfalls", "q.pattern.steps", "q.writingGuide.points"]) {
+    const c = component();
+    const q = fullQuestion();
+    q.writingGuide = { points: ["Point"], outline: "Outline", sample: "Sample" };
+    const writing = list === "q.writingGuide.points";
+    if (writing) q.qtype = "writing";
+    c.visualPaper = { ...c.newVisualPaperState(), total: 1, transferCount: 1,
+      groups: [{ id: writing ? "writing_app" : "reading", title: "Group", questions: [q] }] };
+    c.vpEditing = true;
+    c.vpEditBeforeLeave = () => {};
+    c.vpRemountList = () => {};
+    let saved;
+    c._vpPersistEdits = () => { saved = structuredClone(c.visualPaper); };
+    c.vpAddItem(list);
+    const items = c.vpFieldGet(list), before = items.length;
+    c.vpFlushEdits();
+    assert.equal(c.vpCurrentQuestion, q, "自动保存不得替换正在编辑的题目");
+    assert.equal(c.vpFieldGet(list), items);
+    assert.equal(items.length, before, "新增的空条目不得消失");
+    assert.equal(saved.groups[0].questions[0].no, q.no);
+    const field = list === "q.transfers" ? ".passage" : list === "q.pitfalls" ? ".desc" : "";
+    c.vpSetField(`${list}.${before - 1}${field}`, "New content");
+    c.vpFlushEdits();
+    assert.equal(c.vpFieldGet(`${list}.${before - 1}${field}`), "New content");
+    assert.ok(c.output.includes("New content"));
+  }
+});
+
+test("编辑自动保存仍刷新速查表，并保留空写作指导的未完成状态", () => {
+  const c = component(), q = fullQuestion();
+  c.visualPaper = { ...c.newVisualPaperState(), total: 2, groups: [
+    { id: "reading", questions: [q] },
+    { id: "writing_app", questions: [{ no: "2", qtype: "writing", writingGuide: { points: [], outline: "", sample: "" } }] },
+  ] };
+  c.vpEditing = true;
+  c.vpSetField("q.answer", "B");
+  c.vpFlushEdits();
+  assert.deepEqual(c.visualPaper.answerMap, { "1": "B" });
+  assert.equal(c.vpQuestionAnalyzed(c.vpGroups[1].questions[0]), false);
+});
+
 test("历史重解析后导航持有旧题目引用时，语篇题的完成标记仍与整卷一致", () => {
   const c = component();
   const groups = ["cloze7", "cloze", "grammar", "reading"].map(id => {

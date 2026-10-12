@@ -9308,13 +9308,22 @@ function nbx() {
       const raw = this.vpSerializeRaw();
       this.output = raw;
       this.visualPaper.rawJson = raw;
-      // 重解析一次：答案速查表/题量随最新编辑更新。否则修改模式里改了答案后
-      // 不退出就打印/下载，速查表印的还是旧答案（题干页却已是新答案）。
-      this._outputDirty = true;
-      this.vpDoRender();
+      // 编辑中保留结构与对象引用：重解析会丢弃尚未填写的新增条目，
+      // 也会替换正在绑定编辑框的对象。只刷新派生数据，退出修改时再解析对账。
+      this.visualPaper.answerMap = this.vpBuildAnswerMap();
       this._outputDirty = false;
       this.vpRefreshFramework();
       this._vpPersistEdits();
+    },
+    vpBuildAnswerMap() {
+      const out = {};
+      for (const g of this.vpGroups) for (const q of (g.questions || [])) {
+        const key = String(q.no);
+        if (key in out) continue;
+        if (q.answer) out[key] = String(q.answer);
+        else if (this._vpHasWritingGuide(q.writingGuide)) out[key] = "见范文";
+      }
+      return out;
     },
     _vpPersistEdits() {
       const id = this.visualPaper && this.visualPaper.historyId;
