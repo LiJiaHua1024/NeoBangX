@@ -513,7 +513,12 @@ body {
 }
 .page-title { margin: 0; font-size: 1.15rem; font-weight: 800; letter-spacing: -0.02em; }
 .page-desc { margin: 0.25rem 0 0; font-size: 0.8rem; color: var(--dim); }
+/* 配置类页签的草稿状态提示：有未保存修改时用主题色强调 */
+.page-dirty-hint { margin: 0.25rem 0 0; font-size: 0.78rem; color: var(--faint); }
+.page-dirty-hint.is-dirty { color: var(--accent); font-weight: 700; }
 .topbar-actions { display: flex; align-items: center; gap: 0.85rem; flex-shrink: 0; }
+/* 配置类页签顶栏唯一的保存/重置入口：常驻顶栏，无需滚动 */
+.config-bar { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
 /* 顶栏主题入口只在窄屏出现，宽屏用侧栏页脚那份。
    必须叠加 .theme-dots 提高特异性：下方 .theme-dots 的 display:flex 同权重且更靠后 */
 .theme-dots.theme-dots-top { display: none; }
@@ -1516,9 +1521,13 @@ body.modal-open .panel-stack {
   .nav-item { padding: 0.55rem 0.8rem; min-height: 40px; }
 
   /* ---------- 3. 顶栏收紧 ---------- */
-  .topbar { padding: 0.7rem 0.9rem; border-radius: 0.9rem; gap: 0.6rem; }
+  .topbar { padding: 0.7rem 0.9rem; border-radius: 0.9rem; gap: 0.6rem; flex-wrap: wrap; }
   .page-title { font-size: 1.05rem; }
   .page-desc { display: none; }
+  /* 配置保存入口常驻顶栏：窄屏下按钮另起一行、撑满可点，不过度挤压标题 */
+  .topbar-actions { flex-wrap: wrap; row-gap: 0.5rem; }
+  .config-bar { flex: 1 1 100%; }
+  .config-bar .btn-primary, .config-bar .btn-ghost { flex: 1 1 auto; min-height: 44px; }
 
   /* ---------- 4. 安全横幅：文字独占整行，按钮另起一行 ---------- */
   .security-banner { padding: 12px 14px; gap: 10px; }

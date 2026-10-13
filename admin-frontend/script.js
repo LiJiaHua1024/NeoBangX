@@ -636,6 +636,25 @@ function adminApp() {
     // 后端解析出的镜像状态（含 ready / reason），仅用于面板上的状态提示
     mirror: null,
     savingConfig: false,
+    /* 配置草稿：config/logsettings/mirror 三个页签共享同一份 configForm，
+       统一走顶栏唯一的「保存设置 / 重置」。configSnapshot 是最近一次保存
+       （或加载）后的快照，用于算脏（configDirty）；重置即回到快照。 */
+    configSnapshot: "",
+    get isConfigTab() {
+      return this.tab === "config" || this.tab === "logsettings" || this.tab === "mirror";
+    },
+    get configSaving() {
+      return !!this.savingConfig;
+    },
+    /* 脏检查：快照对比。Jev Key 回显是脱敏值（含 ****），保存时原样送回、
+       后端跳过不覆盖——快照与表单都含同一脱敏值，对比结果不受影响。 */
+    get configDirty() {
+      try {
+        return JSON.stringify(this.configForm || {}) !== (this.configSnapshot || "");
+      } catch {
+        return true;
+      }
+    },
     choresModelMenuOpen: false,
     ocrModelMenuOpen: false,
     // 工具推理规则（工具注册表来自 GET /api/admin/tools，与用户端分组一致）
@@ -659,6 +678,18 @@ function adminApp() {
     // MinerU 文档解析
     parseConfig: { mode: "precision", model: "pipeline", has_token: false, token_masked: "" },
     parseTokenInput: "",
+    // parse 页同样走草稿：快照对比算脏，顶栏保存/重置统一落盘
+    parseSnapshot: "",
+    get isParseTab() {
+      return this.tab === "parse";
+    },
+    get parseDirty() {
+      try {
+        return JSON.stringify({ config: this.parseConfig || {}, token: String(this.parseTokenInput || "") }) !== (this.parseSnapshot || "");
+      } catch {
+        return true;
+      }
+    },
     parseModelMenuOpen: false,
     testingMineru: false,
     savingMineru: false,
@@ -1062,12 +1093,81 @@ function adminApp() {
         // 再拉（nav 已绑定 loadCodes / openLogsTab）。对照实验：日志数据启动即常驻
         // 时高压连点必卡、拦掉则 0 卡死——页签数据不提前加载是这条性能线的硬约束。
         await Promise.all([this.loadStats()]);
-        if (this.tab === "config" || this.tab === "logsettings") await this.loadConfig();
+        // 顶栏刷新不丢草稿：配置/解析页有未保存修改时跳过重拉，只刷统计。
+        if (this.isConfigTab && this.configDirty) return;
+        if (this.tab === "parse" && this.parseDirty) return;
+        if (this.tab === "config" || this.tab === "logsettings" || this.tab === "mirror") await this.loadConfig();
         if (this.tab === "parse") await this.loadMineru();
         if (this.tab === "analytics") await this.loadAnalytics();
       } finally {
         this.loading = false;
       }
+    },
+
+    /* 快照：最近一次 loadConfig / saveConfig 成功后的 configForm 深拷贝序列化。
+       脏检查只看这一份；Provider 增删改走独立接口、立即生效，不进快照。 */
+    snapshotConfig() {
+      try {
+        this.configSnapshot = JSON.stringify(this.configForm || {});
+      } catch {
+        this.configSnapshot = "";
+      }
+    },
+    /* 顶栏「重置」：回到最近一次已保存状态（loadConfig 重拉并重建快照）。
+       有未保存草稿时先确认，避免手滑丢编辑。 */
+    async resetConfigDraft() {
+      if (!this.configDirty || this.configSaving) return;
+      const ok = await this.askConfirm({
+        title: "放弃未保存的修改？",
+        message: "将丢弃当前页所有未保存的修改，恢复为最近一次已保存的配置。确定继续吗？",
+        confirmText: "放弃修改",
+        cancelText: "继续编辑",
+        danger: true,
+      });
+      if (!ok) return;
+      await this.loadConfig();
+    },
+    async switchTab(tab) {
+      if (tab === this.tab) return;
+      const leavesConfig = this.isConfigTab;
+      const entersConfig = tab === "config" || tab === "logsettings" || tab === "mirror";
+      const leavesParse = this.tab === "parse";
+      const entersParse = tab === "parse";
+      // config/logsettings/mirror 共用同一份 configForm 草稿：组内切换不重载、不丢草稿。
+      // 只有离开整组去别的页签、且有未保存修改时，才确认是否丢弃。
+      if (leavesConfig && !entersConfig && this.configDirty) {
+        const ok = await this.askConfirm({
+          title: "放弃未保存的修改？",
+          message: "当前配置有未保存的修改，切换页签会重新加载并丢弃这些修改。确定放弃吗？",
+          confirmText: "放弃修改",
+          cancelText: "继续编辑",
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      if (leavesParse && !entersParse && this.parseDirty) {
+        const ok = await this.askConfirm({
+          title: "放弃未保存的修改？",
+          message: "文档解析页有未保存的修改，切换页签会重新加载并丢弃这些修改。确定放弃吗？",
+          confirmText: "放弃修改",
+          cancelText: "继续编辑",
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      this.tab = tab;
+      // 组内切换（config/logsettings/mirror）共用同一份草稿，不重载；
+      // 首次进入（无快照）才拉一次。离开整组后回来同样不重载，草稿还在。
+      if (entersConfig) {
+        if (!this.configSnapshot) await this.loadConfig();
+      }
+      else if (entersParse) {
+        if (!this.parseSnapshot) await this.loadMineru();
+      }
+      else if (tab === "analytics") await this.loadAnalytics();
+      else if (tab === "codes") await this.loadCodes();
+      else if (tab === "logs") { this.loadLogs(); this.loadPayloadFlag(); }
+      else if (tab === "devices") await this.loadDevices();
     },
 
     async api(path, options = {}) {
@@ -2547,6 +2647,7 @@ function adminApp() {
             this.modelProviderDetails[mid] = (this.modelProviderMap[mid] || []).map(pid => ({ provider_id: pid, provider_model_id: mid, priority: 0 }));
           }
         }
+        this.snapshotConfig();
       } catch (e) {
         this.toast(e.message || "加载配置失败", "error");
       }
@@ -2739,12 +2840,7 @@ function adminApp() {
       }
       if (!this.configForm.default_model && userUsable && enabled) this.configForm.default_model = id;
       this.modelModalOpen = false;
-      // 自动保存，无需用户再点保存配置即可绑定 Provider
-      try {
-        await this.saveConfig();
-      } catch (e) {
-        // saveConfig 已 toast
-      }
+      // 只写草稿：统一走顶栏唯一的「保存设置」落盘，不再偷偷自动保存
     },
 
     async removeModel(i) {
@@ -2838,12 +2934,7 @@ function adminApp() {
         this.configForm.tool_reasoning_rules.splice(this.ruleModalIndex, 1, entry);
       }
       this.ruleModalOpen = false;
-      // 与保存模型弹窗一致：自动保存
-      try {
-        await this.saveConfig();
-      } catch (e) {
-        // saveConfig 已 toast
-      }
+      // 只写草稿：统一走顶栏唯一的「保存设置」落盘，不再偷偷自动保存
     },
     async removeRule(i) {
       const r = this.configForm.tool_reasoning_rules[i];
@@ -2851,7 +2942,7 @@ function adminApp() {
       const names = r.tool_ids.map((t) => this.toolName(t)).join("、");
       const ok = await this.askConfirm({
         title: "删除推理规则？",
-        message: `确定删除覆盖「${names}」的推理规则？删除后需点击“保存配置”生效。`,
+        message: `确定删除覆盖「${names}」的推理规则？删除后是草稿，还要点顶栏“保存设置”才落盘。`,
         confirmText: "删除",
         danger: true,
       });
@@ -2936,13 +3027,8 @@ function adminApp() {
           return;
         }
       }
+      // 只改草稿：统一走顶栏「保存设置」落盘；未保存前顶栏会提示有未保存修改
       m.enabled = nextEnabled;
-      try {
-        await this.saveConfig();
-      } catch (e) {
-        // saveConfig 已 toast，失败时回滚本地状态
-        m.enabled = !nextEnabled;
-      }
     },
 
     async saveConfig() {
@@ -3102,6 +3188,26 @@ function adminApp() {
     },
 
     /* ============ MinerU 文档解析 ============ */
+    snapshotParse() {
+      try {
+        this.parseSnapshot = JSON.stringify({ config: this.parseConfig || {}, token: String(this.parseTokenInput || "") });
+      } catch {
+        this.parseSnapshot = "";
+      }
+    },
+    /* parse 页顶栏「重置」：回到已保存状态。有草稿时先确认。 */
+    async resetParseDraft() {
+      if (!this.parseDirty || this.savingMineru) return;
+      const ok = await this.askConfirm({
+        title: "放弃未保存的修改？",
+        message: "将丢弃文档解析页所有未保存的修改，恢复为最近一次已保存的配置。确定继续吗？",
+        confirmText: "放弃修改",
+        cancelText: "继续编辑",
+        danger: true,
+      });
+      if (!ok) return;
+      await this.loadMineru();
+    },
     async loadMineru() {
       try {
         const data = await this.api("/api/admin/mineru");
@@ -3112,6 +3218,7 @@ function adminApp() {
           token_masked: data.token_masked || "",
         };
         this.parseTokenInput = "";
+        this.snapshotParse();
       } catch (e) {
         this.toast(e.message || "加载文档解析配置失败", "error");
       }
@@ -3150,6 +3257,7 @@ function adminApp() {
           token_masked: data.token_masked || "",
         };
         this.parseTokenInput = "";
+        this.snapshotParse();
         this.toast("文档解析配置已保存");
       } catch (e) {
         this.toast(e.message || "保存失败", "error");
@@ -3159,6 +3267,20 @@ function adminApp() {
     },
 
     /* ============ Provider 聚合 ============ */
+    /* Provider 增删只刷 Provider 部分，不碰 configForm 草稿：
+       loadConfig 会整页重载并覆盖用户未保存的编辑，这里只同步 providers 列表。 */
+    async reloadProvidersOnly() {
+      try {
+        const data = await this.api("/api/admin/config");
+        this.providers = Array.isArray(data.providers) ? data.providers : [];
+        if (data.model_provider_map && typeof data.model_provider_map === "object") {
+          this.modelProviderMap = data.model_provider_map;
+        }
+        if (data.model_provider_details && typeof data.model_provider_details === "object") {
+          this.modelProviderDetails = data.model_provider_details;
+        }
+      } catch {}
+    },
     providerHasKey(id) {
       const p = this.providersById[id];
       return !!(p && p.has_api_key);
@@ -3200,7 +3322,7 @@ function adminApp() {
           this.toast("Provider 已添加");
         }
         this.providerModalOpen = false;
-        await this.loadConfig();
+        await this.reloadProvidersOnly();
       } catch (e) { this.toast(e.message || "保存失败", "error"); }
       finally { this.savingProvider = false; }
     },
@@ -3215,7 +3337,7 @@ function adminApp() {
       try {
         await this.api(`/api/admin/providers/${p.id}`, { method: "DELETE" });
         this.toast("已删除");
-        await this.loadConfig();
+        await this.reloadProvidersOnly();
       } catch (e) { this.toast(e.message || "删除失败", "error"); }
     },
     async toggleProviderEnabled(p) {
@@ -3438,7 +3560,7 @@ function adminApp() {
             body: JSON.stringify({ bindings }),
           });
           this.toast("优先级已更新");
-        } catch (e) { this.toast(e.message || "保存优先级失败", "error"); await this.loadConfig(); }
+        } catch (e) { this.toast(e.message || "保存优先级失败", "error"); await this.reloadProvidersOnly(); }
         return;
       }
       const arr = [...(this.modelProviderMap[modelId] || [])];
@@ -3454,7 +3576,7 @@ function adminApp() {
           body: JSON.stringify({ ordered_provider_ids: arr }),
         });
         this.toast("优先级已更新");
-      } catch (e) { this.toast(e.message || "保存优先级失败", "error"); await this.loadConfig(); }
+      } catch (e) { this.toast(e.message || "保存优先级失败", "error"); await this.reloadProvidersOnly(); }
     },
     async moveProviderInModel(modelId, idx, dir) {
       const details = this.modelProviderDetails[modelId];
@@ -3474,7 +3596,7 @@ function adminApp() {
             body: JSON.stringify({ bindings }),
           });
           this.toast("优先级已更新");
-        } catch (e) { this.toast(e.message || "保存失败", "error"); await this.loadConfig(); }
+        } catch (e) { this.toast(e.message || "保存失败", "error"); await this.reloadProvidersOnly(); }
         return;
       }
       const arr = [...(this.modelProviderMap[modelId] || [])];
@@ -3489,7 +3611,7 @@ function adminApp() {
           body: JSON.stringify({ ordered_provider_ids: arr }),
         });
         this.toast("优先级已更新");
-      } catch (e) { this.toast(e.message || "保存失败", "error"); await this.loadConfig(); }
+      } catch (e) { this.toast(e.message || "保存失败", "error"); await this.reloadProvidersOnly(); }
     },
     moveModelProviderOrdered(idx, dir) {
       const j = idx + dir;

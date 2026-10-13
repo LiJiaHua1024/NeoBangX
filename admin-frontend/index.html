@@ -48,31 +48,31 @@
       </div>
 
       <nav class="nav">
-        <button class="nav-item" :class="{ on: tab === 'dashboard' }" @click="tab = 'dashboard'">
+        <button class="nav-item" :class="{ on: tab === 'dashboard' }" @click="switchTab('dashboard')">
           <span>概览</span>
         </button>
-        <button class="nav-item" :class="{ on: tab === 'analytics' }" @click="tab = 'analytics'; openAnalyticsTab()">
+        <button class="nav-item" :class="{ on: tab === 'analytics' }" @click="switchTab('analytics')">
           <span>用量分析</span>
         </button>
-        <button class="nav-item" :class="{ on: tab === 'codes' }" @click="tab = 'codes'; loadCodes()">
+        <button class="nav-item" :class="{ on: tab === 'codes' }" @click="switchTab('codes')">
           <span>使用码</span>
         </button>
-        <button class="nav-item" :class="{ on: tab === 'logs' }" @click="tab = 'logs'; openLogsTab()">
+        <button class="nav-item" :class="{ on: tab === 'logs' }" @click="switchTab('logs')">
           <span>使用日志</span>
         </button>
-        <button class="nav-item" :class="{ on: tab === 'devices' }" @click="tab = 'devices'; loadDevices()">
+        <button class="nav-item" :class="{ on: tab === 'devices' }" @click="switchTab('devices')">
           <span>设备指纹</span>
         </button>
-        <button class="nav-item" :class="{ on: tab === 'logsettings' }" @click="tab = 'logsettings'; loadConfig()">
+        <button class="nav-item" :class="{ on: tab === 'logsettings' }" @click="switchTab('logsettings')">
           <span>日志设置</span>
         </button>
-        <button class="nav-item" :class="{ on: tab === 'config' }" @click="tab = 'config'; loadConfig()">
+        <button class="nav-item" :class="{ on: tab === 'config' }" @click="switchTab('config')">
           <span>API 配置</span>
         </button>
-        <button class="nav-item" :class="{ on: tab === 'parse' }" @click="tab = 'parse'; loadMineru()">
+        <button class="nav-item" :class="{ on: tab === 'parse' }" @click="switchTab('parse')">
           <span>文档解析</span>
         </button>
-        <button class="nav-item" :class="{ on: tab === 'mirror' }" @click="tab = 'mirror'; loadConfig()">
+        <button class="nav-item" :class="{ on: tab === 'mirror' }" @click="switchTab('mirror')">
           <span>线路镜像</span>
         </button>
       </nav>
@@ -98,6 +98,10 @@
         <div>
           <h1 class="page-title" x-text="pageTitle"></h1>
           <p class="page-desc" x-text="pageDesc"></p>
+          <!-- 配置类页签：统一的草稿状态提示。保存/重置入口常驻顶栏，无需滚到底部。-->
+          <p class="page-dirty-hint" :class="{ 'is-dirty': (isConfigTab && configDirty) || (isParseTab && parseDirty) }"
+             x-show="isConfigTab || isParseTab" x-cloak
+             x-text="configSaving || savingMineru ? '保存中…' : ((isConfigTab ? configDirty : parseDirty) ? '● 有未保存的修改' : '所有修改已保存')"></p>
         </div>
         <div class="topbar-actions">
           <!-- 窄屏下侧栏页脚被收起，主题入口移到顶栏，保证手机上仍可切换 -->
@@ -107,6 +111,21 @@
                       @click="setTheme(th.id)" :title="th.name" :aria-label="th.name"></button>
             </template>
           </div>
+          <!-- 配置类页签的唯一保存/重置入口：随顶栏常驻，无需滚动。-->
+          <template x-if="isConfigTab">
+            <div class="config-bar">
+              <button class="btn-ghost" @click="resetConfigDraft()" :disabled="!configDirty || configSaving">重置</button>
+              <button class="btn-primary" @click="saveConfig()" :disabled="!configDirty || configSaving"
+                      x-text="configSaving ? '保存中…' : '保存设置'"></button>
+            </div>
+          </template>
+          <template x-if="isParseTab">
+            <div class="config-bar">
+              <button class="btn-ghost" @click="resetParseDraft()" :disabled="!parseDirty || savingMineru">重置</button>
+              <button class="btn-primary" @click="saveMineru()" :disabled="!parseDirty || savingMineru"
+                      x-text="savingMineru ? '保存中…' : '保存设置'"></button>
+            </div>
+          </template>
           <button class="btn-ghost" @click="refreshAll()" :disabled="loading">
             刷新
           </button>
@@ -153,8 +172,8 @@
           <h2 class="card-title">快速操作</h2>
           <div class="quick-actions">
             <button class="btn-primary" @click="openCreate()">生成使用码</button>
-            <button class="btn-ghost" @click="tab = 'codes'; loadCodes()">管理使用码</button>
-            <button class="btn-ghost" @click="tab = 'config'; loadConfig()">配置 LLM</button>
+            <button class="btn-ghost" @click="switchTab('codes')">管理使用码</button>
+            <button class="btn-ghost" @click="switchTab('config')">配置 LLM</button>
           </div>
           <p class="muted mt-4">主站端口 8000 对外；本管理后台 8001 仅内网访问。</p>
         </div>
@@ -944,7 +963,7 @@
           <div class="card-head-row">
             <div>
               <h2 class="card-title">模型管理</h2>
-              <p class="muted">用户可选的模型列表；拖动行首手柄可调整模型顺序。每个模型可独立拖拽排序其可用 Provider（首位优先，失败自动 fallback 到下一位）。独占模型仅单 Provider，共享模型可多 Provider。修改后需点击下方“保存配置”生效；Provider 优先级调整即时生效。</p>
+              <p class="muted">用户可选的模型列表；拖动行首手柄可调整模型顺序。每个模型可独立拖拽排序其可用 Provider（首位优先，失败自动 fallback 到下一位）。独占模型仅单 Provider，共享模型可多 Provider。模型增删改、排序与开关均为草稿，改完点顶栏“保存设置”统一落盘；Provider 绑定与优先级调整为立即生效（弹窗保存 / 拖拽 / ↑↓ 即落盘）。</p>
             </div>
             <button class="btn-primary" @click="openAddModel()">+ 添加模型</button>
           </div>
@@ -1127,7 +1146,7 @@
           <div class="card-head-row">
             <div>
               <h2 class="card-title">工具推理规则</h2>
-              <p class="muted">为指定工具强制指定思考强度，覆盖所选模型自身的思考配置；多条规则命中同一工具时按列表顺序取第一条。修改后需点击下方“保存配置”生效（弹窗内保存除外）。</p>
+              <p class="muted">为指定工具强制指定思考强度，覆盖所选模型自身的思考配置；多条规则命中同一工具时按列表顺序取第一条。增删改与排序均为草稿，改完点顶栏“保存设置”统一落盘。</p>
             </div>
             <button class="btn-primary" @click="openAddRule()">+ 添加规则</button>
           </div>
@@ -1262,10 +1281,7 @@
               <span class="field-hint">整卷转录的输出上限，默认 8192；一次识别多张图时更吃这个预算</span>
             </label>
           </div>
-          <div class="form-actions" style="margin-top:1rem; border-top:1px solid var(--border); padding-top:1rem">
-            <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存配置</button>
-            <button class="btn-ghost" @click="loadConfig()">重新加载</button>
-          </div>
+          <p class="field-hint mt-2">本页所有修改均为草稿（含模型、规则与下方参数），改完点顶栏“保存设置”统一落盘；“重置”回到已保存状态。</p>
         </div>
 
         <div class="glass card">
@@ -1311,11 +1327,9 @@
             </label>
           </div>
           <div class="form-actions" style="margin-top:1rem; border-top:1px solid var(--border); padding-top:1rem">
-            <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存配置</button>
             <button class="btn-ghost" @click="testJev()" :disabled="testingJev || savingConfig" x-text="testingJev ? '测试中…' : '测试连接'"></button>
-            <button class="btn-ghost" @click="loadConfig()">重新加载</button>
           </div>
-          <p class="field-hint mt-2" x-show="jevTestResult" x-text="jevTestResult"></p>
+          <p class="field-hint mt-2">测试连接用当前输入即时验证（不落盘）；其它修改均为草稿，点顶栏“保存设置”统一落盘。<span x-show="jevTestResult" x-text="jevTestResult"></span></p>
         </div>
 
       </section></template>
@@ -1346,7 +1360,7 @@
         <div class="glass card parse-model-card" x-show="parseConfig.mode === 'precision'">
           <div>
             <h2 class="card-title">模型版本</h2>
-            <p class="muted">仅精准模式有效；切换后保存生效。</p>
+            <p class="muted">仅精准模式有效；切换后点顶栏“保存设置”生效。</p>
           </div>
           <div class="custom-select mt-3" @click.outside="parseModelMenuOpen = false" style="max-width: 360px;">
             <button class="custom-select-trigger" :class="{ open: parseModelMenuOpen }" @click="parseModelMenuOpen = !parseModelMenuOpen">
@@ -1358,7 +1372,7 @@
               <button class="custom-select-item" :class="{ on: parseConfig.model === 'vlm' }" @click="parseConfig.model = 'vlm'; parseModelMenuOpen = false">vlm</button>
             </div>
           </div>
-          <p class="field-hint mt-2">推荐 pipeline：速度与效果均衡；vlm 精度更高但更慢。切换后保存生效。</p>
+          <p class="field-hint mt-2">推荐 pipeline：速度与效果均衡；vlm 精度更高但更慢。切换后点顶栏“保存设置”生效。</p>
         </div>
 
         <div class="glass card" x-show="parseConfig.mode === 'precision'">
@@ -1376,13 +1390,7 @@
           <div class="form-actions">
             <button class="btn-ghost" @click="testMineru()" :disabled="testingMineru" x-text="testingMineru ? '测试中…' : '一键测试是否可用'"></button>
           </div>
-        </div>
-
-        <div class="glass card">
-          <div class="form-actions" style="margin-top:0">
-            <button class="btn-primary" @click="saveMineru()" :disabled="savingMineru" x-text="savingMineru ? '保存中…' : '保存'"></button>
-            <button class="btn-ghost" @click="loadMineru()">重新加载</button>
-          </div>
+          <p class="field-hint mt-2">本页修改点顶栏“保存设置”统一落盘；“重置”回到已保存状态。“一键测试”用已保存配置即时验证，不落盘。</p>
         </div>
       </section></template>
 
@@ -1421,11 +1429,11 @@
           </div>
 
           <div class="form-actions">
-            <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存日志设置</button>
             <button class="btn-danger" @click="purgeLogs()" :disabled="purging">
               <span x-text="purging ? '清理中…' : '立即清理过期日志'"></span>
             </button>
           </div>
+          <p class="field-hint mt-2">日志开关与保留天数均为草稿，改完点顶栏“保存设置”统一落盘；“立即清理”是即时生效的危险操作，不经过草稿。</p>
         </div>
       </section></template>
 
@@ -1480,11 +1488,7 @@
           </p>
 
           <p class="field-hint mt-3" x-show="mirrorStatusText" x-text="mirrorStatusText"></p>
-
-          <div class="form-actions">
-            <button class="btn-primary" @click="saveConfig()" :disabled="savingConfig">保存线路镜像</button>
-            <button class="btn-ghost" @click="loadConfig()">重新加载</button>
-          </div>
+          <p class="field-hint mt-2">开关与线路地址均为草稿，改完点顶栏“保存设置”统一落盘；下方状态以已保存配置为准。</p>
         </div>
       </section></template>
     </main>
@@ -1711,7 +1715,7 @@
               <button class="preset-chip" :class="{ on: modelForm.concurrency_mode === 'custom' }" @click="modelForm.concurrency_mode = 'custom'">自定义</button>
             </div>
             <input x-show="modelForm.concurrency_mode === 'custom'" type="number" step="1" x-model.number="modelForm.visual_paper_concurrency">
-            <span class="field-hint">每份试卷第二步同时发起的请求数，自动补全共用此设置。1 为串行，0 或负数（如 -1）表示不限并发；保存配置后对新请求生效。</span>
+            <span class="field-hint">每份试卷第二步同时发起的请求数，自动补全共用此设置。1 为串行，0 或负数（如 -1）表示不限并发；点顶栏“保存设置”后对新请求生效。</span>
           </div>
           <label class="field mb-3">
             <span>推荐评分（0-10）</span>
