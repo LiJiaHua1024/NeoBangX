@@ -73,7 +73,7 @@ PROPOSITION_TOOLS = [
 ]
 
 REFERENCE_TOOLS = [
-    {"id": "25", "name": "自由对话", "icon": "chat", "description": "通用 LLM 对话，提示词调试用"},
+    {"id": "25", "name": "自由对话", "icon": "chat", "description": "个性化自定义需求，工具清单外的教学任务兜底"},
     {
         "id": "32",
         "name": "识别图片文字",

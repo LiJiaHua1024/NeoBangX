@@ -79,7 +79,7 @@ TOOL_GROUPS: list[dict] = [
         "title": "通用工具",
         "collapsed": False,
         "tools": [
-            {"id": "25", "name": "自由对话", "icon": "chat", "description": "通用 LLM 对话，提示词调试用", "prompt_filename": "自由对话.md"},
+            {"id": "25", "name": "自由对话", "icon": "chat", "description": "个性化自定义需求，工具清单外的教学任务兜底", "prompt_filename": "自由对话.md"},
             {"id": "32", "name": "识别图片文字", "icon": "scan-text", "description": "图片转文字（试卷、手写作文）", "prompt_filename": "识别图片文字-印刷试卷.md"},
             {"id": "33", "name": "翻译", "icon": "languages", "description": "原文译文对照，支持试卷、作文、文档", "prompt_filename": "翻译.md"},
         ],
