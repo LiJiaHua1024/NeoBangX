@@ -13,4 +13,9 @@ LOCAL-NOTES.md
 .venv/
 __pycache__/
 
+# 运行期日志与临时启动脚本
+*.log
+*.log.err
+run_*.ps1
+
 # 说明：suites/ 下的内容全部入库（案例库、prompt 版本记录、失败样例库、报告）

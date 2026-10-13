@@ -1,7 +1,7 @@
 {
-  "base_url": "https://api.commandcode.ai/provider/v1/systemone",
-  "api_key": "<Command Code key>",
-  "model": "typesafe/jev",
+  "base_url": "https://api.experientiallabs.ai/v1/systemone",
+  "api_key": "<xpl key>",
+  "model": "jev-latest",
   "referer": "",
   "title": ""
 }

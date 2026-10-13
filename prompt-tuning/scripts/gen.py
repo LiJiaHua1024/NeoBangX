@@ -80,6 +80,10 @@ def call_llm(cfg: dict, prompt: str) -> tuple[str, dict]:
                     headers={"Authorization": f"Bearer {cfg['api_key']}"},
                     json=body,
                 )
+                if resp.status_code == 429:
+                    last_err = f"HTTP 429 限流"
+                    time.sleep(15 * (attempt + 1))
+                    continue
                 if resp.status_code >= 500:
                     last_err = f"HTTP {resp.status_code}: {resp.text[:300]}"
                     time.sleep(3 * (attempt + 1))
@@ -153,7 +157,7 @@ def main() -> None:
     jobs = [(cfg, prompt_file, cid, cases[cid], n, out_dir) for cid in case_ids for n in counts]
     print(f"共 {len(jobs)} 个生成任务 → {out_dir}")
     results = []
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=int(cfg.get("gen_workers", 2))) as pool:
         futures = {pool.submit(run_one, *job): job[2] for job in jobs}
         for fut in as_completed(futures):
             try:

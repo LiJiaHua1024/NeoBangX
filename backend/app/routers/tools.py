@@ -62,10 +62,8 @@ TEACHING_TOOLS = [
 ]
 
 PROPOSITION_TOOLS = [
-    {"id": "17", "name": "阅读文本改编", "icon": "edit-1", "description": "改写为高考阅读文本"},
-    {"id": "18", "name": "阅读文本改编 2", "icon": "edit-2", "description": "更符合高考要求的改编版本"},
-    {"id": "19", "name": "阅读理解设问", "icon": "question", "description": "语篇功能 / 主线 / 概括转述设问"},
-    {"id": "20", "name": "阅读理解设问 2", "icon": "question-2", "description": "另一变体"},
+    {"id": "17", "name": "阅读文本改编", "icon": "edit-1", "description": "高考阅读文本改编 + 词汇真实化改造"},
+    {"id": "19", "name": "阅读理解设问", "icon": "question", "description": "双版本命题（标准化 / 思辨）+ 鉴别指引"},
     {"id": "21", "name": "辅助完形填空命题", "icon": "cloze", "description": "完形设空 + 选项 + 答案解析"},
     {"id": "22", "name": "试题解读分析", "icon": "analysis", "description": "选材立意 / 能力考查 / 教学引导"},
     {"id": "23", "name": "英语试题 Bug 侦察", "icon": "bug", "description": "拼写 / 标点 / 中式英语 / 逻辑漏洞"},
@@ -167,9 +165,11 @@ def _resolve_prompt_filename(tool_id: str) -> str:
         "30": "隐性写作知识显性化",
         "31": "读后续写审题指导",
         "17": "阅读文本改编",
-        "18": "阅读文本改编 2",
+        # 旧 id 18/20（「阅读文本改编 2」/「阅读理解设问 2」）已并入 17/19；
+        # 映射保留别名，旧会话的续写/预览不断链
+        "18": "阅读文本改编",
         "19": "阅读理解设问",
-        "20": "阅读理解设问 2",
+        "20": "阅读理解设问",
         "21": "辅助完形填空命题",
         "22": "试题解读分析",
         "23": "英语试题 Bug 侦察",

@@ -10,7 +10,7 @@
 
 一套可复用的 prompt 调优工具与流程。核心范式：**让 judge 找出问题 → 改 prompt → 重新生成 → 再 judge → 循环到收敛**，全程用数据说话。
 
-已完成两个 prompt 的调优（`智能错题迁移` v0 → v18，`试卷可视化全解` v0 → v4），其余 prompt 尚未处理。
+已完成四个 prompt 的调优（`智能错题迁移` v0 → v18，`试卷可视化全解` v0 → v4，`阅读理解设问` 与 `阅读文本改编` 合并版各 v0 → v1），其余 prompt 尚未处理。
 
 ---
 
@@ -25,7 +25,7 @@ prompt-tuning/
 │   ├─ api_config.example.json   模板（入库）
 │   ├─ api_config.json           真实配置（**忽略**，含 key）
 │   ├─ scorer_config.example.json / scorer_config.json   免费评分器（respan）
-│   └─ jev_config.example.json   / jev_config.json       官方 Jev（Command Code）
+│   └─ jev_config.example.json   / jev_config.json       官方 Jev（experientiallabs，仅 jev-latest）
 ├─ scripts/                     全部工具（与具体 prompt 无关）
 │   ├─ paths.py                 路径解析：--suite 决定读写哪个 suite/run
 │   ├─ gen.py solve.py strip.py  生成 / 盲测解题 / 切出 blind 版
@@ -72,7 +72,7 @@ uv run python scripts/check.py --round v17 --suite 智能错题迁移   # 多 su
 
 ### 0. 前置准备
 1. 把生产 prompt 路径记下来（调优只改**副本**，最后再回写）。
-2. 准备**模型配置**：`config/api_config.json`（生成 + 评审池）、`config/scorer_config.json`（respan，免费）、`config/jev_config.json`（typesafe/jev）。
+2. 准备**模型配置**：`config/api_config.json`（生成 + 评审池，本地免费端点）、`config/scorer_config.json`（respan，免费）、`config/jev_config.json`（Jev，仅 jev-latest）。
 
 ### 1. 建 suite
 ```bash
@@ -183,6 +183,11 @@ uv run python scripts/judge.py --round v2 --teacher --students --student-counts 
 | `judge.py` | 教师 + 学生人设多视角评审 | `--teacher --students --student-counts` | 慢 |
 | `blind_student.py` | 多模型盲做统计 | `--round --files` | 中 |
 | `paths.py` | 路径解析（被其他脚本 import） | `--suite` | — |
+| `mech_check.py` | **改编/设问类**：机械检查（结构块/词数/注释格式/选项数/A-B 题干查重/正确项长度露底） | `--round` | 秒级，免费 |
+| `suite_score.py` | **改编/设问类**：窄问题评分（改编 7 项 / 设问 7 项含迷惑性四项，Jev） | `--round` | 快 |
+| `rq_blind.py` | **设问类**：盲做正确率/犹豫率/干扰项被选分布（迷惑性实测） | `--round --solvers` | 中 |
+| `pair_ab.py` | **改编/设问类**：v_new-vs-v0 匿名对比（不退步门禁，正反双序） | `--round-a --round-b` | 快 |
+| `panel_score.py` | **设问类**：多模型评委面板（jev/ling/mimo/bunny 全题全评并发，逐评委留痕，防单评委偏差） | `--round --judges` | 中 |
 | `vp_parse.py` | **整卷类**：`@@TAG@@` 协议解析库（含格式/顺序违规检测） | 被 import | — |
 | `vp_check.py` | **整卷类**：协议合规 + 照录保真 + 迁移质量机械检查 | `--round` | 秒级 |
 | `vp_scorer.py` | **整卷类**：15 项窄问题评分（原题四维 6 项 + 迁移块分型 4-6 项） | `--rounds --config` | 快 |
@@ -197,6 +202,8 @@ uv run python scripts/judge.py --round v2 --teacher --students --student-counts 
 |---|---|---|
 | 智能错题迁移 | ✅ 已调优（v0→v18，v18 专项治理 Goodhart 代偿） | 生产文件 `prompts/智能错题迁移.md`；细节见 `suites/智能错题迁移/{notes,report}.md`。硬否定句 16%→7%（jev）、分配表泄漏 0、错因漂移 0%、陷阱存活 100%；已知代价：overall 盲评 v17 8:1 / jev 合并 24:11（两族一致，为真），败因是解析-题面偶发自相矛盾（可做机械门禁）；deception 税经 subagent 复核不成立 |
 | 试卷可视化全解 | ✅ 已调优（v0→v4，移植 v18 机制） | 生产文件 `prompts/试卷可视化全解.md`；细节见 `suites/试卷可视化全解/{notes,report}.md`。v4：陷阱存活失败率 29%→8%、硬否定 24%→8%；<br>已知代价：v3 时代范式可套用性 ↓13pt；残留：c3 七选五逻辑功能多样性脆、三类"自查不可靠"缺陷建议改做生成后门禁 |
+| 阅读理解设问 | ✅ 已调优（合并 v0→v1→v2，2026-10-13，本地免费模型） | 生产文件 `prompts/阅读理解设问.md`（v2，双版本命题+鉴别指引）。**多模型评委面板**（jev/ling/mimo/bunny 全题全评）驱动：v2 移植错题迁移 v18 设错机制（钓鱼路径/半对/绝对化反转/错法轮换）→ hesitation jev 0.36→0.42、shape_giveaway 0.40→0.35、pair_ab deception 3:0 无回退。单评委偏差实证：jev no_absurd 比其他评委苛刻 20+pt。遗留：强模型盲做 99-100% 正确率（"对的太对"转真学生实测）、ling 429 待补列。细节见 `suites/阅读理解设问/{notes,report}.md` |
+| 阅读文本改编 | ✅ 已调优（合并 v0→v1，2026-10-13，本地免费模型） | 生产文件 `prompts/阅读文本改编.md`（改编+词汇真实化改造，原"改编 2"已并入）。v1：culture_kept 4/5→5/5；pair_ab 四维度全占优无回退。遗留：in_context 0/5 两轮不动（转人工抽检/后置门禁，不再加规则）。细节见 `suites/阅读文本改编/{notes,report}.md` |
 | 其他 prompt | ⬜ 待开始 | 仓库 `prompts/` 下还有 30+ 个（错因分析、作文批改、各类教学设计等）。**动手前先看第 19 条：优先从上面两个 suite 移植机制** |
 
 ### 已知待办（与调优无关但相关）
