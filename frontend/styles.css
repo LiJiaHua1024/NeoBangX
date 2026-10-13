@@ -106,7 +106,7 @@ html[data-theme="obsidian"] {
   --title-grad: linear-gradient(112deg, #f4e3c2 0%, var(--accent) 55%, var(--accent-2) 100%);
   --text: #edece7;
   --text-dim: #9b978c;
-  --text-faint: #63605a;
+  --text-faint: #7e7b76;
   --glass-spec: #f7e7cd;
   --panel: color-mix(in srgb, var(--accent) 6%, transparent);
   --panel-soft: color-mix(in srgb, var(--accent) 4%, transparent);
@@ -136,8 +136,8 @@ html[data-theme="paper"] {
   --accent-2: #8c3316;
   --title-grad: linear-gradient(112deg, #d97b4a 0%, var(--accent) 55%, var(--accent-2) 100%);
   --text: #1d1a15;
-  --text-dim: #6f675a;
-  --text-faint: #a29a8b;
+  --text-dim: #5f594d;
+  --text-faint: #706a60;
   --glass-spec: #fffdf8;
   --panel: color-mix(in srgb, var(--glass-spec) 14%, transparent);
   --panel-soft: color-mix(in srgb, var(--glass-spec) 10%, transparent);
@@ -167,8 +167,8 @@ html[data-theme="celadon"] {
   --accent-2: #0a5245;
   --title-grad: linear-gradient(112deg, #2f9c83 0%, var(--accent) 55%, var(--accent-2) 100%);
   --text: #15211c;
-  --text-dim: #5d6e66;
-  --text-faint: #93a39b;
+  --text-dim: #4e5c56;
+  --text-faint: #626d68;
   --glass-spec: #eaf7f1;
   --panel: color-mix(in srgb, var(--glass-spec) 14%, transparent);
   --panel-soft: color-mix(in srgb, var(--glass-spec) 10%, transparent);
@@ -198,8 +198,8 @@ html[data-theme="jade"] {
   --accent-2: #2f8a66;
   --title-grad: linear-gradient(112deg, #c2ecd2 0%, var(--accent) 55%, var(--accent-2) 100%);
   --text: #e4eee7;
-  --text-dim: #7f948a;
-  --text-faint: #557064;
+  --text-dim: #80958b;
+  --text-faint: #698177;
   --glass-spec: #d8f2e2;
   --panel: color-mix(in srgb, var(--accent) 6%, transparent);
   --panel-soft: color-mix(in srgb, var(--accent) 4%, transparent);
@@ -250,8 +250,8 @@ html[data-theme="sora"] {
   --accent-2: #35709f;
   --title-grad: linear-gradient(112deg, #9cc4e6 0%, var(--accent) 55%, var(--accent-2) 100%);
   --text: #1d2733;
-  --text-dim: #5c6d7f;
-  --text-faint: #93a3b3;
+  --text-dim: #45525f;
+  --text-faint: #5a636d;
   --glass-spec: #f2f8ff;
   --panel: color-mix(in srgb, var(--glass-spec) 13%, transparent);
   --panel-soft: color-mix(in srgb, var(--glass-spec) 9%, transparent);
@@ -296,8 +296,8 @@ html[data-theme="sora"][data-sky="night"] {
   --accent-2: #5d86c2;
   --title-grad: linear-gradient(112deg, #dcebff 0%, var(--accent) 55%, var(--accent-2) 100%);
   --text: #e3ecf7;
-  --text-dim: #8ba0b8;
-  --text-faint: #5b6f85;
+  --text-dim: #a1b2c5;
+  --text-faint: #8e9cab;
   --glass-spec: #cfe0ff;
   --panel: color-mix(in srgb, var(--accent) 7%, transparent);
   --panel-soft: color-mix(in srgb, var(--accent) 4.5%, transparent);
@@ -362,6 +362,16 @@ html[data-theme="sora"] .mascot-peeking {
 @keyframes mascot-breathe {
   0%, 100% { transform: translate3d(0, 0, 0) rotate(0) scale(1); }
   50% { transform: translate3d(0, -4px, 0) rotate(-1.2deg) scale(1.012); }
+}
+
+/* 更高对比度偏好（WCAG 1.4.3 增强）：系统开启「提高对比度」时次级文字向正文色靠拢，
+   color-mix 对亮/暗主题自动取向。用 !important 压过各主题定义；
+   选择器故意不带主题值，避免被「手机页令牌与主站逐字一致」测试当成主题块解析。 */
+@media (prefers-contrast: more) {
+  html[data-theme] {
+    --text-dim: color-mix(in srgb, var(--text) 84%, var(--bg)) !important;
+    --text-faint: color-mix(in srgb, var(--text) 72%, var(--bg)) !important;
+  }
 }
 
 /* 悠空 · 首页底部台词（欢迎页最底下居中，不再漂浮覆盖内容） */
@@ -2590,7 +2600,17 @@ mark, .vp-hl {
 /* ============================================================
    Markdown 排版
    ============================================================ */
-.md { font-size: 0.93rem; line-height: 1.8; color: var(--text); word-break: break-word; }
+/* 结果正文排版：1rem 字号 + 40rem 行宽上限（约 80 个英文字符 / 40 个汉字一行，
+   对齐 WCAG 1.4.8 行长建议；与 .ocr-text / .tr-result-inner 的「限一个舒适行宽」同一哲学） */
+.md {
+  font-size: 1rem;
+  line-height: 1.8;
+  color: var(--text);
+  word-break: break-word;
+  text-wrap: pretty;
+  max-width: 40rem;
+  margin-inline: auto;
+}
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
@@ -2598,6 +2618,7 @@ mark, .vp-hl {
   line-height: 1.4;
   margin: 1.4em 0 0.6em;
   color: var(--text);
+  text-wrap: balance;
 }
 .md h1 { font-size: 1.5em; }
 .md h2 { font-size: 1.25em; padding-bottom: 0.35em; border-bottom: 1px solid var(--border); }
@@ -2644,6 +2665,7 @@ mark, .vp-hl {
   border-collapse: collapse;
   overflow-x: auto;
   font-size: 0.88em;
+  font-variant-numeric: tabular-nums;
 }
 .md th, .md td {
   padding: 0.55em 0.9em;

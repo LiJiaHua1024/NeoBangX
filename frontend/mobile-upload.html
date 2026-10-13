@@ -42,7 +42,7 @@
     --title-grad: linear-gradient(112deg, #f4e3c2 0%, var(--accent) 55%, var(--accent-2) 100%);
     --text: #edece7;
     --text-dim: #9b978c;
-    --text-faint: #63605a;
+    --text-faint: #7e7b76;
     --glass-spec: #f7e7cd;
     --panel: color-mix(in srgb, var(--accent) 6%, transparent);
     --panel-soft: color-mix(in srgb, var(--accent) 4%, transparent);
@@ -68,8 +68,8 @@
     --accent-2: #8c3316;
     --title-grad: linear-gradient(112deg, #d97b4a 0%, var(--accent) 55%, var(--accent-2) 100%);
     --text: #1d1a15;
-    --text-dim: #6f675a;
-    --text-faint: #a29a8b;
+    --text-dim: #5f594d;
+    --text-faint: #706a60;
     --glass-spec: #fffdf8;
     --panel: color-mix(in srgb, var(--glass-spec) 14%, transparent);
     --panel-soft: color-mix(in srgb, var(--glass-spec) 10%, transparent);
@@ -95,8 +95,8 @@
     --accent-2: #0a5245;
     --title-grad: linear-gradient(112deg, #2f9c83 0%, var(--accent) 55%, var(--accent-2) 100%);
     --text: #15211c;
-    --text-dim: #5d6e66;
-    --text-faint: #93a39b;
+    --text-dim: #4e5c56;
+    --text-faint: #626d68;
     --glass-spec: #eaf7f1;
     --panel: color-mix(in srgb, var(--glass-spec) 14%, transparent);
     --panel-soft: color-mix(in srgb, var(--glass-spec) 10%, transparent);
@@ -122,8 +122,8 @@
     --accent-2: #2f8a66;
     --title-grad: linear-gradient(112deg, #c2ecd2 0%, var(--accent) 55%, var(--accent-2) 100%);
     --text: #e4eee7;
-    --text-dim: #7f948a;
-    --text-faint: #557064;
+    --text-dim: #80958b;
+    --text-faint: #698177;
     --glass-spec: #d8f2e2;
     --panel: color-mix(in srgb, var(--accent) 6%, transparent);
     --panel-soft: color-mix(in srgb, var(--accent) 4%, transparent);
@@ -160,8 +160,8 @@
     --accent-2: #35709f;
     --title-grad: linear-gradient(112deg, #9cc4e6 0%, var(--accent) 55%, var(--accent-2) 100%);
     --text: #1d2733;
-    --text-dim: #5c6d7f;
-    --text-faint: #93a3b3;
+    --text-dim: #45525f;
+    --text-faint: #5a636d;
     --glass-spec: #f2f8ff;
     --panel: color-mix(in srgb, var(--glass-spec) 13%, transparent);
     --panel-soft: color-mix(in srgb, var(--glass-spec) 9%, transparent);
@@ -192,8 +192,8 @@
     --accent-2: #5d86c2;
     --title-grad: linear-gradient(112deg, #dcebff 0%, var(--accent) 55%, var(--accent-2) 100%);
     --text: #e3ecf7;
-    --text-dim: #8ba0b8;
-    --text-faint: #5b6f85;
+    --text-dim: #a1b2c5;
+    --text-faint: #8e9cab;
     --glass-spec: #cfe0ff;
     --panel: color-mix(in srgb, var(--accent) 7%, transparent);
     --panel-soft: color-mix(in srgb, var(--accent) 4.5%, transparent);
@@ -209,6 +209,15 @@
     --glow: rgba(143, 182, 230, 0.25);
     --ok-text: #7fd8a8;
     --danger-text: #f0958a;
+  }
+
+  /* 更高对比度偏好（与主站 styles.css 同款）：系统开启「提高对比度」时次级文字向正文色靠拢；
+     选择器不带主题值，避免被「共有令牌与主站逐字一致」测试当成主题块解析 */
+  @media (prefers-contrast: more) {
+    html[data-theme] {
+      --text-dim: color-mix(in srgb, var(--text) 84%, var(--bg)) !important;
+      --text-faint: color-mix(in srgb, var(--text) 72%, var(--bg)) !important;
+    }
   }
 
   /* ============================================================
