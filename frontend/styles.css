@@ -987,7 +987,7 @@ html[data-theme="sora"] .mascot-peeking {
   min-width: 15.5rem;
   /* 宽度上限必须压住内容：模型名称行是 nowrap 文本，会把按内容撑宽的面板拉到
      整行文字宽，右锚定下只能向左伸、窄屏上顶出屏幕左缘；有了上限单行省略号
-     才真正生效。模型简介已改为两行 line-clamp（见 .ms-item-desc），不再横向撑宽 */
+     才真正生效。模型简介只认手动换行、每行单行省略（见 .ms-item-desc），不自动换行 */
   max-width: min(24rem, calc(100vw - 1.5rem));
   padding: 0.35rem;
   border-radius: 0.9rem;
@@ -1167,21 +1167,21 @@ html[data-theme="sora"][data-sky="night"] .ms-menu { --panel-strong: color-mix(i
 .ms-item.on { background: color-mix(in srgb, var(--accent) 13%, transparent); }
 .ms-item .ms-item-name { font-size: 0.83rem; font-weight: 550; }
 .ms-item .ms-item-sub { font-size: 0.68rem; color: var(--text-faint); margin-top: 1px; }
-/* 模型简介多行：保留换行、自动换行，最多 2 行后省略。
-   与单行 .truncate 的区别：white-space:pre-line 让 \n 换行生效；
-   line-clamp 把高度封顶（再长也不撑高列表、不顶出面板，超长进 .ms-list 内部滚动）；
-   overflow-wrap:anywhere 保证无空格长串（URL/Key）也能断行、不横向撑破面板。 */
+/* 模型简介只认手动换行：模板按 \n 切成至多 2 个 .ms-item-desc-line，
+   每行都是 white-space:nowrap 单行省略；没换行就是 1 行，不断行、不自动换行。
+   长串兜底：nowrap 下 overflow-wrap 不生效，无空格长串靠 max-width + 省略截断，
+   不横向撑破面板（面板上限见 .ms-menu）。 */
 .ms-item .ms-item-sub.ms-item-desc {
-  white-space: pre-line;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  line-clamp: 2;
-  overflow: hidden;
-  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+}
+.ms-item .ms-item-sub .ms-item-desc-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.5;
 }
 /* 免费模型：名称行 + 免费标签（标签不参与省略，避免长名称把它挤掉） */
 .ms-item-title { display: flex; align-items: center; gap: 0.3rem; min-width: 0; }

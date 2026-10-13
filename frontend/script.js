@@ -12297,6 +12297,12 @@ function nbx() {
       if (m && m.name && m.name !== m.id) return m.name;
       return (id || "").replace(/^openrouter\//, "") || "默认模型";
     },
+    /* 模型简介只认手动换行：按 \n 切行、去首尾空行，最多取 2 行；
+       每行各自单行省略（见 .ms-item-desc-line），不做自动换行 */
+    modelDescLines(desc) {
+      const lines = String(desc || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      return lines.slice(0, 2);
+    },
     fmtTime(ts) {
       const d = new Date(ts);
       const diff = Date.now() - ts;
