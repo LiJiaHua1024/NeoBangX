@@ -545,12 +545,11 @@
                             <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
                           </button>
                           <div class="reasoning-body scroll-thin" x-show="card.reasoningOpen" x-collapse>
-                            <pre x-text="card.reasoning"></pre>
+                            <pre x-text="card.reasoningShown"></pre>
                             <div class="reasoning-truncated" x-show="card.reasoningTruncated">内容较长，仅保留最近部分</div>
                           </div>
                         </div>
                         <div class="md" x-show="card.output" x-html="card.rendered"></div>
-                        <span class="tw-cursor" x-show="card.streaming"></span>
                         <div x-show="card.error" class="error-card" x-text="card.error"></div>
                       </div>
                     </article>
@@ -748,7 +747,7 @@
                       <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
                     </button>
                     <div class="reasoning-body scroll-thin" x-show="vocab.reasoningOpen" x-collapse>
-                      <pre x-ref="vocabReasoningBody" x-text="vocab.reasoning"></pre>
+                      <pre x-ref="vocabReasoningBody" x-text="vocab.reasoningShown"></pre>
                       <div class="reasoning-truncated" x-show="vocab.reasoningTruncated">内容较长，仅保留最近部分</div>
                     </div>
                   </div>
@@ -1046,7 +1045,7 @@
                       <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
                     </button>
                     <div class="reasoning-body scroll-thin" x-show="reasoningOpen" x-collapse>
-                      <pre x-text="reasoning"></pre>
+                      <pre x-text="reasoningShown"></pre>
                       <div class="reasoning-truncated" x-show="reasoningTruncated">内容较长，仅保留最近部分</div>
                     </div>
                   </div>
@@ -1869,7 +1868,6 @@
                     </div>
                   </div>
                   <div class="md ocr-text" x-show="!!ocrText && !ocrStartStepVisible" x-html="ocrRendered"></div>
-                  <span class="tw-cursor" x-show="ocrStreaming && !!ocrText"></span>
                   <!-- 停下与截断都要如实交代：半份转录最容易被当成完整结果往下用 -->
                   <div class="ocr-note ocr-note-warn" x-show="ocrStopped && !ocrStreaming && !ocrStartStepVisible">
                     已停止识别：这是已经识别出的部分，可能不完整。可先复制现有内容，或重新识别一次。
@@ -2130,7 +2128,6 @@
                       </div>
                     </div>
                     <div class="md" x-show="output" x-html="rendered"></div>
-                    <span class="tw-cursor" x-show="streaming && !!output"></span>
                     <!-- 撞输出上限：半篇译文不能当完整结果交给用户，给一条接着译的出口。
                          紧挨着译文放：它是关于这份译文的交代与出口 -->
                     <div class="tr-note tr-note-warn" x-show="!streaming && trTruncated">
@@ -2162,7 +2159,7 @@
                         <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
                       </button>
                       <div class="reasoning-body scroll-thin" x-show="reasoningOpen" x-collapse>
-                        <pre x-ref="reasoningBody" x-text="reasoning"></pre>
+                        <pre x-ref="reasoningBody" x-text="reasoningShown"></pre>
                         <div class="reasoning-truncated" x-show="reasoningTruncated">内容较长，仅保留最近部分</div>
                       </div>
                     </div>
@@ -2378,7 +2375,7 @@
                     <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
                   </button>
                   <div class="reasoning-body scroll-thin" x-show="reasoningOpen" x-collapse>
-                    <pre x-ref="reasoningBody" x-text="reasoning"></pre>
+                    <pre x-ref="reasoningBody" x-text="reasoningShown"></pre>
                     <div class="reasoning-truncated" x-show="reasoningTruncated">内容较长，仅保留最近部分</div>
                   </div>
                 </div>
@@ -2393,7 +2390,6 @@
                     <span x-text="'查看更多（共 ' + outputFoldTotal + ' 字）'"></span>
                   </button>
                 </div>
-                <span class="tw-cursor" x-show="streaming"></span>
               </div>
 
               <!-- 错误 -->
@@ -3319,7 +3315,6 @@
                 </div>
               </div>
               <div class="md ocr-text" x-show="!!ocrText && !ocrStartStepVisible" x-html="ocrRendered"></div>
-              <span class="tw-cursor" x-show="ocrStreaming && !!ocrText"></span>
               <!-- 停下与截断都要如实交代：半份转录最容易被当成完整结果往下用 -->
               <div class="ocr-note ocr-note-warn" x-show="ocrStopped && !ocrStreaming && !ocrStartStepVisible">
                 已停止识别：这是已经识别出的部分，可能不完整。可先复制现有内容，或重新识别一次。

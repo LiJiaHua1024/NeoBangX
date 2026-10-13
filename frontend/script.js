@@ -1295,6 +1295,252 @@ function streamRenderDelay(len, base = 60) {
   return Math.min(280, base + Math.round(n / 4000) * 40);
 }
 
+/* ---------------- 流式打字机：缓存 + 近匀速放行 + 曲线变速 ----------------
+   网络 chunk 是成簇到达的：一簇几十字、停几百毫秒、又连来几簇。诚实按到达节奏上屏
+   就是一顿一顿的（「块状」观感的来源）。Claude / Codex 的丝滑输出把「到达节奏」与
+   「上屏节奏」彻底解耦，中间垫一层缓存、按**近匀速**放行：晚一点上屏无所谓，
+   重要的是屏幕上文字的出现速率平稳。
+   - 目标速度 = 基准速度 + 积压/软清空时长（积压越大放得越快），有封顶；
+   - 实际速度按指数曲线逼近目标（曲线变速）：积压骤增骤减时速率是渐变的，不跳档；
+   - 小数余量累计推进，慢速下也是逐字均匀出现，不会一帧 0 字一帧 2 字地抖。
+   只影响上屏节奏：output 等真值字段照常按到达写入，历史 / 导出 / 续写都不受影响。
+   打字动画本身是 motion：系统开启「减少动效」时直接放完，不做逐字动画。 */
+const TYPER_BASE_CPS = 45;    // 基准上屏速度（字/秒）：接近舒适阅读节奏，流慢时也不干等
+const TYPER_MAX_CPS = 300;    // 追速上限：积压再大也只快到这个程度，绝不一涌而出
+const TYPER_CATCHUP_S = 1.6;  // 积压清空的软目标（秒）：越大缓存越深、输出越匀（延迟换平稳）
+const TYPER_SPEED_TAU = 300;  // 速度曲线时间常数（ms）：目标速度变了也只渐变，不跳档
+const TYPER_FADE_MS = 320;    // 淡入动画时长，也是淡入段历史窗口（与 styles.css 的 .tw-fade 对齐）
+const TYPER_RENDER_MS = 45;   // 渲染合并间隔（长文自动拉宽，见 typerRenderInterval）
+const TYPER_FINISH_CPS = 800; // 收尾放行速度：明显变快但仍是动画，不是瞬跳
+const TYPER_FINISH_SNAP = 8;  // 收尾只剩零头（≤ 字）时直接给全，不必再走动画
+
+function prefersReducedMotion() {
+  try {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  } catch { return false; }
+}
+
+/* 测试环境可能没有 requestAnimationFrame（工厂按参数注入，替身未必给）：退化为
+   定时器，语义不变，只是帧率降为 ~60ms 一拍 */
+function rafNext(fn) {
+  return typeof requestAnimationFrame === "function"
+    ? requestAnimationFrame(fn)
+    : setTimeout(() => fn(Date.now()), 16);
+}
+
+function rafCancel(id) {
+  if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(id);
+  else clearTimeout(id);
+}
+
+/* 渲染间隔随长度略增：整份 Markdown 重解析 + 整块 DOM 替换的开销随长度线性增长，
+   超长输出把间隔拉宽一点摊平总开销；淡入段带负延迟，间隔变化不会让动画断档 */
+function typerRenderInterval(len) {
+  return Math.min(110, TYPER_RENDER_MS + Math.round((Number(len) || 0) / 400));
+}
+
+function createStreamTyper(render) {
+  const typer = {
+    shown: 0,
+    target: 0,
+    finishing: false,        // 收尾放行中：自然完成的余量仍在平滑放完
+    _speed: TYPER_BASE_CPS,  // 当前上屏速度（字/秒），按曲线逼近目标
+    _frac: 0,                // 小数余量：慢速下逐字均匀推进的关键
+    _raf: 0,
+    _lastTs: 0,
+    _lastRenderTs: -1e9,
+    _dirty: false,
+    // 淡入段历史：每帧记录「放到哪个字、何时上屏」，供渲染时切段做负延迟淡入
+    _pts: [{ shown: 0, ts: -1e9 }],
+  };
+  const stop = () => {
+    if (typer._raf) rafCancel(typer._raf);
+    typer._raf = 0;
+    typer._lastTs = 0;
+  };
+  /* 渲染一次当前指针：marks 是「最近几段新文字」的淡入段（at = 段起点，ageMs = 已上屏多久） */
+  const paint = (now) => {
+    const marks = [];
+    if (!prefersReducedMotion()) {
+      typer._pts.push({ shown: typer.shown, ts: now });
+      for (let i = 1; i < typer._pts.length; i += 1) {
+        const age = now - typer._pts[i].ts;
+        const at = typer._pts[i - 1].shown;
+        if (age < TYPER_FADE_MS && at < typer._pts[i].shown) marks.push({ at, ageMs: age });
+      }
+      while (typer._pts.length > 1 && now - typer._pts[1].ts > TYPER_FADE_MS) typer._pts.shift();
+    }
+    render(typer.shown, marks);
+  };
+  const frame = (ts) => {
+    typer._raf = 0;
+    typer.tick(ts);
+    if (typer.shown < typer.target || typer.finishing) typer._raf = rafNext(frame);
+  };
+  const ensure = () => {
+    if (!typer._raf && (typer.shown < typer.target || typer.finishing)) typer._raf = rafNext(frame);
+  };
+  /* 对齐到 len 并停表：开流起点（续写基线）、停止 / 出错残文、载入历史都用它 */
+  typer.reset = (len) => {
+    stop();
+    typer.target = Math.max(0, Number(len) || 0);
+    typer.shown = typer.target;
+    typer.finishing = false;
+    typer._speed = TYPER_BASE_CPS;
+    typer._frac = 0;
+    typer._dirty = false;
+    typer._lastRenderTs = -1e9;
+    typer._pts = [{ shown: typer.shown, ts: -1e9 }];
+  };
+  /* 原文又变长了：只推进目标，放出多少交给帧循环 */
+  typer.grow = (total) => {
+    const n = Math.max(0, Number(total) || 0);
+    if (n > typer.target) typer.target = n;
+    if (prefersReducedMotion()) {
+      if (typer.shown < typer.target) {
+        typer.shown = typer.target;
+        paint(0);
+      }
+      return;
+    }
+    ensure();
+  };
+  /* 自然完成：余量以收尾速度平滑放完（快但仍是动画）；只剩零头就直接给全 */
+  typer.finish = () => {
+    if (typer.target - typer.shown <= TYPER_FINISH_SNAP) {
+      typer.reset(typer.target);
+      paint(0);
+      return;
+    }
+    typer.finishing = true;
+    ensure();
+  };
+  /* 立刻渲染一次当前指针（不推进）：收尾路径要按打字机的进度画 */
+  typer.paint = () => paint(typer._lastTs || 0);
+  /* 推进一帧并按渲染间隔上屏；时间戳可注入，测试直接驱动、不依赖真实时钟 */
+  typer.tick = (now) => {
+    const backlog = typer.target - typer.shown;
+    if (backlog > 0) {
+      const dt = typer._lastTs ? Math.min(Math.max(now - typer._lastTs, 1), 120) : 16;
+      // 目标速度：基准 + 积压的温和追速，封顶；收尾放行时直接给收尾速度
+      const targetCps = typer.finishing
+        ? TYPER_FINISH_CPS
+        : Math.min(TYPER_BASE_CPS + backlog / TYPER_CATCHUP_S, TYPER_MAX_CPS);
+      // 曲线变速：实际速度按指数曲线逼近目标（τ = TYPER_SPEED_TAU），骤增骤减都不跳档
+      typer._speed += (targetCps - typer._speed) * (1 - Math.exp(-dt / TYPER_SPEED_TAU));
+      typer._frac += (typer._speed * dt) / 1000;
+      let step = Math.floor(typer._frac);
+      typer._frac -= step;
+      if (step > backlog) step = backlog;
+      if (step > 0) {
+        typer.shown += step;
+        typer._dirty = true;
+      }
+    }
+    typer._lastTs = now;
+    const drained = typer.shown >= typer.target;
+    if (drained && typer.finishing) {
+      // 放完那帧就是干净全文（无淡入段）
+      typer.finishing = false;
+      paint(now);
+      return typer.shown;
+    }
+    if (typer._dirty && (drained || now - typer._lastRenderTs >= typerRenderInterval(typer.target))) {
+      typer._dirty = false;
+      typer._lastRenderTs = now;
+      paint(now);
+    }
+    return typer.shown;
+  };
+  return typer;
+}
+
+/* ---------------- 流式淡入 ----------------
+   「每个字淡淡地浮出来」靠两件事配合：
+   1) 淡入段：把「最近 TYPER_FADE_MS 内上屏的文字」切成段，各包一层 <span class="tw-fade">；
+   2) 负延迟：innerHTML 是整块重建的，CSS 动画会跟着重启 —— 所以每段带上
+      「已经上屏多久」的负 animation-delay，重建后动画从原进度接着跑，淡入曲线不断，
+      已淡完的老文字回到普通文本（opacity 1），画面永远只有一层淡淡的尾迹。
+   段边界用不可见分隔符 U+2063 埋进 Markdown 源文本，解析后落在文字流的原位；
+   换装按标签切开逐段做，绝不让 span 跨块级标签，避免破坏 HTML 结构。 */
+const FADE_MARK = "\u2063";
+
+/* 段边界的安全落点：淡入分隔符绝不能切开 Markdown 语法记号
+   （## 、**、```、- 、1. 、空行……），否则解析结果会在「字面记号」与
+   「格式块」之间闪烁（标题闪成 "## 文字"）。落点不安全就向后挪，
+   直到两侧都是普通文字——记号整体留在边界一侧，解析永远稳定。 */
+const FADE_UNSAFE = /[#*_`~\-+=|>\[\]()!$.]/;
+
+function safeMarkPos(text, at) {
+  const t = String(text || "");
+  let i = Math.min(Math.max(0, Number(at) || 0), t.length);
+  if (i === 0) return 0;
+  for (let guard = 0; guard < 128 && i < t.length; guard += 1) {
+    const prev = t[i - 1];
+    const next = t[i];
+    // 任一侧贴着记号都不行；空行中间也不行（会把两个块粘成一块）
+    if (FADE_UNSAFE.test(prev) || FADE_UNSAFE.test(next) || (prev === "\n" && next === "\n")) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  return Math.min(i, t.length);
+}
+
+function renderMarkedMarkdown(slice, marks) {
+  let src = "";
+  // pos 从 -1 起：允许第一段从 0 开头（整段都是新文字的常见情形）
+  let pos = -1;
+  const ages = [];
+  for (const m of marks) {
+    const at = safeMarkPos(slice, m.at);
+    if (at <= pos) continue;
+    src += slice.slice(Math.max(0, pos), at) + FADE_MARK;
+    ages.push(Math.max(0, Number(m.ageMs) || 0));
+    pos = at;
+  }
+  src += slice.slice(Math.max(0, pos));
+  return wrapFadeBands(renderMd(src), ages);
+}
+
+function wrapFadeBands(html, ages) {
+  const s = String(html || "");
+  if (!ages.length || s.indexOf(FADE_MARK) < 0) return s;
+  const out = [];
+  let band = 0;
+  for (const tok of s.split(/(<[^>]*>)/)) {
+    if (!tok) continue;
+    if (tok[0] === "<") {
+      out.push(tok);
+      continue;
+    }
+    tok.split(FADE_MARK).forEach((piece, idx) => {
+      if (idx > 0) band += 1;
+      if (!piece) return;
+      // band 0 是分隔符之前的老文字（不在窗口内）；band k 对应 ages[k-1]
+      const age = band === 0 ? undefined : ages[band - 1];
+      // 纯空白片段（块间换行等）不包淡入：看不见的东西不需要动画，
+      // 而且它常在 html 尾部，包上 span 只会给尾部留一段空壳
+      if (!piece.trim() || age === undefined || age >= TYPER_FADE_MS) {
+        out.push(piece);
+        return;
+      }
+      out.push(`<span class="tw-fade" style="animation-delay:-${Math.round(age)}ms">${piece}</span>`);
+    });
+  }
+  return out.join("");
+}
+
+/* 流式期间的 Markdown 渲染：最近上屏的文字淡入（逐字「淡淡出现」）；
+   收尾（live=false）时是干净全文（无淡入）。不做打字光标——文字自己长出来就是效果 */
+function renderMdStreamPaced(text, shown, marks, live) {
+  const full = String(text || "");
+  if (!live) return renderMd(full);
+  const slice = full.slice(0, Math.min(Math.max(0, Number(shown) || 0), full.length));
+  return marks && marks.length ? renderMarkedMarkdown(slice, marks) : renderMd(slice);
+}
+
 /* ---------------- 超长历史折叠 ----------------
    打开一条很长的历史记录时，一次性渲染全文会让首屏明显变慢（解析 + 消毒 + DOM 重建
    都按全文长度算）。超过阈值只渲染前一段，底部给「查看更多」按钮展开全文。
@@ -2022,6 +2268,9 @@ function nbx() {
     // 推理过程（ ephemeral，不进历史/导出/复制）：有 reasoning 事件才显示，
     // 无事件时保持空，界面回退到“等待模型响应”动画。
     reasoning: "",
+    /* 推理过程的「已上屏」视图：流式逐字放出（打字机），真值始终是 reasoning。
+       收尾（reasoningDone）后与真值对齐；历史 / 统计一律读真值。 */
+    reasoningShown: "",
     reasoningOpen: true,
     reasoningDone: false,
     reasoningTruncated: false,
@@ -2222,7 +2471,6 @@ function nbx() {
     _ocrDrag: null,             // 本次拖拽的起点与目标（裁剪框/平移）
     _ocrDragged: false,
     _ocrTimer: null,
-    _ocrRenderTimer: null,
     _ocrAbort: null,
     _ocrRequestId: "",
     /* 扫码配对（阶段五） */
@@ -2248,7 +2496,6 @@ function nbx() {
     trResultVisible: false,            // 窄屏：还没按下翻译时译文栏不占地方（宽屏不起作用）
     trResultFolded: false,             // 输入法弹起时译文栏让位（只留栏头一行），窄屏才有
     _trSnap: null,                     // 本轮翻译的输入快照 { source, sourceId, targetId }
-    _trRenderTimer: null,
     _trKbTimer: null,                  // 键盘开合的判定延时（键盘动画期间会连续报值）
     _trRevealTimer: null,              // 译文栏收放动画落下后再重算高度/对齐
     _trGrowRaf: 0,
@@ -2309,9 +2556,8 @@ function nbx() {
     _timer: null,
     _thinkTimer: null,
     _startTs: 0,
-    _renderPending: false,
-    // 渲染脏标记：只有输出内容变化（新 token / 载入历史）才需要重新渲染，
-    // 避免 finalize 定稿与在途节流 tick 对同一份全文做重复的全量重渲染
+    // 渲染脏标记：只有输出内容变化（新 token / 载入历史 / 打字机推进）才需要重新渲染，
+    // 避免 finalize 定稿与在途渲染对同一份全文做重复的全量重渲染
     _outputDirty: true,
     _nearBottom: true,
     _draftTimer: null,
@@ -2401,6 +2647,7 @@ function nbx() {
         foldTotal: 0,
         requestId: null,
         reasoning: "",
+        reasoningShown: "",
         reasoningOpen: true,
         reasoningDone: false,
         reasoningTruncated: false,
@@ -4101,7 +4348,7 @@ function nbx() {
             this.finishVocabReasoningOnToken();
             this.vocab.output += text;
             this._outputDirty = true;
-            this.scheduleRender();
+            this.vocabTyper().grow((this.vocab.output || "").length);
           },
         });
         this.vocab.status = state === "stopped" ? "stopped" : "done";
@@ -4149,6 +4396,13 @@ function nbx() {
         clearInterval(this._timer);
         this._timer = null;
         this.vocab.replacing = false;
+        // 打字机收尾：自然完成的余量平滑放完，停止 / 出错残文立即全量
+        if (this.vocab.status === "done") this.vocabTyper().finish();
+        else this.vocabTyper().reset((this.vocab.output || "").length);
+        this.vocabReasonTyper().reset((this.vocab.reasoning || "").length);
+        this.vocab.reasoningShown = this.vocab.reasoning || "";
+        this._outputDirty = true;
+        this.doRender();
         // 同 finalize：只在正文从未开始时收一次
         if (this.vocab.reasoning && !this.vocab.reasoningDone) {
           this.vocab.reasoningDone = true;
@@ -6241,8 +6495,10 @@ function nbx() {
             throw new Error(msg);
           }
         });
-        this.flushOcrRender();
+        // 先落状态再收尾渲染：收尾要按「已经不是流式中」的口径画（不带淡入）
         this.ocrStage = serverStopped ? "stopped" : "done";
+        if (serverStopped) this.flushOcrRender();
+        else this.finishOcrRender();
         this.pushOcrHistory(this.ocrStage);
         if (this.ocrTruncated) {
           this.toast("结果可能不完整：可减少一次识别的张数，或请管理员调大 OCR 输出上限", "warn");
@@ -6293,22 +6549,28 @@ function nbx() {
       err.status = res.status;
       return err;
     },
-    scheduleOcrRender() {
-      // 与结果区同样按内容长度节流：长文流式渲染太密会拖慢主线程
-      if (this._ocrRenderTimer) return;
-      this._ocrRenderTimer = setTimeout(() => {
-        this._ocrRenderTimer = null;
-        this.ocrRendered = renderMd(this.ocrText);
-      }, streamRenderDelay(this.ocrText.length, 60));
+    ocrTyper() {
+      return this._typer("ocr", (shown, marks) => {
+        this.ocrRendered = renderMdStreamPaced(
+          this.ocrText,
+          shown,
+          marks,
+          this.ocrStreaming || this.ocrTyper().finishing
+        );
+      });
     },
-    /* 收尾时立刻渲染一次：节流定时器会被 _stopOcrTimer 清掉，
-       不清这一步的话最后一段（往往就是全部内容）永远上不了屏 */
+    scheduleOcrRender() {
+      // token 到达只推进打字机目标，转录文字近匀速放行（与其他流式文本同一套节奏）
+      this.ocrTyper().grow((this.ocrText || "").length);
+    },
+    /* 停止 / 出错收尾：残文立即全量，不再吊着动画 */
     flushOcrRender() {
-      if (this._ocrRenderTimer) {
-        clearTimeout(this._ocrRenderTimer);
-        this._ocrRenderTimer = null;
-      }
+      this.ocrTyper().reset((this.ocrText || "").length);
       this.ocrRendered = renderMd(this.ocrText);
+    },
+    /* 自然完成收尾：余量平滑放完（零头直接给全），放完那帧自动是干净全文 */
+    finishOcrRender() {
+      this.ocrTyper().finish();
     },
     _startOcrTimer() {
       this._stopOcrTimer();
@@ -6319,10 +6581,6 @@ function nbx() {
     _stopOcrTimer() {
       if (this._ocrTimer) clearInterval(this._ocrTimer);
       this._ocrTimer = null;
-      if (this._ocrRenderTimer) {
-        clearTimeout(this._ocrRenderTimer);
-        this._ocrRenderTimer = null;
-      }
     },
     /* reason：user = 用户按下取消（默认）；batch = 批次变了被动停。
        只有用户自己停的那次才按「已停止」交代并留记录（见 ocrStart 的收尾），
@@ -6955,6 +7213,7 @@ function nbx() {
           collapsed: false,
           requestId: `${state.batchId}_${index}`,
           reasoning: "",
+          reasoningShown: "",
           reasoningOpen: true,
           reasoningDone: false,
           reasoningTruncated: false,
@@ -7115,10 +7374,6 @@ function nbx() {
               this.scheduleCardRender(card);
             }
           } else if (event === "done" || data === "[DONE]") {
-            // 收尾：取消挂起的节流渲染，直接渲染最终全文
-            if (card._renderTimer) { clearTimeout(card._renderTimer); card._renderTimer = null; }
-            card._renderPending = false;
-            card.rendered = renderMd(card.output);
             if (card.reasoning && !card.reasoningDone) {
               card.reasoningDone = true;
               card.reasoningOpen = false;
@@ -7135,7 +7390,19 @@ function nbx() {
           card.error = describeError(e, "生成失败");
         }
       } finally {
+        // 打字机收尾统一放这里：done 的余量平滑放完（放完那帧自动是干净全文），
+        // 停止 / 出错残文立即全量；推理不玩动画，定稿即整段可见。
+        // 先落 streaming=false 再收尾：渲染口径以「已不是流式中」为准
         card.streaming = false;
+        if (card._rTyper) card._rTyper.reset((card.reasoning || "").length);
+        card.reasoningShown = card.reasoning || "";
+        if (card._typer) {
+          if (card.status === "done") card._typer.finish();
+          else {
+            card._typer.reset((card.output || "").length);
+            card.rendered = renderMd(card.output);
+          }
+        }
         delete this._migrationAbortControllers[card.requestId];
       }
     },
@@ -7644,19 +7911,24 @@ function nbx() {
       this.toast("译文已复制");
     },
     scheduleTrRender() {
-      if (this._trRenderTimer) return;
-      this._trRenderTimer = setTimeout(() => {
-        this._trRenderTimer = null;
-        this.rendered = renderMd(this.output);
-      }, streamRenderDelay(this.output.length, 60));
+      // 与其余流式文本同一套节奏：token 到达只推进打字机，上屏逐字放行
+      this.outTyper().grow((this.output || "").length);
     },
     flushTrRender() {
-      if (this._trRenderTimer) {
-        clearTimeout(this._trRenderTimer);
-        this._trRenderTimer = null;
-      }
+      // 收尾：指针对齐全文，整份干净渲染
+      this.outTyper().reset((this.output || "").length);
       this.rendered = renderMd(this.output);
       this.pinTrBottom();
+    },
+    /* 译文收尾渲染：自然完成的余量交给打字机平滑放完（放行帧带淡入，
+       放完那帧是干净全文）；停止 / 出错残文立即全量 */
+    settleTrRender(state) {
+      if (state === "done" && this.outTyper().finishing) {
+        this.outTyper().paint();
+        this.pinTrBottom();
+        return;
+      }
+      this.flushTrRender();
     },
     /* 流式输出时把译文栏钉在底部，否则新字全写在视口下方，一屏一屏地跳。
        用户往回翻过（_trFollowOutput 为假）就不跟了。
@@ -7728,13 +8000,13 @@ function nbx() {
       // 续写零新增（模型只回了「已完整」的哨兵，或刚开跑就被停）：剥掉哨兵、保持记录原状
       if (state !== "error" && opts.continueFrom && !this._continueProducedNew()) {
         const saidDone = this._stripContinueSentinel();
-        this.flushTrRender();
+        this.settleTrRender(state);
         this.status = this.errorMsg ? "error" : (origin && origin.partial ? "stopped" : "done");
         if (saidDone) this.toast("原文已经全部译完，没有剩余内容");
         else this.toast("这次没有新增内容，可稍后重试", "warn");
         return;
       }
-      this.flushTrRender();
+      this.settleTrRender(state);
       const snap = this._trSnap || {};
       const produced = !!String(this.output || "").trim();
       if (state === "error") {
@@ -7844,10 +8116,6 @@ function nbx() {
       this._trDriven = null;
       this._trScrollSide = "";
       this._trFollowOutput = true;
-      if (this._trRenderTimer) {
-        clearTimeout(this._trRenderTimer);
-        this._trRenderTimer = null;
-      }
     },
 
     /* ============ 流式生成（SSE） ============ */
@@ -7928,6 +8196,8 @@ function nbx() {
       this.retreatMascot();
       this.activeHistoryId = updateId;
       this._streamBaselineLen = continueFrom ? this.output.length : 0;
+      // 打字机从基线起步：续写时已有的全文立即可见，只有新增部分逐字放出
+      this.outTyper().reset(this._streamBaselineLen);
       this.fallbackInfo = null;
       this.streaming = true;
       this.thinking = true;
@@ -8404,6 +8674,10 @@ function nbx() {
       this.streaming = false;
       this.thinking = false;
       this.fallbackInfo = null;
+      // 打字机收尾：自然完成的余量交给它平滑放完（放完那帧是干净全文）；
+      // 停止 / 出错残文立即全量——半份内容不能还吊着动画
+      if (state === "done") this.outTyper().finish();
+      else this.outTyper().reset((this.output || "").length);
       this.stopTimer();
       this.stopThinkTimer();
       // 推理盒定稿：正文从未开始过（还没自动收起过）才收一次，
@@ -8412,6 +8686,8 @@ function nbx() {
         this.reasoningDone = true;
         this.reasoningOpen = false;
         this.reasoningLive = false;
+        this.reasonTyper().reset(this.reasoning.length);
+        this.reasoningShown = this.reasoning;
         this.syncReasoningBox();
       }
       // 翻译（工具 33）有自己的历史口径（改而不增、零产出不留空记录），收尾整体交给它。
@@ -9734,6 +10010,8 @@ function nbx() {
     },
     resetReasoning() {
       this.reasoning = "";
+      this.reasoningShown = "";
+      this.reasonTyper().reset(0);
       this.reasoningOpen = true;
       this.reasoningDone = false;
       this.reasoningLive = false;
@@ -9757,6 +10035,8 @@ function nbx() {
         this.reasoningTruncated = true;
       }
       this.reasoning = next;
+      // 上屏走打字机逐字放出（真值已到位，节奏只影响 reasoningShown）
+      this.reasonTyper().grow(this.reasoning.length);
       // 还没定稿才让它上屏：定稿后（正文已开始）迟到的推理 chunk 不该把盒子又顶回来
       if (!this.reasoningDone) {
         this.reasoningLive = true;
@@ -9784,6 +10064,9 @@ function nbx() {
         this.reasoningDone = true;
         this.reasoningOpen = false;
         this.reasoningLive = false;
+        // 定稿 = 思考文字停止打字，整段立即可见
+        this.reasonTyper().reset(this.reasoning.length);
+        this.reasoningShown = this.reasoning;
         this.syncReasoningBox();
       }
     },
@@ -9801,6 +10084,8 @@ function nbx() {
     resetVocabReasoning() {
       if (!this.vocab) return;
       this.vocab.reasoning = "";
+      this.vocab.reasoningShown = "";
+      this.vocabReasonTyper().reset(0);
       this.vocab.reasoningOpen = true;
       this.vocab.reasoningDone = false;
       this.vocab.reasoningTruncated = false;
@@ -9815,6 +10100,7 @@ function nbx() {
         this.vocab.reasoningTruncated = true;
       }
       this.vocab.reasoning = next;
+      this.vocabReasonTyper().grow(this.vocab.reasoning.length);
       this.scrollVocabReasoning();
     },
     scrollVocabReasoning() {
@@ -9831,6 +10117,8 @@ function nbx() {
       if (this.vocab && this.vocab.reasoning && !this.vocab.reasoningDone) {
         this.vocab.reasoningDone = true;
         this.vocab.reasoningOpen = false;
+        this.vocabReasonTyper().reset(this.vocab.reasoning.length);
+        this.vocab.reasoningShown = this.vocab.reasoning;
       }
     },
     appendCardReasoning(card, text, tok) {
@@ -9842,39 +10130,111 @@ function nbx() {
         card.reasoningTruncated = true;
       }
       card.reasoning = next;
+      this.cardReasonTyper(card).grow(card.reasoning.length);
     },
-    /* --- 渲染（节流） --- */
+    /* ============ 流式打字机（每份正在增长的文本一台） ============
+       惰性创建：不进 data 初始值，避免被历史快照 / 镜像层带走。
+       render 回调只写「显示」字段，真值字段（output / reasoning 等）不受影响。 */
+    _typer(key, render) {
+      if (!this._typers) this._typers = {};
+      if (!this._typers[key]) this._typers[key] = createStreamTyper(render);
+      return this._typers[key];
+    },
+    /* 上屏进行中 = 流式期间，或自然完成的余量还在平滑放行。
+       载入历史 / 收尾之后两者皆非，永远给全文（打字机指针的旧值不作数） */
+    liveOut() {
+      return this.streaming || this.outTyper().finishing;
+    },
+    liveOutputText() {
+      const t = this.output || "";
+      return this.liveOut() ? t.slice(0, this.outTyper().shown) : t;
+    },
+    liveVocab() {
+      return !!(this.vocab && this.vocab.replacing) || this.vocabTyper().finishing;
+    },
+    liveVocabText() {
+      const t = (this.vocab && this.vocab.output) || "";
+      return this.liveVocab() ? t.slice(0, this.vocabTyper().shown) : t;
+    },
+    /* 主输出 / 译文共用一台（同一时刻只有一种工具在流式出字）：
+       译文栏自己渲染（不走 doRender 的折叠 / 滚动口径），其余工具走 doRender */
+    outTyper() {
+      return this._typer("out", (shown, marks) => {
+        if (this.isTranslateTool) {
+          this.rendered = renderMdStreamPaced(this.output, shown, marks, this.liveOut());
+        } else {
+          this._outputDirty = true;
+          this.doRender(marks);
+        }
+      });
+    },
+    vocabTyper() {
+      return this._typer("vocab", (shown, marks) => {
+        this._outputDirty = true;
+        this.doRender(null, marks);
+      });
+    },
+    reasonTyper() {
+      return this._typer("reason", (shown) => {
+        this.reasoningShown = this.reasoningDone
+          ? this.reasoning
+          : this.reasoning.slice(0, shown);
+      });
+    },
+    vocabReasonTyper() {
+      return this._typer("vocabReason", (shown) => {
+        if (!this.vocab) return;
+        this.vocab.reasoningShown = this.vocab.reasoningDone
+          ? this.vocab.reasoning
+          : this.vocab.reasoning.slice(0, shown);
+      });
+    },
+    /* 迁移卡片一卡两台（正文 + 推理），挂在卡片对象上随卡片走 */
+    cardTyper(card) {
+      if (!card._typer) {
+        card._typer = createStreamTyper((shown, marks) => {
+          card.rendered = renderMdStreamPaced(
+            card.output || "",
+            shown,
+            marks,
+            card.streaming || card._typer.finishing
+          );
+        });
+      }
+      return card._typer;
+    },
+    cardReasonTyper(card) {
+      if (!card._rTyper) {
+        card._rTyper = createStreamTyper((shown) => {
+          card.reasoningShown = card.reasoningDone
+            ? card.reasoning
+            : (card.reasoning || "").slice(0, shown);
+        });
+      }
+      return card._rTyper;
+    },
+    /* --- 渲染调度：token 到达只推进打字机目标，上屏节奏由帧循环匀速放行 --- */
     scheduleRender() {
-      if (this._renderPending) return;
-      this._renderPending = true;
-      setTimeout(() => {
-        this._renderPending = false;
-        this.doRender();
-      }, streamRenderDelay(this.output.length));
+      this.outTyper().grow((this.output || "").length);
     },
-    /* 迁移卡片的按卡片节流渲染（多卡并行时开销随累计长度二次增长，必须合并） */
+    /* 迁移卡片按卡片各自放行（多卡并行，各卡一台互不干扰） */
     scheduleCardRender(card) {
-      card._renderPending = true;
-      if (card._renderTimer) return;
-      card._renderTimer = setTimeout(() => {
-        card._renderTimer = null;
-        if (card._renderPending) card.rendered = renderMd(card.output);
-        card._renderPending = false;
-      }, streamRenderDelay((card.output || "").length));
+      this.cardTyper(card).grow((card.output || "").length);
     },
-    doRender() {
-      // 输出未变化（如定稿与在途节流 tick 重叠）时跳过整份重渲染
+    doRender(mainMarks, vocabMarks) {
+      // 输出未变化（如定稿与在途渲染重叠）时跳过整份重渲染。
+      // 打字机每帧推进也算变化，其 render 回调会先把 _outputDirty 置回 true
       if (!this._outputDirty) return;
       this._outputDirty = false;
-      const main = this._foldedForRender(this.output, this.outputFoldEligible);
+      const main = this._foldedForRender(this.liveOutputText(), this.outputFoldEligible);
       this.outputFolded = main.folded;
       this.outputFoldTotal = main.total;
-      this.rendered = renderMd(main.text);
+      this.rendered = renderMdStreamPaced(main.text, main.text.length, mainMarks, this.liveOut());
       if (this.vocab) {
-        const v = this._foldedForRender(this.vocab.output || "", this.vocab.foldEligible);
+        const v = this._foldedForRender(this.liveVocabText(), this.vocab.foldEligible);
         this.vocab.folded = v.folded;
         this.vocab.foldTotal = v.total;
-        this.vocab.rendered = renderMd(v.text);
+        this.vocab.rendered = renderMdStreamPaced(v.text, v.text.length, vocabMarks, this.liveVocab());
       }
       this.$nextTick(() => {
         if (this.maskOn && this.currentTool && this.currentTool.id === "13") {
@@ -11029,6 +11389,7 @@ function nbx() {
         collapsed: false,
         requestId: "",
         reasoning: "",
+        reasoningShown: "",
         reasoningOpen: false,
         reasoningDone: true,
         reasoningTruncated: false,

@@ -1633,18 +1633,20 @@ html[data-theme="sora"][data-sky="night"] .ms-menu { --panel-strong: color-mix(i
   to { transform: translateX(66.666667%); }
 }
 
-.tw-cursor {
-  display: inline-block;
-  width: 3px;
-  height: 1.15em;
-  margin-left: 2px;
-  border-radius: 2px;
-  vertical-align: text-bottom;
-  background: var(--accent);
-  box-shadow: 0 0 10px var(--glow);
-  animation: blink 0.9s steps(2, start) infinite;
+/* 流式淡入段：最近上屏的文字从透明浮出（逐字「淡淡出现」的那层过渡）。
+   innerHTML 整块重建会重启 CSS 动画，所以每段自带负的 animation-delay
+   （= 这段文字已经上屏多久），重建后从原进度接着淡，曲线不断；
+   动画时长与 script.js 的 TYPER_FADE_MS（320ms）对齐，改动必须同步。 */
+.tw-fade {
+  animation: tw-fade 320ms linear both;
 }
-@keyframes blink { to { visibility: hidden; } }
+@keyframes tw-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tw-fade { animation: none; }
+}
 
 .status-dot {
   width: 0.5rem; height: 0.5rem;
