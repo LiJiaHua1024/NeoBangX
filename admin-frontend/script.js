@@ -575,6 +575,7 @@ function adminApp() {
     themes: ADMIN_THEMES,
     tab: "dashboard",
     loading: false,
+    refreshing: false,
     stats: {},
     securityWarning: false,
     securityBannerDismissed: false,
@@ -1240,7 +1241,12 @@ function adminApp() {
       setTimeout(() => { if (gen === this._sweepGen) el.classList.remove("run"); }, 1450);
     },
 
-    async refreshAll() {
+    async refreshAll({ feedback = false } = {}) {
+      if (this.refreshing) return;
+      this.refreshing = true;
+      // 按钮触发的刷新保底一节旋转的可见时长：请求太快时光标来不及感知，
+      // “点了跟没点一样”的观感主要来自这里。初始化走默认路径，不加延迟。
+      const minDelay = feedback ? new Promise((r) => setTimeout(r, 450)) : null;
       this.loading = true;
       try {
         // 启动只拉仪表盘自己要的统计；使用码、日志（含汇总）都等进入对应页签时
@@ -1250,13 +1256,18 @@ function adminApp() {
         // 顶栏刷新不丢草稿：配置/解析页有未保存修改时跳过重拉，只刷统计。
         // 线路探活读的是已保存配置、不碰草稿，照常刷新。
         if (this.tab === "dashboard" || this.tab === "mirror") this.checkMirrorHealth({ silent: true });
+        // 已在日志/使用码页签时当场重拉列表（含汇总），不靠切页签兜底。
+        if (this.tab === "codes") await this.loadCodes();
+        if (this.tab === "logs") await this.loadLogs();
         if (this.isConfigTab && this.configDirty) return;
         if (this.tab === "parse" && this.parseDirty) return;
         if (this.tab === "config" || this.tab === "logsettings" || this.tab === "mirror") await this.loadConfig();
         if (this.tab === "parse") await this.loadMineru();
         if (this.tab === "analytics") await this.loadAnalytics();
       } finally {
+        if (minDelay) await minDelay;
         this.loading = false;
+        this.refreshing = false;
       }
     },
 

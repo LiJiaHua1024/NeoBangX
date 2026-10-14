@@ -575,6 +575,15 @@ body {
 }
 .btn-primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
 .btn-primary:disabled, .btn-ghost:disabled, .btn-danger:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+/* 顶栏刷新按钮：图标在加载时旋转，转完一拍才恢复，给点击一个明确反馈 */
+.refresh-btn { display: inline-flex; align-items: center; gap: 0.35rem; }
+.refresh-btn .refresh-icon { flex-shrink: 0; }
+.refresh-btn.spinning .refresh-icon { animation: refresh-spin 0.9s linear infinite; }
+@keyframes refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .refresh-btn.spinning .refresh-icon { animation: none; opacity: 0.6; }
+}
 .btn-ghost {
   background: transparent; color: var(--text);
   border-color: var(--border-strong);
