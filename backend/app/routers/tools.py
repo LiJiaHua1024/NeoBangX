@@ -63,7 +63,7 @@ TEACHING_TOOLS = [
 
 PROPOSITION_TOOLS = [
     {"id": "17", "name": "阅读文本改编", "icon": "edit-1", "description": "高考阅读文本改编 + 词汇真实化改造"},
-    {"id": "19", "name": "阅读理解设问", "icon": "question", "description": "双版本命题（标准化 / 思辨）+ 鉴别指引"},
+    {"id": "19", "name": "阅读理解设问", "icon": "question", "description": "双版本命题（标准化 / 思辨）+ 鉴别指引，多篇语篇逐篇同出"},
     {"id": "21", "name": "辅助完形填空命题", "icon": "cloze", "description": "完形设空 + 选项 + 答案解析"},
     {"id": "22", "name": "试题解读分析", "icon": "analysis", "description": "选材立意 / 能力考查 / 教学引导"},
     {"id": "23", "name": "英语试题 Bug 侦察", "icon": "bug", "description": "拼写 / 标点 / 中式英语 / 逻辑漏洞"},

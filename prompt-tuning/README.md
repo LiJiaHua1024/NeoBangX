@@ -202,7 +202,7 @@ uv run python scripts/judge.py --round v2 --teacher --students --student-counts 
 |---|---|---|
 | 智能错题迁移 | ✅ 已调优（v0→v18，v18 专项治理 Goodhart 代偿） | 生产文件 `prompts/智能错题迁移.md`；细节见 `suites/智能错题迁移/{notes,report}.md`。硬否定句 16%→7%（jev）、分配表泄漏 0、错因漂移 0%、陷阱存活 100%；已知代价：overall 盲评 v17 8:1 / jev 合并 24:11（两族一致，为真），败因是解析-题面偶发自相矛盾（可做机械门禁）；deception 税经 subagent 复核不成立 |
 | 试卷可视化全解 | ✅ 已调优（v0→v4，移植 v18 机制） | 生产文件 `prompts/试卷可视化全解.md`；细节见 `suites/试卷可视化全解/{notes,report}.md`。v4：陷阱存活失败率 29%→8%、硬否定 24%→8%；<br>已知代价：v3 时代范式可套用性 ↓13pt；残留：c3 七选五逻辑功能多样性脆、三类"自查不可靠"缺陷建议改做生成后门禁 |
-| 阅读理解设问 | ✅ 已调优（合并 v0→v1→v2，2026-10-13，本地免费模型） | 生产文件 `prompts/阅读理解设问.md`（v2，双版本命题+鉴别指引）。**多模型评委面板**（jev/ling/mimo/bunny 全题全评）驱动：v2 移植错题迁移 v18 设错机制（钓鱼路径/半对/绝对化反转/错法轮换）→ hesitation jev 0.36→0.42、shape_giveaway 0.40→0.35、pair_ab deception 3:0 无回退。单评委偏差实证：jev no_absurd 比其他评委苛刻 20+pt。遗留：强模型盲做 99-100% 正确率（"对的太对"转真学生实测）、ling 429 待补列。细节见 `suites/阅读理解设问/{notes,report}.md` |
+| 阅读理解设问 | ✅ 已调优（合并 v0→v1→v2，2026-10-13，本地免费模型） | 生产文件 `prompts/阅读理解设问.md`（v2，双版本命题+鉴别指引）。**多模型评委面板**（jev/ling/mimo/bunny 全题全评）驱动：v2 移植错题迁移 v18 设错机制（钓鱼路径/半对/绝对化反转/错法轮换）→ hesitation jev 0.36→0.42、shape_giveaway 0.40→0.35、pair_ab deception 3:0 无回退。单评委偏差实证：jev no_absurd 比其他评委苛刻 20+pt。**v2.1（2026-10-14）功能扩展**：多篇语篇逐篇同出（篇目切分判断+逐篇成组+拼卷总览表），回归测试 `test_reading_question_prompt.py`。遗留：强模型盲做 99-100% 正确率（"对的太对"转真学生实测）、ling 429 待补列。细节见 `suites/阅读理解设问/{notes,report}.md` |
 | 阅读文本改编 | ✅ 已调优（合并 v0→v1，2026-10-13，本地免费模型） | 生产文件 `prompts/阅读文本改编.md`（改编+词汇真实化改造，原"改编 2"已并入）。v1：culture_kept 4/5→5/5；pair_ab 四维度全占优无回退。遗留：in_context 0/5 两轮不动（转人工抽检/后置门禁，不再加规则）。细节见 `suites/阅读文本改编/{notes,report}.md` |
 | 其他 prompt | ⬜ 待开始 | 仓库 `prompts/` 下还有 30+ 个（错因分析、作文批改、各类教学设计等）。**动手前先看第 19 条：优先从上面两个 suite 移植机制** |
 
