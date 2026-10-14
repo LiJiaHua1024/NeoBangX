@@ -35,6 +35,7 @@ CONFIG_KEYS = [
     "tool_reasoning_rules",
     "mirror_enabled",
     "mirror_origins",
+    "mirror_banner_enabled",
     "jev_enabled",
     "jev_base_url",
     "jev_api_key",
@@ -313,14 +314,18 @@ def parse_mirror_settings(cfg: dict[str, str]) -> dict:
     ready 表示「开关已开且恰好配了两条合法线路」。前端还要自己确认
     location.origin 在列表里 —— 服务器不替它判断：那需要信任 Host / 转发头，
     而反代与隧道下这两个头未必可靠，由页面拿真实 origin 比对更稳。
+    banner_enabled 为故障全局横幅开关（默认开，单线路时永不打扰）。
     """
     enabled = (cfg.get("mirror_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
     origins = parse_origins(cfg.get("mirror_origins"))
+    # 新键在老库里可能尚未种入：缺键时按默认开启，避免升级后横幅静默消失
+    raw_banner = cfg.get("mirror_banner_enabled")
+    banner_enabled = True if raw_banner is None or str(raw_banner).strip() == "" else str(raw_banner).strip().lower() in ("1", "true", "yes", "on")
     if not enabled:
-        return {"enabled": False, "origins": origins, "ready": False, "reason": "disabled"}
+        return {"enabled": False, "origins": origins, "ready": False, "reason": "disabled", "banner_enabled": banner_enabled}
     if len(origins) < 2:
-        return {"enabled": True, "origins": origins, "ready": False, "reason": "need_two_origins"}
-    return {"enabled": True, "origins": origins, "ready": True, "reason": ""}
+        return {"enabled": True, "origins": origins, "ready": False, "reason": "need_two_origins", "banner_enabled": banner_enabled}
+    return {"enabled": True, "origins": origins, "ready": True, "reason": "", "banner_enabled": banner_enabled}
 
 
 def parse_free_limits(raw) -> dict[str, int]:
@@ -520,6 +525,7 @@ def _env_defaults() -> dict[str, str]:
         "mineru_token": settings.mineru_token,
         "mirror_enabled": "true" if settings.mirror_enabled else "false",
         "mirror_origins": settings.mirror_origins,
+        "mirror_banner_enabled": "true" if settings.mirror_banner_enabled else "false",
         "jev_enabled": "true" if settings.jev_enabled else "false",
         "jev_base_url": settings.jev_base_url,
         "jev_api_key": settings.jev_api_key,

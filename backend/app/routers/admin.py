@@ -210,6 +210,7 @@ class ConfigUpdateRequest(BaseModel):
         max_length=MAX_MIRROR_ORIGINS,
         description="参与镜像的线路地址（纯 origin，如 https://a.example.com）",
     )
+    mirror_banner_enabled: Optional[bool] = Field(None, description="线路故障时是否显示全局横幅提醒")
     jev_enabled: Optional[bool] = Field(None, description="是否启用 Jev 决策模型做错误重试判定；关闭时直接走程序化启发式")
     jev_base_url: Optional[str] = Field(
         None, max_length=512, description="Jev 端点（完整地址，直接 POST，如官方 https://api.typesafe.ai/v1/systemone）"
@@ -2093,6 +2094,9 @@ async def update_admin_config(
         if key == "mirror_enabled":
             updates[key] = "true" if value else "false"
             continue
+        if key == "mirror_banner_enabled":
+            updates[key] = "true" if value else "false"
+            continue
         if key == "jev_enabled":
             updates[key] = "true" if value else "false"
             continue
@@ -2280,6 +2284,127 @@ async def update_admin_config(
         "model_provider_map": model_provider_map,
         "updated": list(updates.keys()),
         "mirror": parse_mirror_settings(cfg),
+    }
+
+
+# ---- 线路镜像可用性检测 ----
+
+# 单条线路探活超时（秒）：两条并发，总耗时钳制在该值附近，前端轮询不会被拖住
+MIRROR_PROBE_TIMEOUT = 5.0
+
+
+def _mirror_probe_error(exc: Exception) -> str:
+    """把 httpx 异常翻译成管理员可读的中文短语（不抛原文堆栈）。"""
+    import httpx
+
+    if isinstance(exc, httpx.TimeoutException):
+        return "连接超时（5s）：对方无响应或端口不可达"
+    if isinstance(exc, httpx.ConnectError):
+        msg = str(exc).lower()
+        if "refused" in msg:
+            return "连接被拒绝：对方服务未启动或端口未监听"
+        if "dns" in msg or "name or service not known" in msg or "nodename nor servname" in msg or "getaddrinfo failed" in msg:
+            return "域名解析失败：请检查线路地址是否写错"
+        return "无法连接：请检查线路地址与网络是否可达"
+    if isinstance(exc, httpx.HTTPError):
+        return f"请求失败：{exc.__class__.__name__}"
+    return f"检测失败：{exc}"
+
+
+async def _probe_mirror_origin(origin: str) -> dict:
+    """探测单条线路的 /api/health，返回统一结构（永不抛异常）。"""
+    import time
+
+    import httpx
+
+    url = origin.rstrip("/") + "/api/health"
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=MIRROR_PROBE_TIMEOUT, follow_redirects=True, max_redirects=2) as client:
+            res = await client.get(url)
+    except Exception as exc:
+        latency = int((time.monotonic() - started) * 1000)
+        return {
+            "origin": origin,
+            "ok": False,
+            "status_code": None,
+            "latency_ms": latency,
+            "version": "",
+            "error": _mirror_probe_error(exc),
+        }
+    latency = int((time.monotonic() - started) * 1000)
+    if res.status_code != 200:
+        return {
+            "origin": origin,
+            "ok": False,
+            "status_code": res.status_code,
+            "latency_ms": latency,
+            "version": "",
+            "error": f"对方返回 HTTP {res.status_code}",
+        }
+    try:
+        body = res.json()
+    except Exception:
+        return {
+            "origin": origin,
+            "ok": False,
+            "status_code": res.status_code,
+            "latency_ms": latency,
+            "version": "",
+            "error": "健康检查返回异常：非 JSON 响应",
+        }
+    if not isinstance(body, dict) or body.get("status") != "ok":
+        return {
+            "origin": origin,
+            "ok": False,
+            "status_code": res.status_code,
+            "latency_ms": latency,
+            "version": "",
+            "error": "健康检查返回异常：状态非 ok",
+        }
+    return {
+        "origin": origin,
+        "ok": True,
+        "status_code": 200,
+        "latency_ms": latency,
+        "version": str(body.get("version") or ""),
+        "error": "",
+    }
+
+
+@router.get("/mirror/status")
+async def mirror_status(db: Annotated[Session, Depends(get_db)]):
+    """线路镜像可用性检测：并发探测已保存的两条线路的 /api/health。
+
+    只测 DB 里已保存的 mirror_origins（不接受客户端传 URL，防 SSRF 任意探测）。
+    未启用 / 地址不足两条时直接返回配置状态，不发起任何出站请求。
+    """
+    cfg = get_config_map(db)
+    mirror = parse_mirror_settings(cfg)
+    checked_at = datetime.now(timezone.utc).isoformat()
+    if not mirror.get("enabled") or not mirror.get("ready"):
+        return {
+            "enabled": mirror.get("enabled", False),
+            "origins": mirror.get("origins", []),
+            "ready": mirror.get("ready", False),
+            "reason": mirror.get("reason", ""),
+            "banner_enabled": mirror.get("banner_enabled", True),
+            "checked_at": checked_at,
+            "results": [],
+            "summary": {"all_ok": True, "fault_count": 0},
+        }
+    origins = mirror.get("origins", [])
+    results = list(await asyncio.gather(*(_probe_mirror_origin(o) for o in origins)))
+    fault_count = sum(1 for r in results if not r.get("ok"))
+    return {
+        "enabled": True,
+        "origins": origins,
+        "ready": True,
+        "reason": "",
+        "banner_enabled": mirror.get("banner_enabled", True),
+        "checked_at": checked_at,
+        "results": results,
+        "summary": {"all_ok": fault_count == 0, "fault_count": fault_count},
     }
 
 

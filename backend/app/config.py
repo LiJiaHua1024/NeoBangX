@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     # 必须是纯 origin（scheme://host[:port]，不带路径）；支持 IP 与端口，
     # 便于内网环境用 http://192.168.1.10:8000 这类地址测试。
     mirror_origins: str = ""
+    # 线路故障时的全局横幅提醒：镜像就绪且某条线路探活失败时，在管理后台顶部
+    # 常驻一条红色横幅（与 JWT 默认密钥的安全警告同级），避免备用线路早挂了
+    # 却没人发现。默认开启——单线路（镜像未启用）时永不打扰。
+    mirror_banner_enabled: bool = True
 
     # SSE 配置
     sse_retry_timeout: int = 30000  # 客户端重连时间（毫秒）

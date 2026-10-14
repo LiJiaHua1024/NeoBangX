@@ -622,6 +622,8 @@ function adminApp() {
       // 线路镜像：开关 + 两条线路地址（顺序无关，两条线路是对等的）
       mirror_enabled: false,
       mirror_origins: ["", ""],
+      // 线路故障全局横幅开关：默认开，单线路（镜像未启用）时永不打扰
+      mirror_banner_enabled: true,
       // Jev 决策模型（错误重试判定）：开关 + 端点 + Key + 模型名 + 超时。
       // api_key 存脱敏值（含 ****）时保存跳过该字段，后端保持原密钥
       jev_enabled: false,
@@ -635,6 +637,11 @@ function adminApp() {
     jevTestResult: "",
     // 后端解析出的镜像状态（含 ready / reason），仅用于面板上的状态提示
     mirror: null,
+    // 线路可用性探活（后端代测两条线路的 /api/health，按需 + 每 60s 轮询）
+    mirrorHealth: { loading: false, checkedAt: "", results: [], summary: null, error: "" },
+    mirrorBannerDismissed: false,
+    _mirrorDismissKey: "",
+    _mirrorPollTimer: null,
     savingConfig: false,
     /* 配置草稿：config/logsettings/mirror 三个页签共享同一份 configForm，
        统一走顶栏唯一的「保存设置 / 重置」。configSnapshot 是最近一次保存
@@ -834,6 +841,7 @@ function adminApp() {
           logsettings: "日志设置",
           config: "API 配置",
           parse: "文档解析",
+          mirror: "线路镜像",
         }[this.tab] || "管理后台"
       );
     },
@@ -848,6 +856,7 @@ function adminApp() {
           logsettings: "配置原始数据记录开关与日志保留策略",
           config: "管理 LLM 密钥、模型与调用参数",
           parse: "配置 PDF 云端解析：精准/轻量模式、模型与 Token",
+          mirror: "配置多线路镜像与可用性检测",
         }[this.tab] || ""
       );
     },
@@ -958,6 +967,42 @@ function adminApp() {
       const schemes = new Set(list.map((o) => (o.split("://")[0] || "").toLowerCase()));
       return schemes.size > 1;
     },
+    /* 线路可用性：以后端探活结果为准（this.mirrorHealth），未检测时不告警 */
+    get mirrorBannerEnabled() {
+      // 已保存配置为准（草稿未保存前不改变横幅行为）；老数据缺键时按默认开启
+      if (!this.mirror || this.mirror.banner_enabled === undefined) return true;
+      return !!this.mirror.banner_enabled;
+    },
+    get mirrorHasFault() {
+      if (!this.mirror || !this.mirror.ready) return false;
+      const s = this.mirrorHealth && this.mirrorHealth.summary;
+      if (s && typeof s.all_ok === "boolean") return !s.all_ok;
+      return (this.mirrorHealth.results || []).some((r) => !r.ok);
+    },
+    get mirrorFaults() {
+      return (this.mirrorHealth.results || []).filter((r) => !r.ok);
+    },
+    get mirrorFaultText() {
+      return this.mirrorFaults.map((r) => `${r.origin}（${r.error || "不可用"}）`).join("；");
+    },
+    get mirrorBannerVisible() {
+      return this.mirrorHasFault && this.mirrorBannerEnabled && !this.mirrorBannerDismissed;
+    },
+    get mirrorHealthText() {
+      const h = this.mirrorHealth;
+      if (!this.mirror || !this.mirror.enabled) return "";
+      if (this.mirror.reason === "need_two_origins") return "";
+      if (h.error) return `检测失败：${h.error}`;
+      if (!h.checkedAt) return "尚未检测，点击「立即检测」查看两条线路是否可用。";
+      const okCount = (h.results || []).filter((r) => r.ok).length;
+      const total = (h.results || []).length;
+      if (!total) return `检测于 ${this.fmtTime(h.checkedAt)}，暂无结果。`;
+      if (okCount === total) {
+        const ms = h.results.map((r) => `${r.latency_ms}ms`).join(" / ");
+        return `检测于 ${this.fmtTime(h.checkedAt)}：两条线路均正常（${ms}）。`;
+      }
+      return `检测于 ${this.fmtTime(h.checkedAt)}：${total - okCount} 条线路不可用。`;
+    },
 
     async init() {
       const saved = localStorage.getItem("nbx_admin_theme");
@@ -990,7 +1035,81 @@ function adminApp() {
       try {
         this.securityBannerDismissed = sessionStorage.getItem("nbx_jwt_warn_dismissed") === "1";
       } catch {}
+      try {
+        const key = sessionStorage.getItem("nbx_mirror_banner_dismissed") || "";
+        if (key) {
+          this.mirrorBannerDismissed = true;
+          this._mirrorDismissKey = key;
+        }
+      } catch {}
       await this.refreshAll();
+      // 首屏即探活一次（概览卡与全局横幅都依赖它），之后每 60s 轮询
+      this.checkMirrorHealth();
+      this.startMirrorPoll();
+    },
+
+    dismissMirrorBanner() {
+      this.mirrorBannerDismissed = true;
+      this._mirrorDismissKey = this._mirrorFaultKey();
+      try { sessionStorage.setItem("nbx_mirror_banner_dismissed", this._mirrorDismissKey); } catch {}
+    },
+    _mirrorFaultKey() {
+      const bad = (this.mirrorHealth.results || []).filter((r) => !r.ok).map((r) => r.origin).sort().join("|");
+      const origins = ((this.mirror && this.mirror.origins) || []).join("|");
+      return `${origins}#${bad}`;
+    },
+    startMirrorPoll() {
+      // 60s 一轮：备用线路挂了最多 1 分钟即被发现；单次检测最多 5s 超时，
+      // 两条并发，开销可忽略。页面隐藏时跳过（回到前台由 visibility 补测一次）。
+      if (this._mirrorPollTimer) return;
+      this._mirrorPollTimer = setInterval(() => {
+        if (document.hidden) return;
+        if (!this.mirror || !this.mirror.ready) return;
+        this.checkMirrorHealth({ silent: true });
+      }, 60000);
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && this.mirror && this.mirror.ready) this.checkMirrorHealth({ silent: true });
+      });
+    },
+    async checkMirrorHealth(opts = {}) {
+      const silent = !!opts.silent;
+      if (this.mirrorHealth.loading) return;
+      // 未启用/未就绪时无需探测（后端同样会直接返回空结果，这里省一次请求）
+      if (this.mirror && (this.mirror.enabled === false || this.mirror.reason === "need_two_origins")) return;
+      this.mirrorHealth.loading = true;
+      if (!silent) this.mirrorHealth.error = "";
+      try {
+        const data = await this.api("/api/admin/mirror/status");
+        // 状态接口自带已保存的镜像配置：同步给概览卡与横幅，
+        // 避免仪表盘首屏还要再拉一次全量 config
+        if (data && typeof data === "object") {
+          this.mirror = {
+            enabled: !!data.enabled,
+            origins: Array.isArray(data.origins) ? data.origins : [],
+            ready: !!data.ready,
+            reason: data.reason || "",
+            banner_enabled: data.banner_enabled !== false,
+          };
+        }
+        this.mirrorHealth.results = Array.isArray(data.results) ? data.results : [];
+        this.mirrorHealth.summary = data.summary || null;
+        this.mirrorHealth.checkedAt = data.checked_at || new Date().toISOString();
+        this.mirrorHealth.error = "";
+        // 故障集合变化时清除旧的"知道了"（新挂的线路必须重新提示）
+        const key = this._mirrorFaultKey();
+        if (key !== this._mirrorDismissKey) {
+          this.mirrorBannerDismissed = false;
+          this._mirrorDismissKey = "";
+          try { sessionStorage.removeItem("nbx_mirror_banner_dismissed"); } catch {}
+        }
+      } catch (e) {
+        // 探活接口自身失败（如管理后台断连）：镜像 tab 内给一句，其它位置静默
+        if (!silent && (this.tab === "mirror" || this.tab === "dashboard")) {
+          this.mirrorHealth.error = e.message || "检测失败";
+        }
+      } finally {
+        this.mirrorHealth.loading = false;
+      }
     },
 
     dismissSecurityBanner() {
@@ -1094,6 +1213,8 @@ function adminApp() {
         // 时高压连点必卡、拦掉则 0 卡死——页签数据不提前加载是这条性能线的硬约束。
         await Promise.all([this.loadStats()]);
         // 顶栏刷新不丢草稿：配置/解析页有未保存修改时跳过重拉，只刷统计。
+        // 线路探活读的是已保存配置、不碰草稿，照常刷新。
+        if (this.tab === "dashboard" || this.tab === "mirror") this.checkMirrorHealth({ silent: true });
         if (this.isConfigTab && this.configDirty) return;
         if (this.tab === "parse" && this.parseDirty) return;
         if (this.tab === "config" || this.tab === "logsettings" || this.tab === "mirror") await this.loadConfig();
@@ -1160,6 +1281,7 @@ function adminApp() {
       // 首次进入（无快照）才拉一次。离开整组后回来同样不重载，草稿还在。
       if (entersConfig) {
         if (!this.configSnapshot) await this.loadConfig();
+        if (tab === "mirror") this.checkMirrorHealth({ silent: true });
       }
       else if (entersParse) {
         if (!this.parseSnapshot) await this.loadMineru();
@@ -1168,6 +1290,7 @@ function adminApp() {
       else if (tab === "codes") await this.loadCodes();
       else if (tab === "logs") { this.loadLogs(); this.loadPayloadFlag(); }
       else if (tab === "devices") await this.loadDevices();
+      else if (tab === "dashboard") this.checkMirrorHealth({ silent: true });
     },
 
     async api(path, options = {}) {
@@ -2598,6 +2721,7 @@ function adminApp() {
           log_payload: /^(1|true|yes|on)$/i.test(String(cfg.log_payload ?? "")),
           log_retention_days: Number(cfg.log_retention_days) || 0,
           mirror_enabled: /^(1|true|yes|on)$/i.test(String(cfg.mirror_enabled ?? "")),
+          mirror_banner_enabled: String(cfg.mirror_banner_enabled ?? "").trim() === "" ? true : /^(1|true|yes|on)$/i.test(String(cfg.mirror_banner_enabled ?? "")),
           // Jev 决策模型：Key 以脱敏形式回显（含 ****），保存时原样送回、后端跳过不覆盖
           jev_enabled: /^(1|true|yes|on)$/i.test(String(cfg.jev_enabled ?? "")),
           jev_base_url: String(cfg.jev_base_url ?? ""),
@@ -3138,6 +3262,7 @@ function adminApp() {
           mirror_origins: (this.configForm.mirror_origins || [])
             .map((s) => String(s || "").trim())
             .filter(Boolean),
+          mirror_banner_enabled: this.configForm.mirror_banner_enabled !== false,
           jev_enabled: !!this.configForm.jev_enabled,
           jev_base_url: String(this.configForm.jev_base_url || "").trim(),
           jev_model: String(this.configForm.jev_model || "").trim(),
@@ -3180,6 +3305,8 @@ function adminApp() {
         });
         this.toast("配置已保存");
         await this.loadConfig();
+        // 镜像地址/开关变了，已有的探活结果即过期，立即重测一次
+        this.checkMirrorHealth({ silent: true });
       } catch (e) {
         this.toast(e.message || "保存失败", "error");
       } finally {

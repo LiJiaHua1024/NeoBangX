@@ -147,6 +147,18 @@
         <button class="security-banner-close" @click="dismissSecurityBanner()">知道了</button>
       </div>
 
+      <!-- 线路故障全局横幅：镜像就绪且探活失败时常驻（可在「线路镜像」里关闭） -->
+      <div class="security-banner" x-show="mirrorBannerVisible" x-cloak>
+        <div class="security-banner-text">
+          <strong>⚠️ 线路故障：有线路不可用。</strong>
+          <span x-text="mirrorFaultText"></span>
+          <span>请在主线路故障前修复，否则届时无线路可切。</span>
+          <span class="dim mono" x-show="mirrorHealth.checkedAt" x-text="`（检测于 ${fmtTime(mirrorHealth.checkedAt)}）`"></span>
+        </div>
+        <button class="security-banner-action" @click="switchTab('mirror')">前往线路镜像</button>
+        <button class="security-banner-close" @click="dismissMirrorBanner()">知道了</button>
+      </div>
+
       <!-- 概览 -->
       <template x-if="tab === 'dashboard'"><section class="panel-stack">
         <div class="stat-grid">
@@ -165,6 +177,31 @@
           <div class="stat-card glass">
             <div class="stat-label">日志条数</div>
             <div class="stat-value" x-text="stats.total_logs ?? '—'"></div>
+          </div>
+        </div>
+
+        <!-- 线路状态：仅镜像已启用时展示；故障时整卡标红 -->
+        <div class="glass card mirror-card" :class="{ 'mirror-card-fault': mirrorHasFault }" x-show="mirror && mirror.enabled" x-cloak>
+          <div class="card-head-row">
+            <div>
+              <h2 class="card-title">线路状态 <span class="dim" x-show="mirrorHealth.checkedAt" x-text="`· 检测于 ${fmtTime(mirrorHealth.checkedAt)}`"></span></h2>
+              <p class="muted" x-show="!mirrorHasFault && mirrorHealth.results.length" style="margin:0">两条线路均正常，镜像可正常接管。</p>
+              <p class="mirror-fault-text" x-show="mirrorHasFault" style="margin:0" x-text="`⚠ ${mirrorFaultText}`"></p>
+              <p class="muted" x-show="!mirrorHealth.results.length && !mirrorHealth.loading" style="margin:0">尚未检测，正在探活两条线路…</p>
+            </div>
+            <button class="btn-ghost" @click="switchTab('mirror')">线路镜像</button>
+          </div>
+          <div class="mirror-rows" x-show="mirrorHealth.results.length">
+            <template x-for="r in mirrorHealth.results" :key="r.origin">
+              <div class="mirror-row">
+                <span class="dot" :class="r.ok ? 'on' : 'mirror-dot-bad'"></span>
+                <span class="mono mirror-origin" x-text="r.origin"></span>
+                <span class="dim mono" x-text="r.ok ? `${r.latency_ms}ms${r.version ? ' · v' + r.version : ''}` : (r.error || '不可用')"></span>
+              </div>
+            </template>
+          </div>
+          <div class="mirror-rows" x-show="mirrorHealth.loading && !mirrorHealth.results.length">
+            <p class="muted" style="margin:0">正在检测…</p>
           </div>
         </div>
 
@@ -1489,6 +1526,45 @@
 
           <p class="field-hint mt-3" x-show="mirrorStatusText" x-text="mirrorStatusText"></p>
           <p class="field-hint mt-2">开关与线路地址均为草稿，改完点顶栏“保存设置”统一落盘；下方状态以已保存配置为准。</p>
+
+          <div class="switch-row mt-4">
+            <label class="switch" :class="{ disabled: savingConfig }">
+              <input type="checkbox" x-model="configForm.mirror_banner_enabled" :disabled="savingConfig">
+              <span class="switch-slider"></span>
+            </label>
+            <div class="switch-copy">
+              <div class="switch-title">故障时全局横幅提醒</div>
+              <div class="field-hint">
+                开启后，某条线路不可用时在管理后台顶部常驻红色横幅（与 JWT 安全警告同级），
+                在哪个页签都能看到。关闭则只在下方检测区与概览卡里提示。同样是草稿，随顶栏“保存设置”落盘。
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="glass card">
+          <div class="card-head-row">
+            <div>
+              <h2 class="card-title">可用性检测</h2>
+              <p class="muted" style="margin:0">管理后台每 60 秒自动探测一次，也可手动立即检测。测的是<strong>已保存配置</strong>，草稿保存后才纳入检测。</p>
+            </div>
+            <button class="btn-ghost" @click="checkMirrorHealth()" :disabled="mirrorHealth.loading" x-text="mirrorHealth.loading ? '检测中…' : '立即检测'"></button>
+          </div>
+          <p class="field-hint mt-2" x-show="mirrorHealthText" x-text="mirrorHealthText"></p>
+          <div class="mirror-rows mt-4" x-show="mirrorHealth.results.length">
+            <template x-for="r in mirrorHealth.results" :key="'mirror-' + r.origin">
+              <div class="mirror-row mirror-row-card">
+                <span class="dot" :class="r.ok ? 'on' : 'mirror-dot-bad'"></span>
+                <div class="mirror-row-main">
+                  <span class="mono mirror-origin" x-text="r.origin"></span>
+                  <span class="dim mono" x-show="r.ok" x-text="`${r.latency_ms}ms${r.version ? ' · v' + r.version : ''}`"></span>
+                  <span class="mirror-fault-text" x-show="!r.ok" x-text="r.error || '不可用'"></span>
+                </div>
+                <span class="status-badge" :class="r.ok ? 'st-success' : 'st-error'" x-text="r.ok ? '正常' : '故障'"></span>
+              </div>
+            </template>
+          </div>
+          <p class="muted mt-4" x-show="mirror && !mirror.enabled">当前未启用镜像，无需检测。先在上方打开开关并保存两条线路地址。</p>
         </div>
       </section></template>
     </main>

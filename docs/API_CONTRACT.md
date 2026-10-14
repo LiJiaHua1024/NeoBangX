@@ -71,6 +71,7 @@
 | POST | `/api/admin/logs/purge` | 手动清理过期日志 |
 | GET | `/api/admin/config` | 查看运行时配置 |
 | PUT | `/api/admin/config` | 更新运行时配置（含日志开关与保留天数） |
+| GET | `/api/admin/mirror/status` | 线路镜像可用性检测（代测两条线路的 /api/health） |
 
 ---
 
@@ -1029,6 +1030,7 @@ data: [DONE]
     "tool_reasoning_rules": [],
     "mirror_enabled": "false",
     "mirror_origins": [],
+    "mirror_banner_enabled": "true",
     "jev_enabled": "false",
     "jev_base_url": "https://api.typesafe.ai/v1/systemone",
     "jev_api_key": "sk-t****7890",
@@ -1048,7 +1050,8 @@ data: [DONE]
 `log_payload` 以字符串 `"true"` / `"false"` 存储；`log_retention_days` 为
 天数字符串，`"0"` 表示永久保留。`jev_api_key` 回显为脱敏值（含 `****`），
 保存时原样送回表示不修改（与 Provider Key 的约定一致）；`jev_enabled` 同为
-字符串开关。旧的单 URL 配置键（`llm_base_url` / `llm_api_key` /
+字符串开关。`mirror_banner_enabled` 为线路故障全局横幅开关（字符串 `"true"` /
+`"false"`，缺键按 `"true"`），随 `PUT /api/admin/config` 落盘。旧的单 URL 配置键（`llm_base_url` / `llm_api_key` /
 `llm_model` / `chores_base_url` / `chores_api_key`）已不再由配置读写，仅作为环境变量兜底存在。
 
 ### 11.8 更新配置
@@ -1120,6 +1123,38 @@ data: [DONE]
 红色提示指出怎么修（为默认模型补上该项，或指定一个别的模型）。某模型的能力被取消或被禁用后，
 它会立刻从列表消失，原先的指向则显示同样的红色提示。用户端模型下拉同理，只列勾选了「用户可用」
 且未禁用的模型。
+
+### 11.9 线路可用性检测
+
+#### GET `/api/admin/mirror/status`
+
+管理后台代测两条线路的 `/api/health`（前端不直测，避免 CORS 与混合内容误报）。
+只测 DB 里已保存的 `mirror_origins`，不接受客户端传 URL。
+
+未启用（`reason=disabled`）或地址不足两条（`reason=need_two_origins`）时直接返回
+配置状态，不发起任何出站请求（`results=[]`，`summary={all_ok:true, fault_count:0}`）。
+
+**响应：**
+
+```json
+{
+  "enabled": true,
+  "origins": ["https://a.example.com", "https://b.example.com"],
+  "ready": true,
+  "reason": "",
+  "banner_enabled": true,
+  "checked_at": "2026-10-14T12:00:00+00:00",
+  "results": [
+    {"origin": "https://a.example.com", "ok": true, "status_code": 200, "latency_ms": 123, "version": "1.2.0", "error": ""},
+    {"origin": "https://b.example.com", "ok": false, "status_code": null, "latency_ms": 5001, "version": "", "error": "连接超时（5s）：对方无响应或端口不可达"}
+  ],
+  "summary": {"all_ok": false, "fault_count": 1}
+}
+```
+
+单条探测超时 5s，两条并发，总耗时约 5s。`error` 为中文短语（超时 / 拒绝 / 解析失败 /
+非 200 / 非 JSON），可直接展示给管理员。管理前端在概览卡、线路镜像页与全局横幅
+中复用该接口，每 60s 轮询一次（页面隐藏时跳过）。
 
 ---
 
