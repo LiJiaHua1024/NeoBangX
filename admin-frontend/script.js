@@ -527,6 +527,41 @@ function anaMemoized(self, key, fn) {
   return anaMemo.map[key];
 }
 
+/* AI 智力与算力打击评级：AA 智能指数 → 打击级别区间映射。
+   唯一对照表，与用户端 frontend/script.js 的同名常量保持一致（一致性测试盯着两边）。
+   留空或低于 17 分一律未评级；max 为 null 表示上不封顶。 */
+const AA_STRIKE_LEVELS = [
+  { lv: 1, min: 17, max: 35, name: "常规火炮级", alias: "", color: "#64748b",
+    gist: "基础逻辑与轻量文本处理；已强于绝大多数普通人，仅在领域专家面前显现智力差距" },
+  { lv: 2, min: 36, max: 42, name: "温压弹级", alias: "学科满分级", color: "#d97706",
+    gist: "做题家巅峰：彻底打穿人类标准化考试（如高考英语除作文满分），高阶思辨仍受限于既有框架" },
+  { lv: 3, min: 43, max: 47, name: "原子弹级", alias: "曼哈顿时刻", color: "#ea580c",
+    gist: "初次眩晕瘫坐：单点突破人类专家盲区，解题解析极其细腻，开始让专业学者产生压迫感" },
+  { lv: 4, min: 48, max: 51, name: "氢弹级", alias: "热核聚变", color: "#dc2626",
+    gist: "规模化智力溢出：从裂变跃升至聚变，在复杂长链条推理与奥赛级难题上形成无死角覆盖" },
+  { lv: 5, min: 52, max: 54, name: "光粒级", alias: "恒星引爆", color: "#7c3aed",
+    gist: "跨量级定点抹杀：以近光速质量点直接引爆恒星，定点攻克悬置数十年的单点数学猜想" },
+  { lv: 6, min: 55, max: 58, name: "二向箔级", alias: "维度坍缩", color: "#0e7490",
+    gist: "连同思考过程一起二维化：不仅给出答案，更把人类探索范式的空间彻底拍扁" },
+  // 59 分及以上不设级别：现有评测体系上限之外的强度不可知——未知的未知
+  { lv: 0, min: 59, max: null, name: "未知", alias: "未知的未知", color: "#52525b",
+    gist: "超出评级体系上限：强度不可知，故不设打击级别" },
+];
+
+/* AA 指数 → 打击级别；留空、非数字或低于 17 分返回 null（未评级）。
+   区间按整数分段、小数向下取整归档；59 分及以上返回「未知」档（未知的未知）。 */
+function aaLevelOf(aa) {
+  const n = Number(aa);
+  if (aa == null || aa === "" || !Number.isFinite(n)) return null;
+  const v = Math.floor(n);
+  return AA_STRIKE_LEVELS.find((l) => v >= l.min && (l.max == null || v <= l.max)) || null;
+}
+
+/* 区间文案：52–54 分 / 59 分及以上 */
+function aaRangeText(lv) {
+  return lv.max == null ? `${lv.min} 分及以上` : `${lv.min}–${lv.max} 分`;
+}
+
 function adminApp() {
   // 请求句柄不进入 Alpine 深层代理；只有最后一次查询可以更新列表与汇总。
   let logsRequest = 0;
@@ -761,7 +796,7 @@ function adminApp() {
     modelModalIndex: null,
     modelForm: {
       concurrency_mode: "default", visual_paper_concurrency: 3,
-      id: "", name: "", description: "", score: null, reasoning_effort: "", extra_body: "",
+      id: "", name: "", description: "", aa_index: null, reasoning_effort: "", extra_body: "",
       user_usable: true, ocr_usable: false, chores_usable: true, enabled: true,
       is_free: false, free_no_code: false,
       free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
@@ -2693,7 +2728,7 @@ function adminApp() {
                 id: m.id || "",
                 name: m.name && m.name !== m.id ? m.name : "",
                 description: m.description || "",
-                score: m.score ?? null,
+                aa_index: m.aa_index ?? null,
                 reasoning_effort: m.reasoning_effort || null,
                 extra_body: m.extra_body || null,
                 visual_paper_concurrency: m.visual_paper_concurrency ?? null,
@@ -2778,10 +2813,23 @@ function adminApp() {
     },
 
     /* ============ 模型管理 ============ */
-    scoreColor(score) {
-      if (score == null || !Number.isFinite(Number(score))) return "";
-      const s = Math.max(0, Math.min(10, Number(score)));
-      return `hsl(${Math.round(s * 12)} 85% 45%)`;
+    /* 打击级别说明标签：填 AA 智能指数即时映射，悬停看区间与含义 */
+    aaLevelLabel(aa) {
+      const lv = aaLevelOf(aa);
+      return lv ? lv.name : "未评级";
+    },
+    aaLevelStyle(aa) {
+      const lv = aaLevelOf(aa);
+      return lv ? `color:${lv.color};border-color:${lv.color}66;background:${lv.color}1a` : "";
+    },
+    aaLevelTip(aa) {
+      const lv = aaLevelOf(aa);
+      const n = Number(aa);
+      if (!lv) {
+        if (aa == null || aa === "") return "未评级：留空不显示打击级别，用户端不显示任何评级角标";
+        return `AA 智能指数 ${n}（低于 17 分）：暂无对应打击级别，用户端不显示评级`;
+      }
+      return `AA 智能指数 ${n}（${aaRangeText(lv)}）→ ${lv.name}${lv.alias ? `（${lv.alias}）` : ""}：${lv.gist}`;
     },
     thinkingLabel(m) {
       const val = (m.reasoning_effort || "").trim();
@@ -2791,7 +2839,7 @@ function adminApp() {
     openAddModel() {
       this.modelModalIndex = null;
       this.modelForm = {
-        id: "", name: "", description: "", score: null, reasoning_effort: "", extra_body: "",
+        id: "", name: "", description: "", aa_index: null, reasoning_effort: "", extra_body: "",
         concurrency_mode: "default", visual_paper_concurrency: this.configForm.visual_paper_concurrency,
         user_usable: true, ocr_usable: false, chores_usable: true, enabled: true,
         is_free: false, free_no_code: false,
@@ -2811,7 +2859,7 @@ function adminApp() {
         concurrency_mode: m.visual_paper_concurrency == null ? "default" : "custom",
         visual_paper_concurrency: m.visual_paper_concurrency ?? this.configForm.visual_paper_concurrency,
         description: m.description || "",
-        score: m.score ?? null,
+        aa_index: m.aa_index ?? null,
         reasoning_effort: m.reasoning_effort || "",
         extra_body: m.extra_body ? JSON.stringify(m.extra_body, null, 2) : "",
         user_usable: m.user_usable !== false,
@@ -2876,11 +2924,14 @@ function adminApp() {
           return;
         }
       }
-      const score = this.modelForm.score;
-      if (score != null && (score === "" || !Number.isFinite(Number(score)) || Number(score) < 0 || Number(score) > 10)) {
-        this.toast("推荐评分需为 0 到 10 之间的数字，留空则不展示", "error");
+      // 空串/未填都归一为 null（未评级）；其余校验 0-100，避免 x-model.number 空值变成 ""
+      const aaRaw = this.modelForm.aa_index;
+      const aaIndex = aaRaw === "" || aaRaw == null ? null : Number(aaRaw);
+      if (aaIndex != null && (!Number.isFinite(aaIndex) || aaIndex < 0 || aaIndex > 100)) {
+        this.toast("AA 智能指数需为 0 到 100 之间的数字，留空则为未评级", "error");
         return;
       }
+      this.modelForm.aa_index = aaIndex;
       const enabled = this.modelForm.enabled !== false;
       // 三项用途：未禁用的模型至少要勾一项，否则它在任何入口都到不了
       const userUsable = !!this.modelForm.user_usable;
@@ -2934,7 +2985,7 @@ function adminApp() {
         id,
         name: (this.modelForm.name || "").trim(),
         description: (this.modelForm.description || "").trim(),
-        score: this.modelForm.score,
+        aa_index: this.modelForm.aa_index,
         reasoning_effort: effort,
         extra_body: extraBody,
         visual_paper_concurrency: concurrency,
@@ -3277,7 +3328,7 @@ function adminApp() {
             id: m.id,
             name: m.name || "",
             description: m.description || "",
-            score: m.score ?? null,
+            aa_index: m.aa_index ?? null,
             reasoning_effort: m.reasoning_effort || null,
             extra_body: m.extra_body || null,
             visual_paper_concurrency: m.visual_paper_concurrency ?? null,

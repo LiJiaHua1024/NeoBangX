@@ -1012,7 +1012,7 @@
                   <th></th>
                   <th>显示名称</th>
                   <th>可用 Provider<span class="hint-th">（首位优先 · 拖拽排序）</span></th>
-                  <th>推荐评分</th>
+                  <th>打击级别<span class="hint-th">（AA 指数映射）</span></th>
                   <th>思考控制</th>
                   <th>操作</th>
                 </tr>
@@ -1093,9 +1093,9 @@
                         </template>
                       </div>
                     </td>
-                    <td data-label="推荐评分">
-                      <span class="badge" :style="m.score != null ? 'color:' + scoreColor(m.score) + ';border-color:' + scoreColor(m.score) + '66;background:' + scoreColor(m.score) + '1a' : ''"
-                            x-text="m.score != null ? m.score + ' / 10' : '—'"></span>
+                    <td data-label="打击级别">
+                      <span class="badge" :style="aaLevelStyle(m.aa_index)" :title="aaLevelTip(m.aa_index)"
+                            x-text="aaLevelOf(m.aa_index) ? aaLevelLabel(m.aa_index) : '—'"></span>
                     </td>
                     <td data-label="思考控制"><span class="badge badge-user" x-text="thinkingLabel(m)"></span></td>
                     <td class="actions-cell" data-label="操作" data-span="full">
@@ -1794,9 +1794,14 @@
             <span class="field-hint">每份试卷第二步同时发起的请求数，自动补全共用此设置。1 为串行，0 或负数（如 -1）表示不限并发；点顶栏“保存设置”后对新请求生效。</span>
           </div>
           <label class="field mb-3">
-            <span>推荐评分（0-10）</span>
-            <input type="number" x-model.number="modelForm.score" min="0" max="10" step="0.5" placeholder="留空不展示推荐环">
-            <span class="field-hint">用户端以红→绿渐变圆环展示，评分越高越推荐</span>
+            <span>AA 智能指数（Artificial Analysis）</span>
+            <div class="aa-level-row">
+              <input type="number" x-model.number="modelForm.aa_index" min="0" max="100" step="0.1" placeholder="留空 = 未评级，用户端不显示级别">
+              <!-- 说明标签：填入即时映射打击级别，鼠标悬停看区间与含义 -->
+              <span class="badge aa-level-chip" :style="aaLevelStyle(modelForm.aa_index)" :title="aaLevelTip(modelForm.aa_index)"
+                    x-text="aaLevelOf(modelForm.aa_index) ? aaLevelLabel(modelForm.aa_index) : '未评级'"></span>
+            </div>
+            <span class="field-hint">按打击级别区间自动映射（如 52–54 分 = 光粒级）；鼠标悬停右侧标签可看区间与含义。留空或低于 17 分为未评级，用户端不显示评级角标；59 分及以上为「未知」——未知的未知，不设级别。</span>
           </label>
           <label class="field mb-3">
             <span>思考强度档位（Reasoning Effort）</span>

@@ -93,11 +93,11 @@ def test_tools_endpoint_keys_match_real_shape(client):
                     "id", "name", "icon", "description", "prompt_filename", "prompt_loaded",
                 }
         for model in payload["models"]:
-            assert set(model) == {"id", "name", "description", "score", "is_free", "free_no_code"}
+            assert set(model) == {"id", "name", "description", "aa_index", "is_free", "free_no_code"}
         # /api/tools/models 用的是 label 而不是 name
         slim = catalog.models_payload()
         assert set(slim) == {"models", "default_model"}
-        assert set(slim["models"][0]) == {"id", "label", "description", "score", "is_free", "free_no_code"}
+        assert set(slim["models"][0]) == {"id", "label", "description", "aa_index", "is_free", "free_no_code"}
 
     asyncio.run(run())
 

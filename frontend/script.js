@@ -2213,6 +2213,41 @@ function fmtTokens(n) {
   return (Number(n) || 0).toLocaleString("en-US");
 }
 
+/* ---------------- 打击级别评级（AA 智能指数 → 打击级别区间映射） ----------------
+   唯一对照表，与管理端 admin-frontend/script.js 的同名常量保持一致（一致性测试盯着两边）。
+   留空或低于 17 分一律未评级；max 为 null 表示上不封顶。 */
+const AA_STRIKE_LEVELS = [
+  { lv: 1, min: 17, max: 35, name: "常规火炮级", alias: "", color: "#64748b",
+    gist: "基础逻辑与轻量文本处理；已强于绝大多数普通人，仅在领域专家面前显现智力差距" },
+  { lv: 2, min: 36, max: 42, name: "温压弹级", alias: "学科满分级", color: "#d97706",
+    gist: "做题家巅峰：彻底打穿人类标准化考试（如高考英语除作文满分），高阶思辨仍受限于既有框架" },
+  { lv: 3, min: 43, max: 47, name: "原子弹级", alias: "曼哈顿时刻", color: "#ea580c",
+    gist: "初次眩晕瘫坐：单点突破人类专家盲区，解题解析极其细腻，开始让专业学者产生压迫感" },
+  { lv: 4, min: 48, max: 51, name: "氢弹级", alias: "热核聚变", color: "#dc2626",
+    gist: "规模化智力溢出：从裂变跃升至聚变，在复杂长链条推理与奥赛级难题上形成无死角覆盖" },
+  { lv: 5, min: 52, max: 54, name: "光粒级", alias: "恒星引爆", color: "#7c3aed",
+    gist: "跨量级定点抹杀：以近光速质量点直接引爆恒星，定点攻克悬置数十年的单点数学猜想" },
+  { lv: 6, min: 55, max: 58, name: "二向箔级", alias: "维度坍缩", color: "#0e7490",
+    gist: "连同思考过程一起二维化：不仅给出答案，更把人类探索范式的空间彻底拍扁" },
+  // 59 分及以上不设级别：现有评测体系上限之外的强度不可知——未知的未知
+  { lv: 0, min: 59, max: null, name: "未知", alias: "未知的未知", color: "#52525b",
+    gist: "超出评级体系上限：强度不可知，故不设打击级别" },
+];
+
+/* AA 指数 → 打击级别；留空、非数字或低于 17 分返回 null（未评级）。
+   区间按整数分段、小数向下取整归档；59 分及以上返回「未知」档（未知的未知）。 */
+function aaLevelOf(aa) {
+  const n = Number(aa);
+  if (aa == null || aa === "" || !Number.isFinite(n)) return null;
+  const v = Math.floor(n);
+  return AA_STRIKE_LEVELS.find((l) => v >= l.min && (l.max == null || v <= l.max)) || null;
+}
+
+/* 区间文案：52–54 分 / 59 分及以上 */
+function aaRangeText(lv) {
+  return lv.max == null ? `${lv.min} 分及以上` : `${lv.min}–${lv.max} 分`;
+}
+
 /* ---------------- Alpine 主应用 ---------------- */
 function nbx() {
   return {
@@ -2222,6 +2257,8 @@ function nbx() {
     // 模型下拉最大显示数（后台配置，0 = 不折叠）与本次展开状态
     maxVisibleModels: 0,
     modelsExpanded: false,
+    // 打击级别科普弹窗（模型下拉底部「等级说明」入口打开）
+    strikeGuideOpen: false,
     toolsLoaded: false,
     toolsError: "",
     currentTool: null,
@@ -4929,7 +4966,7 @@ function nbx() {
         }
         const data = await res.json();
         this.groups = data.groups || [];
-        // models 为结构化列表：[{ id, name, description, score, is_free, free_no_code }]
+        // models 为结构化列表：[{ id, name, description, aa_index, is_free, free_no_code }]
         // 后端已滤掉禁用与仅 Chores 模型，该列表长度即「可见模型数」，折叠计数以它为准
         this.models = data.models || [];
         this.maxVisibleModels = Number(data.max_visible_models) || 0;
@@ -5158,6 +5195,15 @@ function nbx() {
     closeModelMenu() {
       this.modelMenuOpen = false;
       this.modelsExpanded = false;
+    },
+    /* 打击级别科普弹窗：从模型下拉/重试弹窗里的「等级说明」入口打开 */
+    openStrikeGuide() {
+      this.closeModelMenu();
+      this.retryModelOpen = false;
+      this.strikeGuideOpen = true;
+    },
+    closeStrikeGuide() {
+      this.strikeGuideOpen = false;
     },
     /* 手机档浮层落位（≤640px 时 CSS 放平 .ms-wrap，.ms-menu 的包含块变成
        mainPanel 玻璃面板，仿 positionVpSettings）：与触发器右对齐、下方 8px，
@@ -12279,18 +12325,22 @@ function nbx() {
     },
 
     /* ============ 小工具 ============ */
-    modelScoreColor(score) {
-      const s = Math.max(0, Math.min(10, Number(score) || 0));
-      return `hsl(${Math.round(s * 12)} 85% 45%)`;
+    /* 打击级别徽章：AA 智能指数按 AA_STRIKE_LEVELS 区间映射；未评级不渲染任何角标 */
+    strikeBadgeText(aa) {
+      const lv = aaLevelOf(aa);
+      return lv ? lv.name : "";
     },
-    modelRingOffset(score) {
-      const s = Math.max(0, Math.min(10, Number(score) || 0));
-      return (62.83 * (1 - s / 10)).toFixed(2);
+    strikeBadgeStyle(aa) {
+      const lv = aaLevelOf(aa);
+      return lv ? `color:${lv.color};border-color:${lv.color}66;background:${lv.color}1a` : "";
     },
-    modelScoreText(score) {
-      const n = Number(score);
-      if (!Number.isFinite(n)) return "";
-      return n % 1 === 0 ? String(n) : String(Math.round(n * 10) / 10);
+    strikeTip(aa) {
+      const lv = aaLevelOf(aa);
+      if (!lv) return "";
+      return `AA 智能指数 ${Number(aa)}（${aaRangeText(lv)}）· ${lv.name}${lv.alias ? `（${lv.alias}）` : ""} —— ${lv.gist}`;
+    },
+    strikeLevels() {
+      return AA_STRIKE_LEVELS;
     },
     shortModel(id) {
       const m = this.models.find((x) => x.id === id);

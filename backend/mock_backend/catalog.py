@@ -91,11 +91,12 @@ DEFAULT_MODEL = "mock/mock-flash"
 MAX_VISIBLE_MODELS = 3
 
 MODELS: list[dict] = [
-    {"id": "mock/mock-flash", "name": "假模型 · Flash", "description": "假后端默认，免费且免码", "score": 88, "is_free": True, "free_no_code": True},
-    {"id": "mock/mock-pro", "name": "假模型 · Pro", "description": "付费假模型，用于测使用码门禁", "score": 92, "is_free": False, "free_no_code": False},
-    {"id": "mock/mock-reasoning", "name": "假模型 · 深度思考", "description": "带推理过程，用于测思考面板", "score": 90, "is_free": False, "free_no_code": False},
-    {"id": "mock/mock-long", "name": "假模型 · 长文", "description": "输出超长，用于测折叠与渲染性能", "score": 85, "is_free": True, "free_no_code": True},
-    {"id": "mock/mock-slow", "name": "假模型 · 慢速", "description": "每 token 间隔 200ms，用于测流式与停止", "score": 80, "is_free": True, "free_no_code": True},
+    {"id": "mock/mock-flash", "name": "假模型 · Flash", "description": "假后端默认，免费且免码", "aa_index": 41, "is_free": True, "free_no_code": True},
+    {"id": "mock/mock-pro", "name": "假模型 · Pro", "description": "付费假模型，用于测使用码门禁", "aa_index": 53, "is_free": False, "free_no_code": False},
+    {"id": "mock/mock-reasoning", "name": "假模型 · 深度思考", "description": "带推理过程，用于测思考面板", "aa_index": 46, "is_free": False, "free_no_code": False},
+    {"id": "mock/mock-long", "name": "假模型 · 长文", "description": "输出超长，用于测折叠与渲染性能", "aa_index": 35, "is_free": True, "free_no_code": True},
+    # 未评级（aa_index 为 null）：验证用户端不显示任何打击级别角标
+    {"id": "mock/mock-slow", "name": "假模型 · 慢速", "description": "每 token 间隔 200ms，用于测流式与停止", "aa_index": None, "is_free": True, "free_no_code": True},
 ]
 
 # 选中这些模型即自动套用对应场景，省得每次手写指令
@@ -183,7 +184,7 @@ def models_payload() -> dict:
                 "id": m["id"],
                 "label": m["name"],
                 "description": m["description"],
-                "score": m["score"],
+                "aa_index": m["aa_index"],
                 "is_free": m["is_free"],
                 "free_no_code": m["free_no_code"],
             }

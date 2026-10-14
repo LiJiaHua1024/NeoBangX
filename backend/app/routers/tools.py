@@ -280,7 +280,7 @@ async def list_tools(
                 "id": m["id"],
                 "name": m["name"],
                 "description": m["description"],
-                "score": m["score"],
+                "aa_index": m["aa_index"],
                 # 免费模型：用户端展示「免费」标签；free_no_code 表示无码/次数用尽也可直接调用
                 "is_free": bool(m.get("is_free")),
                 "free_no_code": bool(m.get("is_free") and m.get("free_no_code")),
@@ -312,7 +312,7 @@ async def list_models(db: Annotated[Session, Depends(get_db)]):
                 "id": m["id"],
                 "label": m["name"],
                 "description": m["description"],
-                "score": m["score"],
+                "aa_index": m["aa_index"],
                 "is_free": bool(m.get("is_free")),
                 "free_no_code": bool(m.get("is_free") and m.get("free_no_code")),
             }

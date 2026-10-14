@@ -825,6 +825,11 @@ select option { background: var(--bg); color: var(--text); }
 /* 用途能力标记（用户 / OCR / Chores）：中性色，靠在名称后一眼看清这个模型能干什么 */
 .badge-cap { background: var(--panel-soft); color: var(--dim); border: 1px solid var(--border); }
 
+/* AA 智能指数输入行：输入框 + 打击级别说明标签（悬停看区间与含义） */
+.aa-level-row { display: flex; align-items: center; gap: 0.6rem; }
+.aa-level-row input { flex: 1; min-width: 0; }
+.aa-level-chip { flex-shrink: 0; white-space: nowrap; cursor: help; }
+
 /* 用途勾选组一项都没勾时的提醒态：与后端「未勾选任何用途」的拦截一致 */
 .rule-tool-options.cap-missing {
   padding: 0.3rem; border-radius: 0.7rem;

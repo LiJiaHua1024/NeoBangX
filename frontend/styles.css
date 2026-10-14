@@ -956,7 +956,8 @@ html[data-theme="sora"] .mascot-peeking {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  max-width: 16rem;
+  /* 放宽到 20rem：名称行是 nowrap 截断，16rem 时免费标签一挤就满屏省略号 */
+  max-width: 20rem;
   padding: 0.48rem 0.8rem;
   border-radius: 0.75rem;
   font-size: 0.8rem;
@@ -987,8 +988,9 @@ html[data-theme="sora"] .mascot-peeking {
   min-width: 15.5rem;
   /* 宽度上限必须压住内容：模型名称行是 nowrap 文本，会把按内容撑宽的面板拉到
      整行文字宽，右锚定下只能向左伸、窄屏上顶出屏幕左缘；有了上限单行省略号
-     才真正生效。模型简介只认手动换行、每行单行省略（见 .ms-item-desc），不自动换行 */
-  max-width: min(24rem, calc(100vw - 1.5rem));
+     才真正生效。模型简介只认手动换行、每行单行省略（见 .ms-item-desc），不自动换行。
+     28rem 为上限：名称 + 免费/免码/打击级别三个标签并排时不至于挤出满屏省略号 */
+  max-width: min(28rem, calc(100vw - 1.5rem));
   padding: 0.35rem;
   border-radius: 0.9rem;
   z-index: 70;
@@ -1154,7 +1156,7 @@ html[data-theme="sora"][data-sky="night"] .ms-menu { --panel-strong: color-mix(i
 .ms-item {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.5rem;
   width: 100%;
   padding: 0.55rem 0.6rem;
   border-radius: 0.65rem;
@@ -1184,16 +1186,21 @@ html[data-theme="sora"][data-sky="night"] .ms-menu { --panel-strong: color-mix(i
   line-height: 1.5;
 }
 /* 免费模型：名称行 + 免费标签（标签不参与省略，避免长名称把它挤掉） */
-.ms-item-title { display: flex; align-items: center; gap: 0.3rem; min-width: 0; }
+/* 标签行高固定：免费/免码/打击级别徽章与标题文字共用一条水平中线 */
+.ms-item-title { display: flex; align-items: center; gap: 0.25rem; min-width: 0; min-height: 1.25rem; }
 .ms-item-title .truncate { font-size: 0.83rem; font-weight: 550; min-width: 0; }
+/* 徽章内文字要视觉居中：line-height: 1 的行盒恰等于字号，中文字形墨迹
+   （ascent+descent ≈ 1.16em）高出行盒，按行盒居中就会顶出上沿、看着偏上；
+   行高放宽到 1.4 让墨迹完整落进再居中。三个标签统一同一套规格 */
 .ms-free {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   flex: none;
   font-size: 0.62rem;
   font-weight: 700;
-  line-height: 1;
-  padding: 0.16rem 0.36rem;
+  line-height: 1.4;
+  padding: 0.07rem 0.36rem;
   border-radius: 999px;
   color: #34d399;
   background: color-mix(in srgb, #10b981 15%, transparent);
@@ -1203,41 +1210,68 @@ html[data-theme="sora"][data-sky="night"] .ms-menu { --panel-strong: color-mix(i
 .ms-nocode {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   flex: none;
   font-size: 0.62rem;
   font-weight: 700;
-  line-height: 1;
-  padding: 0.16rem 0.36rem;
+  line-height: 1.4;
+  padding: 0.07rem 0.36rem;
   border-radius: 999px;
   color: #60a5fa;
   background: color-mix(in srgb, #3b82f6 15%, transparent);
   border: 1px solid color-mix(in srgb, #3b82f6 38%, transparent);
 }
-.ms-item .ms-ring {
-  position: relative;
-  width: 28px;
-  height: 28px;
+/* 打击级别徽章：颜色由 strikeBadgeStyle 按级别内联给定（对照表 AA_STRIKE_LEVELS）。
+   规格与 .ms-free/.ms-nocode 逐项一致（字号/行高/内边距/圆角/边框），三个标签才齐整；
+   位置随 .ms-item 的 align-items: center 垂直居中——即最初正确的落位，勿再加
+   align-self/margin-top 之类的锚定，那会把整枚徽章压离中线 */
+.ms-item .ms-strike {
   margin-left: auto;
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.4;
+  padding: 0.07rem 0.36rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  cursor: help;
 }
-.ms-item .ms-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
-.ms-item .ms-ring .ms-ring-track { fill: none; stroke: var(--border); stroke-width: 2.6; }
-.ms-item .ms-ring .ms-ring-bar { fill: none; stroke-width: 2.6; stroke-linecap: round; transition: stroke-dashoffset 0.6s ease; }
-.ms-item .ms-ring .ms-ring-num {
-  position: absolute;
-  inset: 0;
+.ms-item .ms-strike + .ck { margin-left: 0.35rem; }
+.ms-item .ck { margin-left: auto; color: var(--accent); flex: none; }
+
+/* 模型下拉底部「等级说明」入口：与 .ms-more 同款排版（伪元素画分隔线） */
+.ms-guide {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
-  font-weight: 650;
-  line-height: 1;
+  gap: 0.35rem;
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 0.65rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: color 0.15s ease, background 0.15s ease;
 }
-.ms-item .ms-ring + .ck { margin-left: 0.35rem; }
-.ms-item .ck { margin-left: auto; color: var(--accent); flex: none; }
+.ms-guide::before {
+  content: "";
+  position: absolute;
+  top: -0.16rem;
+  left: 0.45rem;
+  right: 0.45rem;
+  height: 1px;
+  background: var(--border);
+}
+.ms-guide:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+/* 重试弹窗里的块级入口：不在下拉里，不需要顶部分隔线 */
+.ms-guide.ms-guide-block { margin-top: 0.7rem; }
+.ms-guide.ms-guide-block::before { display: none; }
 
 /* 换个模型重试弹窗：静态滚动的模型列表 */
 .retry-model-list {
@@ -1255,6 +1289,181 @@ html[data-theme="sora"][data-sky="night"] .ms-menu { --panel-strong: color-mix(i
 .ms-item:disabled:hover { background: color-mix(in srgb, var(--accent) 13%, transparent); }
 .ms-item:disabled:active { transform: none; }
 .ms-item .ms-item-failed { color: #f0958a; font-weight: 550; }
+
+/* ==================== 打击级别科普弹窗 ====================
+   横幅布局：宽度显著大于高度，宽屏分双栏排版（.sg-cols），窄屏回落单列 */
+.modal-card.sg-card { width: min(1180px, calc(100vw - 2.5rem)); max-width: none; }
+/* 弹窗长标题：可收缩换行，窄屏不许把关闭按钮顶出屏幕 */
+.sg-title { flex: 1; min-width: 0; line-height: 1.45; }
+.sg-body {
+  max-height: min(84vh, 940px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1.15rem 1.5rem 1.6rem;
+}
+.sg-cols {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  gap: 1.4rem 1.8rem;
+  align-items: start;
+}
+.sg-sec + .sg-sec,
+.sg-sec + .sg-cols,
+.sg-cols + .sg-cols { margin-top: 1.35rem; }
+.sg-cols > .sg-sec + .sg-sec { margin-top: 0; }
+/* 正文字号随视口渐变：手机不低于 15px、笔记本约 15.5px、大屏封顶 16px */
+.sg-sec h4 {
+  font-size: clamp(1rem, 0.95rem + 0.2vw, 1.12rem);
+  font-weight: 750;
+  color: var(--text);
+  margin-bottom: 0.55rem;
+  padding-left: 0.62rem;
+  border-left: 3px solid var(--accent);
+}
+.sg-sec p { font-size: clamp(0.94rem, 0.88rem + 0.2vw, 1rem); line-height: 1.9; color: var(--text-dim); margin-top: 0.55rem; }
+.sg-sec p strong { color: var(--text); font-weight: 700; }
+.sg-sec p em { font-style: normal; color: var(--text); font-weight: 650; }
+.sg-lead { color: var(--text); font-weight: 600; }
+
+/* 图表一：武器梯度刻度带（窄屏横向滚动） */
+.sg-scale-wrap { overflow-x: auto; overscroll-behavior-x: contain; padding: 0.2rem 0; }
+.sg-scale {
+  display: flex;
+  min-width: 480px;
+  height: 60px;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.sg-seg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  min-width: 0;
+  color: #fff;
+}
+.sg-seg-name { font-size: 0.72rem; font-weight: 750; white-space: nowrap; }
+.sg-seg-range { font-size: 0.64rem; opacity: 0.85; white-space: nowrap; }
+
+/* 七级卡片 */
+.sg-levels {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+.sg-level-card {
+  border: 1px solid color-mix(in srgb, var(--lv) 35%, var(--border));
+  background: color-mix(in srgb, var(--lv) 7%, transparent);
+  border-radius: 0.8rem;
+  padding: 0.65rem 0.75rem;
+}
+.sg-level-head { display: flex; align-items: baseline; gap: 0.3rem; flex-wrap: wrap; }
+.sg-level-name { font-size: 0.88rem; font-weight: 750; color: var(--lv); }
+.sg-level-alias { font-size: 0.72rem; color: var(--text-dim); }
+.sg-level-range { margin-left: auto; font-size: 0.72rem; font-weight: 650; color: var(--text-dim); }
+.sg-level-gist { font-size: clamp(0.86rem, 0.8rem + 0.15vw, 0.92rem) !important; line-height: 1.75 !important; margin-top: 0.35rem !important; }
+
+/* 事实故事块与引文 */
+.sg-story {
+  margin-top: 0.9rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border: 1px solid var(--border);
+}
+.sg-story h5 { font-size: clamp(0.92rem, 0.88rem + 0.15vw, 1rem); font-weight: 750; color: var(--text); margin-bottom: 0.35rem; }
+.sg-quote {
+  margin-top: 0.55rem !important;
+  padding: 0.55rem 0.85rem;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 0.55rem;
+  font-weight: 650;
+  color: var(--text) !important;
+}
+.sg-note { font-size: clamp(0.86rem, 0.82rem + 0.1vw, 0.9rem) !important; }
+
+/* 图表二：人类 vs AI 对比条 */
+.sg-vs { margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.sg-vs-row { display: flex; align-items: center; gap: 0.6rem; }
+.sg-vs-label { flex: none; width: 8.2rem; font-size: 0.8rem; font-weight: 650; color: var(--text); text-align: right; }
+.sg-vs-track {
+  flex: 1;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  overflow: hidden;
+}
+.sg-vs-bar { height: 100%; border-radius: 999px; }
+.sg-vs-human { background: color-mix(in srgb, var(--text-dim) 45%, transparent); }
+.sg-vs-ai { background: linear-gradient(90deg, var(--accent), var(--accent-2)); min-width: 1px; }
+.sg-vs-val { flex: none; width: 8.6rem; font-size: 0.8rem; color: var(--text-dim); }
+
+/* 图表三：里程碑时间线 */
+.sg-timeline {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-left: 0.35rem;
+}
+.sg-tl-item {
+  position: relative;
+  display: flex;
+  gap: 0.65rem;
+  font-size: clamp(0.86rem, 0.82rem + 0.15vw, 0.93rem);
+  line-height: 1.8;
+  color: var(--text-dim);
+}
+.sg-tl-item::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1.15rem;
+  bottom: -0.85rem;
+  width: 2px;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.sg-tl-item:last-child::before { display: none; }
+.sg-tl-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 0.35rem;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.sg-tl-item b { color: var(--text); }
+
+/* FAQ */
+.sg-faq p { font-size: clamp(0.88rem, 0.84rem + 0.15vw, 0.95rem) !important; line-height: 1.85 !important; }
+.sg-faq p + p { margin-top: 0.65rem; }
+.sg-faq b { color: var(--text); }
+
+/* 窄屏：留白收紧、双栏回落单列、对比条换行、级别卡片单列 */
+@media (max-width: 900px) {
+  .sg-cols { grid-template-columns: 1fr; gap: 0; }
+}
+@media (max-width: 640px) {
+  .modal-card.sg-card { width: calc(100vw - 1.25rem); }
+  .sg-title { font-size: 0.85rem; }
+  .sg-body { padding: 0.95rem 1rem 1.25rem; }
+  /* 刻度带不再横向滚动：七档折成两列图例网格，段内名称/区间各占一行；
+     「未知」档合并且居中占满最下排，不留空格 */
+  .sg-scale-wrap { overflow-x: visible; }
+  .sg-scale { min-width: 0; height: auto; flex-wrap: wrap; }
+  .sg-seg { flex: 1 1 45% !important; min-width: 45%; max-width: 50%; padding: 0.55rem 0.25rem; }
+  .sg-seg-unknown { flex: 1 1 100% !important; max-width: none; }
+  .sg-vs-row { flex-wrap: wrap; }
+  .sg-vs-label { width: auto; text-align: left; }
+  .sg-vs-val { width: auto; }
+  .sg-vs-track { flex-basis: 100%; order: 3; }
+  .sg-levels { grid-template-columns: 1fr; }
+}
 
 /* ============================================================
    输入区

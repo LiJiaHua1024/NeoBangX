@@ -115,7 +115,12 @@ class ModelEntry(BaseModel):
     id: str = Field(..., min_length=1, description="LiteLLM 格式模型 ID")
     name: str = Field("", max_length=100, description="显示名称，留空回退模型 ID")
     description: str = Field("", max_length=200, description="用户端展示的模型描述，替代模型 ID 显示")
-    score: Optional[float] = Field(None, ge=0, le=10, description="推荐评分 0-10，用户端以红绿圆环展示")
+    score: Optional[float] = Field(
+        None, description="【已废弃】旧 0-10 推荐评分；读入即丢弃、不再落库，模型评级改用 aa_index 打击级别"
+    )
+    aa_index: Optional[float] = Field(
+        None, ge=0, le=100, description="AA 智能指数 0-100；前端按打击级别区间映射展示，留空为未评级"
+    )
     reasoning_effort: Optional[str] = Field(
         None, description="思考强度档位：直接透传给上游（如 none/off/instant/low/medium/high/xhigh 等）；空为供应商默认"
     )

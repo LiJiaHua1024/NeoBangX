@@ -17,7 +17,7 @@ function setup() {
 test("并发可跟随默认或模型覆盖，编辑取消和其他模型设置保持原值", async () => {
   const { app, errors } = setup();
   app.configForm.visual_paper_concurrency = 8;
-  app.configForm.models = [{ id: "test", name: "Test", score: 7, visual_paper_concurrency: null }];
+  app.configForm.models = [{ id: "test", name: "Test", aa_index: 45, visual_paper_concurrency: null }];
   app.openEditModel(0);
   assert.equal(app.modelForm.concurrency_mode, "default");
   assert.equal(app.modelForm.visual_paper_concurrency, 8);
@@ -26,7 +26,7 @@ test("并发可跟随默认或模型覆盖，编辑取消和其他模型设置�
   assert.equal(app.configForm.models[0].visual_paper_concurrency, null);
   await app.saveModelModal();
   assert.equal(app.configForm.models[0].visual_paper_concurrency, 5);
-  assert.equal(app.configForm.models[0].score, 7);
+  assert.equal(app.configForm.models[0].aa_index, 45);
   app.openEditModel(0);
   assert.equal(app.modelForm.concurrency_mode, "custom");
   for (const value of [17, 1000000, 0, -1, -2]) {

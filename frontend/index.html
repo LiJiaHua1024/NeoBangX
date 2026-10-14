@@ -341,16 +341,7 @@
                             </div>
                             <div class="ms-item-sub ms-item-desc" x-show="m.description && m.description.trim()" :title="m.description"><template x-for="(line, idx) in modelDescLines(m.description)" :key="idx"><div class="ms-item-desc-line" x-text="line"></div></template></div>
                           </div>
-                          <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
-                            <svg viewBox="0 0 24 24">
-                              <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
-                              <circle class="ms-ring-bar" cx="12" cy="12" r="10"
-                                      :stroke="modelScoreColor(m.score)"
-                                      stroke-dasharray="62.83"
-                                      :stroke-dashoffset="modelRingOffset(m.score)"></circle>
-                            </svg>
-                            <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
-                          </span>
+                          <span class="ms-strike" x-show="aaLevelOf(m.aa_index)" :style="strikeBadgeStyle(m.aa_index)" :title="strikeTip(m.aa_index)" x-text="strikeBadgeText(m.aa_index)"></span>
                         </button>
                       </template>
                     </div>
@@ -358,6 +349,10 @@
                       @click="modelsExpanded = !modelsExpanded">
                       <span x-text="modelsExpanded ? '收起' : `展开全部（共 ${models.length} 个）`"></span>
                       <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
+                    <button class="ms-guide" @click="openStrikeGuide()" title="评级标准与依据（AA 指数映射）">
+                      <span x-html="icon('question','w-3.5 h-3.5')"></span>
+                      <span>打击级别评级说明</span>
                     </button>
                   </div>
                 </div>
@@ -614,16 +609,7 @@
                             </div>
                             <div class="ms-item-sub ms-item-desc" x-show="m.description && m.description.trim()" :title="m.description"><template x-for="(line, idx) in modelDescLines(m.description)" :key="idx"><div class="ms-item-desc-line" x-text="line"></div></template></div>
                           </div>
-                          <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
-                            <svg viewBox="0 0 24 24">
-                              <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
-                              <circle class="ms-ring-bar" cx="12" cy="12" r="10"
-                                      :stroke="modelScoreColor(m.score)"
-                                      stroke-dasharray="62.83"
-                                      :stroke-dashoffset="modelRingOffset(m.score)"></circle>
-                            </svg>
-                            <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
-                          </span>
+                          <span class="ms-strike" x-show="aaLevelOf(m.aa_index)" :style="strikeBadgeStyle(m.aa_index)" :title="strikeTip(m.aa_index)" x-text="strikeBadgeText(m.aa_index)"></span>
                         </button>
                       </template>
                     </div>
@@ -631,6 +617,10 @@
                       @click="modelsExpanded = !modelsExpanded">
                       <span x-text="modelsExpanded ? '收起' : `展开全部（共 ${models.length} 个）`"></span>
                       <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
+                    <button class="ms-guide" @click="openStrikeGuide()" title="评级标准与依据（AA 指数映射）">
+                      <span x-html="icon('question','w-3.5 h-3.5')"></span>
+                      <span>打击级别评级说明</span>
                     </button>
                   </div>
                 </div>
@@ -805,16 +795,7 @@
                             </div>
                             <div class="ms-item-sub ms-item-desc" x-show="m.description && m.description.trim()" :title="m.description"><template x-for="(line, idx) in modelDescLines(m.description)" :key="idx"><div class="ms-item-desc-line" x-text="line"></div></template></div>
                           </div>
-                          <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
-                            <svg viewBox="0 0 24 24">
-                              <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
-                              <circle class="ms-ring-bar" cx="12" cy="12" r="10"
-                                      :stroke="modelScoreColor(m.score)"
-                                      stroke-dasharray="62.83"
-                                      :stroke-dashoffset="modelRingOffset(m.score)"></circle>
-                            </svg>
-                            <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
-                          </span>
+                          <span class="ms-strike" x-show="aaLevelOf(m.aa_index)" :style="strikeBadgeStyle(m.aa_index)" :title="strikeTip(m.aa_index)" x-text="strikeBadgeText(m.aa_index)"></span>
                         </button>
                       </template>
                     </div>
@@ -822,6 +803,10 @@
                       @click="modelsExpanded = !modelsExpanded">
                       <span x-text="modelsExpanded ? '收起' : `展开全部（共 ${models.length} 个）`"></span>
                       <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
+                    <button class="ms-guide" @click="openStrikeGuide()" title="评级标准与依据（AA 指数映射）">
+                      <span x-html="icon('question','w-3.5 h-3.5')"></span>
+                      <span>打击级别评级说明</span>
                     </button>
                   </div>
                 </div>
@@ -2004,16 +1989,7 @@
                             </div>
                             <div class="ms-item-sub ms-item-desc" x-show="m.description && m.description.trim()" :title="m.description"><template x-for="(line, idx) in modelDescLines(m.description)" :key="idx"><div class="ms-item-desc-line" x-text="line"></div></template></div>
                           </div>
-                          <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
-                            <svg viewBox="0 0 24 24">
-                              <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
-                              <circle class="ms-ring-bar" cx="12" cy="12" r="10"
-                                      :stroke="modelScoreColor(m.score)"
-                                      stroke-dasharray="62.83"
-                                      :stroke-dashoffset="modelRingOffset(m.score)"></circle>
-                            </svg>
-                            <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
-                          </span>
+                          <span class="ms-strike" x-show="aaLevelOf(m.aa_index)" :style="strikeBadgeStyle(m.aa_index)" :title="strikeTip(m.aa_index)" x-text="strikeBadgeText(m.aa_index)"></span>
                         </button>
                       </template>
                     </div>
@@ -2021,6 +1997,10 @@
                       @click="modelsExpanded = !modelsExpanded">
                       <span x-text="modelsExpanded ? '收起' : `展开全部（共 ${models.length} 个）`"></span>
                       <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
+                    <button class="ms-guide" @click="openStrikeGuide()" title="评级标准与依据（AA 指数映射）">
+                      <span x-html="icon('question','w-3.5 h-3.5')"></span>
+                      <span>打击级别评级说明</span>
                     </button>
                   </div>
                 </div>
@@ -2260,16 +2240,7 @@
                             </div>
                             <div class="ms-item-sub ms-item-desc" x-show="m.description && m.description.trim()" :title="m.description"><template x-for="(line, idx) in modelDescLines(m.description)" :key="idx"><div class="ms-item-desc-line" x-text="line"></div></template></div>
                           </div>
-                          <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
-                            <svg viewBox="0 0 24 24">
-                              <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
-                              <circle class="ms-ring-bar" cx="12" cy="12" r="10"
-                                      :stroke="modelScoreColor(m.score)"
-                                      stroke-dasharray="62.83"
-                                      :stroke-dashoffset="modelRingOffset(m.score)"></circle>
-                            </svg>
-                            <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
-                          </span>
+                          <span class="ms-strike" x-show="aaLevelOf(m.aa_index)" :style="strikeBadgeStyle(m.aa_index)" :title="strikeTip(m.aa_index)" x-text="strikeBadgeText(m.aa_index)"></span>
                         </button>
                       </template>
                     </div>
@@ -2277,6 +2248,10 @@
                       @click="modelsExpanded = !modelsExpanded">
                       <span x-text="modelsExpanded ? '收起' : `展开全部（共 ${models.length} 个）`"></span>
                       <span class="chev" x-html="icon('chevron-down','w-3.5 h-3.5')"></span>
+                    </button>
+                    <button class="ms-guide" @click="openStrikeGuide()" title="评级标准与依据（AA 指数映射）">
+                      <span x-html="icon('question','w-3.5 h-3.5')"></span>
+                      <span>打击级别评级说明</span>
                     </button>
                   </div>
                 </div>
@@ -2887,19 +2862,133 @@
                   <div class="ms-item-sub" x-show="retryModelMode === 'regen' && m.id === currentVersionModel">当前这一版</div>
                   <div class="ms-item-sub" x-show="m.id === selectedModel && (retryModelMode === 'regen' || m.id !== failedModel)">当前使用中</div>
                 </div>
-                <span class="ms-ring" x-show="m.score != null" :title="'推荐度 ' + m.score + ' / 10'">
-                  <svg viewBox="0 0 24 24">
-                    <circle class="ms-ring-track" cx="12" cy="12" r="10"></circle>
-                    <circle class="ms-ring-bar" cx="12" cy="12" r="10"
-                            :stroke="modelScoreColor(m.score)"
-                            stroke-dasharray="62.83"
-                            :stroke-dashoffset="modelRingOffset(m.score)"></circle>
-                  </svg>
-                  <span class="ms-ring-num" :style="{ color: modelScoreColor(m.score) }" x-text="modelScoreText(m.score)"></span>
-                </span>
+                <span class="ms-strike" x-show="aaLevelOf(m.aa_index)" :style="strikeBadgeStyle(m.aa_index)" :title="strikeTip(m.aa_index)" x-text="strikeBadgeText(m.aa_index)"></span>
               </button>
             </template>
           </div>
+          <!-- 等级说明入口：与模型下拉底部的入口一致 -->
+          <button class="ms-guide ms-guide-block mt-3" @click="openStrikeGuide()" title="评级标准与依据（AA 指数映射）">
+            <span x-html="icon('question','w-3.5 h-3.5')"></span>
+            <span>打击级别评级说明</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 打击级别科普弹窗 ====================
+         文风与评级标准文档一致：只陈述映射与事实，不作口语化科普；
+         不列具体模型（模型列表是后台可配的），里程碑事实用于标定量级体感。 -->
+    <div x-show="strikeGuideOpen" class="modal-mask" x-transition.opacity x-cloak
+         @click.self="closeStrikeGuide()" @keydown.escape.window="closeStrikeGuide()">
+      <div class="modal-card modal-lg glass-deep pop-in sg-card" @click.stop
+           role="dialog" aria-modal="true" aria-label="打击级别说明">
+        <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
+          <span class="text-dim" x-html="icon('sparkle','w-4 h-4')"></span>
+          <h3 class="font-bold text-sm sg-title">AI 智力与算力打击评级系统（AA 指数映射标准）</h3>
+          <button class="icon-btn ml-auto" @click="closeStrikeGuide()" title="关闭" x-html="icon('x','w-4 h-4')"></button>
+        </div>
+
+        <div class="sg-body scroll-thin">
+          <section class="sg-sec">
+            <h4>背景</h4>
+            <p>人类已身处<strong>智能爆炸</strong>：AGI 应已达成——并无某一个明确的标识点——并正在以极快的速度穿越智能。模型能力以天为单位迭代，数日即可产出此前数周乃至数月的改进量，指数型爆发仍在加速。</p>
+            <p>0-10 制评分在这一速度下已被撑爆：主流模型集中于 9~10 分区间，区分度归零、评价词穷。相对评分另有结构性缺陷——已有模型的能力不因新模型发布而改变，若据相对位置下调其评分，评级即失去公信力。</p>
+            <p>评级体系因此重建为<strong>绝对刻度映射</strong>：以 Artificial Analysis 智能指数（AA 智能指数）为量化输入，与人类科学破壁里程碑、《三体》/核武打击梯度做硬性绑定。评级只取决于模型在刻度上的位置，与接入时间无关，永不贬值。</p>
+            <p>刻度性质：<strong>两三分的差距即代表代际跨越</strong>。一级之差未必等于一个代际——数个代际凑出一级亦属常态；但在当前指数爆发的节奏下，大致一个代际对应一级。</p>
+          </section>
+
+          <div class="sg-cols">
+          <section class="sg-sec">
+            <h4>完整评级表</h4>
+            <div class="sg-scale-wrap">
+              <div class="sg-scale" aria-hidden="true">
+                <template x-for="lv in strikeLevels()" :key="lv.lv">
+                  <div class="sg-seg" :class="{ 'sg-seg-unknown': lv.max == null }" :style="{ flex: (lv.max == null ? 8 : lv.max - lv.min + 1), background: lv.color }">
+                    <span class="sg-seg-name" x-text="lv.name.replace('级', '')"></span>
+                    <span class="sg-seg-range" x-text="lv.max == null ? lv.min + '+' : lv.min + '–' + lv.max"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div class="sg-levels">
+              <template x-for="lv in strikeLevels()" :key="lv.lv">
+                <div class="sg-level-card" :style="{ '--lv': lv.color }">
+                  <div class="sg-level-head">
+                    <span class="sg-level-name" x-text="lv.lv ? 'Lv.' + lv.lv + ' ' + lv.name : lv.name"></span>
+                    <span class="sg-level-alias" x-show="lv.alias" x-text="'（' + lv.alias + '）'"></span>
+                    <span class="sg-level-range" x-text="aaRangeText(lv)"></span>
+                  </div>
+                  <p class="sg-level-gist" x-text="lv.gist"></p>
+                </div>
+              </template>
+            </div>
+          </section>
+
+          <section class="sg-sec">
+            <h4>人类科学破壁里程碑：级别的体感标定</h4>
+            <p class="sg-lead">以下事实用于标定打击级别的量级体感。</p>
+
+            <div class="sg-story">
+              <h5>原子弹级（曼哈顿时刻）· 单位距离猜想，悬置 80 年</h5>
+              <p>单位距离猜想：平面上任意点集中距离恰为 1 的点对数量上界问题，1946 年提出，<strong>悬置 80 年未获彻底解决</strong>。</p>
+              <p>2026 年 5 月，AI <strong>独立</strong>推翻人类数学家在该问题上的构想；菲尔兹奖得主高尔斯评价其成果可直接发表于《数学年刊》。</p>
+              <p class="sg-quote">瘫坐眩晕在椅子上，仿佛看到原子弹爆炸。</p>
+            </div>
+
+            <div class="sg-story">
+              <h5>二向箔级（维度坍缩）· NS 方程，悬置近 200 年</h5>
+              <p>NS 方程（纳维-斯托克斯方程）：千禧年七大难题之一，1823 年提出，<strong>悬置近 200 年，克雷数学研究所悬赏 100 万美元</strong>。</p>
+              <p>2026 年 9 月 8 日，万级智能体集群耗时 <strong>88 小时</strong>，以 165 页论文宣告攻克；随后两周批量产出 722 篇数学手稿（涵盖 372 个结果家族：黎曼 ζ 函数无零点区域由 0.99 推至 0.875、有理数域希尔伯特第十问题等）。</p>
+              <div class="sg-vs">
+                <div class="sg-vs-row">
+                  <span class="sg-vs-label">人类数学界</span>
+                  <div class="sg-vs-track"><div class="sg-vs-bar sg-vs-human" style="width:100%"></div></div>
+                  <span class="sg-vs-val">近 200 年</span>
+                </div>
+                <div class="sg-vs-row">
+                  <span class="sg-vs-label">万级智能体集群</span>
+                  <div class="sg-vs-track"><div class="sg-vs-bar sg-vs-ai" style="width:0.005%"></div></div>
+                  <span class="sg-vs-val">88 小时</span>
+                </div>
+              </div>
+              <p class="sg-note">近 200 年约合 1,753,000 小时，88 小时仅占 0.005%。时间投入相差约 <strong>2 万倍</strong>；若将近 200 年压缩为一天，88 小时<strong>不足 5 秒</strong>。</p>
+            </div>
+
+            <div class="sg-timeline">
+              <div class="sg-tl-item">
+                <span class="sg-tl-dot"></span>
+                <div><b>2026 年 5 月</b> · 单位距离猜想构想被独立推翻，数学家眩晕瘫坐——「原子弹级」语义来源。</div>
+              </div>
+              <div class="sg-tl-item">
+                <span class="sg-tl-dot"></span>
+                <div><b>2026 年 9 月 8 日</b> · NS 方程千禧难题被 88 小时爆破，165 页论文宣告攻克。</div>
+              </div>
+              <div class="sg-tl-item">
+                <span class="sg-tl-dot"></span>
+                <div><b>2026 年 9 月下旬</b> · 722 篇数学手稿批量产出——「二向箔级」语义来源。</div>
+              </div>
+            </div>
+          </section>
+          </div>
+
+          <div class="sg-cols">
+          <section class="sg-sec">
+            <h4>落地：英语教学场景</h4>
+            <p>温压弹级即<strong>学科满分级</strong>：彻底打穿标准化考试（高考英语除作文满分），常规题型精准覆盖。就备考而言，36 分以上的模型已是降维配置；级别差异实际体现在解析深度、长链条思辨与创造层。</p>
+            <p>出题难于做题：命题质量随智能水平单调上升。低智能模型所出试题「对的太对、错的太错」，干扰项失真、区分度不足；随智能水平提升，命题质量将<strong>达到并必将超过高考出题标准</strong>。</p>
+          </section>
+
+          <section class="sg-sec">
+            <h4>口径说明</h4>
+            <div class="sg-faq">
+              <p><b>为何弃用星级与百分制。</b>相对评分必然再次撑爆、词穷；打击级别锚定绝对刻度，可量化、抗词穷，且具备强视觉锚点。</p>
+              <p><b>未评级。</b>尚未录入 AA 指数，或低于 17 分（未达评级线）。未评级不显示任何评级角标。</p>
+              <p><b>59 分及以上为何标注「未知」。</b>现有评测体系上限之外的强度不可知——未知的未知，故不设级别，直接标注「未知」。</p>
+              <p><b>评级稳定性。</b>评级由 AA 指数硬性映射：模型能力不变则级别不变，新模型发布不影响既有评级。</p>
+            </div>
+          </section>
+          </div>
+
         </div>
       </div>
     </div>
