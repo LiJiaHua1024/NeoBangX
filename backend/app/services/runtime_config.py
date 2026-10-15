@@ -41,6 +41,7 @@ CONFIG_KEYS = [
     "jev_api_key",
     "jev_model",
     "jev_timeout",
+    "jev_tool_search_enabled",
 ]
 
 # 线路镜像：参与镜像的线路条数上限。
@@ -537,6 +538,7 @@ def _env_defaults() -> dict[str, str]:
         "jev_api_key": settings.jev_api_key,
         "jev_model": settings.jev_model,
         "jev_timeout": str(settings.jev_timeout),
+        "jev_tool_search_enabled": "true" if settings.jev_tool_search_enabled else "false",
     }
 
 
@@ -725,9 +727,13 @@ def parse_jev_settings(cfg: dict[str, str]) -> dict:
     """解析 Jev 决策模型配置（管理后台可改，环境变量给默认值）。
 
     返回 dict {enabled, base_url, api_key(原文，未脱敏，仅内部使用),
-    model, timeout}。enabled 为 False 时调用方直接走启发式，不碰网络。
+    model, timeout, tool_search_enabled}。enabled 为 False 时调用方直接走启发式，
+    不碰网络；tool_search_enabled 单独控制「描述需求找工具」这一用途。
     """
     enabled = (cfg.get("jev_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
+    # 用途开关缺省为开：老库里没有这个键时，启用 Jev 即启用工具搜索
+    tool_search_raw = (cfg.get("jev_tool_search_enabled") or "").strip().lower()
+    tool_search_enabled = tool_search_raw not in ("0", "false", "no", "off")
     base_url = (cfg.get("jev_base_url") or "").strip() or DEFAULT_JEV_BASE_URL
     api_key = (cfg.get("jev_api_key") or "").strip()
     model = (cfg.get("jev_model") or "").strip() or DEFAULT_JEV_MODEL
@@ -742,6 +748,7 @@ def parse_jev_settings(cfg: dict[str, str]) -> dict:
         "api_key": api_key,
         "model": model,
         "timeout": timeout,
+        "tool_search_enabled": tool_search_enabled,
     }
 
 

@@ -223,6 +223,9 @@ class ConfigUpdateRequest(BaseModel):
     jev_api_key: Optional[str] = Field(None, max_length=2048, description="Jev API Key（TypeSafe 官方 Key；含 **** 表示不修改）")
     jev_model: Optional[str] = Field(None, max_length=256, description="Jev 模型名，可自定义（如官方 jev-latest）")
     jev_timeout: Optional[int] = Field(None, ge=2, le=30, description="单次 Jev 判定等待上限（秒），超时立刻回退启发式")
+    jev_tool_search_enabled: Optional[bool] = Field(
+        None, description="是否用 Jev 做「描述需求找工具」；关闭时该控件回退本地关键词匹配"
+    )
 
 
 class ProviderCreateRequest(BaseModel):
@@ -2103,6 +2106,9 @@ async def update_admin_config(
             updates[key] = "true" if value else "false"
             continue
         if key == "jev_enabled":
+            updates[key] = "true" if value else "false"
+            continue
+        if key == "jev_tool_search_enabled":
             updates[key] = "true" if value else "false"
             continue
         if key == "jev_base_url":

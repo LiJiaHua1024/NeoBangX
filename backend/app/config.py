@@ -125,6 +125,10 @@ class Settings(BaseSettings):
     jev_model: str = "jev-latest"
     # 单次判定等待上限（秒）：超时即回退启发式，前端最多多等这么久
     jev_timeout: int = 4
+    # 是否把 Jev 也用于「描述需求找工具」（用户用一句话说想做什么，由 Jev
+    # 选一个工具）。可在管理后台单独关闭，不影响上面的错误重试判定；
+    # 关闭或 Jev 不可用时，搜索自动回退本地关键词匹配，控件仍然可用。
+    jev_tool_search_enabled: bool = True
 
     @property
     def model_list(self) -> List[str]:

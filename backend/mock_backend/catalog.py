@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.services.migration import MIGRATION_TOOL_ID, MIGRATION_TOOL_NAME
 
 # 分组顺序、折叠态与 tools.py 的 TOOL_GROUPS 完全一致
@@ -174,6 +176,63 @@ def tools_payload() -> dict:
         "default_model": DEFAULT_MODEL,
         "max_visible_models": MAX_VISIBLE_MODELS,
     }
+
+
+# ---- 描述需求找工具 ----
+
+
+def _search_grams(text: str) -> list[str]:
+    cleaned = re.sub(r"[^\w]+", "", str(text or "").lower(), flags=re.UNICODE)
+    if len(cleaned) < 2:
+        return [cleaned] if cleaned else []
+    return [cleaned[i:i + 2] for i in range(len(cleaned) - 1)]
+
+
+def search_tools(query: str, limit: int = 3) -> list[dict]:
+    """「描述需求找工具」的假答案：本地关键词匹配，与真实响应同形。
+
+    假后端不去调真 Jev（要 Key、要花钱），所以 source 永远是 keyword。
+    浏览器里要验的是交互链路（停顿即搜、中断重发、面板排版），不是判定质量；
+    在真后端上把 Jev 配好，这条链路才会自动换成 Jev 的结果。
+    打分口径与 frontend/script.js 的 toolSearchKeywordMatch 一致：
+    工具名被整体叫出来最强，其次是查询与工具名 / 用途描述的字符 bigram 重叠。
+    """
+    text = str(query or "").strip().lower()
+    if not text:
+        return []
+    query_grams = set(_search_grams(text))
+    rows: list[dict] = []
+    for group in TOOL_GROUPS:
+        for tool in group["tools"]:
+            name = str(tool["name"]).lower()
+            description = str(tool["description"]).lower()
+            score = 0.0
+            if name and name in text:
+                score += 6 + 1.5 * len(name)
+            if query_grams:
+                for grams, weight in (
+                    (_search_grams(name), 6.0),
+                    (_search_grams(description), 4.0),
+                ):
+                    if not grams:
+                        continue
+                    hit = sum(1 for gram in set(grams) if gram in query_grams)
+                    score += weight * hit / len(query_grams)
+            if score <= 0:
+                continue
+            rows.append({
+                "tool_id": tool["id"],
+                "name": tool["name"],
+                "icon": tool["icon"],
+                "description": tool["description"],
+                "group_id": group["id"],
+                "group_title": group["title"],
+                "score": round(min(1.0, score / 12), 4),
+                "source": "keyword",
+                "reason": tool["description"],
+            })
+    rows.sort(key=lambda row: (-row["score"], row["tool_id"]))
+    return rows[:limit]
 
 
 def models_payload() -> dict:

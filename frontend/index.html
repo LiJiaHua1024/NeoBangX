@@ -93,8 +93,72 @@
                 x-html="icon('x','w-4 h-4')"></button></span>
       </div>
 
+      <!-- 描述需求找工具：窄版常驻在工具列表上方。
+           它不是「按工具名过滤」的搜索框，而是让用户用一句话说自己想做什么：
+           文案与示例都把话往「说人话」上引，停顿即自动搜（停顿判定见 script.js
+           顶部的 TOOL_SEARCH_* 常量）。未登录也能用 —— 只做导航，不扣额度。 -->
+      <div class="px-3 pb-2 shrink-0">
+        <div class="ts-field" :class="{ 'on': toolSearchSidebarOpen }">
+          <span class="ts-ico" x-html="icon('search','w-4 h-4')"></span>
+          <input id="tool-search-sidebar" class="ts-input" type="text"
+                 placeholder="说说你想做什么…"
+                 x-model="toolSearchQuery"
+                 autocomplete="off" spellcheck="false"
+                 role="combobox" aria-label="用一句话描述你想做的事" aria-autocomplete="list"
+                 :aria-expanded="toolSearchSidebarOpen ? 'true' : 'false'"
+                 @focus="onToolSearchFocus('sidebar')" @blur="onToolSearchBlur()"
+                 @input="onToolSearchInput($event)" @paste="onToolSearchPaste()"
+                 @keydown="onToolSearchKeydown($event)"
+                 @compositionstart="onToolSearchCompositionStart()"
+                 @compositionend="onToolSearchCompositionEnd($event)">
+          <span class="ts-spin" x-show="toolSearchState === 'searching'" x-cloak></span>
+          <button class="ts-clear" x-show="toolSearchQuery.length > 0" x-cloak
+                  @click="clearToolSearch()" title="清空" aria-label="清空搜索"
+                  x-html="icon('x','w-3.5 h-3.5')"></button>
+        </div>
+      </div>
+
       <!-- 工具分组 -->
       <div class="flex-1 min-h-0 overflow-y-auto scroll-thin px-3 pb-3">
+
+        <!-- 描述需求找工具 · 结果面板（与首页那份同一套状态，只是挂在这个入口下） -->
+        <div class="ts-panel" x-show="toolSearchSidebarOpen" x-cloak>
+          <!-- 停顿进度条：key 用 toolSearchArm，每次重新计时都从头再走一遍，
+               用户能直接看出「停一下就会搜」，不必知道要按 Enter -->
+          <div class="ts-progress" x-show="toolSearchState === 'waiting'">
+            <template x-for="arm in [toolSearchArm]" :key="arm">
+              <span class="ts-progress-bar" :style="'animation-duration:' + toolSearchPauseMs + 'ms'"></span>
+            </template>
+          </div>
+          <div class="ts-head">
+            <span class="ts-spin" x-show="toolSearchState === 'searching'" x-cloak></span>
+            <span x-text="toolSearchPanelTitle()"></span>
+          </div>
+          <div class="ts-list scroll-thin" role="listbox" aria-label="推荐的工具">
+            <template x-for="(r, i) in toolSearchResults" :key="r.tool_id">
+              <button class="ts-item" role="option" :class="{ 'on': i === toolSearchActive }"
+                      :aria-selected="i === toolSearchActive ? 'true' : 'false'"
+                      @click="pickToolSearchResult(r, $event)" @mousemove="toolSearchActive = i">
+                <span class="tool-ico" x-html="icon(r.icon,'w-4 h-4')"></span>
+                <span class="ts-item-main">
+                  <span class="ts-item-name" x-text="r.name"></span>
+                  <span class="ts-item-desc" x-text="r.reason || r.description"></span>
+                </span>
+                <span class="ts-item-group" x-text="r.group_title"></span>
+              </button>
+            </template>
+          </div>
+          <div class="ts-foot" x-show="toolSearchState === 'results' && !toolSearchResults.length" x-cloak>
+            <span>没找到对口的工具 —— </span>
+            <button class="ts-link" @click="gotoFreeformTool($event)">用「自由对话」把需求说完整</button>
+          </div>
+          <p class="ts-foot ts-foot-note" x-show="toolSearchState === 'long'" x-cloak>
+            看着像一篇正文。先挑一个工具，再把内容粘到工具里；这里只写你想做什么。
+          </p>
+        </div>
+
+        <!-- 工具列表与骨架：搜索面板开着时整块让位，避免两份列表叠着看 -->
+        <div x-show="toolSearchShowGroups">
         <!-- 加载骨架 -->
         <div x-show="!toolsLoaded && !toolsError" class="space-y-2 px-1 pt-1">
           <div class="skel h-4 w-24"></div>
@@ -135,6 +199,7 @@
             </div>
           </div>
         </template>
+        </div>
       </div>
 
       <!-- 底部：主题切换 + 使用码 -->
@@ -196,6 +261,71 @@
               <span x-show="hasFreeTrial">带「免费」标签的模型不消耗使用码次数，带「免码」标签的模型无需使用码即可试用；其他工具输入使用码开始。</span>
               <span x-show="!hasFreeTrial">输入使用码即可开始，额度用完自动锁定。</span>
             </p>
+
+            <!-- 描述需求找工具：首页正中的入口。排在「输入使用码」之前 ——
+                 「我该用哪个工具」是进站第一个真实的疑问，先回答它再要码。 -->
+            <div class="fade-up mt-8 w-full max-w-2xl" style="animation-delay:.18s">
+              <div class="ts-field ts-field-lg" :class="{ 'on': toolSearchHomeOpen }">
+                <span class="ts-ico" x-html="icon('search','w-5 h-5')"></span>
+                <input id="tool-search-home" class="ts-input" type="text"
+                       :placeholder="toolSearchPlaceholder"
+                       x-model="toolSearchQuery"
+                       autocomplete="off" spellcheck="false"
+                       role="combobox" aria-label="用一句话描述你想做的事" aria-autocomplete="list"
+                       :aria-expanded="toolSearchHomeOpen ? 'true' : 'false'"
+                       @focus="onToolSearchFocus('home')" @blur="onToolSearchBlur()"
+                       @input="onToolSearchInput($event)" @paste="onToolSearchPaste()"
+                       @keydown="onToolSearchKeydown($event)"
+                       @compositionstart="onToolSearchCompositionStart()"
+                       @compositionend="onToolSearchCompositionEnd($event)">
+                <span class="ts-spin" x-show="toolSearchState === 'searching'" x-cloak></span>
+                <button class="ts-clear" x-show="toolSearchQuery.length > 0" x-cloak
+                        @click="clearToolSearch()" title="清空" aria-label="清空搜索"
+                        x-html="icon('x','w-4 h-4')"></button>
+              </div>
+
+              <!-- 引导：说清「不用背工具名 / 直接说人话」，示例可点即搜 -->
+              <div class="ts-guide" x-show="!toolSearchHomeOpen" x-cloak>
+                <span class="ts-guide-text">不用背工具名，按你的说法描述就行</span>
+                <template x-for="ex in toolSearchExamples" :key="ex">
+                  <button class="ts-chip" @click="useToolSearchExample(ex)" x-text="ex"></button>
+                </template>
+              </div>
+
+              <!-- 结果面板（与侧栏那份同一套状态） -->
+              <div class="ts-panel" x-show="toolSearchHomeOpen" x-cloak>
+                <div class="ts-progress" x-show="toolSearchState === 'waiting'">
+                  <template x-for="arm in [toolSearchArm]" :key="arm">
+                    <span class="ts-progress-bar" :style="'animation-duration:' + toolSearchPauseMs + 'ms'"></span>
+                  </template>
+                </div>
+                <div class="ts-head">
+                  <span class="ts-spin" x-show="toolSearchState === 'searching'" x-cloak></span>
+                  <span x-text="toolSearchPanelTitle()"></span>
+                </div>
+                <div class="ts-list scroll-thin" role="listbox" aria-label="推荐的工具">
+                  <template x-for="(r, i) in toolSearchResults" :key="r.tool_id">
+                    <button class="ts-item" role="option" :class="{ 'on': i === toolSearchActive }"
+                            :aria-selected="i === toolSearchActive ? 'true' : 'false'"
+                            @click="pickToolSearchResult(r, $event)" @mousemove="toolSearchActive = i">
+                      <span class="tool-ico" x-html="icon(r.icon,'w-4 h-4')"></span>
+                      <span class="ts-item-main">
+                        <span class="ts-item-name" x-text="r.name"></span>
+                        <span class="ts-item-desc" x-text="r.reason || r.description"></span>
+                      </span>
+                      <span class="ts-item-group" x-text="r.group_title"></span>
+                    </button>
+                  </template>
+                </div>
+                <div class="ts-foot" x-show="toolSearchState === 'results' && !toolSearchResults.length" x-cloak>
+                  <span>没找到对口的工具 —— </span>
+                  <button class="ts-link" @click="gotoFreeformTool($event)">用「自由对话」把需求说完整</button>
+                </div>
+                <p class="ts-foot ts-foot-note" x-show="toolSearchState === 'long'" x-cloak>
+                  看着像一篇正文。先挑一个工具，再把内容粘到工具里；这里只写你想做什么。
+                </p>
+              </div>
+            </div>
 
             <!-- 首页使用码入口 -->
             <div class="fade-up mt-8 w-full max-w-md" style="animation-delay:.2s">
@@ -260,9 +390,9 @@
                 <div class="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm mb-3"
                      style="background:linear-gradient(135deg,var(--accent),var(--accent-2))">2</div>
                 <div class="font-semibold text-sm flex items-center gap-1.5">
-                  <span x-html="icon('book-open','w-4 h-4')"></span>选工具 · 输入
+                  <span x-html="icon('search','w-4 h-4')"></span>描述需求或挑工具
                 </div>
-                 <p class="text-xs text-dim mt-1.5 leading-relaxed"><span x-text="'左侧 ' + toolCountLabel + '工具；粘贴语篇、作文、试卷或上传文件。'"></span></p>
+                 <p class="text-xs text-dim mt-1.5 leading-relaxed"><span x-text="'用一句话说你想做什么，由它挑；也可以直接看左侧 ' + toolCountLabel + '工具，再粘贴语篇、作文、试卷或上传文件。'"></span></p>
               </div>
               <div class="glass-soft rounded-2xl p-5">
                 <div class="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm mb-3"

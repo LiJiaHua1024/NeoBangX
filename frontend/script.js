@@ -229,6 +229,93 @@ const CARD_REASONING_LIMIT = 2000;
    实测模型对定界符的写法会漂移（试卷工具的 @@TAG@@ 就吃过这个亏），严格匹配必漏。 */
 const CONTINUE_DONE_SRC = "[＠@]*\\s*CONTINUE[\\s_-]*DONE\\s*[＠@]*";
 
+/* ---------------- 「描述需求找工具」参数 ----------------
+   用户不需要按 Enter：只要「有意停顿」就自动搜。什么叫有意停顿分两档：
+   - 打完一句话自然停手（PAUSE_MS 内没有新输入）：这是最常见的一种，等待窗口
+     里面板顶部有一条进度条走满，用户能直接看出「原来停一下就会搜」，不必猜；
+   - 明确收尾的输入（以句读标点/空白结尾，或粘贴）：粘贴是完整的一次动作，
+     用一个短窗确认后立即发，不再等满 PAUSE_MS。
+   输入一旦变化，在途的那次搜索立刻被掐断、重新计时 —— 上一句话的结论对新的
+   一句话没有意义，也不该让它晚一步盖掉新结果。
+   中文输入法必须走 composition：拼音候选阶段也会触发 input，那不是用户的意思，
+   组字过程中一个请求都不发（见 onToolSearchInput / onToolSearchCompositionEnd）。 */
+const TOOL_SEARCH_PAUSE_MS = 500;
+const TOOL_SEARCH_EARLY_MS = 140;
+/* 少于此字数不打扰：一两个字的输入几乎必是还没说完 */
+const TOOL_SEARCH_MIN_CHARS = 2;
+/* 超过这个长度就不是「一句话需求」而是粘进来的正文了：不发请求，改成提示用户
+   先挑工具再把内容ぁ到工具里（拿整篇作文去问 Jev 既贵又不可能准） */
+const TOOL_SEARCH_MAX_CHARS = 200;
+const TOOL_SEARCH_LIMIT = 3;
+/* 「自由对话」：工具清单之外的兵底。搜索一个也匹不上时把用户送到这里，
+   比让他对着空结果自己再想一遍强。id 与后端 tools.py 的 REFERENCE_TOOLS 一致。 */
+const FREEFORM_TOOL_ID = "25";
+/* 输入框空着时轮播的示例：教用户「可以用大白话说，不用背工具名」 */
+const TOOL_SEARCH_EXAMPLES = [
+  "帮我把这篇学生作文批改一下",
+  "把这套卷子的重点题讲评一下",
+  "给这篇课文写一份研读报告",
+  "按这个语法点设计一节情境课",
+  "把这段原文翻译成英文",
+];
+/* 视为「这句话说完了」的收尾字符（中英文标点、空白） */
+const TOOL_SEARCH_END_CHARS = "\n。！？；：，、.!?;:，, ";
+
+function toolSearchLooksFinal(text) {
+  const trimmed = String(text || "").replace(/\s+$/, "");
+  if (!trimmed) return false;
+  return TOOL_SEARCH_END_CHARS.includes(trimmed[trimmed.length - 1]);
+}
+
+/* 本地关键词匹配：后端不可达时的兜底，让搜索框任何时候都不空转。
+   与后端 tool_search.keyword_search 同一套思路（零依赖、不引分词库）：
+   工具名整体被叫出来最强，其次是查询与「工具名 / 用途描述」的字符 bigram 重叠。
+   命中后端时这条路径不会走 —— 它会用在后端自己配的关键词兜底（带别名表）上。 */
+function toolSearchBigrams(text) {
+  const cleaned = String(text || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  if (cleaned.length < 2) return cleaned ? [cleaned] : [];
+  const out = [];
+  for (let i = 0; i < cleaned.length - 1; i += 1) out.push(cleaned.slice(i, i + 2));
+  return out;
+}
+
+function toolSearchKeywordMatch(groups, query, limit = TOOL_SEARCH_LIMIT) {
+  const text = String(query || "").toLowerCase().trim();
+  if (!text) return [];
+  const queryGrams = new Set(toolSearchBigrams(text));
+  const share = (grams) => {
+    if (!grams.length || !queryGrams.size) return 0;
+    let hit = 0;
+    for (const gram of new Set(grams)) if (queryGrams.has(gram)) hit += 1;
+    return hit / queryGrams.size;
+  };
+  const rows = [];
+  for (const group of groups || []) {
+    for (const tool of group.tools || []) {
+      const name = String(tool.name || "").toLowerCase();
+      const description = String(tool.description || "").toLowerCase();
+      let score = 0;
+      if (name && text.includes(name)) score += 6 + 1.5 * name.length;
+      score += 6 * share(toolSearchBigrams(name));
+      score += 4 * share(toolSearchBigrams(description));
+      if (score <= 0) continue;
+      rows.push({
+        tool_id: String(tool.id),
+        name: tool.name,
+        icon: tool.icon || "",
+        description: tool.description || "",
+        group_id: group.id || "",
+        group_title: group.title || "",
+        score: Math.min(1, Number((score / 12).toFixed(4))),
+        source: "keyword",
+        reason: tool.description || "",
+      });
+    }
+  }
+  rows.sort((a, b) => b.score - a.score || (a.tool_id < b.tool_id ? -1 : 1));
+  return rows.slice(0, limit);
+}
+
 /* ---------------- 图片识别（OCR）参数 ---------------- */
 // 工具 id 与后端 tools.py 的 OCR_TOOL_ID 一致
 const OCR_TOOL_ID = "32";
@@ -2262,6 +2349,31 @@ function nbx() {
     toolsLoaded: false,
     toolsError: "",
     currentTool: null,
+
+    /* --- 描述需求找工具（Jev choice） ---
+       两个输入框（首页大搜索框 + 侧栏顶部窄版）共用这一份状态：
+       toolSearchAnchor 记住是哪个入口在开着面板，同一时刻只渲染一份结果面板。 */
+    toolSearchQuery: "",
+    // idle（空）| waiting（停顿计时中，进度条在走）| searching | results | long（看着像粘了正文）
+    toolSearchState: "idle",
+    toolSearchOpen: false,
+    toolSearchResults: [],
+    toolSearchMeta: { fallback: false, no_match: false, uncertain: false, offline: false, jev: false },
+    toolSearchAnchor: "home",
+    toolSearchActive: 0,
+    // 停顿窗口与短窗：做成状态字段而不是直接读常量，便于测试收敛到几十毫秒
+    toolSearchPauseMs: TOOL_SEARCH_PAUSE_MS,
+    toolSearchEarlyMs: TOOL_SEARCH_EARLY_MS,
+    toolSearchExample: TOOL_SEARCH_EXAMPLES[0],
+    // 每次重新计时自增：进度条的动画靠它当 key 重建，才能从头再走一遍
+    toolSearchArm: 0,
+    _toolSearchTimer: null,
+    _toolSearchAbort: null,
+    _toolSearchSeq: 0,
+    _toolSearchFired: "",
+    _toolSearchComposing: false,
+    _toolSearchExampleTimer: null,
+
     selectedModel: "",
     input: "",
     output: "",
@@ -5023,6 +5135,8 @@ function nbx() {
         if (!ok) return;
         this.stopBusyStreams();
       }
+      // 进了工具就收起搜索面板（用户写的那句话留着，回来还能接着改）
+      this.closeToolSearch();
       this.currentTool = tool;
       this.output = "";
       this.rendered = "";
@@ -5070,6 +5184,7 @@ function nbx() {
         if (!ok) return;
         this.stopBusyStreams();
       }
+      this.closeToolSearch();
       this.currentTool = null;
       this.leftOpen = false;
       this.activeHistoryId = null;
@@ -5092,6 +5207,293 @@ function nbx() {
       } else {
         this.toast("工具列表还没加载好，请稍候或点左侧「重新加载」", "warn");
       }
+    },
+
+    /* ============ 描述需求找工具（Jev choice） ============
+       交互契约（与后端 tool_search.py 的注释成对）：
+       1. 不要求按 Enter：最后一次输入后静默 PAUSE_MS 视为「有意停顿」，自动发请求；
+          waiting 期间面板顶部有一条进度条走满，用户看得见「停一下就会搜」。
+       2. 以句读标点/空白结尾或粘贴 → 短窗后立即发（粘贴是一次明确的动作）。
+       3. 输入一变：在途请求立刻掐断（本地第二层兜底），重新计时，再发新的一次。
+       4. 中文输入法组字期间（composition）绝不发请求，落字之后才开始计时。
+       5. 同一句话不重复打 Jev（去重）；后端也可能命中自己的缓存。 */
+    get toolSearchPanelOpen() {
+      return this.toolSearchOpen && this.toolSearchState !== "idle";
+    },
+    get toolSearchSidebarOpen() {
+      return this.toolSearchPanelOpen && this.toolSearchAnchor === "sidebar";
+    },
+    get toolSearchHomeOpen() {
+      return this.toolSearchPanelOpen && this.toolSearchAnchor === "home";
+    },
+    /* 侧栏面板打开时让出列表位置：候选就是此刻要找的东西，两份列表叠着看反而难选 */
+    get toolSearchShowGroups() {
+      return !this.toolSearchSidebarOpen;
+    },
+    get toolSearchCanPick() {
+      return this.toolSearchState === "results" && this.toolSearchResults.length > 0;
+    },
+    /* 模板里读的示例清单。之所以要经由 getter：TOOL_SEARCH_EXAMPLES 是模块作用域的
+       const，不会挂到 window 上，Alpine 表达式（在全局作用域求值）读不到它 */
+    get toolSearchExamples() {
+      return TOOL_SEARCH_EXAMPLES;
+    },
+    get toolSearchPlaceholder() {
+      return this.toolSearchExample
+        ? `用一句话说说你想做什么，例如「${this.toolSearchExample}」`
+        : "用一句话说说你想做什么";
+    },
+
+    onToolSearchFocus(anchor) {
+      this.toolSearchAnchor = anchor;
+      this.startToolSearchExamples();
+      if (this.toolSearchQuery.trim()) {
+        this.toolSearchOpen = true;
+        if (this.toolSearchState === "idle") this.toolSearchState = "waiting";
+      }
+    },
+    onToolSearchBlur() {
+      // 面板不因失焦关闭：点候选的那一下会先失焦，关在这里就永远点不中
+      this.stopToolSearchExamples();
+    },
+    /* 输入法组字开始：停表，组字中间一个请求都不发 */
+    onToolSearchCompositionStart() {
+      this._toolSearchComposing = true;
+      clearTimeout(this._toolSearchTimer);
+      this._toolSearchTimer = null;
+    },
+    onToolSearchCompositionEnd(ev) {
+      this._toolSearchComposing = false;
+      // 直接读 DOM：x-model 对组字的落字也可能晚于本事件，读状态会差一个字
+      const value = ev && ev.target ? ev.target.value : this.toolSearchQuery;
+      this.toolSearchQuery = value;
+      this.armToolSearch({ early: toolSearchLooksFinal(value) });
+    },
+    onToolSearchInput(ev) {
+      if (this._toolSearchComposing) return;
+      const value = ev && ev.target ? ev.target.value : this.toolSearchQuery;
+      this.toolSearchQuery = value;
+      this.armToolSearch({ early: toolSearchLooksFinal(value) });
+    },
+    onToolSearchPaste() {
+      // 粘贴：等落字完成再计时（这一步通常是零延迟的），用短窗
+      this.$nextTick(() => {
+        if (this._toolSearchComposing) return;
+        this.armToolSearch({ early: true });
+      });
+    },
+
+    /* 重新计时（并作废在途请求）：输入每变一次都走这里 */
+    armToolSearch({ early = false } = {}) {
+      clearTimeout(this._toolSearchTimer);
+      this._toolSearchTimer = null;
+      this.abortToolSearch();
+      const value = (this.toolSearchQuery || "").trim();
+      if (!value) {
+        this.toolSearchState = "idle";
+        this.toolSearchOpen = false;
+        this.toolSearchResults = [];
+        this.toolSearchMeta = { fallback: false, no_match: false, uncertain: false, offline: false, jev: false };
+        this._toolSearchFired = "";
+        return;
+      }
+      this.toolSearchOpen = true;
+      this.toolSearchState = "waiting";
+      this.toolSearchArm += 1;
+      const delay = early ? this.toolSearchEarlyMs : this.toolSearchPauseMs;
+      this._toolSearchTimer = setTimeout(() => {
+        this._toolSearchTimer = null;
+        this.fireToolSearch();
+      }, delay);
+    },
+
+    abortToolSearch() {
+      if (this._toolSearchAbort) {
+        try { this._toolSearchAbort.abort(); } catch { /* 已经结束的请求：忽略 */ }
+        this._toolSearchAbort = null;
+      }
+      // 序号推前：迟到的回包一律作废（无论它是成功还是失败）
+      this._toolSearchSeq += 1;
+    },
+
+    async fireToolSearch() {
+      const value = (this.toolSearchQuery || "").trim();
+      if (value.length < TOOL_SEARCH_MIN_CHARS) {
+        this.toolSearchState = "idle";
+        return;
+      }
+      if (value.length > TOOL_SEARCH_MAX_CHARS) {
+        this.toolSearchState = "long";
+        return;
+      }
+      if (value === this._toolSearchFired && this.toolSearchResults.length) {
+        this.toolSearchState = "results";
+        return;
+      }
+
+      this.abortToolSearch();
+      const seq = (this._toolSearchSeq += 1);
+      this._toolSearchFired = value;
+      const controller = typeof AbortController === "function" ? new AbortController() : null;
+      this._toolSearchAbort = controller;
+      this.toolSearchState = "searching";
+      try {
+        const res = await fetch("/api/tools/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...this.authHeaders() },
+          body: JSON.stringify({ query: value, limit: TOOL_SEARCH_LIMIT }),
+          signal: controller ? controller.signal : undefined,
+        });
+        if (seq !== this._toolSearchSeq) return;
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        if (seq !== this._toolSearchSeq) return;
+        this.applyToolSearchResults(data);
+      } catch (e) {
+        if (e && e.name === "AbortError") return;   // 自己掐断的：不是错误
+        if (seq !== this._toolSearchSeq) return;
+        // 第二层兜底：后端不可达时用本地关键词匹配，控件任何时候都不空转
+        this.applyToolSearchResults({
+          results: toolSearchKeywordMatch(this.groups, value, TOOL_SEARCH_LIMIT),
+          fallback: true,
+          no_match: false,
+          uncertain: false,
+          offline: true,
+        });
+      } finally {
+        if (seq === this._toolSearchSeq) this._toolSearchAbort = null;
+      }
+    },
+
+    applyToolSearchResults(data) {
+      this.toolSearchResults = (data && data.results) || [];
+      this.toolSearchMeta = {
+        fallback: !!(data && data.fallback),
+        no_match: !!(data && data.no_match),
+        uncertain: !!(data && data.uncertain),
+        offline: !!(data && data.offline),
+        jev: !!(data && data.jev_available),
+      };
+      this.toolSearchActive = 0;
+      this.toolSearchOpen = true;
+      this.toolSearchState = "results";
+    },
+
+    onToolSearchKeydown(ev) {
+      const key = ev.key;
+      if (key === "ArrowDown" || key === "ArrowUp") {
+        if (!this.toolSearchResults.length) return;
+        ev.preventDefault();
+        const count = this.toolSearchResults.length;
+        const step = key === "ArrowDown" ? 1 : -1;
+        this.toolSearchActive = (this.toolSearchActive + step + count) % count;
+        return;
+      }
+      if (key === "Enter") {
+        // Enter 是加速键、不是必需：有结果就进最合适那个，还没搜就先搜
+        ev.preventDefault();
+        if (this.toolSearchCanPick) {
+          this.pickToolSearchResult(this.toolSearchResults[this.toolSearchActive], ev);
+        } else {
+          clearTimeout(this._toolSearchTimer);
+          this._toolSearchTimer = null;
+          this.fireToolSearch();
+        }
+        return;
+      }
+      if (key === "Escape") {
+        ev.preventDefault();
+        this.closeToolSearch();
+      }
+    },
+
+    pickToolSearchResult(row, ev) {
+      if (!row) return;
+      const tool = this.findTool(row.tool_id);
+      if (!tool) {
+        this.toast("这个工具当前不可用，请重新加载工具列表", "warn");
+        return;
+      }
+      this.clearToolSearch();
+      this.selectTool(tool, ev);
+    },
+
+    /* 一个都没匹上时的出口：带着原话去「自由对话」，不把用户丢在空结果上 */
+    gotoFreeformTool(ev) {
+      const free = this.findTool(FREEFORM_TOOL_ID);
+      if (!free) {
+        this.toast("工具列表还没加载好，请稍候或点左侧「重新加载」", "warn");
+        return;
+      }
+      const question = (this.toolSearchQuery || "").trim();
+      this.clearToolSearch();
+      this.selectTool(free, ev);
+      // 把刚才那句话带进去（用户本来就在描述需求）；已经写了内容的绝不覆盖
+      if (question && !(this.input || "").trim()) this.input = question;
+    },
+
+    /* 示例 chip：点一下即填即搜（是用户明确的动作，不必再等停顿） */
+    useToolSearchExample(example) {
+      this.toolSearchQuery = example;
+      this.toolSearchOpen = true;
+      this.toolSearchState = "waiting";
+      this.toolSearchArm += 1;
+      this.abortToolSearch();
+      this._toolSearchFired = "";
+      this.fireToolSearch();
+    },
+
+    /* 收面板但留着用户写的那句话（换工具、回首页走这条） */
+    closeToolSearch() {
+      clearTimeout(this._toolSearchTimer);
+      this._toolSearchTimer = null;
+      this.abortToolSearch();
+      this.toolSearchOpen = false;
+      if (this.toolSearchState !== "idle") this.toolSearchState = "idle";
+    },
+
+    /* 连输入一起清空（选中结果、进工具之后走这条） */
+    clearToolSearch() {
+      this.closeToolSearch();
+      this.toolSearchQuery = "";
+      this.toolSearchResults = [];
+      this.toolSearchActive = 0;
+      this._toolSearchFired = "";
+      this.toolSearchMeta = { fallback: false, no_match: false, uncertain: false, offline: false, jev: false };
+    },
+
+    startToolSearchExamples() {
+      this.stopToolSearchExamples();
+      if (!TOOL_SEARCH_EXAMPLES.length) return;
+      let index = Math.floor(Math.random() * TOOL_SEARCH_EXAMPLES.length);
+      this.toolSearchExample = TOOL_SEARCH_EXAMPLES[index];
+      this._toolSearchExampleTimer = setInterval(() => {
+        index = (index + 1) % TOOL_SEARCH_EXAMPLES.length;
+        this.toolSearchExample = TOOL_SEARCH_EXAMPLES[index];
+      }, 3200);
+    },
+
+    stopToolSearchExamples() {
+      if (this._toolSearchExampleTimer) {
+        clearInterval(this._toolSearchExampleTimer);
+        this._toolSearchExampleTimer = null;
+      }
+    },
+
+    /* 面板顶部文案：把「为什么是这个结果」说清楚，否则用户不知道能不能信 */
+    toolSearchPanelTitle() {
+      if (this.toolSearchState === "searching") return "正在理解你的需求…";
+      if (this.toolSearchState === "long") return "这句话有点长，看着像正文";
+      if (this.toolSearchState === "waiting") {
+        return this.toolSearchQuery.trim().length < TOOL_SEARCH_MIN_CHARS
+          ? "再多说几个字，例如「批改这篇作文」"
+          : "停一下就会自动搜索…";
+      }
+      if (this.toolSearchMeta.no_match) return "没有完全对口的工具，这几个最接近";
+      if (this.toolSearchMeta.offline) return "网络不通，按关键词匹配";
+      if (this.toolSearchMeta.fallback) return "未启用智能匹配，按关键词匹配";
+      if (this.toolSearchMeta.uncertain) return "不太确定，这几个可能合适";
+      return "最合适的工具";
     },
 
     /* ============ 分组折叠 ============ */

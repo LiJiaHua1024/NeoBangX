@@ -141,6 +141,21 @@ http://127.0.0.1:8000/__mock__/
 | `vocab` | 超标词替换流（超标词排查本身走真实 3500 词表，见 `/api/chat/vocab/check`） |
 | `title` | 标题生成正文场景；`/api/chat/title-jobs` 另会在内存中异步完成标题，便于查看 Shimmer 与刷新对账 |
 
+### 描述需求找工具（搜索框）
+
+`POST /api/tools/search` 桩已实现且与真实端点同形（键集由
+`app.services.tool_search.SEARCH_RESPONSE_SHAPE` 守着，见
+`test_mock_backend.py::test_tool_search_stub_matches_real_shape`）。该端点**不需要使用码**。
+假后端不调真 Jev，永远给关键词结果（`jev_available` 恒 true）；查询首行写场景指令：
+
+| 指令 | 行为 |
+| --- | --- |
+| （无） | 正常返回关键词匹配结果 |
+| `#mock fallback` | `fallback: true` / `jev_available: false` —— 演示「按关键词匹配」标注 |
+| `#mock slow` | 等 3 秒再回，验「查找中」动画与输入变化中断重发 |
+| `#mock error` | 返回 500，验前端本地关键词兜底 |
+| `#mock empty` | `no_match: true` 且零结果，验空态与「自由对话」出口 |
+
 ### PDF 解析
 
 | 场景 | 分支 |
@@ -293,6 +308,9 @@ uv run python -m mock_backend.main --port 8000 --mirror-origin http://localhost:
 | 14 | 上传 `scanned.pdf` / `large.pdf` / `corrupt.pdf` | 分别弹 409 / 413 / 422 提示 |
 | 15 | 控制台把额度设为 1，用付费模型连跑两次 | 第二次弹「额度已用尽」 |
 | 16 | 按第 6 节起两个实例，在 A 线路收藏一条 | B 线路刷新后出现同一条收藏 |
+| 17 | 点开「描述需求找工具」，输入「把学生的作文批改一下」，停半秒不按回车 | 进度环亮起后出推荐卡（前端本地关键词匹配或假后端关键词结果），标注来源 |
+| 18 | 搜索框换成输入 `#mock slow 把作文批改一下`，停顿后在慢搜途中改一个字 | 旧请求被中断（请求日志里第一条无响应），重新发起；结果只出现一次 |
+| 19 | 搜索框输入 `#mock empty 测试` | 空态与「自由对话」出口出现，不出现错误卡 |
 
 ---
 

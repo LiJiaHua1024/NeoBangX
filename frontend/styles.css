@@ -4551,6 +4551,283 @@ mark, .vp-hl {
 }
 
 /* ============================================================
+   描述需求找工具（Jev choice）
+   —— 一个「用一句话说想做什么」的控件：输入框 + 停顿进度条 + 候选面板。
+   配色与圆角沿用侧栏既有语言（--panel-soft / --border / --accent）；面板刻意
+   做得比工具列表更像「一张卡」，因为面板开着时它取代的就是列表的位置。
+   ============================================================ */
+.ts-field {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.8rem;
+  /* 顶缘一线微光（玻璃的厚度感），与游丝无关、常驻 */
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--glass-spec) 13%, transparent), transparent 42%),
+    var(--panel-soft);
+  /* 常亮的主题色描边（v5 补）：idle 就有 accent 底色，hover / 聚焦逐级加深 */
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.3s ease;
+}
+/* 月影过境 v5 —— 之前三版（conic 旋转 / 双层虚线描边）全部推翻：
+   教训 1：conic 是角速度恒定，在宽框上长边中部必然减速，几何注定；
+   教训 2：只要有两个运动层，人眼迟早会把它们看成「一条在前面跑、
+   一条在后面追」，相位数学对得再齐也没用。
+   v5 只用一个运动层：一道月光每 3s 从框面上掠过（左→右匀速约 1.1s，
+   剩下约 1.9s 静置）—— 只有一个在动的东西，层与层之间没有东西可错位。
+   静置时靠顶缘微光 + 聚焦光环认出这个框，不靠常亮灯带。 */
+/* 唯一的运动层：一道斜向微光带，用 3 倍宽背景 + background-position
+   把它从框左搬到框右（背景自带圆角裁剪，不需要额外遮罩，HTML 零改动） */
+.ts-field::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(100deg,
+    transparent 0%, transparent 43%,
+    color-mix(in srgb, var(--glass-spec) 12%, transparent) 47%,
+    color-mix(in srgb, var(--glass-spec) 62%, transparent) 50%,
+    color-mix(in srgb, var(--glass-spec) 12%, transparent) 53%,
+    transparent 57%, transparent 100%);
+  background-size: 300% 100%;
+  background-repeat: no-repeat;
+  opacity: 0.9;
+  animation: ts-sheen 3s linear infinite;
+}
+/* v5：运动层只剩 ::before 那一道月光，下面是它的层级与状态 */
+/* 内容浮于月光之上，字不被掠过的光压住 */
+.ts-field > * { position: relative; z-index: 1; }
+.ts-field:hover { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.ts-field:hover::before { opacity: 1; }
+.ts-field:focus-within::before,
+.ts-field.on::before { opacity: 1; }
+/* 0→38% 掠过（约 1.1s），之后静置到循环结束；linear 保证掠过时匀速 */
+@keyframes ts-sheen {
+  0% { background-position: 100% 0; }
+  38% { background-position: 0% 0; }
+  100% { background-position: 0% 0; }
+}
+/* 减少动效：月光停在框外（不可见），只剩静态描边 + 聚焦光环 */
+@media (prefers-reduced-motion: reduce) {
+  .ts-field::before {
+    animation: none;
+    background-position: 0% 0;
+    opacity: 0.5;
+  }
+}
+/* 「面板开着」与「正在输入」共用一套高亮：让用户一眼看出这个框已经接管了列表 */
+.ts-field.on,
+.ts-field:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent),
+    0 8px 28px -10px color-mix(in srgb, var(--accent) 38%, transparent);
+}
+.ts-field .ts-ico {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-faint);
+  transition: color 0.25s ease;
+}
+.ts-field.on .ts-ico,
+.ts-field:focus-within .ts-ico { color: var(--accent); }
+.ts-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.855rem;
+}
+.ts-input::placeholder { color: var(--text-faint); }
+/* 首页那份放大一档：它是首页最显眼的交互元素，也是「不知道用哪个」的第一出口 */
+.ts-field-lg { padding: 0.7rem 0.9rem; border-radius: 1rem; }
+.ts-field-lg .ts-input { font-size: 0.98rem; }
+
+.ts-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  color: var(--text-faint);
+  transition: color 0.2s ease, background 0.2s ease;
+}
+.ts-clear:hover { color: var(--text); background: var(--hover-bg); }
+
+/* 查找进行中：环形转圈。偏好减少动效时全局规则会把动画压成瞬间，
+   但它是「正在查找」的唯一动效载体，所以这里让它保留一个最小可感知的转速 */
+.ts-spin {
+  display: inline-flex;
+  flex: none;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  border: 1.6px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: ts-spin 0.7s linear infinite;
+}
+@keyframes ts-spin { to { transform: rotate(360deg); } }
+
+/* 引导行：一句小字 + 可点即搜的示例（说的都是大白话，不用工具名） */
+.ts-guide {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+.ts-guide-text { font-size: 0.75rem; color: var(--text-faint); }
+.ts-chip {
+  font-size: 0.75rem;
+  padding: 0.28rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text-dim);
+  transition: color 0.2s ease, border-color 0.2s ease, transform 0.3s var(--ease-spring);
+}
+.ts-chip:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  transform: translateY(-1px);
+}
+
+/* 候选面板 */
+.ts-panel {
+  margin: 0.15rem 0 0.4rem;
+  border-radius: 0.9rem;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  text-align: left;
+  animation: ts-panel-in 0.22s var(--ease-out);
+}
+@keyframes ts-panel-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 停顿进度条：走满 = 停顿成立，请求随即发出。
+   它同时是「不用按 Enter」的说明书 —— 看得见就不用读说明。
+   key 换成 toolSearchArm 时整条重建，所以每次重新计时都从头走一遍 */
+.ts-progress { height: 2px; background: var(--border); overflow: hidden; }
+.ts-progress-bar {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: left center;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 45%, transparent), var(--accent));
+  animation-name: ts-fill;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@keyframes ts-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+.ts-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.7rem 0.35rem;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+.ts-list { max-height: 22rem; overflow-y: auto; padding: 0 0.35rem 0.4rem; }
+.ts-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.45rem;
+  border-radius: 0.7rem;
+  text-align: left;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+.ts-item:hover,
+.ts-item.on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.ts-item.on { background: var(--active-bg); }
+.ts-item:hover:not(.on) { background: var(--hover-bg); }
+/* .tool-ico 的盒子样式原本挂在 .tool-item 下，这里那份选择器不生效，补一份同形的 */
+.ts-item .tool-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  flex: none;
+  border-radius: 0.6rem;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.ts-item.on .tool-ico {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.ts-item-main { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.ts-item-name { font-size: 0.86rem; font-weight: 600; color: var(--text); }
+/* 为什么推荐：Jev 不生成解释，这里展示的就是该工具自己的用途描述 */
+.ts-item-desc {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ts-item-group {
+  flex: none;
+  font-size: 0.66rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+}
+.ts-foot { padding: 0.2rem 0.7rem 0.6rem; font-size: 0.72rem; color: var(--text-faint); }
+.ts-foot-note { line-height: 1.5; }
+.ts-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+
+/* 窄栏里面板不该把工具列表挤到看不见；长候选自己滚 */
+@media (max-width: 1535.98px) {
+  .ts-list { max-height: 18rem; }
+}
+
+/* 手机端：首页大框收一档内距与字号，引导行不折行撑高；
+   侧栏在手机端收进抽屉，抽屉里的搜索框同样不占多余竖向空间 */
+@media (max-width: 640px) {
+  .ts-field-lg { padding: 0.55rem 0.75rem; }
+  .ts-field-lg .ts-input { font-size: 0.92rem; }
+  .ts-guide { gap: 0.3rem 0.35rem; margin-top: 0.5rem; }
+  .ts-chip { font-size: 0.7rem; padding: 0.22rem 0.5rem; }
+  .ts-guide-text { width: 100%; text-align: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 动效被全局压成瞬间，进度条会一上来就满格，反而像「已经搜完了」：整条撤掉，
+     只留 ts-head 里那句「停一下就会自动搜索…」把机制说清楚 */
+  .ts-progress { display: none; }
+  .ts-spin { animation-duration: 1.6s !important; }
+}
+
+/* ============================================================
    减少动效偏好
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {

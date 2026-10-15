@@ -667,6 +667,8 @@ function adminApp() {
       jev_api_key: "",
       jev_model: "jev-latest",
       jev_timeout: 4,
+      // 「描述需求找工具」用途开关：可在不改动错误判定开关的情况下单独关掉
+      jev_tool_search_enabled: true,
     },
     // Jev 测试状态（与 Provider 测试相互独立）
     testingJev: false,
@@ -2774,6 +2776,10 @@ function adminApp() {
           jev_api_key: String(cfg.jev_api_key ?? ""),
           jev_model: String(cfg.jev_model ?? "") || "jev-latest",
           jev_timeout: Math.max(2, Math.min(30, Math.floor(Number(cfg.jev_timeout) || 4))),
+          // 老库没有这个键：解析端按「开」兜底，这里保持一致（不能因为缺键就显示成关）
+          jev_tool_search_enabled: String(cfg.jev_tool_search_enabled ?? "").trim() === ""
+            ? true
+            : /^(1|true|yes|on)$/i.test(String(cfg.jev_tool_search_enabled)),
           // 固定补齐两个输入框，避免数组短于 2 时 x-model 写到越界下标
           mirror_origins: (() => {
             const list = Array.isArray(cfg.mirror_origins) ? cfg.mirror_origins.map(String) : [];
@@ -3329,6 +3335,7 @@ function adminApp() {
           jev_base_url: String(this.configForm.jev_base_url || "").trim(),
           jev_model: String(this.configForm.jev_model || "").trim(),
           jev_timeout: Math.max(2, Math.min(30, Math.floor(Number(this.configForm.jev_timeout) || 4))),
+          jev_tool_search_enabled: this.configForm.jev_tool_search_enabled !== false,
           tool_reasoning_rules: this.configForm.tool_reasoning_rules.map((r) => ({
             id: r.id || "",
             tool_ids: r.tool_ids.map(String),

@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 
 from mock_backend import catalog, paper as paper_mod, panel, upstream
 from mock_backend.engine import StreamStats, sse_frame, stats_summary, stream_frames
-from mock_backend.scenarios import SCENARIOS, resolve_plan
+from mock_backend.scenarios import SCENARIOS, parse_directive, resolve_plan
 from mock_backend.state import STATE
 
 logger = logging.getLogger("mock_backend")
@@ -321,6 +321,47 @@ def create_app(
     @app.get("/api/tools/models")
     async def tool_models() -> dict:
         return catalog.models_payload()
+
+    @app.post("/api/tools/search")
+    async def tool_search(request: Request) -> dict:
+        """描述需求找工具（与真实端点同形）。
+
+        假后端不调真 Jev，永远给关键词结果；查询首行可写 ``#mock <场景>``
+        把几个边界演出来（与聊天流的魔术指令同一套写法）：
+
+        - ``#mock fallback``：标成「按关键词匹配」（真后端 Jev 不可用时的样子）
+        - ``#mock slow``：慢 3 秒才回（验「查找中」动画与内容一变就中断重发）
+        - ``#mock error``：返回 500（验前端本地兜底）
+        - ``#mock empty``：一个结果都不给（验空态与「自由对话」出口）
+        """
+        body = await _json_body(request)
+        raw = str(body.get("query") or "")
+        try:
+            limit = max(1, min(8, int(body.get("limit") or 3)))
+        except (TypeError, ValueError):
+            limit = 3
+        scenario, _params, text = parse_directive(raw)
+        text = text.strip() or raw.strip()
+        STATE.record(
+            ts=time.time(), method="POST", path="/api/tools/search",
+            authorization=bool(_bearer(request)), fingerprint=_fingerprint(request),
+            scenario=scenario or "keyword",
+            body={"query": raw, "limit": limit},
+        )
+        if scenario == "slow":
+            await asyncio.sleep(3)
+        if scenario == "error":
+            raise HTTPException(status_code=500, detail="假后端场景：工具搜索失败")
+        results = [] if scenario == "empty" else catalog.search_tools(text, limit)
+        return {
+            "results": results,
+            "fallback": scenario == "fallback",
+            "no_match": scenario == "empty",
+            "uncertain": False,
+            "cached": False,
+            "latency_ms": 1,
+            "jev_available": scenario != "fallback",
+        }
 
     # ---- 认证 ----
     @app.post("/api/auth/activate")

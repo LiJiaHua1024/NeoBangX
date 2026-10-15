@@ -30,6 +30,7 @@
 | GET | `/api/config` | 前端配置信息 | 否 |
 | GET | `/api/tools/` | 工具元数据 + 模型列表 | 是 |
 | GET | `/api/tools/models` | 可用模型列表 | 是 |
+| POST | `/api/tools/search` | 按自然语言需求推荐工具（Jev 单题判定，不扣额度、不写日志） | 否 |
 | POST | `/api/auth/activate` | 验证使用码，返回 JWT | 否 |
 | GET | `/api/auth/me` | 当前使用码状态 | 是 |
 | POST | `/api/chat/preview` | 预览最终 Prompt | 是 |
@@ -257,6 +258,73 @@
 `max_visible_models` 为管理后台配置的模型下拉最大显示数（`0` = 不折叠）。
 `models` 已过滤掉**已禁用**与**未勾选「用户可用」**的模型，因此该数组长度就是折叠计数的基数，
 前端按 `min(长度, max_visible_models)` 渲染，超出部分折叠为「展开全部」。
+
+### POST `/api/tools/search`
+
+按自然语言需求推荐工具。用 Jev（TypeSafe System One 决策模型）的一次 choice
+题型判定把「老师的一句话」映射到最合适的工具；Jev 未启用、未配齐、超时（上限
+5 秒，切到工具搜索即取 `min(jev_timeout, 5)`）、报错或回包无法解析时，立即
+回退到本地关键词匹配（中文按字符 bigram 重叠打分，零新依赖）。任何情况下都
+返回 200 与一份可展示的结果。
+
+- **认证：** 否（与 `GET /api/tools/` 同理由：只做导航，未登录用户也可浏览工具）。
+- **不扣额度、不写使用日志**（不污染管理后台统计与免费模型限额），但按主体
+  （使用码 > 指纹 > IP）限速：`tool_search` 桶 30 次 / 60 秒，超限返回 429。
+- **缓存：** 进程内缓存（TTL 600 秒，最多 256 条；键含工具目录指纹），命中
+  `cached: true`，不消耗 Jev 调用。
+- **后台开关：** `jev_tool_search_enabled`（管理后台「Jev 错误判定」卡片，
+  字符串 `"true"`/`"false"`，缺键按 `"true"`）可单独关闭本端点的 Jev 判定，
+  不影响 Jev 的错误重试判定。
+
+**请求体：**
+
+```json
+{ "query": "帮我把这篇学生作文批改一下", "limit": 3 }
+```
+
+- `query`：自然语言需求描述（不是工具名检索词），去空白后少于 2 字返回 400
+  「请多说几个字…」，最长 200 字。
+- `limit`：返回条数上限，1~8，缺省 3。
+
+**响应：**
+
+```json
+{
+  "results": [
+    {
+      "tool_id": "10",
+      "name": "学生作文批改",
+      "icon": "correction",
+      "description": "评分 + 修改建议 + 改进版本",
+      "group_id": "teaching",
+      "group_title": "备课与教学",
+      "score": 0.9231,
+      "source": "jev",
+      "reason": "评分 + 修改建议 + 改进版本"
+    }
+  ],
+  "fallback": false,
+  "no_match": false,
+  "uncertain": false,
+  "cached": false,
+  "latency_ms": 214,
+  "jev_available": true
+}
+```
+
+- `results[].source`：`"jev"`（Jev 选中）或 `"keyword"`（关键词兜底）。
+- `fallback: true`：本次走了关键词兜底；`jev_available` 同时为 `false`，
+  前端据此把结果标注为「按关键词匹配」。
+- `no_match: true`：Jev 明确选了「以上都不合适」（候选里的兜底选项 25
+  「自由对话」），返回的是关键词近邻；前端给出「没有合适的工具，试试自由对话」。
+- `uncertain: true`：Jev 置信度低或前两名概率难分；前端提示「不太确定」，
+  且**不触发本地兜底重选**（宁可直接展示低置信结果，不做二次猜测）。
+- `results[].reason`：Jev 不生成文字，所以「为什么推荐」直接取该工具自己的
+  用途描述（`description`），不是模型编的推荐语；UI 也照实展示这一点。
+- 假后端（`backend/mock_backend`）打桩了同形响应，查询首行写 `#mock` 场景指令
+  可演示 `fallback` / `slow` / `error` / `empty` 四种边界；测试
+  `backend/tests/test_mock_backend.py` 以 `SEARCH_RESPONSE_SHAPE` 断言两端
+  契约同形。
 
 ### GET `/api/tools/models`
 
@@ -1035,7 +1103,8 @@ data: [DONE]
     "jev_base_url": "https://api.typesafe.ai/v1/systemone",
     "jev_api_key": "sk-t****7890",
     "jev_model": "jev-latest",
-    "jev_timeout": "4"
+    "jev_timeout": "4",
+    "jev_tool_search_enabled": "true"
   },
   "keys": [ ... ],
   "reasoning_efforts": ["high", "low", "medium", "minimal", "none"],
@@ -1050,7 +1119,9 @@ data: [DONE]
 `log_payload` 以字符串 `"true"` / `"false"` 存储；`log_retention_days` 为
 天数字符串，`"0"` 表示永久保留。`jev_api_key` 回显为脱敏值（含 `****`），
 保存时原样送回表示不修改（与 Provider Key 的约定一致）；`jev_enabled` 同为
-字符串开关。`mirror_banner_enabled` 为线路故障全局横幅开关（字符串 `"true"` /
+字符串开关。`jev_tool_search_enabled` 为字符串开关（缺键按 `"true"`），单独
+关掉「描述需求找工具」（`POST /api/tools/search` 的 Jev 判定），不影响 Jev 的
+错误重试判定。`mirror_banner_enabled` 为线路故障全局横幅开关（字符串 `"true"` /
 `"false"`，缺键按 `"true"`），随 `PUT /api/admin/config` 落盘。旧的单 URL 配置键（`llm_base_url` / `llm_api_key` /
 `llm_model` / `chores_base_url` / `chores_api_key`）已不再由配置读写，仅作为环境变量兜底存在。
 
@@ -1281,4 +1352,5 @@ openrouter/deepseek/deepseek-chat
 | 1.14.0 | 2026-09-23 | 新增翻译工具（33「翻译」）：`/api/chat/stream` 与 `/api/chat/preview` 新增 `source_lang` / `target_lang`（渲染进 `翻译.md`，缺省回落 `auto` / `简体中文`）；`truncated` 事件的适用范围放宽到工具 33（撞全局 `max_tokens` 时前端给出「继续翻译」出口）；`ocr_mode` 的手动选择名单增加工具 33（印刷试卷与手写作文都可能来）；工具 33 走普通工具链路：须正文、按模型计费、用用户所选模型。同批：本地静态资源不再带 `?v=` 版本串（改走 `no-cache` + `etag`，升级后无需强刷即可拿到新代码），`bridge.html` 与 `index.html` 引用镜像模块的 URL 必须一致 |
 | 1.15.0 | 2026-09-25 | 标题生成改为后端持久任务：新增 `title_jobs` 与 `/api/chat/title-jobs`、`/api/chat/title-jobs/status`；任务最多尝试 3 次，浏览器关闭或刷新不影响 worker；历史标题待生成时显示原文摘要 Shimmer，终态失败静默回退原文 |
 | 1.16.0 | 2026-10-06 | 试卷可视化全解（工具 13）改两阶段生成：阶段一由 Chores 模型按 `@@MARK` 插标协议（`prompts/试卷可视化全解框架.md`）在带行号的原卷上标出语篇/题目/选项/答案区，分组跟着语篇走（每篇一组，阅读理解 A/B/C/D 篇各自独立；GROUP 锚点必须落在本组第一题的标记之前——语篇在前的题型与 PASSAGE 同锚正文首行，写作两节锚在各自要求行且应用文/读后续写各自成组），读后续写的材料原文（含两段开头语）挂回本题展示，后端 `visual_paper_framework.FrameworkApplier` 按锚点（支持行中定位断行、短锚点行首优先、单字符拒收）派生出 `@@TAG@@` 骨架逐段流给前端，结构从流式一开始就逐步上屏；阶段二（`prompts/试卷可视化全解精讲.md`）材料换成骨架，主模型只输出讲解字段（题干/选项/语篇不再转录），解析端对同号 `@@Q@@` 重开合并。新增 SSE `stage` 事件（见 7）、标签 `@@KEY@@`（卷末答案区）与 `@@GROUP_INTRO@@`（分组导语）；续写输入携带骨架时后端跳过阶段一。进度条改两段式：浅色条为第一轮结构解析，跑完留作背景，深色条在其上展示第二轮讲解进度；进度行单一状态文案按阶段切换（解析结构 N/M → 撰写讲解 N/M），不再出现双计数。框架解析失败或产出为零时自动回退单阶段老路径（`@@TOTAL@@`/`@@PAPER@@` 头部重复对解析无害）；模型口头声明的总题数不可靠（实测 47 题报成 51，总数虚高让 UI 显示不存在的余题），applier 收尾按实际派生的题号数补一行 `@@TOTAL@@` 校正，解析端后者生效。配置键：`visual_paper_framework`（默认开）、`framework_model`（默认跟随 chores 模型）、`framework_max_tokens`（默认跟随全局 `max_tokens`，不受 chores 256 钳制）；阶段一单记一条使用日志（`tool_name`「试卷可视化全解·框架」，`request_id` 加 `_fw` 后缀，`units` 恒 0），与主记录分列，便于核对锚点命中率 |
+| 1.18.0 | 2026-10-15 | 描述需求找工具：新增 `POST /api/tools/search`（无需使用码，不扣额度不写日志，`tool_search` 桶 30 次/60 秒限速）；Jev choice 单题判定（~70-500ms）映射 32 个工具并允许「以上都不合适」，未配齐/超时（上限 5s）/报错立即回退本地关键词 bigram 匹配；进程内缓存（TTL 600s、键含工具目录指纹）；新增配置键 `jev_tool_search_enabled`（缺键按开，可单独关闭搜索的 Jev 判定）；前端在侧栏与移动顶部提供「描述需求找工具」入口（输入停顿 500ms 自动搜、内容变化中断重发、查找中可见进度环、空态/兜底/不确定状态文案）；假后端打桩同形响应（`#mock` 场景 fallback/slow/error/empty） |
 | 1.17.0 | 2026-10-07 | 工具推理规则支持 Chores 系列工作：管理端工具注册表新增 `chores` 分组（含「生成标题」`title`、「可视化试卷全解框架」`visual_framework` 与「设备画像分析」`device_profile`）；标题生成任务与试卷可视化全解阶段一（框架解析）及后台设备画像执行时均按配置的推理规则（`reasoning_effort`）与不支持处理策略（`fallback`/`fail`）应用推理强度 |

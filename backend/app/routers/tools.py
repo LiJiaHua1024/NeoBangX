@@ -1,12 +1,23 @@
 from typing import Annotated, List
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.services.free_access import identity_key
 from app.services.prompt_loader import PromptLoader
+from app.services.rate_limit import enforce_rate_limit
+from app.services.request_log import get_client_info, get_fingerprint_info
 from app.services.runtime_config import resolve_llm_settings
+from app.services.tool_search import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    MAX_QUERY_CHARS,
+    MIN_QUERY_CHARS,
+    flatten_tools,
+    search_tools,
+)
 from app.config import settings
 from app.services.migration import MIGRATION_TOOL_ID, MIGRATION_TOOL_NAME
 
@@ -210,12 +221,13 @@ class ToolGroupsResponse(BaseModel):
     max_visible_models: int = 0
 
 
-@router.get("/", response_model=ToolGroupsResponse)
-async def list_tools(
-    db: Annotated[Session, Depends(get_db)],
-    loader: PromptLoader = Depends(get_prompt_loader),
-):
-    """返回所有工具元数据、分组信息及可用模型列表"""
+def build_tool_groups(loader: PromptLoader) -> List[dict]:
+    """构造工具分组目录（含 prompt_loaded 状态）。
+
+    工具列表接口与「描述需求找工具」共用这一份构造：搜索给出的候选必须与
+    左侧列表逐字一致，两处各拼一份迟早会漂。分组只影响展示与浏览，
+    搜索是一道覆盖全部工具的 choice 题，不按分组切（分组本身无语义）。
+    """
 
     def enrich(tools):
         return [
@@ -230,7 +242,7 @@ async def list_tools(
             for t in tools
         ]
 
-    groups = [
+    return [
         {
             "id": "exclusive",
             "title": "独家功能",
@@ -256,6 +268,16 @@ async def list_tools(
             "tools": enrich(REFERENCE_TOOLS),
         },
     ]
+
+
+@router.get("/", response_model=ToolGroupsResponse)
+async def list_tools(
+    db: Annotated[Session, Depends(get_db)],
+    loader: PromptLoader = Depends(get_prompt_loader),
+):
+    """返回所有工具元数据、分组信息及可用模型列表"""
+
+    groups = build_tool_groups(loader)
 
     llm_cfg = resolve_llm_settings(db)
     available = llm_cfg.get("available_model_ids")
@@ -290,6 +312,66 @@ async def list_tools(
         "default_model": llm_cfg["default_model"],
         "max_visible_models": llm_cfg.get("max_visible_models", 0),
     }
+
+
+class ToolSearchRequest(BaseModel):
+    query: str = Field(
+        "",
+        max_length=MAX_QUERY_CHARS,
+        description="用户用自然语言描述自己想做什么（不是工具名检索词）",
+    )
+    limit: int = Field(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT, description="返回条数上限")
+
+
+class ToolSearchResult(BaseModel):
+    tool_id: str
+    name: str
+    icon: str
+    description: str
+    group_id: str
+    group_title: str
+    score: float = Field(description="Jev 给的选项概率，或关键词归一化得分")
+    source: str = Field(description="jev = 决策模型判定；keyword = 本地关键词兜底")
+    reason: str = Field(description="为什么可能是它：直接取该工具的用途描述（Jev 不生成文字）")
+
+
+class ToolSearchResponse(BaseModel):
+    results: List[ToolSearchResult]
+    fallback: bool = Field(description="是否走了关键词兜底（Jev 未启用/不可用/回包不可解析）")
+    no_match: bool = Field(description="Jev 明确判定「以上都不合适」，返回的是关键词近邻")
+    uncertain: bool = Field(description="置信度低或前两名难分，应提示「不太确定」")
+    cached: bool = Field(description="是否命中进程内缓存（未消耗 Jev 调用）")
+    latency_ms: int
+    jev_available: bool = Field(description="本次是否真的用上了 Jev（未启用或未配齐时为 false）")
+
+
+@router.post("/search", response_model=ToolSearchResponse)
+async def search_tools_api(
+    req: ToolSearchRequest,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    loader: PromptLoader = Depends(get_prompt_loader),
+):
+    """按自然语言需求推荐工具。
+
+    与 `/api/tools/` 一样不需要使用码：它只做导航，不是生成，未登录用户
+    本来就可以浏览全部工具；也**不扣额度、不写使用日志**（不污染管理后台的
+    请求统计与免费模型限额计数），但按指纹/IP 限速，防止有人拿它刷 Jev Key。
+    """
+    query = (req.query or "").strip()
+    if len(query) < MIN_QUERY_CHARS:
+        raise HTTPException(
+            status_code=400, detail="请多说几个字，比如「把这篇学生作文批改一下」"
+        )
+
+    fp_hash, _ = get_fingerprint_info(request)
+    client_ip, _ = get_client_info(request)
+    enforce_rate_limit(identity_key(fingerprint=fp_hash, ip=client_ip), "tool_search")
+
+    cfg = resolve_llm_settings(db)
+    jev_cfg = cfg.get("jev") if isinstance(cfg.get("jev"), dict) else None
+    tools = flatten_tools(build_tool_groups(loader))
+    return await search_tools(jev_cfg, query, tools, limit=req.limit)
 
 
 @router.get("/models")

@@ -116,6 +116,48 @@ def test_config_endpoint_shape(client):
     asyncio.run(run())
 
 
+# ---------------------------------------------------------------- 工具搜索桩
+
+
+def test_tool_search_stub_matches_real_shape(client):
+    """搜索桩必须与真实 /api/tools/search 响应同形（前端按同一套字段渲
+染）。"""
+    from app.services.tool_search import SEARCH_RESPONSE_SHAPE
+
+    async def run():
+        r = await client.post("/api/tools/search", json={"query": "帮我把学生作文批改一下", "limit": 3})
+        assert r.status_code == 200
+        data = r.json()
+        assert set(data) == SEARCH_RESPONSE_SHAPE
+        assert len(data["results"]) == 3
+        assert set(data["results"][0]) == {
+            "tool_id", "name", "icon", "description", "group_id", "group_title", "score", "source", "reason",
+        }
+
+        r = await client.post("/api/tools/search", json={"query": "#mock fallback\n把学生的作文批改一下"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["fallback"] is True and data["jev_available"] is False
+        # 场景指令要被剥掉，正文才进关键词匹配
+        assert data["results"] != []
+
+    asyncio.run(run())
+
+
+def test_tool_search_scenarios(client):
+    async def run():
+        # slow：桩真实等待（很小地模拟，用 monkeypatch 不了桩内 sleep，这里只验语义能通）
+        r = await client.post("/api/tools/search", json={"query": "#mock empty 描写作文批改\n正文可以随意"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["no_match"] is True and data["results"] == []
+
+        r = await client.post("/api/tools/search", json={"query": "#mock error 描写作文批改\n正文可以随意"})
+        assert r.status_code == 500
+
+    asyncio.run(run())
+
+
 # ---------------------------------------------------------------- SSE 帧契约
 
 

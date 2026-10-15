@@ -1329,8 +1329,8 @@
 
         <div class="glass card">
           <div>
-            <h2 class="card-title">Jev 错误判定</h2>
-            <p class="muted">Provider 报错后换不换下一家，先由程序判断能确定的情况，剩下的再问 Jev，不再靠关键词猜。判定在后台等出结果后才继续，用户最多晚几秒收到结果，不会收到重复或前后不一致的错误。Jev 不可用时自动按内置规则判断，生成不受影响。</p>
+            <h2 class="card-title">Jev 决策模型</h2>
+            <p class="muted">Jev 是决策模型（不生成文字），这里用它做两件事：<b>错误判定</b> —— Provider 报错后换不换下一家，先由程序判断能确定的情况，剩下的再问 Jev，不再靠关键词猜；<b>描述需求找工具</b> —— 用户在搜索框里用一句话说自己想做什么，由 Jev 从全部工具里选一个。两处都在等出结果后才继续，用户不会收到重复或前后不一致的结果；Jev 不可用时各自自动回退（错误判定按内置规则，工具搜索按本地关键词匹配），主流程不受影响。</p>
           </div>
           <div class="switch-row mt-3">
             <label class="switch" :class="{ disabled: savingConfig }">
@@ -1338,9 +1338,23 @@
               <span class="switch-slider"></span>
             </label>
             <div class="switch-copy">
-              <div class="switch-title">启用 Jev 判定</div>
+              <div class="switch-title">启用 Jev（总开关）</div>
               <div class="field-hint">
-                关闭后只按内置规则判断：只有超限和内容审核不切换，其余都切换。默认关闭。
+                关闭后两项都不再走 Jev：错误判定只按内置规则（只有超限和内容审核不切换，其余都切换），工具搜索按本地关键词匹配。默认关闭。
+              </div>
+            </div>
+          </div>
+          <div class="switch-row mt-2">
+            <label class="switch" :class="{ disabled: savingConfig }">
+              <input type="checkbox" x-model="configForm.jev_tool_search_enabled" :disabled="savingConfig">
+              <span class="switch-slider"></span>
+            </label>
+            <div class="switch-copy">
+              <div class="switch-title">用于「描述需求找工具」</div>
+              <div class="field-hint">
+                首页与侧栏的搜索框（用户用一句话说想做什么，Jev 从全部工具里挑一个）。
+                <b>注意：开启后用户那句话会随请求发往上面的端点</b>；关闭时只在服务器本地按关键词匹配，不外发。
+                它不消耗使用码额度、也不写使用日志，但按指纹/IP 限速（30 次/分钟）。
               </div>
             </div>
           </div>
