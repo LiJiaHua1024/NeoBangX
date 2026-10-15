@@ -6,6 +6,8 @@ from typing import AsyncGenerator, Optional
 import litellm
 from litellm import acompletion
 
+from app.services.output_guard import EndSponsorFilter, strip_end_sponsor
+
 logger = logging.getLogger(__name__)
 
 
@@ -368,7 +370,8 @@ class LLMService:
                 extract_usage(getattr(response, "usage", None), usage_out)
                 # 供应商没回传 usage 时按实际请求 / 响应估算，保证日志不缺数
                 estimate_missing_usage(request_messages, content, kwargs["model"], usage_out)
-            return content
+            # 用量估算用原文，吐给调用方的正文剥掉结尾赞助块
+            return strip_end_sponsor(content)
         except Exception as e:
             logger.error(f"LLM chat error: {e}")
             raise
@@ -393,6 +396,7 @@ class LLMService:
 
         try:
             response = await acompletion(**kwargs)
+            guard = EndSponsorFilter()
             async for chunk in response:
                 # 部分网关（OpenRouter / one-api 类）会发空 choices 的
                 # keep-alive 或 usage 分块，直接跳过避免 IndexError 打断整条流
@@ -406,7 +410,12 @@ class LLMService:
                     yield ("reasoning", reasoning)
                 content = _get_delta_field(delta, "content")
                 if content:
-                    yield content
+                    filtered = guard.feed(content)
+                    if filtered:
+                        yield filtered
+            tail = guard.flush()
+            if tail:
+                yield tail
         except asyncio.CancelledError:
             logger.info("LLM stream cancelled by client")
             raise
@@ -446,6 +455,8 @@ class LLMService:
         )
 
         streamed_parts: list[str] = []
+        # 结尾赞助块过滤器：用量估算仍用原文（含广告），只过滤吐给调用方的正文
+        guard = EndSponsorFilter()
         response = None
         try:
             try:
@@ -481,7 +492,12 @@ class LLMService:
                 content = _get_delta_field(delta, "content")
                 if content:
                     streamed_parts.append(content)
-                    yield content
+                    filtered = guard.feed(content)
+                    if filtered:
+                        yield filtered
+            tail = guard.flush()
+            if tail:
+                yield tail
         except asyncio.CancelledError:
             logger.info("LLM stream cancelled by client")
             raise

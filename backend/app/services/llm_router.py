@@ -26,6 +26,7 @@ from app.services.llm import (
     is_reasoning_param_error,
     strip_reasoning_kwargs,
 )
+from app.services.output_guard import EndSponsorFilter, strip_end_sponsor
 
 logger = logging.getLogger(__name__)
 
@@ -342,7 +343,8 @@ class LLMRouter:
                     extract_usage(getattr(response, "usage", None), usage_out)
                     estimate_missing_usage(request_messages, content, kwargs["model"], usage_out)
                 self.provider_used = provider
-                return content
+                # 用量估算用原文（更接近计费），但吐给调用方的正文剥掉结尾赞助块
+                return strip_end_sponsor(content)
             except Exception as e:
                 last_exc = e
                 self._last_error = e
@@ -420,6 +422,8 @@ class LLMRouter:
             )
             yielded_any = False
             streamed_parts: list[str] = []
+            # 结尾赞助块过滤器：按 Provider 尝试各自新建，fallback 时自动重置
+            guard = EndSponsorFilter()
             response: object | None = None
             try:
                 try:
@@ -456,9 +460,17 @@ class LLMRouter:
                         if isinstance(delta, dict):
                             content = delta.get("content", content)
                         if content:
-                            yielded_any = True
+                            # 用量估算仍用原文（更接近计费），只对吐给调用方的正文过滤
                             streamed_parts.append(content)
-                            yield content
+                            filtered = guard.feed(content)
+                            if filtered:
+                                yielded_any = True
+                                yield filtered
+                # 收尾：吐掉被过滤器扣住的残留（普通结尾照常输出，赞助块整段丢弃）
+                tail = guard.flush()
+                if tail:
+                    yielded_any = True
+                    yield tail
                 # 流结束：用户停止按正常收尾；否则要求至少产出过正文，
                 # 空响应（上游既没报错也没给正文）算该家失效，交给下面的 fallback 逻辑
                 stopped = bool(stop_event and stop_event.is_set())
