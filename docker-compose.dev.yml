@@ -1,0 +1,27 @@
+# 本地预览用的「开发模式」叠加配置（与 docker-compose.yml 合并生效）：
+#
+#   ddev = docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# 它只改一件事：把「源码」从镜像里改挂成宿主机目录，并让后端热重载。
+# 于是改代码/改提示词不再需要重建镜像，几秒内生效。
+#
+# 数据不在这一层动：/app/data 仍然挂在命名卷 neobangx_data 上（就是下面第一行），
+# 所以模型配置、API Key、使用记录一条都不会丢——重建镜像本来也不会动卷。
+#
+# ⚠️ 千万别在这里把 ./data 挂到 /app/data：那会用宿主机那个旧 neobangx.db
+#    顶替掉卷里的真数据，看起来就像「数据全没了」。
+services:
+  neobangx:
+    environment:
+      # 由 supervisord.conf 的 %(ENV_UVICORN_RELOAD)s 拼到 uvicorn 命令后面。
+      # 只监听 app/ 与 prompts/（prompts 也听是为了改完提示词自动重载缓存）。
+      UVICORN_RELOAD: " --reload --reload-dir /app/app --reload-dir /app/prompts --reload-include *.md"
+      # Windows/macOS 的 bind mount 不会把文件事件传进 Linux 容器，
+      # 不开轮询的话热重载会「看起来没生效」。
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - neobangx_data:/app/data          # 数据卷原样保留，不换成宿主目录
+      - ./backend/app:/app/app           # 只挂源码
+      - ./prompts:/app/prompts
+      - ./frontend:/app/frontend
+      - ./admin-frontend:/app/admin-frontend

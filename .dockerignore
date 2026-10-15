@@ -1,0 +1,44 @@
+# 构建上下文是仓库根目录（docker-compose.yml 里 build: .），而 Dockerfile 只
+# COPY backend/app、backend/pyproject.toml、backend/uv.lock、prompts、frontend、
+# admin-frontend、supervisord.conf 这几样。下面把其余的东西挡在上下文之外，
+# 免得每次构建都白同步一遍（既慢又占带宽）。
+
+# 版本库与本机工具缓存
+.git
+.gitignore
+.pytest_cache
+.uv-cache
+.venv
+__pycache__
+*.pyc
+.commandcode
+.freebuff
+.zcode
+.zcodeignore
+
+# Node 依赖树（前端已构建产物随 frontend/ 一起进镜像，源码构建只在宿主机做）
+node_modules
+
+# 本地数据与运行产物
+data
+*.log
+.tmp-shots
+
+# 文档与仓库级配置（运行镜像用不到）
+README.md
+PRD*.md
+analysis.md
+docs
+prompt-tuning
+docker-compose*.yml
+opencode.json
+
+# 密钥：绝不进镜像层，由 env_file 运行时注入
+backend/.env
+
+# 后端本地开发用的目录（镜像不需要）
+backend/tests
+backend/mock_backend
+backend/data
+backend/pt.log
+backend/pt2.log

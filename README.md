@@ -202,6 +202,24 @@ docker-compose up --build -d
 docker-compose down
 ```
 
+### 5.6 开发模式：改代码免重建
+
+正式镜像把代码 `COPY` 进镜像层，所以改一行代码也要重建整个镜像（还要重新解析基础镜像标签）。本地反复调代码 / 提示词时，改用叠加配置 `docker-compose.dev.yml`：源码挂进容器、后端开热重载，**改完即生效、零构建**。
+
+```bash
+# 开发模式（源码挂载 + 热重载），在本机 shell 里也配了别名 ddev / ddevlog
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+# 只有依赖变了（pyproject.toml / uv.lock）或要出正式镜像时，才重建
+docker-compose up --build -d
+```
+
+- 挂载的只有 `backend/app`、`prompts`、`frontend`、`admin-frontend` 四个**源码目录**；`/app/data` **仍走命名卷**，模型配置与使用记录不受影响。
+- 热重载用 `WATCHFILES_FORCE_POLLING` 轮询（Windows / macOS 的 bind mount 不会把文件事件传进容器），并同时监听 `app/**/*.py` 与 `prompts/*.md` —— 改提示词也会自动重载缓存。
+- ⚠️ **不要在开发配置里把宿主目录挂到 `/app/data`**：那会用仓库里那份旧的 `neobangx.db` 顶替掉数据卷中的真数据。
+
+> 基础镜像（`python:3.13-slim`、`uv`）在 `Dockerfile` 里按 `tag@sha256:…` **钉死 digest**：可移动标签每次构建都要向 Docker Hub 解析一次，既慢又会撞未登录用户的匿名拉取限流（429）。升级基础镜像时用 `docker buildx imagetools inspect <镜像> --format '{{.Manifest.Digest}}'` 取新 digest 替换即可。
+
 ---
 
 ## 6. 配置项说明
