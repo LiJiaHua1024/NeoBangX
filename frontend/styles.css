@@ -4896,3 +4896,123 @@ mark, .vp-hl {
   }
   .nbx-tool-link .nbx-tool-link-go { display: none; }
 }
+
+/* ============================================================
+   自由对话 · 工具卡片 → 目标工具 过渡（「徽章飞行」）
+   点击推荐卡片的瞬间，卡片图标化作一枚渐变徽章，飞向目标工具头部
+   的工具徽章；旧界面下沉让位，新界面自下浮现，徽章落定时头部徽章
+   有一次到位脉冲。
+   驱动：View Transitions API（共享元素 morph + 内容过渡），script.js
+   负责在过渡窗口内挂 / 摘 view-transition-name 并注入飞行徽章；
+   不支持或「减少动态效果」时降级为无动画／轻量淡入。
+   性能约定：只动 transform / opacity（合成器线程），飞行体只有一个
+   节点，过渡结束立即清理。
+   ============================================================ */
+
+/* 飞行徽章：点击瞬间由 JS 注入（fixed 定位于卡片图标处），作为旧快照的起点 */
+.nbx-flight-badge {
+  position: fixed;
+  z-index: 96;               /* 高于全屏讲解(90)/弹窗(80)/Toast(70)，退出期不被任何界面遮挡 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.625rem;           /* 26px：卡片图标(16px)与头部徽章(40px)之间的过渡尺寸 */
+  height: 1.625rem;
+  border-radius: 0.55rem;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 12px 26px -8px var(--glow), 0 4px 10px -4px rgba(31, 26, 22, 0.18);
+  pointer-events: none;
+}
+.nbx-flight-badge svg { width: 1rem; height: 1rem; }
+
+/* 被点中的卡片：点亮一下，随旧界面一起退场（快照起始帧的观感） */
+.nbx-tool-link.nbx-link-launch {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  transform: scale(0.97);
+}
+
+/* —— 飞行徽章：460ms 「抛出 → 巡航 → 刹停」落定 ——
+   可见性优先：旧端（渐变徽章）保持实心到 58%，新端（头部徽章）从 36%
+   就叠着浮上来，整个航程没有「半透明窗口」。
+   路径曲线是专门挑的变速曲线：expo（--ease-out）前 100ms 就冲过半程、
+   尾巴走几百毫秒；Quad 则中段过缓、后段像缓缓飘。这版用
+   cubic-bezier(0.33, 0.66, 0.3, 1)——约 60% 时间走完 94%，末端只剩
+   几像素的刹停动作，观感是「到位停住」，不是「缓缓挪」。
+   起飞时从 0.72 倍弹起（≈ 卡片图标大小），像图标从卡片里长出来再飞走。 */
+::view-transition-group(nbx-tool-fly) {
+  animation-duration: 460ms;
+  animation-timing-function: cubic-bezier(0.33, 0.66, 0.3, 1);
+}
+::view-transition-old(nbx-tool-fly) {
+  animation: nbx-fly-old 460ms linear both;
+}
+::view-transition-new(nbx-tool-fly) {
+  animation: nbx-fly-new 460ms linear both;
+}
+@keyframes nbx-fly-old {
+  0% { opacity: 1; transform: scale(0.72); }
+  14% { transform: scale(1); }
+  58% { opacity: 1; }
+  86%, 100% { opacity: 0; }
+}
+@keyframes nbx-fly-new {
+  0%, 36% { opacity: 0; }
+  66%, 100% { opacity: 1; }
+}
+
+/* —— 工具界面内容（.tool-view-root）：旧内容下沉缩小让位，新内容自下浮起；
+   内容比飞行先完成（340ms 收尾），把舞台让给飞行体 —— */
+::view-transition-group(nbx-tool-main) {
+  animation-duration: 460ms;
+}
+::view-transition-old(nbx-tool-main) {
+  animation: nbx-main-old 180ms var(--ease-out) both;   /* 快速退场，把舞台让给飞行体 */
+  transform-origin: 50% 30%;
+}
+::view-transition-new(nbx-tool-main) {
+  animation: nbx-main-new 300ms var(--ease-out) 40ms both;
+}
+@keyframes nbx-main-old {
+  to { opacity: 0; transform: translateY(10px) scale(0.992); }
+}
+@keyframes nbx-main-new {
+  from { opacity: 0; transform: translateY(12px) scale(0.996); }
+}
+
+/* —— 头部工具徽章：飞行落定后的到位脉冲（过渡结束后由 JS 短暂加类） —— */
+.tool-head-badge { position: relative; }
+.nbx-badge-land { animation: nbx-badge-land 300ms var(--ease-spring); }
+.nbx-badge-land::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  animation: nbx-badge-ring 340ms var(--ease-out) forwards;
+}
+@keyframes nbx-badge-land {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+@keyframes nbx-badge-ring {
+  from { opacity: 0.9; transform: scale(1); }
+  to { opacity: 0; transform: scale(1.7); }
+}
+
+/* —— 降级（无 View Transitions）：新界面轻量淡入，与既有 fade-up 语汇一致 —— */
+.nbx-view-enter { animation: nbx-view-enter 260ms var(--ease-out); }
+@keyframes nbx-view-enter {
+  from { opacity: 0; transform: translateY(10px); }
+}
+
+/* 减少动态效果：过渡彻底退化为切页（JS 侧也会跳过 VT，这里兜底） */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) { animation: none !important; }
+  .nbx-flight-badge { display: none; }
+}

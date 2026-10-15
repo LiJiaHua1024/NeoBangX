@@ -241,7 +241,7 @@
                 x-html="icon('clock','w-5 h-5')"></button>
 
         <!-- ========== 欢迎页 ========== -->
-        <div x-show="!currentTool" class="flex-1 min-h-0 overflow-y-auto scroll-thin">
+        <div x-show="!currentTool" class="tool-view-root flex-1 min-h-0 overflow-y-auto scroll-thin">
           <div class="min-h-full flex flex-col items-center text-center px-6 py-12">
 
             <!-- 主内容：在剩余空间内垂直居中 -->
@@ -434,13 +434,13 @@
 
         <!-- ========== 智能错题迁移 ========== -->
         <template x-if="currentTool && isMigrationTool">
-          <div class="flex-1 min-h-0 flex flex-col migration-shell">
+          <div class="tool-view-root flex-1 min-h-0 flex flex-col migration-shell">
             <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
               <!-- 窄档：顶栏已移除，工具列表入口放在头部行首（左上角）；宽屏两侧栏并排，不需要 -->
               <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
                       @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
                       x-html="icon('menu','w-5 h-5')"></button>
-              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
+              <span class="tool-head-badge w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
               <div class="min-w-0">
@@ -702,13 +702,13 @@
 
         <!-- ========== 超标词排查+替换 ========== -->
         <template x-if="currentTool && isVocabTool">
-          <div class="flex-1 min-h-0 flex flex-col vocab-shell">
+          <div class="tool-view-root flex-1 min-h-0 flex flex-col vocab-shell">
             <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
               <!-- 窄档：顶栏已移除，工具列表入口放在头部行首（左上角）；宽屏两侧栏并排，不需要 -->
               <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
                       @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
                       x-html="icon('menu','w-5 h-5')"></button>
-              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
+              <span class="tool-head-badge w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
               <div class="min-w-0">
@@ -886,7 +886,7 @@
 
         <!-- ========== 试卷可视化全解 ========== -->
         <template x-if="currentTool && isVisualPaperTool">
-          <div class="flex-1 min-h-0 flex flex-col" :class="vpFullscreen ? 'vp-embed-full' : ''"
+          <div class="tool-view-root flex-1 min-h-0 flex flex-col" :class="vpFullscreen ? 'vp-embed-full' : ''"
                @pointerdown.window="vpSettingsOutsideHide($event)" @keydown.escape.window="closeVpSettings()">
             <!-- 工具头部 -->
             <div x-show="!vpFullscreen" class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
@@ -894,7 +894,7 @@
               <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
                       @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
                       x-html="icon('menu','w-5 h-5')"></button>
-              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
+              <span class="tool-head-badge w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
               <div class="min-w-0">
@@ -1829,14 +1829,14 @@
         <!-- 面板主体与「其他工具上传流程」里的阻塞弹窗是同一套状态（ocr* 键）与同一份布局，
              两边刻意各留一份标记：本页无构建步骤、没有可复用的局部模板，改布局时两处一起改。 -->
         <template x-if="currentTool && isOcrTool">
-          <div class="flex-1 min-h-0 flex flex-col">
+          <div class="tool-view-root flex-1 min-h-0 flex flex-col">
             <!-- 工具头部：名称 + 识别模式 -->
             <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
               <!-- 窄档：顶栏已移除，工具列表入口放在头部行首（左上角）；宽屏两侧栏并排，不需要 -->
               <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
                       @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
                       x-html="icon('menu','w-5 h-5')"></button>
-              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
+              <span class="tool-head-badge w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
               <div class="min-w-0">
@@ -2012,13 +2012,13 @@
              两栏各滚各的，滚动进度按比例互相对齐（可关）；折叠原文后译文独占工作区，阅读栏居中。
              原文栏的输入框就是全站的 input：粘贴、上传解析、拍照识别写回都落在它上面。 -->
         <template x-if="currentTool && isTranslateTool">
-          <div class="flex-1 min-h-0 flex flex-col">
+          <div class="tool-view-root flex-1 min-h-0 flex flex-col">
             <!-- 工具头部：语言对 + 模型。窄屏藏掉标题与描述，把宽度让给语言对与模型 -->
             <div class="mascot-keepout px-3 sm:px-5 py-2.5 border-b flex items-center gap-2 sm:gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
               <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
                       @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
                       x-html="icon('menu','w-5 h-5')"></button>
-              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
+              <span class="tool-head-badge w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
               <div class="min-w-0 hidden md:block">
@@ -2327,7 +2327,7 @@
 
         <!-- ========== 普通工具操作页 ========== -->
         <template x-if="currentTool && !isMigrationTool && !isVocabTool && !isVisualPaperTool && !isOcrTool && !isTranslateTool">
-          <div class="flex-1 min-h-0 flex flex-col">
+          <div class="tool-view-root flex-1 min-h-0 flex flex-col">
 
             <!-- 工具头部 -->
             <div class="mascot-keepout px-4 sm:px-5 py-3 border-b flex items-center gap-3 flex-wrap shrink-0" style="border-color:var(--border)">
@@ -2335,7 +2335,7 @@
               <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
                       @click="leftOpen = true" title="工具列表" aria-label="打开工具列表"
                       x-html="icon('menu','w-5 h-5')"></button>
-              <span class="w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
+              <span class="tool-head-badge w-10 h-10 rounded-xl hidden sm:flex items-center justify-center text-white shrink-0"
                     style="background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 6px 18px -6px var(--glow)"
                     x-html="icon(currentTool.icon,'w-5 h-5')"></span>
               <div class="min-w-0">

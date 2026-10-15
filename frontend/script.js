@@ -2003,6 +2003,42 @@ function finalizeRenderedHtml(html) {
   return String(html || "").replace(/\*{2,}/g, "");
 }
 
+/* ---------------- 自由对话 · 卡片进工具的「徽章飞行」过渡 ----------------
+   点击推荐卡片的瞬间，卡片图标化作一枚渐变徽章飞向目标工具头部的徽章，
+   旧界面下沉让位、新界面自下浮现（动画细节见 styles.css 的「徽章飞行」一节）。
+   本块只放与 DOM 环境无关的判定与几何，编排逻辑在组件的 animateToolSwitch。
+   触发范围刻意只覆盖「卡片点击」这一条路径：侧栏/搜索框切工具是高频动作，
+   保持即时；卡片是低频、有仪式感的跳转，值得这段动画。 */
+const TOOL_FLY_BADGE_PX = 26;      // 飞行徽章边长（px），介于卡片图标 16 与头部徽章 40 之间
+const TOOL_FLY_MS = 460;           // 与 styles.css 的 VT 动画时长一致（460ms）：落定脉冲在此之后触发
+const TOOL_FLY_MIN_VIEWPORT = "(min-width: 40rem)"; // sm 以下头部徽章不显示，不做飞行
+const TOOL_FLY_NAME = "nbx-tool-fly";   // View Transitions 共享元素名（旧端=飞行徽章，新端=头部徽章）
+const TOOL_MAIN_NAME = "nbx-tool-main"; // 工具界面内容容器名（旧内容退场 / 新内容入场）
+
+/* 过渡是否可用：浏览器支持 View Transitions 且用户未要求减少动态效果 */
+function toolSwitchTransitionsOk(env) {
+  const e = env || {};
+  return !!e.startViewTransition && !e.reducedMotion;
+}
+
+/* 飞行徽章在视口中的落点：以锚点（卡片图标）中心居中，四边留 4px 钳制，
+   防止贴边点击时徽章被视口裁掉 */
+function toolSwitchFlightRect(anchor, size, vw, vh) {
+  const half = size / 2;
+  const maxX = Math.max(4, vw - size - 4);
+  const maxY = Math.max(4, vh - size - 4);
+  const x = Math.min(Math.max(anchor.left + anchor.width / 2 - half, 4), maxX);
+  const y = Math.min(Math.max(anchor.top + anchor.height / 2 - half, 4), maxY);
+  return { left: Math.round(x), top: Math.round(y) };
+}
+
+/* 给元素挂上 View Transitions 命名并做标记，便于过渡结束后按标记统一清理 */
+function nbxNameViewTransition(el, name) {
+  if (!el || !el.style || !el.setAttribute) return;
+  el.style.viewTransitionName = name;
+  el.setAttribute("data-nbx-vt", name);
+}
+
 function renderMd(raw) {
   if (!raw) return "";
   const slotted = toolLinkPlaceholder(raw);
@@ -2751,6 +2787,8 @@ function nbx() {
     _nearBottom: true,
     _draftTimer: null,
     _bg: null,
+    // 「徽章飞行」过渡代次：连点时旧过渡的收尾据此不再碰新过渡的痕迹
+    _toolFxSeq: 0,
     _migrationAbortControllers: {},
     _exportMenuAnchor: null,
     _exportMenuPositionFrame: null,
@@ -5198,41 +5236,201 @@ function nbx() {
         if (!ok) return;
         this.stopBusyStreams();
       }
-      // 进了工具就收起搜索面板（用户写的那句话留着，回来还能接着改）
-      this.closeToolSearch();
-      this.currentTool = tool;
-      this.output = "";
-      this.rendered = "";
-      this.outputFoldEligible = false;  // 切工具后展示的是新内容，清掉历史折叠态
-      this.errorMsg = "";
-      this.failedModel = "";
-      // 换工具即与上一条记录脱钩：续写/重试不能再写回别的工具的记录
-      this.activeHistoryId = null;
-      this.status = "idle";
-      this.maskOn = false;
-      this.resetReasoning();
-      this.leftOpen = false;
-      this.inputCollapsed = false;
-      this.submittedInput = "";
-      this.submittedFileName = "";
-      this.submittedExpanded = false;
-      this.resetMigration();
-      this.resetVocab();
-      this.resetVisualPaper();
-      this.resetOcr();
-      this.resetTranslate();
       const el = ev && ev.currentTarget ? ev.currentTarget : null;
+      /* 换工具的状态落位：收起搜索面板、清空输出与各类暂存，然后把输入区
+         高度与新尺寸对齐。抽成闭包是因为动画路径下它要等旧快照拍完再执行
+         （见 animateToolSwitch）——这份逻辑要么整体发生，要么不发生。 */
+      const apply = () => {
+        // 进了工具就收起搜索面板（用户写的那句话留着，回来还能接着改）
+        this.closeToolSearch();
+        this.currentTool = tool;
+        this.output = "";
+        this.rendered = "";
+        this.outputFoldEligible = false;  // 切工具后展示的是新内容，清掉历史折叠态
+        this.errorMsg = "";
+        this.failedModel = "";
+        // 换工具即与上一条记录脱钩：续写/重试不能再写回别的工具的记录
+        this.activeHistoryId = null;
+        this.status = "idle";
+        this.maskOn = false;
+        this.resetReasoning();
+        this.leftOpen = false;
+        this.inputCollapsed = false;
+        this.submittedInput = "";
+        this.submittedFileName = "";
+        this.submittedExpanded = false;
+        this.resetMigration();
+        this.resetVocab();
+        this.resetVisualPaper();
+        this.resetOcr();
+        this.resetTranslate();
+        this.$nextTick(() => {
+          this.autoGrow();
+          if (this.isTranslateTool) {
+            this.trGrow();
+            this.trScrollTop();
+          }
+          this.scheduleMascotCheck(80);
+        });
+      };
+
+      /* 自由对话里的工具推荐卡片：点它是一次「跳转」而不是高频的切换，
+         值得一段「徽章飞行」过渡（卡片图标飞向目标工具头部徽章）。
+         其余入口（侧栏、搜索结果）保持即时切换，不打扰连续操作 */
+      const fromCard = !!(el && el.classList && el.classList.contains("nbx-tool-link"));
+      if (!fromCard) {
+        apply();
+      } else {
+        const env = {
+          startViewTransition: typeof document.startViewTransition === "function",
+          reducedMotion: !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches),
+        };
+        if (toolSwitchTransitionsOk(env)) {
+          this.animateToolSwitch(el, apply);
+        } else {
+          apply();
+          // 没有 View Transitions 的浏览器退化为「新界面轻量淡入」；减少动态效果则纯切换
+          if (!env.reducedMotion) this._enterToolViewFallback();
+        }
+      }
+
       if (el && this._bg) {
         const r = el.getBoundingClientRect();
         this._bg.attract(r.left + r.width * 0.5, r.top + r.height * 0.5);
       }
-      this.$nextTick(() => {
-        this.autoGrow();
-        if (this.isTranslateTool) {
-          this.trGrow();
-          this.trScrollTop();
+    },
+
+    /* ---------- 卡片 → 工具 的「徽章飞行」过渡 ----------
+       把一次切换拆成三段：起飞（注入飞行徽章）→ 换景（View Transitions
+       窗口内落位新工具）→ 落定（脉冲 + 清理）。过渡期间控制权在浏览器的
+       快照层，这里只在窗口边界插手，全程不做逐帧 JS。
+       任何一步失败都退回「直接切换」，绝不把用户撂在半路。 */
+    animateToolSwitch(anchorEl, apply) {
+      const seq = (this._toolFxSeq += 1);
+      // 兜底清理上一代可能残留的痕迹（连点 / 异常中断）
+      this.clearToolSwitchFx();
+
+      let ghost = null;
+      let ico = null;
+      let landed = null;
+      let oldRoot = null;
+      try {
+        const wideOk = !window.matchMedia || window.matchMedia(TOOL_FLY_MIN_VIEWPORT).matches;
+        ico = anchorEl && anchorEl.querySelector ? anchorEl.querySelector(".nbx-tool-link-ico") : null;
+        const r = ico && ico.getBoundingClientRect ? ico.getBoundingClientRect() : null;
+        if (wideOk && r && r.width > 0) {
+          const pos = toolSwitchFlightRect(r, TOOL_FLY_BADGE_PX, window.innerWidth, window.innerHeight);
+          ghost = document.createElement("span");
+          ghost.className = "nbx-flight-badge";
+          ghost.setAttribute("data-nbx-fly-ghost", "");
+          ghost.style.left = pos.left + "px";
+          ghost.style.top = pos.top + "px";
+          ghost.innerHTML = ico.innerHTML;  // 沿用卡片那颗图标；渐变底与光晕由样式给出
+          nbxNameViewTransition(ghost, TOOL_FLY_NAME);
+          document.body.appendChild(ghost);
+          ico.setAttribute("data-nbx-fly-ico", "");
+          ico.style.visibility = "hidden";  // 旧快照里只留飞行徽章，避免双图标
         }
-        this.scheduleMascotCheck(80);
+        if (anchorEl && anchorEl.classList) anchorEl.classList.add("nbx-link-launch");
+      } catch (err) {
+        // 起飞准备失败：收拾干净后直接切换，动画不能成为功能的前置条件
+        this.clearToolSwitchFx();
+        apply();
+        return;
+      }
+      // 旧端的内容容器（与目标工具同属 .tool-view-root；两边皆可见时是同一节点）
+      oldRoot = this._toolViewRoot();
+      nbxNameViewTransition(oldRoot, TOOL_MAIN_NAME);
+
+      let vt = null;
+      try {
+        vt = document.startViewTransition(async () => {
+          // 旧快照已拍完：卸掉飞行徽章，让新快照里没有它（图像已被快照接手）
+          if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
+          try { apply(); } catch (err) { console.error("切换工具出错：", err); }
+          // 等 Alpine 渲染出新界面，再把命名挂到新端的容器与头部徽章上。
+          // 微任务循环足够（x-if 渲染在一个 tick 内完成），拿到即走
+          for (let i = 0; i < 4; i += 1) {
+            await this.$nextTick();
+            landed = this._toolHeadBadge();
+            if (landed) break;
+          }
+          nbxNameViewTransition(this._toolViewRoot(), TOOL_MAIN_NAME);
+          nbxNameViewTransition(landed, TOOL_FLY_NAME);
+        });
+      } catch (err) {
+        // VT 起不来：回到地面，直接切换
+        this.clearToolSwitchFx();
+        apply();
+        return;
+      }
+      const settle = () => {
+        // 只有最新一代负责收尾：旧代被连点打断时，它的痕迹已由新一代的
+        // 启动清理收走，这里再动手会误伤正在播的过渡
+        if (seq !== this._toolFxSeq) return;
+        this.clearToolSwitchFx();
+        this._pulseToolBadge(landed);
+      };
+      vt.finished.then(settle, settle);  // 中途被 skip 走 reject 分支，同样要收尾
+    },
+
+    /* 清理「徽章飞行」的全部痕迹（幂等）：飞行徽章、被隐藏的卡片图标、
+       view-transition-name 命名、卡片点亮。过渡结束与再次启动前各调一次 */
+    clearToolSwitchFx() {
+      document.querySelectorAll("[data-nbx-fly-ghost]").forEach((el) => el.remove());
+      document.querySelectorAll("[data-nbx-fly-ico]").forEach((el) => {
+        el.style.visibility = "";
+        el.removeAttribute("data-nbx-fly-ico");
+      });
+      document.querySelectorAll("[data-nbx-vt]").forEach((el) => {
+        el.style.viewTransitionName = "";
+        el.removeAttribute("data-nbx-vt");
+      });
+      document.querySelectorAll(".nbx-tool-link.nbx-link-launch").forEach((el) => el.classList.remove("nbx-link-launch"));
+    },
+
+    /* 当前可见的工具界面根（欢迎页与六种工作区共用 .tool-view-root，同一
+       时刻只有一个可见；display:none 的元素没有 client rect） */
+    _toolViewRoot() {
+      const panel = this.$refs && this.$refs.mainPanel;
+      if (!panel || !panel.querySelectorAll) return null;
+      for (const el of panel.querySelectorAll(".tool-view-root")) {
+        if (el.getClientRects().length) return el;
+      }
+      return null;
+    },
+
+    /* 目标工具的头部徽章（飞行终点）。窄档头部藏起徽章，拿不到就退化为无飞行 */
+    _toolHeadBadge() {
+      const panel = this.$refs && this.$refs.mainPanel;
+      const badge = panel && panel.querySelector ? panel.querySelector(".tool-head-badge") : null;
+      return badge && badge.getClientRects().length ? badge : null;
+    },
+
+    /* 落定脉冲：加类触发一次缩放 + 光圈，动画走完（或超时兜底）摘掉 */
+    _pulseToolBadge(badge) {
+      if (!badge || !badge.classList) return;
+      badge.classList.remove("nbx-badge-land");
+      void badge.offsetWidth;  // 强制重排，连点场景下也能重新触发动画
+      badge.classList.add("nbx-badge-land");
+      clearTimeout(badge._nbxLandTimer);
+      badge._nbxLandTimer = setTimeout(() => {
+        badge.classList.remove("nbx-badge-land");
+        badge._nbxLandTimer = null;
+      }, TOOL_FLY_MS + 240);
+    },
+
+    /* 降级入场：没有 View Transitions 时，新界面轻量淡入一次 */
+    _enterToolViewFallback() {
+      this.$nextTick(() => {
+        const root = this._toolViewRoot();
+        if (!root || !root.classList) return;
+        root.classList.add("nbx-view-enter");
+        clearTimeout(root._nbxEnterTimer);
+        root._nbxEnterTimer = setTimeout(() => {
+          root.classList.remove("nbx-view-enter");
+          root._nbxEnterTimer = null;
+        }, TOOL_FLY_MS + 40);
       });
     },
 
