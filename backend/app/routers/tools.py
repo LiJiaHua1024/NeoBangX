@@ -133,6 +133,9 @@ CHORES_TOOLS = [
 TRANSLATE_TOOL_ID = "33"
 TRANSLATE_TOOL_NAME = "翻译"
 
+# 自由对话（工具 25）：逐请求注入工具目录，供模型在用户找工具时推荐（见 build_tool_catalog）
+FREEFORM_TOOL_ID = "25"
+
 # 图片 OCR：一条工具、两种识别模式，各自对应一份提示词文件
 OCR_TOOL_ID = "32"
 OCR_TOOL_NAME = "识别图片文字"
@@ -268,6 +271,22 @@ def build_tool_groups(loader: PromptLoader) -> List[dict]:
             "tools": enrich(REFERENCE_TOOLS),
         },
     ]
+
+
+def build_tool_catalog(loader: PromptLoader) -> str:
+    """自由对话注入用的工具目录（编号｜名称：用途）。
+
+    与左侧列表同一份数据（build_tool_groups），避免两处各写一份而漂移。
+    只列真正可用的工具（Prompt 已加载），并排除「自由对话」自身——在自由对话里
+    推荐自由对话没有意义。
+    """
+    lines: list[str] = []
+    for group in build_tool_groups(loader):
+        for tool in group["tools"]:
+            if tool["id"] == FREEFORM_TOOL_ID or not tool["prompt_loaded"]:
+                continue
+            lines.append(f"- {tool['id']}｜{tool['name']}：{tool['description']}")
+    return "\n".join(lines)
 
 
 @router.get("/", response_model=ToolGroupsResponse)

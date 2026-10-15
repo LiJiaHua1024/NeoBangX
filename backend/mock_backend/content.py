@@ -219,6 +219,20 @@ def _echo(req: dict, input_text: str) -> str:
         + "\n```\n\n> 这不是模型输出，只是假后端的回执。\n"
 
 
+# 自由对话工具推荐：正文里出现 [[tool:编号]] 标记，用于验证前端把编号渲染成可点击入口。
+# 编号取自 prompts/自由对话.md 注入的工具目录（10=学生作文批改，13=试卷可视化全解）。
+_TOOLREC = """你想找一个能帮学生批改作文的工具，平台里最对口的是下面这个，点一下就能直接用：
+
+[[tool:10]]
+
+它会给作文做多维评分、逐段点评，并给出可直接讲评的升格版本。如果你要做的是整卷的结构化解析，那更合适的是：
+
+[[tool:13]]
+
+这两件事在自由对话里也能做，但用专用工具得到的输出更规整、可以直接拿去上课。
+"""
+
+
 def build_content(name: str, plan: StreamPlan, req: dict, input_text: str, tool_id: str) -> str:
     """按内容名与工具产出正文。"""
     if name == "empty":
@@ -227,6 +241,8 @@ def build_content(name: str, plan: StreamPlan, req: dict, input_text: str, tool_
         return "@@CONTINUE_DONE@@\n"
     if name == "echo":
         return _echo(req, input_text)
+    if name == "toolrec":
+        return _TOOLREC
     if name == "long":
         return _long()
     if name == "title":

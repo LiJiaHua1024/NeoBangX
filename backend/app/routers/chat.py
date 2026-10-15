@@ -22,6 +22,7 @@ from app.routers.ocr import normalize_image_mime, pair_image_data_urls, sniff_im
 from app.routers.tools import (
     CONTINUE_PROMPT_NAME,
     DEFAULT_OCR_MODE,
+    FREEFORM_TOOL_ID,
     OCR_MAX_IMAGES,
     OCR_MODES,
     OCR_TOOL_ID,
@@ -31,6 +32,7 @@ from app.routers.tools import (
     VISUAL_FRAMEWORK_TOOL_ID,
     _resolve_continue_prompt_filename,
     _resolve_prompt_filename,
+    build_tool_catalog,
     get_prompt_loader,
     resolve_ocr_prompt_filename,
 )
@@ -170,6 +172,15 @@ def _load_continue_prompt(loader: PromptLoader, tool_id: str) -> str | None:
         return override
     shared = loader.get(CONTINUE_PROMPT_NAME)
     return shared if (shared and shared.strip()) else None
+
+
+def _render_catalog_vars(loader: PromptLoader, tool_id: str) -> dict:
+    """自由对话（工具 25）逐请求注入工具目录。
+
+    其余工具不含 {{tool_catalog}} 占位符；返回 None 让 render 跳过该键，
+    避免用空串覆盖 prompt_loader 的回落值。目录来源与左侧列表同一份数据。
+    """
+    return {"tool_catalog": build_tool_catalog(loader) if tool_id == FREEFORM_TOOL_ID else None}
 
 
 def _continue_messages(prompt: str, continue_from: str, continue_prompt: str) -> list[dict]:
@@ -1055,6 +1066,8 @@ async def preview_prompt(
             # 翻译（工具 33）：语言对是这份提示词里唯一无法从材料推断出来的信息
             "source_lang": req.source_lang,
             "target_lang": req.target_lang,
+            # 自由对话（工具 25）：逐请求注入工具目录，供模型在用户找工具时推荐
+            **_render_catalog_vars(loader, req.tool_id),
         },
     )
     if prompt is None:
@@ -1125,6 +1138,8 @@ async def chat_stream(
             # 翻译（工具 33）：语言对是这份提示词里唯一无法从材料推断出来的信息
             "source_lang": req.source_lang,
             "target_lang": req.target_lang,
+            # 自由对话（工具 25）：逐请求注入工具目录，供模型在用户找工具时推荐
+            **_render_catalog_vars(loader, req.tool_id),
         },
     )
     if prompt is None:

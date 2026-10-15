@@ -1961,6 +1961,43 @@ function renderMdFallback(raw) {
   return html.join("\n");
 }
 
+/* ---------------- 自由对话 · 工具推荐标记 ----------------
+   提示词约定：模型推荐工具时单独输出一行 [[tool:10]]（只放编号，见 prompts/自由对话.md）。
+   这里把编号解析成本地工具表里的入口卡片；编号→入口的映射由 loadTools 填充。
+   两段式渲染：先换成私有区占位符（不参与 Markdown 解析，也不会被消毒误伤），等
+   Markdown 渲染并消毒之后，再把占位符还原成 HTML 卡片，避免 HTML 被 marked 打散。
+   流式期间被切断的残片（如 "[[tool:1"）暂不显示，闭合后再出现；未知编号直接丢弃，
+   绝不把裸标记漏给用户。 */
+let NBX_TOOLS_BY_ID = Object.create(null);
+const TOOL_LINK_RE = /\[\[\s*tool\s*[:：]\s*(\d{1,3})\s*\]\]/gi;
+// 完整标记已被换成占位符后，行尾残留的未闭合标记（含缺右括号的半截）整块丢弃
+const TOOL_LINK_TAIL_RE = /\[\[[\s\u2063]*tool[\s\u2063]*[:：]?[\s\u2063]*\d{0,3}[\s\u2063]*[\]\s\u2063]*$/i;
+const TOOL_LINK_SLOT = "\uE002";
+
+function toolLinkPlaceholder(raw) {
+  // 流式淡入的不可见分隔符（FADE_MARK）可能被插进标记内部：先抹掉方括号内的它，
+  // 否则一个被切开的标记会漏成裸文本显示出来
+  let text = String(raw || "").replace(/\[\[[\s\S]*?\]\]/g, (m) => m.replace(/\u2063/g, ""));
+  text = text.replace(TOOL_LINK_RE, (_, id) => `${TOOL_LINK_SLOT}${id}${TOOL_LINK_SLOT}`);
+  return text.replace(TOOL_LINK_TAIL_RE, "");
+}
+
+function toolLinkChipHtml(id) {
+  const tool = NBX_TOOLS_BY_ID[String(id)];
+  if (!tool) return "";
+  return `<button type="button" class="nbx-tool-link" data-tool-id="${escapeHtml(String(id))}">`
+    + `<span class="nbx-tool-link-ico">${icon(tool.icon || "sparkle", "w-4 h-4")}</span>`
+    + `<span class="nbx-tool-link-name">${escapeHtml(tool.name || "")}</span>`
+    + `<span class="nbx-tool-link-go">${icon("chevron-right", "w-4 h-4")}</span>`
+    + `</button>`;
+}
+
+function restoreToolLinkChips(html) {
+  const s = String(html || "");
+  if (s.indexOf(TOOL_LINK_SLOT) < 0) return s;
+  return s.replace(/\uE002(\d{1,3})\uE002/g, (_, id) => toolLinkChipHtml(id));
+}
+
 function finalizeRenderedHtml(html) {
   // 极少数未配对的加粗标记可能被 Markdown 解析器原样输出，避免它们漏到页面上。
   return String(html || "").replace(/\*{2,}/g, "");
@@ -1968,15 +2005,18 @@ function finalizeRenderedHtml(html) {
 
 function renderMd(raw) {
   if (!raw) return "";
-  const normalized = normalizeMarkdown(raw);
+  const slotted = toolLinkPlaceholder(raw);
+  const normalized = normalizeMarkdown(slotted);
+  let html;
   try {
     const parser = window.marked && typeof window.marked.parse === "function" ? window.marked : null;
-    const html = parser ? parser.parse(normalized) : renderMdFallback(normalized);
-    return finalizeRenderedHtml(window.DOMPurify ? DOMPurify.sanitize(html) : html);
+    html = parser ? parser.parse(normalized) : renderMdFallback(normalized);
+    html = finalizeRenderedHtml(window.DOMPurify ? DOMPurify.sanitize(html) : html);
   } catch {
-    const html = renderMdFallback(raw);
-    return finalizeRenderedHtml(window.DOMPurify ? DOMPurify.sanitize(html) : html);
+    const fallback = renderMdFallback(slotted);
+    html = finalizeRenderedHtml(window.DOMPurify ? DOMPurify.sanitize(fallback) : fallback);
   }
+  return restoreToolLinkChips(html);
 }
 
 function markdownToPlainText(raw) {
@@ -4636,6 +4676,22 @@ function nbx() {
         if (!document.fullscreenElement && this.vpFullscreen) this.vpCloseFullscreen();
       });
 
+      // 自由对话里的工具推荐卡片：事件委托，覆盖所有 x-html 输出区（正文 / 历史 / 收藏）。
+      // 卡片是渲染后才注入的，逐个绑定会漏掉后续重渲染，委托在 document 上一劳永逸。
+      document.addEventListener("click", (e) => {
+        const el = e.target && e.target.closest ? e.target.closest(".nbx-tool-link") : null;
+        if (!el) return;
+        const id = el.getAttribute("data-tool-id");
+        const tool = this.findTool(id);
+        if (!tool) {
+          this.toast("这个工具当前不可用，请重新加载工具列表", "warn");
+          return;
+        }
+        // selectTool 只用到 ev.currentTarget（点击定位动效）；委托里 currentTarget 是 document，
+        // 必须显式换成卡片本身，否则动效锚点会落到页面原点
+        this.selectTool(tool, { currentTarget: el });
+      });
+
       // 恢复认证
       this.loadAuth();
 
@@ -5078,6 +5134,13 @@ function nbx() {
         }
         const data = await res.json();
         this.groups = data.groups || [];
+        // 自由对话工具推荐卡片用：编号 → 工具（含图标/名称）的本地查表
+        NBX_TOOLS_BY_ID = Object.create(null);
+        for (const group of this.groups) {
+          for (const tool of group.tools || []) {
+            if (tool && tool.id != null) NBX_TOOLS_BY_ID[String(tool.id)] = tool;
+          }
+        }
         // models 为结构化列表：[{ id, name, description, aa_index, is_free, free_no_code }]
         // 后端已滤掉禁用与仅 Chores 模型，该列表长度即「可见模型数」，折叠计数以它为准
         this.models = data.models || [];

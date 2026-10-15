@@ -83,6 +83,8 @@ SCENARIOS: dict[str, dict[str, Any]] = {
     "empty": {"content": "empty"},
     "sentinel": {"content": "sentinel"},
     "echo": {"content": "echo", "reasoning_chars": 60},
+    # 自由对话推荐工具：正文含 [[tool:10]] 标记，验前端渲染成可点击入口
+    "toolrec": {"content": "toolrec", "reasoning_chars": 0},
     # ---- HTTP 层 ----
     "http-401": {"http_status": 401, "http_detail": "请先输入使用码"},
     "http-403": {"http_status": 403, "http_detail": "额度已用尽"},
@@ -136,6 +138,7 @@ SCENARIO_DOC: list[tuple[str, str]] = [
     ("empty", "立即 done 且无正文"),
     ("sentinel", "只回 @@CONTINUE_DONE@@，测续写哨兵"),
     ("echo", "正文是请求回执，用于核对前端发出的参数"),
+    ("toolrec", "自由对话推荐工具：正文含 [[tool:10]]，验渲染成可点击入口"),
     ("http-401", "直接 401 → 使用码弹窗 / 清登录态"),
     ("http-403", "直接 403 → 额度已用尽"),
     ("http-403-quota", "结构化 403（required/remaining）→ 迁移额度不足"),

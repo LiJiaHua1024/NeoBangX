@@ -4837,3 +4837,62 @@ mark, .vp-hl {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================================================
+   自由对话 · 工具推荐卡片
+   [[tool:10]] 渲染出的入口胶囊：点击直达对应工具（事件委托见 script.js）
+   ============================================================ */
+.nbx-tool-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.15rem 0;
+  padding: 0.3rem 0.65rem 0.3rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.2;
+  vertical-align: middle;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+.nbx-tool-link:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  transform: translateY(-1px);
+}
+.nbx-tool-link:active { transform: translateY(0); }
+.nbx-tool-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: 2px;
+}
+.nbx-tool-link .nbx-tool-link-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+.nbx-tool-link .nbx-tool-link-name { white-space: nowrap; }
+.nbx-tool-link .nbx-tool-link-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+.nbx-tool-link:hover .nbx-tool-link-go {
+  color: var(--accent);
+  transform: translateX(2px);
+}
+/* 打印/导出成文档时，入口卡片不该表现得像可点的控件：压成朴素边框、去掉箭头 */
+@media print {
+  .nbx-tool-link {
+    border-color: currentColor;
+    background: transparent;
+    transform: none;
+  }
+  .nbx-tool-link .nbx-tool-link-go { display: none; }
+}
