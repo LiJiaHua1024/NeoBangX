@@ -345,7 +345,6 @@
     var ed = el("div", "vp-editable" + (o.passage ? " vp-editable-passage" : ""));
     ed.dataset.vpPath = path;
     if (o.multi) ed.dataset.vpMulti = "1";
-    if (o.max) ed.dataset.vpMax = String(o.max);
     return ed;
   }
   function cell(label, path, o) {
@@ -353,7 +352,6 @@
     var box = el("div", "vp-edit-cell");
     if (label) box.appendChild(el("div", "vp-edit-label", label));
     box.appendChild(editableNode(path, o));
-    if (o.max) { var c = el("div", "vp-edit-count"); c.hidden = true; box.appendChild(c); }
     return box;
   }
   function listBox(path) {
@@ -390,16 +388,16 @@
     clear(qEditMeta);
     qEditMeta.appendChild(cell("讲解标题（封面大字）", "doc.title"));
     qEditMeta.appendChild(cell("试卷标题（封面小字，可留空）", "paper.title"));
-    qEditMeta.appendChild(cell("试卷说明（封面底部，可留空）", "doc.notice", { max: 200 }));
+    qEditMeta.appendChild(cell("试卷说明（封面底部，可留空）", "doc.notice", {}));
     if (cur) {
       qEditMeta.appendChild(cell("大题标题", "g" + cur.gi + ".title"));
-      qEditMeta.appendChild(cell("大题导语（可留空）", "g" + cur.gi + ".intro", { max: 200 }));
+      qEditMeta.appendChild(cell("大题导语（可留空）", "g" + cur.gi + ".intro", {}));
     }
-    qEditMeta.appendChild(cell("语篇（写作题或语法填空可留空）", "q.passage", { multi: true, max: 4000, passage: true }));
+    qEditMeta.appendChild(cell("语篇（写作题或语法填空可留空）", "q.passage", { multi: true, passage: true }));
   }
   function renderEditHead(q) {
     clear(qEditHead);
-    qEditHead.appendChild(cell("题干", "q.stem", { multi: true, max: 1000 }));
+    qEditHead.appendChild(cell("题干", "q.stem", { multi: true }));
     var opts = q.options || [];
     if (opts.length || q.qtype === "choice") {
       var obox = el("div", "vp-edit-cell");
@@ -440,9 +438,9 @@
     if (state.tab === "reference") {
       tabPanel.appendChild(el("div", "vp-tab-title", "参考答案"));
       if (!q.reference) q.reference = { evidence: "", reason: "", distractor: "" };
-      tabPanel.appendChild(cell("证据（照录原文出处）", "q.reference.evidence", { multi: true, max: 800 }));
-      tabPanel.appendChild(cell("推理", "q.reference.reason", { multi: true, max: 800 }));
-      tabPanel.appendChild(cell("干扰项", "q.reference.distractor", { multi: true, max: 800 }));
+      tabPanel.appendChild(cell("证据（照录原文出处）", "q.reference.evidence", { multi: true }));
+      tabPanel.appendChild(cell("推理", "q.reference.reason", { multi: true }));
+      tabPanel.appendChild(cell("干扰项", "q.reference.distractor", { multi: true }));
       return;
     }
 
@@ -453,7 +451,7 @@
       list.forEach(function (p, i) {
         var item = el("div", "vp-pitfall-item vp-edit-item");
         item.appendChild(cell("易错点 " + (i + 1) + " · 标题", "q.pitfalls." + i + ".title"));
-        item.appendChild(cell("描述", "q.pitfalls." + i + ".desc", { multi: true, max: 500 }));
+        item.appendChild(cell("描述", "q.pitfalls." + i + ".desc", { multi: true }));
         item.appendChild(delBtn("q.pitfalls", i, "删除这条易错点"));
         box.appendChild(item);
       });
@@ -473,7 +471,7 @@
       steps.forEach(function (s, i) {
         var row = el("div", "vp-edit-row");
         row.appendChild(el("span", "vp-edit-key", (i + 1) + "."));
-        row.appendChild(editableNode("q.pattern.steps." + i, { max: 300 }));
+        row.appendChild(editableNode("q.pattern.steps." + i, {}));
         row.appendChild(delBtn("q.pattern.steps", i, "删除这一步"));
         slist.appendChild(row);
       });
@@ -496,7 +494,7 @@
         if (!tr) return;
         var card = el("div", "glass-soft vp-card vp-edit-item");
         card.appendChild(el("div", "vp-transfer-cap", "迁移训练 " + (ti + 1) + " / " + transfers.length));
-        card.appendChild(cell("迁移语篇", "q.transfers." + ti + ".passage", { multi: true, max: 800 }));
+        card.appendChild(cell("迁移语篇", "q.transfers." + ti + ".passage", { multi: true }));
         card.appendChild(cell("迁移题干", "q.transfers." + ti + ".stem", { multi: true }));
         var tcell = el("div", "vp-edit-cell");
         tcell.appendChild(el("div", "vp-edit-label", "迁移选项（只改文字；增删时编号自动重排）"));
@@ -546,7 +544,6 @@
       node.addEventListener("mouseup", function () { showTools(node); });
       node.addEventListener("blur", function () { edit.sel = false; syncFmtButtons(); hideToolsSoon(); });
     }
-    syncCount(node);
   }
   function mountEditables(root) {
     if (!edit.on) return;
@@ -560,17 +557,6 @@
     node.dataset.vpEdited = "1";
     fieldSet(path, vpDomToMd(node));
     markDirty();
-    syncCount(node);
-  }
-  function syncCount(node) {
-    var max = Number(node.dataset.vpMax || 0);
-    var box = node.parentElement ? node.parentElement.querySelector(".vp-edit-count") : null;
-    if (!box) return;
-    if (!max) { box.hidden = true; return; }
-    var len = str(fieldGet(node.dataset.vpPath)).length;
-    box.hidden = len < max * 0.9;
-    box.textContent = len + " / " + max;
-    box.classList.toggle("over", len > max);
   }
   /* 把改过的编辑区内容写回数据（防抖还没到点、或浏览器吞了 input 事件时兜底） */
   function writeBackEdited(root) {

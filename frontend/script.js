@@ -2218,6 +2218,16 @@ function vpNormalizeInline(text) {
   }).join("");
 }
 
+/* 约定符号兜底清洗：`::` 是 @@PITFALLS@@ 专用的「标题::描述」分隔符，模型偶尔会把
+   这套写法带进其他讲解字段（如干扰项写成「易混 was::…」），裸露的分隔符会直接
+   渲染到屏幕上。讲解类字段里连续两个及以上的冒号（::、：:、:：、：：）统一还原成
+   普通冒号「：」。照录类字段（语篇/题干/选项/迁移题面/范文/答案）与易错点描述
+   不碰：前者必须逐字保留，后者允许老师写含 :: 的文本（有回归用例盯着）。 */
+function vpScrubFieldText(text) {
+  if (typeof text !== "string") return text;
+  return text.replace(/[:：]{2,}/g, "：");
+}
+
 /* 编辑区 DOM → 标记文本：b/strong/mark 转标记，br/div/p 转换行，其余元素透明穿透 */
 function vpDomToMd(root) {
   const walk = (node) => {
@@ -3488,7 +3498,7 @@ function nbx() {
       out.paper.title = out.paper.title || "";
       out.paper.subject = out.paper.subject || "英语";
       out.paper.year = out.paper.year || "";
-      out.notice = out.notice || "";
+      out.notice = vpScrubFieldText(out.notice || "");
       out.answerMap = out.answerMap || {};
       out.groups = Array.isArray(out.groups) ? out.groups : [];
       out.total = out.total != null ? out.total : null;
@@ -3514,7 +3524,7 @@ function nbx() {
         out.answerMap = am;
       }
       for (const g of out.groups) {
-        g.intro = String(g.intro || "");
+        g.intro = vpScrubFieldText(String(g.intro || ""));
         // 坏快照可能漏 questions 数组：这里补上空数组，
         // 否则下面的 for...of 与模板里的 g.questions.length 都会抛 TypeError
         if (!Array.isArray(g.questions)) g.questions = [];
@@ -3544,6 +3554,22 @@ function nbx() {
             tr.answer = typeof tr.answer === "string" ? tr.answer : "";
             tr.explanation = typeof tr.explanation === "string" ? tr.explanation : "";
             if (!Array.isArray(tr.options)) tr.options = [];
+          }
+          // 讲解类字段兜底清洗约定符号（范围与理由见 vpScrubFieldText）：
+          // 易错点描述与全部照录类字段保持原样
+          if (q.reference && typeof q.reference === "object") {
+            q.reference.evidence = vpScrubFieldText(q.reference.evidence);
+            q.reference.reason = vpScrubFieldText(q.reference.reason);
+            q.reference.distractor = vpScrubFieldText(q.reference.distractor);
+          }
+          if (q.pattern && typeof q.pattern === "object") {
+            q.pattern.name = vpScrubFieldText(q.pattern.name);
+            if (Array.isArray(q.pattern.steps)) q.pattern.steps = q.pattern.steps.map((s) => vpScrubFieldText(s));
+          }
+          for (const tr of (q.transfers || [])) tr.explanation = vpScrubFieldText(tr.explanation);
+          if (q.writingGuide && typeof q.writingGuide === "object") {
+            if (Array.isArray(q.writingGuide.points)) q.writingGuide.points = q.writingGuide.points.map((s) => vpScrubFieldText(s));
+            q.writingGuide.outline = vpScrubFieldText(q.writingGuide.outline);
           }
         }
       }
@@ -10169,24 +10195,12 @@ function nbx() {
         el.addEventListener("mouseup", () => this.vpShowTools(el));
         el.addEventListener("blur", () => { this.vpSelActive = false; this.vpHideToolsSoon(); });
       }
-      this.vpSyncCount(el);
     },
     vpOnEditInput(el) {
       const path = el.dataset.vpPath;
       if (!path) return;
       el.dataset.vpEdited = "1";
       this.vpSetField(path, vpDomToMd(el));
-      this.vpSyncCount(el);
-    },
-    vpSyncCount(el) {
-      const max = Number(el.dataset.vpMax || 0);
-      const box = el.parentElement ? el.parentElement.querySelector(".vp-edit-count") : null;
-      if (!box) return;
-      if (!max) { box.hidden = true; return; }
-      const len = String(this.vpFieldGet(el.dataset.vpPath) || "").length;
-      box.hidden = len < max * 0.9;
-      box.textContent = `${len} / ${max}`;
-      box.classList.toggle("over", len > max);
     },
 
     /* --- 输入行为：粘贴纯文本、回车、快捷键 --- */
@@ -10401,29 +10415,6 @@ function nbx() {
       item.visualPaper = JSON.parse(JSON.stringify(this.visualPaper));
       this._persistHistoryItem(item);
     },
-    /* 超出上限的字段：重解析会按 normalizeVisualPaper 截断，这里先收集好明确告知老师 */
-    vpEditOverLimit() {
-      const out = [];
-      const check = (label, val, max) => { if (typeof val === "string" && val.length > max) out.push(label); };
-      for (const g of this.vpGroups) {
-        check("大题导语", g.intro, 200);
-        for (const q of (g.questions || [])) {
-          check(`第 ${q.no} 题语篇`, q.passage, 4000);
-          check(`第 ${q.no} 题题干`, q.stem, 1000);
-          if (q.reference) {
-            check("参考答案·证据", q.reference.evidence, 800);
-            check("参考答案·推理", q.reference.reason, 800);
-            check("参考答案·干扰项", q.reference.distractor, 800);
-          }
-          for (const p of (q.pitfalls || [])) check("易错点描述", p.desc, 500);
-          for (const s of ((q.pattern && q.pattern.steps) || [])) check("考点范式步骤", s, 300);
-          (q.transfers || []).forEach((tr, ti) => {
-            if (tr) check(`第 ${q.no} 题·迁移${ti + 1} 语篇`, tr.passage, 800);
-          });
-        }
-      }
-      return [...new Set(out)];
-    },
     /* 结构 → @@TAG@@ 契约文本（与 parseCustomVisualPaper 的口径严格对应：
        QTYPE 值必须同行、每题必须 @@END_Q@@ 收题、易错点用 :: 分隔、组信息用 | 分隔、
        语篇用 @@PASSAGE_DEF@@/@@PASSAGE_REF@@ 编号复用，同一篇只写一份正文） */
@@ -10574,7 +10565,6 @@ function nbx() {
     vpCommitEdits() {
       if (!this.visualPaper || !this.visualPaper.groups || !this.visualPaper.groups.length) return;
       const before = this.vpQuestionCount;
-      const over = this.vpEditOverLimit();
       // 极端兜底用的结构快照：万一序列化出的文本解析不出题目，宁可回滚也不丢老师的内容。
       // output/rawJson 也必须进快照——旧版只备份五项，校验失败时 this.output 已被写成
       // 空文档，界面看着恢复了，导出/复制/续写读到的却是空卷子。
@@ -10611,7 +10601,6 @@ function nbx() {
       this.vpRefreshFramework();
       this._vpPersistEdits();
       if (this.vpQuestionCount !== before) this.toast(`保存提示：题数由 ${before} 变成 ${this.vpQuestionCount}`, "warn");
-      else if (over.length) this.toast(`有内容超出长度上限，已截断：${over.join("、")}`, "warn");
     },
 
     /* --- 推理过程（有界展示：截头保尾 + 盒内滚动 + 首 token 自动收起） --- */

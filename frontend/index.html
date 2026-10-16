@@ -1208,8 +1208,7 @@
                             </div>
                             <div class="vp-edit-cell">
                               <div class="vp-edit-label">导语</div>
-                              <div class="vp-editable" :data-vp-path="'g' + gIdx + '.intro'" data-vp-max="200" x-init="vpEditMount($el)"></div>
-                              <div class="vp-edit-count" hidden></div>
+                              <div class="vp-editable" :data-vp-path="'g' + gIdx + '.intro'" x-init="vpEditMount($el)"></div>
                             </div>
                           </div>
                         </template>
@@ -1251,8 +1250,7 @@
                     <template x-if="vpEditing">
                       <div class="vp-edit-cell">
                         <div class="vp-edit-label">语篇（写作题可留空）</div>
-                        <div class="vp-editable vp-editable-passage" data-vp-path="q.passage" data-vp-multi="1" data-vp-max="4000" x-init="vpEditMount($el)"></div>
-                        <div class="vp-edit-count" hidden></div>
+                        <div class="vp-editable vp-editable-passage" data-vp-path="q.passage" data-vp-multi="1" x-init="vpEditMount($el)"></div>
                       </div>
                     </template>
                     <div x-show="visualPaper && visualPaper.answerMap && Object.keys(visualPaper.answerMap).length" class="mt-6 pt-4 border-t" style="border-color:var(--border)">
@@ -1325,8 +1323,7 @@
                           <div class="space-y-2">
                             <div class="vp-edit-cell">
                               <div class="vp-edit-label">题干</div>
-                              <div class="vp-editable" data-vp-path="q.stem" data-vp-multi="1" data-vp-max="1000" x-init="vpEditMount($el)"></div>
-                              <div class="vp-edit-count" hidden></div>
+                              <div class="vp-editable" data-vp-path="q.stem" data-vp-multi="1" x-init="vpEditMount($el)"></div>
                             </div>
                             <div class="vp-edit-cell" x-show="vpCurrentQuestion.qtype !== 'writing'">
                               <div class="vp-edit-label">答案（选项字母，或填空文本）</div>
@@ -1414,18 +1411,15 @@
                           <div class="space-y-2">
                             <div class="vp-edit-cell">
                               <div class="vp-edit-label">证据（照录原文出处）</div>
-                              <div class="vp-editable" data-vp-path="q.reference.evidence" data-vp-multi="1" data-vp-max="800" x-init="vpEditMount($el)"></div>
-                              <div class="vp-edit-count" hidden></div>
+                              <div class="vp-editable" data-vp-path="q.reference.evidence" data-vp-multi="1" x-init="vpEditMount($el)"></div>
                             </div>
                             <div class="vp-edit-cell">
                               <div class="vp-edit-label">推理</div>
-                              <div class="vp-editable" data-vp-path="q.reference.reason" data-vp-multi="1" data-vp-max="800" x-init="vpEditMount($el)"></div>
-                              <div class="vp-edit-count" hidden></div>
+                              <div class="vp-editable" data-vp-path="q.reference.reason" data-vp-multi="1" x-init="vpEditMount($el)"></div>
                             </div>
                             <div class="vp-edit-cell">
                               <div class="vp-edit-label">干扰项</div>
-                              <div class="vp-editable" data-vp-path="q.reference.distractor" data-vp-multi="1" data-vp-max="800" x-init="vpEditMount($el)"></div>
-                              <div class="vp-edit-count" hidden></div>
+                              <div class="vp-editable" data-vp-path="q.reference.distractor" data-vp-multi="1" x-init="vpEditMount($el)"></div>
                             </div>
                           </div>
                         </template>
@@ -1471,8 +1465,7 @@
                                   </div>
                                   <div class="vp-edit-cell">
                                     <div class="vp-edit-label">描述</div>
-                                    <div class="vp-editable" :data-vp-path="'q.pitfalls.' + idx + '.desc'" data-vp-multi="1" data-vp-max="500" x-init="vpEditMount($el)"></div>
-                                    <div class="vp-edit-count" hidden></div>
+                                    <div class="vp-editable" :data-vp-path="'q.pitfalls.' + idx + '.desc'" data-vp-multi="1" x-init="vpEditMount($el)"></div>
                                   </div>
                                   <button class="vp-edit-del" @click="vpRemoveItem('q.pitfalls', idx)" title="删除这条易错点">×</button>
                                 </div>
@@ -1523,7 +1516,7 @@
                               <template x-for="(step, idx) in (vpCurrentQuestion.pattern ? vpCurrentQuestion.pattern.steps : [])" :key="idx">
                                 <div class="vp-edit-row">
                                   <span class="text-xs faint" x-text="(idx + 1) + '.'"></span>
-                                  <div class="vp-editable" :data-vp-path="'q.pattern.steps.' + idx" data-vp-max="300" x-init="vpEditMount($el)"></div>
+                                  <div class="vp-editable" :data-vp-path="'q.pattern.steps.' + idx" x-init="vpEditMount($el)"></div>
                                   <button class="vp-edit-del" @click="vpRemoveItem('q.pattern.steps', idx)" title="删除这一步">×</button>
                                 </div>
                               </template>
@@ -1568,8 +1561,7 @@
                                   <div class="vp-edit-label vp-transfer-cap" x-text="'迁移训练 ' + (tIdx + 1) + ' / ' + vpCurrentQuestion.transfers.length"></div>
                                   <div class="vp-edit-cell">
                                     <div class="vp-edit-label">迁移语篇</div>
-                                    <div class="vp-editable" :data-vp-path="'q.transfers.' + tIdx + '.passage'" data-vp-multi="1" data-vp-max="800" x-init="vpEditMount($el)"></div>
-                                    <div class="vp-edit-count" hidden></div>
+                                    <div class="vp-editable" :data-vp-path="'q.transfers.' + tIdx + '.passage'" data-vp-multi="1" x-init="vpEditMount($el)"></div>
                                   </div>
                                   <div class="vp-edit-cell">
                                     <div class="vp-edit-label">迁移题干</div>

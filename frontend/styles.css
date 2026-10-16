@@ -1985,8 +1985,6 @@ mark, .vp-hl {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .vp-editable-passage { min-height: 8rem; }
-.vp-edit-count { font-size: 0.65rem; color: var(--text-faint); text-align: right; }
-.vp-edit-count.over { color: #e5604c; font-weight: 600; }
 .vp-edit-row { display: flex; align-items: flex-start; gap: 0.45rem; }
 .vp-edit-row .vp-editable { flex: 1; min-width: 0; }
 .vp-edit-item { position: relative; }

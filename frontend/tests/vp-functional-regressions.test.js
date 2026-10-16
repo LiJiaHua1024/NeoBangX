@@ -974,6 +974,52 @@ test("本就无语篇的题仍写 '-'，不会被误标成未解析", () => {
   assert.ok(!reparsed.groups[0].questions[0].passageUnresolved);
 });
 
+
+test("讲解字段里的 :: 分隔写法清洗成普通冒号，易错点描述与照录字段保留原样", () => {
+  const c = component();
+  const raw = `@@TOTAL@@ 1
+@@PAPER@@ Test
+@@GROUP@@ reading|Reading|
+@@PASSAGE_DEF@@ P1
+Ratio 1::2 in passage.
+@@Q@@ 1
+@@PASSAGE_REF@@ P1
+@@STEM@@
+Stem with :: inside?
+@@DISTRACTOR@@
+易混 was::学生看到 was 就近取单数
+易混 are::受一般现在时影响
+@@PITFALLS@@
+标题::描述里保留 :: 分隔符
+@@PATTERN_STEPS@@
+第一步::看主语中心词
+@@END_Q@@
+`;
+  const norm = c.normalizeVisualPaper(c.parseCustomVisualPaper(raw));
+  const q = norm.groups[0].questions[0];
+  assert.equal(q.reference.distractor, "易混 was：学生看到 was 就近取单数\n易混 are：受一般现在时影响");
+  assert.equal(q.passage, "Ratio 1::2 in passage.");
+  assert.equal(q.stem, "Stem with :: inside?");
+  assert.equal(q.pitfalls[0].title, "标题");
+  assert.equal(q.pitfalls[0].desc, "描述里保留 :: 分隔符");
+  assert.deepEqual(q.pattern.steps, ["第一步：看主语中心词"]);
+});
+
+test("完成修改不再报长度上限，超长迁移语篇原样保存", () => {
+  const c = component();
+  const q = fullQuestion();
+  const long = "Transfer sentence. ".repeat(120) + "FINAL TRANSFER";
+  q.transfers[0].passage = long;
+  c.visualPaper = { ...c.newVisualPaperState(), total: 1, transferCount: 1,
+    groups: [{ id: "reading", title: "Group", questions: [q] }] };
+  c.output = c.vpSerializeRaw();
+  const toasts = [];
+  c.toast = (t) => toasts.push(t);
+  c.vpCommitEdits();
+  assert.ok(!toasts.some(t => t.includes("长度上限") || t.includes("已截断")),
+    "无改动保存不该出现长度上限警告");
+  assert.equal(c.visualPaper.groups[0].questions[0].transfers[0].passage, long);
+});
 test("生成中拒绝打印与导出半成品", () => {
   const c = component();
   loadPaper(c);
