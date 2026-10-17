@@ -170,6 +170,9 @@ def _router(count=2, first_token_timeout=5):
         max_tokens=128,
         timeout=120,
         first_token_timeout=first_token_timeout,
+        # 本文件聚焦 fallback 语义：关闭快重试（fast_fail_ms=0），
+        # 快重试的专门覆盖见 test_quick_retry_breaker.py
+        fast_fail_ms=0,
     )
 
 

@@ -32,3 +32,17 @@ def _prepare_database():
         db.close()
     yield
     shutil.rmtree(_TEST_DATA_DIR, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_health():
+    """熔断器是进程级状态：每个测试前后清零，避免跨测试互相污染。
+
+    不隔离的话，前面测试里记录的瞬态失败会在后面测试里触发熔断沉底，
+    把「Provider 顺序 / fallback 次数」类断言搅成随机结果。
+    """
+    from app.services import provider_health
+
+    provider_health.reset_for_tests()
+    yield
+    provider_health.reset_for_tests()

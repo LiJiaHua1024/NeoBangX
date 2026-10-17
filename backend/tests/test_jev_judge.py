@@ -350,6 +350,9 @@ def _router(count=2, jev_config=None):
         timeout=120,
         first_token_timeout=5,
         jev_config=jev_config,
+        # 本文件聚焦 Jev 判定语义：关闭快重试（fast_fail_ms=0），
+        # 快重试的专门覆盖见 test_quick_retry_breaker.py
+        fast_fail_ms=0,
     )
 
 
