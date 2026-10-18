@@ -1,8 +1,9 @@
 /* 首屏启动页静态回归用例
    目标不是测视觉，而是锁住几件容易在后续改动中悄悄退化的事实：
    1. 主题 id 必须和 script.js 的 THEMES 完全对齐（历史上 forest/jade 就错配过）；
-   2. m/n 的 9 个关键步骤必须和 index.html 里的标签一一对应；
-   3. thumbmark / 镜像三件套 / click-fx 不得再回到首屏关键路径；
+   2. m/n 的 6 个关键步骤必须和 index.html 里的标签一一对应；
+   3. thumbmark / 镜像三件套 / click-fx / marked / DOMPurify / 检索内核
+      不得再回到首屏关键路径；
    4. 背景引擎必须留在独立模块里，由启动后的空闲调度加载。 */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -36,32 +37,30 @@ test("splash 主题选择器覆盖 THEMES 的每个 id，且不再有 forest", (
   }
 });
 
-test("m/n 的 9 个关键资源与标签数量一致", () => {
+test("m/n 的 6 个关键资源与标签数量一致", () => {
   const cssMarks = [...HTML.matchAll(/__nbxBootMark\('(css:[^']+)'\)/g)].map((m) => m[1]);
   const jsMarks = [...HTML.matchAll(/__nbxBootMark\('(js:[^']+)'\)/g)].map((m) => m[1]);
   const all = [...cssMarks, ...jsMarks];
   assert.equal(cssMarks.length, 2, "应恰好有 2 份关键 CSS");
-  assert.equal(jsMarks.length, 7, "应恰好有 7 个关键脚本");
-  assert.equal(new Set(all).size, 9, "步骤名不能重复");
-  assert.ok(HTML.includes("total: 9"), "登记器 total 必须是 9");
-  assert.ok(HTML.includes("jsTotal: 7"), "登记器 jsTotal 必须是 7");
-  assert.match(HTML, /id="boot-splash-progress"[\s\S]*?aria-valuemax="9"/);
+  assert.equal(jsMarks.length, 4, "应恰好有 4 个关键脚本");
+  assert.equal(new Set(all).size, 6, "步骤名不能重复");
+  assert.ok(HTML.includes("total: 6"), "登记器 total 必须是 6");
+  assert.ok(HTML.includes("jsTotal: 4"), "登记器 jsTotal 必须是 4");
+  assert.match(HTML, /id="boot-splash-progress"[\s\S]*?aria-valuemax="6"/);
 
   const rail = HTML.match(/id="boot-splash-rail"[\s\S]*?<\/div>/);
   assert.ok(rail, "应有进度轨");
-  assert.equal((rail[0].match(/<i><\/i>/g) || []).length, 9, "进度轨应有 9 段");
+  assert.equal((rail[0].match(/<i><\/i>/g) || []).length, 6, "进度轨应有 6 段");
 });
 
 test("关键脚本标签都带 onload/onerror，且顺序保持依赖关系", () => {
   const tags = [...HTML.matchAll(/<script\s+defer\s+src="([^"]+)"([^>]*)><\/script>/g)];
-  const names = tags.map((m) => m[1]);
+  // 本地资源带 ?v=<内容哈希> 版本串（构建产物），比对前先剥掉
+  const names = tags.map((m) => m[1].split("?")[0]);
   assert.deepEqual(names, [
-    "/static/vendor/marked-15.0.12.min.js",
-    "/static/vendor/dompurify-3.4.12.min.js",
     "/static/vendor/alpine-collapse-3.15.12.min.js",
     "/static/nbx-versions.js",
-    "/static/nbx-history-search.js",
-    "/static/script.js",
+    "/static/script.min.js",
     "/static/vendor/alpinejs-3.15.12.min.js",
   ]);
   for (const [, src, attrs] of tags) {
@@ -70,14 +69,17 @@ test("关键脚本标签都带 onload/onerror，且顺序保持依赖关系", ()
   }
 });
 
-test("thumbmark、镜像三件套、click-fx 不再占首屏关键路径", () => {
-  const srcs = [...HTML.matchAll(/<script[^>]+src="([^"]+)"/g)].map((m) => m[1]);
+test("thumbmark、镜像三件套、click-fx、渲染与检索内核都不占首屏关键路径", () => {
+  const srcs = [...HTML.matchAll(/<script[^>]+src="([^"]+)"/g)].map((m) => m[1].split("?")[0]);
   for (const url of [
     "/static/vendor/thumbmark.umd.js",
     "/static/nbx-mirror.js",
     "/static/nbx-mirror-store.js",
     "/static/nbx-mirror-peer.js",
     "/static/click-fx.js",
+    "/static/vendor/marked-15.0.12.min.js",
+    "/static/vendor/dompurify-3.4.12.min.js",
+    "/static/nbx-history-search.js",
   ]) {
     const name = url.slice(url.lastIndexOf("/") + 1);
     assert.ok(!srcs.some((s) => s === url), `${name} 不应再出现在首屏 script 标签里`);
@@ -86,6 +88,8 @@ test("thumbmark、镜像三件套、click-fx 不再占首屏关键路径", () =>
   assert.ok(JS.includes("nbxEnsureClickFx"), "点击特效应有按需加载器");
   assert.ok(JS.includes("nbxEnsureMirrorAssets"), "镜像应有按需加载器");
   assert.ok(JS.includes("NBX_ASSET_URLS.thumbmark"), "指纹库应有按需加载 URL");
+  assert.ok(JS.includes("nbxEnsureRenderLibs"), "marked/DOMPurify 应有按需加载器");
+  assert.ok(JS.includes("nbxEnsureHistorySearch"), "检索内核应有按需加载器");
 });
 
 test("背景引擎已拆出且首屏不再直接初始化", () => {
@@ -151,7 +155,7 @@ function makeSplashSandbox({ failed = "", seen = null } = {}) {
     "boot-splash-phase", "boot-splash-progress", "boot-splash-rail", "boot-splash-hint",
     "boot-splash-retry",
   ]) elements.set(id, makeEl(id));
-  elements.get("boot-splash-rail").children = Array.from({ length: 9 }, (_, i) => makeEl("seg" + i));
+  elements.get("boot-splash-rail").children = Array.from({ length: 6 }, (_, i) => makeEl("seg" + i));
 
   const store = new Map();
   if (seen != null) store.set("nbx_boot_seen", seen);
@@ -159,7 +163,7 @@ function makeSplashSandbox({ failed = "", seen = null } = {}) {
   const timers = new Map();
   let timerId = 0;
   const window = {
-    __nbxBoot: { steps: Object.create(null), total: 9, jsTotal: 7, failed, startedAt: Date.now() },
+    __nbxBoot: { steps: Object.create(null), total: 6, jsTotal: 4, failed, startedAt: Date.now() },
   };
   const document = {
     documentElement: makeEl("html"),
@@ -192,18 +196,18 @@ function makeSplashSandbox({ failed = "", seen = null } = {}) {
 function markAll(sandbox) {
   const boot = sandbox.window.__nbxBoot;
   for (const name of [
-    "css:tailwind", "css:styles", "js:marked", "js:dompurify",
-    "js:alpine-collapse", "js:versions", "js:hsearch", "js:app", "js:alpine",
+    "css:tailwind", "css:styles",
+    "js:alpine-collapse", "js:versions", "js:app", "js:alpine",
   ]) {
     boot.steps[name] = 1;
     sandbox.window.__nbxBootPaint();
   }
 }
 
-test("控制器：9/9 + Alpine + booted 后淡出并记录已访问", () => {
+test("控制器：6/6 + Alpine + booted 后淡出并记录已访问", () => {
   const sb = makeSplashSandbox({ seen: null });
   const splash = sb.elements.get("boot-splash");
-  assert.equal(sb.elements.get("boot-splash-count").textContent, "0/9");
+  assert.equal(sb.elements.get("boot-splash-count").textContent, "0/6");
   assert.equal(sb.elements.get("boot-splash-phase").textContent, "正在加载界面");
   assert.equal(
     sb.elements.get("boot-splash-hint").textContent,
@@ -211,8 +215,8 @@ test("控制器：9/9 + Alpine + booted 后淡出并记录已访问", () => {
   );
 
   markAll(sb);
-  assert.equal(sb.elements.get("boot-splash-count").textContent, "9/9");
-  assert.equal(sb.elements.get("boot-splash-progress").attrs["aria-valuenow"], "9");
+  assert.equal(sb.elements.get("boot-splash-count").textContent, "6/6");
+  assert.equal(sb.elements.get("boot-splash-progress").attrs["aria-valuenow"], "6");
   assert.equal(splash.classList.contains("boot-splash-done"), false, "Alpine 未就绪前不能放行");
 
   sb.window.__nbxBooted = true;

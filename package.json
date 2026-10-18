@@ -3,10 +3,16 @@
   "private": true,
   "scripts": {
     "build:css": "tailwindcss -i tools/styles/frontend.css -o frontend/tailwind.css --minify && tailwindcss -i tools/styles/admin.css -o admin-frontend/tailwind.css --minify",
+    "build:styles": "node tools/build-css.mjs",
+    "build:js": "node tools/build-js.mjs",
+    "build:assets": "node tools/build-assets.mjs",
+    "build": "npm run build:css && npm run build:styles && npm run build:js && npm run build:assets",
     "test": "node --test frontend/tests/*.test.js"
   },
   "devDependencies": {
     "@tailwindcss/cli": "4.3.3",
-    "tailwindcss": "4.3.3"
+    "lightningcss": "^1.32.0",
+    "tailwindcss": "4.3.3",
+    "terser": "^5.51.2"
   }
 }

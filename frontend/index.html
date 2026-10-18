@@ -165,12 +165,12 @@
     }
   </style>
   <!-- 首屏步骤登记器：必须早于 CSS/JS 的 onload，缓存命中时回调可能先于后面的 splash 控制器。
-       资源名只在这里登记一次；总数 9 = 2 份 CSS + 7 个关键脚本。 -->
+       资源名只在这里登记一次；总数 6 = 2 份 CSS + 4 个关键脚本。 -->
   <script>
     (function () {
       var steps = Object.create(null);
       var boot = window.__nbxBoot = {
-        steps: steps, failed: "", total: 9, jsTotal: 7, startedAt: Date.now(),
+        steps: steps, failed: "", total: 6, jsTotal: 4, startedAt: Date.now(),
       };
       window.__nbxBootMark = function (name) {
         if (!name || steps[name]) return;
@@ -184,23 +184,28 @@
       };
     })();
   </script>
-  <!-- 预编译 Tailwind：修改工具类后运行 npm run build:css，部署无需 Node。
+  <!-- 预编译 Tailwind + 手写主题样式：改工具类后跑 npm run build（tailwind 出 CSS、
+       terser 出 script.min.js、lightningcss 出 styles.min.css、最后按内容算版本串）。
+       部署无需 Node：产物进仓库，容器只负责静态托管。
        两份 CSS 改成 preload 非阻塞：首帧由上面的内联 splash 立即绘制，不再等 47KB CSS。
        隐藏 splash 前会检查两份 CSS 都已就绪，避免应用无样式闪现。 -->
-  <link rel="preload" as="style" href="/static/tailwind.css" fetchpriority="high"
+  <link rel="preload" as="style" href="/static/tailwind.css?v=8e7f78ad1c" fetchpriority="high"
         onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:tailwind')"
         onerror="this.onerror=null;__nbxBootFail('css:tailwind','界面样式')">
-  <link rel="preload" as="style" href="/static/styles.css" fetchpriority="high"
+  <link rel="preload" as="style" href="/static/styles.min.css?v=6c41acd08d" fetchpriority="high"
         onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:styles')"
         onerror="this.onerror=null;__nbxBootFail('css:styles','主题样式')">
   <noscript>
-    <link rel="stylesheet" href="/static/tailwind.css">
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/tailwind.css?v=8e7f78ad1c">
+    <link rel="stylesheet" href="/static/styles.min.css?v=6c41acd08d">
   </noscript>
-  <!-- 本地静态资源一律不带 ?v= 版本串：带 query 会被服务端缓存中间件当成「版本化资源」
-       下发 immutable 长缓存，于是「改了文件但忘了改版本串」时浏览器一直用旧代码，
-       新 HTML 配旧 JS/CSS 界面直接错乱，而手机端还没法 Ctrl+Shift+R 强刷。
-       不带版本串走 no-cache + etag：文件变了下一次加载自动就是新的，没变则 304（几乎零成本）。 -->
+  <!-- 本地静态资源带 ?v=<内容哈希> 版本串（npm run build:assets 按文件内容生成，勿手改）：
+       带 query 的 /static/** 由后端中间件下发 immutable 长缓存，浏览器与 Cloudflare
+       边缘都能长期复用、不再回源验证 —— 跨境线路上省掉的是「每个资源每次访问一次
+       往返」。哈希取自文件内容：内容没变 URL 不变（缓存继续命中），内容一变 URL 即变
+       （自动失效），所以不存在「改了文件忘了改版本号」导致新 HTML 配旧 JS 的问题。
+       少数按需加载的资源（script.js 里的 NBX_ASSET_URLS）刻意不带版本串，走
+       no-cache + etag：改动后下一次加载自动就是新的，且它们不在首屏关键路径上。 -->
 
   <!-- 首屏防闪烁：尽早恢复主题（悠空主题同时恢复昼夜天空） -->
   <script>
@@ -218,23 +223,22 @@
   </script>
 
   <!-- 依赖库全部自托管（同源、无跨境 CDN）：首屏只保留启动与渲染必需的库。
-       KaTeX / mammoth / html-docx / qrcode / vp-print 由 script.js 按需加载；
-       thumbmark / 镜像三件套 / click-fx 也改为启动后按需加载，不占首屏关键路径。 -->
-  <script defer src="/static/vendor/marked-15.0.12.min.js" onload="__nbxBootMark('js:marked')" onerror="__nbxBootFail('js:marked','Markdown 组件')"></script>
-  <script defer src="/static/vendor/dompurify-3.4.12.min.js" onload="__nbxBootMark('js:dompurify')" onerror="__nbxBootFail('js:dompurify','安全过滤组件')"></script>
-  <script defer src="/static/vendor/alpine-collapse-3.15.12.min.js" onload="__nbxBootMark('js:alpine-collapse')" onerror="__nbxBootFail('js:alpine-collapse','折叠组件')"></script>
-  <!-- 回答版本容器（重新生成保留旧结果）：纯函数层，必须先于 script.js 加载 -->
-  <script defer src="/static/nbx-versions.js" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
-  <!-- 历史全文检索内核：纯函数层，必须先于 script.js 加载 -->
-  <script defer src="/static/nbx-history-search.js" onload="__nbxBootMark('js:hsearch')" onerror="__nbxBootFail('js:hsearch','历史搜索组件')"></script>
-  <!-- 本地脚本同样不带 ?v=（理由见上面 styles.css 那一段） -->
-  <script defer src="/static/script.js" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
-  <script defer src="/static/vendor/alpinejs-3.15.12.min.js" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
+       marked / DOMPurify / 历史检索内核 / KaTeX / mammoth / html-docx / qrcode /
+       vp-print 全部由 script.js 按需加载，thumbmark / 镜像三件套 / click-fx 也改为
+       启动后按需加载 —— 都不占首屏关键路径，少 3 个跨境请求。 -->
+  <script defer src="/static/vendor/alpine-collapse-3.15.12.min.js?v=c7661d4e2c" onload="__nbxBootMark('js:alpine-collapse')" onerror="__nbxBootFail('js:alpine-collapse','折叠组件')"></script>
+  <!-- 回答版本容器（重新生成保留旧结果）：纯函数层，必须先于 script.js 加载。
+       它留在关键路径是有意为之：模板 getter（versionCount / versionIndex …）直接读
+       它，且只在生成完成后才出现；3KB 的体积换十几处 getter 的未加载兜底不划算。 -->
+  <script defer src="/static/nbx-versions.js?v=7270a8ece4" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
+  <!-- 压缩产物：源码是 frontend/script.js，改完跑 npm run build:js 重新生成 -->
+  <script defer src="/static/script.min.js?v=b9cac56c11" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
+  <script defer src="/static/vendor/alpinejs-3.15.12.min.js?v=57b37d7cae" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
 </head>
 
 <body>
   <!-- 首屏加载态：纯内联 CSS，不依赖任何外部样式/脚本。
-       放行条件：9 个关键资源全部就绪 + Alpine 初始化完成 + script.js 同步初始化完成。
+       放行条件：6 个关键资源全部就绪 + Alpine 初始化完成 + script.js 同步初始化完成。
        快速网络下几乎无感；慢网显示 m/n、阶段、首次/再次提示，10s 给刷新入口，20s 失败重试。 -->
   <div id="boot-splash" role="presentation">
     <div class="boot-ambient" aria-hidden="true"><i></i><i></i></div>
@@ -249,12 +253,12 @@
         <span id="boot-splash-text">正在准备工作台…</span>
       </div>
       <div class="boot-progress" id="boot-splash-progress" role="progressbar"
-           aria-valuemin="0" aria-valuemax="9" aria-valuenow="0" aria-label="加载进度">
+           aria-valuemin="0" aria-valuemax="6" aria-valuenow="0" aria-label="加载进度">
         <div class="boot-rail" id="boot-splash-rail" aria-hidden="true">
-          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          <i></i><i></i><i></i><i></i><i></i><i></i>
         </div>
         <div class="boot-meta" aria-hidden="true">
-          <span class="boot-count" id="boot-splash-count">0/9</span>
+          <span class="boot-count" id="boot-splash-count">0/6</span>
           <span class="boot-phase" id="boot-splash-phase">正在加载界面</span>
         </div>
       </div>
@@ -279,9 +283,9 @@
       var hint = document.getElementById("boot-splash-hint");
       var retry = document.getElementById("boot-splash-retry");
       var segs = rail ? Array.prototype.slice.call(rail.children) : [];
-      var boot = window.__nbxBoot || (window.__nbxBoot = { steps: {}, total: 9, jsTotal: 7, failed: "" });
-      var total = Number(boot.total) || 9;
-      var jsTotal = Number(boot.jsTotal) || 7;
+      var boot = window.__nbxBoot || (window.__nbxBoot = { steps: {}, total: 6, jsTotal: 4, failed: "" });
+      var total = Number(boot.total) || 6;
+      var jsTotal = Number(boot.jsTotal) || 4;
       var hidden = false, failed = false, alpineReady = false;
       var phase = "", jsDoneAt = 0;
       var poll = null, slowTimer = null, refreshTimer = null, failTimer = null;
@@ -586,7 +590,7 @@
              :class="['mascot-' + mascotState, 'mascot-anchor-' + mascotAnchorName]"
              @dblclick="mascotSecretTap()"
              aria-hidden="true">
-          <img src="/static/Sora_Rabbit_Plush.webp" alt="" draggable="false"
+          <img src="/static/Sora_Rabbit_Plush.webp?v=3eeecd88fa" alt="" draggable="false"
                width="760" height="920" loading="lazy" decoding="async" fetchpriority="low">
         </div>
 

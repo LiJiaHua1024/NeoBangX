@@ -278,18 +278,31 @@ docker-compose up --build -d
 **只能由环境变量提供**（管理后台里没有对应输入框）。首次启动若 `llm_providers` 表为空，
 会按它们生成首个 Provider 并绑定全部模型；已存在但地址为空的自动迁移 Provider 也会被补齐。
 
-**修改 Tailwind 工具类后重新构建**：在项目根目录执行 `npm ci`，再执行 `npm run build:css`。
-两端的 HTML 和 JS 都纳入扫描，包含 Alpine 条件分支与动态模板中的完整类名；不要拼接 Tailwind
-类名片段，新增动态工具类时写出完整名称。两个 `tailwind.css` 产物应随源码一起保存，部署仍是纯静态文件，
-服务器和 Docker 镜像无需安装 Node。仅改自定义 `styles.css` 无需构建。版本由 `package-lock.json` 锁定，
-不会因 CDN 更新而改变样式。采用 [Tailwind 官方的静态扫描方式](https://tailwindcss.com/docs/detecting-classes-in-source-files)。
+**前端资源需要构建（改了源文件就要重新构建）**：在项目根目录执行 `npm ci`，然后跑构建：
 
-**静态资源不用手改版本串，也别加回去**：`frontend/` 与 `admin-frontend/` 的文件名不带
-内容哈希，而 `index.html` 里的本地资源（JS / CSS / 图片）一律**不带** `?v=` 查询串。带 query 的资源
-会被缓存中间件当成「版本化资源」下发 immutable 长缓存，于是「改了文件但忘了改版本串」时浏览器会一直
-跑旧代码，升级后出现「新 HTML + 旧 JS/CSS」的错配（管理端曾因此让三个用途勾选框全部显示为未勾选，
-翻译工具上线时又让工作区直接变成空白，且手机端无法强退出缓存刷新）。不带版本串走 `no-cache` + `etag`：
-文件变了下一次加载自动就是新的，没变则 304，几乎零成本，也不需要任何人工纪律。
+- `npm run build` —— 一次跑完下面四步（推荐）
+- `npm run build:css` —— Tailwind：`tools/styles/frontend.css` / `admin.css` → 两个 `tailwind.css`
+- `npm run build:styles` —— 手写主题样式：`frontend/styles.css` → `frontend/styles.min.css`（lightningcss）
+- `npm run build:js` —— 应用脚本：`frontend/script.js` → `frontend/script.min.js`（terser）
+- `npm run build:assets` —— 按文件内容给 `index.html` 的本地资源算 `?v=<哈希>` 版本串（**最后跑**）
+
+两端的 HTML 和 JS 都纳入 Tailwind 扫描，包含 Alpine 条件分支与动态模板中的完整类名；不要拼接 Tailwind
+类名片段，新增动态工具类时写出完整名称。所有产物（两个 `tailwind.css`、`styles.min.css`、`script.min.js`
+以及写进 `index.html` 的版本串）都随源码一起提交，部署仍是纯静态文件，服务器和 Docker 镜像无需安装 Node。
+版本由 `package-lock.json` 锁定，不会因 CDN 更新而改变样式。采用
+[Tailwind 官方的静态扫描方式](https://tailwindcss.com/docs/detecting-classes-in-source-files)。
+
+**主站 `index.html` 的本地资源带 `?v=<内容哈希>` 版本串（`npm run build:assets` 生成，勿手改）**：
+带 query 的资源由缓存中间件下发 immutable 长缓存，浏览器与 Cloudflare 边缘都能长期复用、不再回源验证 ——
+跨境线路上省掉的是「每个资源每次访问一次往返」，也是 CF 边缘缓存能生效的前提（源站标 `no-cache` 时 CF
+不会缓存）。哈希取自文件内容，所以不存在「改了文件忘了改版本号」的老问题：内容没变 URL 不变（缓存继续
+命中），内容一变 URL 即变（自动失效）。`backend/tests/test_static_cache.py` 会核对版本串与文件内容是否
+一致 —— 改了资源却忘了重新构建时测试直接失败，不会等到用户手机上出现「新 HTML + 旧 JS」才发现。
+
+`bridge.html` 与管理端仍直接引用**不带**版本串的资源（走 `no-cache` + `etag`）：桥接页与主站必须共用
+同一份镜像模块 URL，两边都不带才成立。`script.js` 里按需加载的资源（`NBX_ASSET_URLS`：KaTeX、mammoth、
+marked、DOMPurify、检索内核、背景、点击特效、镜像三件套等）同理不带版本串 —— 它们不在首屏关键路径上，
+改动后下一次加载自动就是新的，无需任何人工纪律。
 两处入口页（`index.html` / `bridge.html`）引用同名模块时必须用同一个 URL——镜像桥接页与主站若各缓存
 一份，协议版本不一致会让线路镜像**静默失效**（`backend/tests/test_static_cache.py` 两条测试守着这两点）。
 
@@ -365,6 +378,8 @@ NBXU-3XXX-XXXX-XXXX
 | 使用日志 | 后端 SQLite（元数据 `usage_logs`；原始输入/输出 `log_payloads`，按开关记录） |
 | 标题任务 | 后端 SQLite（`title_jobs`）。为让标题生成不依赖网页存活，任务会暂存输入/输出摘要；进入成功或最终失败状态时立即清空正文，只保留状态、结果与错误元数据 7 天。业务历史本身仍不存后端。 |
 | LLM / API 配置 | 后端 SQLite（管理后台维护） |
+| 1.14.0 | 2026-10-18 | 首屏关键路径瘦身（针对跨境双线路部署）：`script.js` / `styles.css` 改由 terser / lightningcss 压缩（br 后 151→72KB、38→19KB）；marked / DOMPurify / 历史检索内核移出首屏关键路径改为按需加载（关键资源 10→6，少 3 个跨境请求），首屏关键路径 br 传输量约 337→165KB；`index.html` 的本地资源改带 `?v=<内容哈希>` 版本串（`npm run build:assets` 生成，测试会核对哈希与文件内容是否一致），从而启用 immutable 长缓存与 Cloudflare 边缘缓存 —— 原先源站 `no-cache` 让 CF 对每个静态资源每次访问都要跨境回源验证；`/` 与 304 响应新增 `Link` 头供 Cloudflare 生成 103 Early Hints；工具目录改为本地缓存优先渲染（省掉 `/api/tools/` 一个往返）；清理静态缓存中间件里遗留的 DBG 调试打印 |
+
 | 历史记录 | 浏览器 localStorage（列表索引 + 每条正文分开存，超出配额时自动淘汰最旧记录）。一条记录默认只存一份结果；「重新生成」过的记录会在正文里多带一个版本数组（`versions` + `activeVersionId`，最多 8 版、总字数封顶），旧结果因此不会丢，底部状态条的切换器用来回看。未重新生成过的记录没有这个字段，与旧数据形状完全一致。 |
 | 标题补交日志 | 浏览器 localStorage（`nbx_title_jobs`）。正文历史先落盘，再异步提交标题任务；若关页时 POST 尚未送达，下次打开按同一 job ID 幂等补交。只保存在当前 origin，不随导入或线路镜像传播，终态后删除。 |
 | 收藏 | 浏览器 localStorage |

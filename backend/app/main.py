@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import SessionLocal, bootstrap_lock, init_db
-from app.middleware import StaticCacheMiddleware
+from app.middleware import StaticCacheMiddleware, index_preload_links
 from app.routers import auth, chat, ocr, parse, tools
 from app.services.request_log import (
     STATUS_ERROR,
@@ -255,7 +255,13 @@ app.add_middleware(
 async def root():
     index_path = static_path / "index.html"
     if index_path.exists():
-        return FileResponse(index_path)
+        # 首屏关键资源的 preload 提示：Cloudflare 读这个 Link 头，在 HTML 首字节到达前
+        # 就给浏览器推 103 Early Hints（Dashboard → Speed → Content Optimization →
+        # Early Hints 需打开），省掉「等 HTML 解析完才发现要下载 JS/CSS」的跨境往返。
+        # 樱花 FRP 线路拿不到（TLS 在 FRP 节点终结，不会生成 103），多这个头也无副作用。
+        links = index_preload_links(static_path)
+        headers = {"Link": ", ".join(links)} if links else None
+        return FileResponse(index_path, headers=headers)
     return {
         "message": "NeoBangX backend is running. Visit /docs for API documentation.",
         "version": "1.2.0",

@@ -23,6 +23,7 @@ import asyncio
 import gzip
 import hashlib
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -109,6 +110,65 @@ def _etag_for_stat(st: os.stat_result) -> str:
     base = str(st.st_mtime) + "-" + str(st.st_size)
     digest = hashlib.md5(base.encode(), usedforsecurity=False).hexdigest()
     return f'"{digest}"'
+
+
+# index.html 里首屏关键资源的两种写法：<link rel="preload" href=…> 与 <script src=…>
+_INDEX_ASSET_RE = re.compile(
+    r'<link[^>]*?rel="preload"[^>]*?href="(/static/[^"]+)"'
+    r'|<script[^>]*?src="(/static/[^"]+)"',
+    re.IGNORECASE,
+)
+
+# 按文件 mtime 缓存解析结果：文件不变就零成本复用
+_index_links_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
+_index_links_lock = threading.Lock()
+
+
+def index_preload_links(static_dir: os.PathLike | str) -> tuple[str, ...]:
+    """从 index.html 里读出首屏关键资源，拼成 `Link` 头值（供 Cloudflare 生成 103）。
+
+    Cloudflare 的 Early Hints 只认**响应头**里的 Link（rel=preload / preconnect），
+    不看 HTML 里的 <link rel=preload>：它在 HTML 首字节到达前就把缓存的 103 推给
+    浏览器，省掉「等 HTML 解析完才发现要下载 JS/CSS」的那一个跨境往返。开启方式是
+    Dashboard → Speed → Settings → Content Optimization → Early Hints。
+
+    单一事实来源就是 HTML 本身：版本串由 tools/build-assets.mjs 写进 HTML，这里跟着
+    它走，因此不会出现「Link 头与 HTML 指向不同 URL → 浏览器下两份」的问题。
+
+    樱花 FRP 线路拿不到这个收益（TLS 在 FRP 节点终结，它不会生成 103），但多一个
+    响应头没有任何副作用。
+    """
+    index_path = os.path.join(os.fspath(static_dir), "index.html")
+    try:
+        st = os.stat(index_path)
+    except OSError:
+        return ()
+    key = os.path.abspath(index_path)
+    with _index_links_lock:
+        hit = _index_links_cache.get(key)
+        if hit is not None and hit[0] == st.st_mtime_ns:
+            return hit[1]
+    try:
+        with open(index_path, encoding="utf-8") as fh:
+            html = fh.read()
+    except OSError:
+        return ()
+
+    links: list[str] = []
+    seen: set[str] = set()
+    for preload_href, script_src in _INDEX_ASSET_RE.findall(html):
+        url = preload_href or script_src
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        # as= 必须与页面实际用法一致，否则浏览器会为同一 URL 再下一次
+        kind = "style" if url.split("?")[0].endswith(".css") else "script"
+        links.append(f"<{url}>; rel=preload; as={kind}")
+
+    result = tuple(links)
+    with _index_links_lock:
+        _index_links_cache[key] = (st.st_mtime_ns, result)
+    return result
 
 
 def _etag_matches(header: Optional[str], etag: str) -> bool:
@@ -288,6 +348,11 @@ class StaticCacheMiddleware:
                                 (b"last-modified", formatdate(st.st_mtime, usegmt=True).encode("latin-1")),
                                 (b"vary", b"accept-encoding"),
                             ]
+                            # 304 也要带 Link：Cloudflare 用它缓存并推送 103 Early Hints，
+                            # 漏掉会让「HTML 命中 304」的那些访问拿不到 Early Hints。
+                            links = index_preload_links(self.static_dir)
+                            if links:
+                                headers_304.append((b"link", ", ".join(links).encode("latin-1")))
                             await send({"type": "http.response.start", "status": 304, "headers": headers_304})
                             await send({"type": "http.response.body", "body": b"", "more_body": False})
                             return

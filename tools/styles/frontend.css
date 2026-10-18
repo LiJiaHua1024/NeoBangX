@@ -1,3 +1,6 @@
 @import "tailwindcss" source(none);
 @source "../../frontend/*.html";
 @source "../../frontend/*.js";
+/* 压缩产物是源码的子集，但压缩会拼出源码里没有的 token（可能被当成类名混进 CSS），
+   而且每次构建都要多扫 300KB。扫描只认源码。 */
+@source not "../../frontend/*.min.js";

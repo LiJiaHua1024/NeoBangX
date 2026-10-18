@@ -1,10 +1,11 @@
 """静态资源压缩与缓存头中间件测试。
 
 覆盖：brotli/gzip 协商、Cache-Control 两档策略（版本化长缓存 / 未版本化 no-cache）、
-etag 304 透传、Range 透传、API 路径不受影响、HTML 里的本地资源不带版本串。
+etag 304 透传、Range 透传、API 路径不受影响、主站 HTML 的本地资源带内容哈希版本串。
 注意 httpx 会按 Content-Encoding 自动解码，故断言压缩效果时看响应头，断言内容时直接读正文。
 """
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -21,23 +22,30 @@ def client(request):
     return TestClient(main_app if request.param == "main" else admin_app)
 
 
-def test_local_assets_are_never_versioned():
-    """HTML 里的本地静态资源不许带 ?v= 版本串。
+def test_index_assets_carry_content_hash_version():
+    """主站 index.html 的本地静态资源必须带 ?v=<内容哈希> 版本串。
 
-    带 query 会被中间件当成「版本化资源」下发 immutable 长缓存：改了文件却忘了改
-    版本串时浏览器会一直用旧代码，而 HTML 每次重验证 → 「新 HTML + 旧 JS/CSS」
-    界面直接错乱，且手机端无法强退出缓存刷新（只能干等缓存过期）。不带版本串走
-    no-cache + etag：文件变了下一次加载自动就是新的，没变则 304，几乎零成本。
-    这条测试就是防它被谁加回来。
+    带 query 的 /static/** 会被中间件下发 immutable 长缓存：浏览器与 Cloudflare 边缘
+    都能长期复用、不再回源验证 —— 跨境线路上省掉的是「每个资源每次访问一次往返」，
+    而且这也是 CF 边缘缓存能生效的前提（源站标 no-cache 时 CF 不会缓存）。
+
+    旧策略是「一律不带版本串」，顾虑是「改了文件忘改版本号 → 新 HTML 配旧 JS」。
+    现在版本号由 tools/build-assets.mjs 按文件内容算，那个顾虑不存在了，于是这里反过来
+    锁住两件事：**必须带**，且**哈希与当前文件内容一致** —— 改了资源却忘了重新构建时，
+    这条测试会直接失败，而不是等用户手机上出现「新 HTML + 旧 JS」才发现。
+
+    只覆盖主站 index.html：bridge.html 与管理端仍直接引用不带版本串的资源，走
+    no-cache + etag（桥接页与主站必须共用同一份镜像模块 URL，两边都不带才成立）。
     """
-    pages = [
-        Path(settings.static_dir) / "index.html",
-        Path(settings.static_dir) / "bridge.html",
-        Path(settings.admin_static_dir) / "index.html",
-    ]
-    for page in pages:
-        html = page.read_text(encoding="utf-8")
-        assert not re.search(r"/static/[^\"\s>]+\?v=", html), f"{page} 的本地资源带了版本串"
+    html = (Path(settings.static_dir) / "index.html").read_text(encoding="utf-8")
+    pairs = re.findall(r'(?:href|src)="(/static/[^"]+)\?v=([0-9a-f]{6,})"', html)
+    assert pairs, "index.html 的本地资源应带 ?v= 版本串（跑 npm run build:assets 生成）"
+    static_root = Path(settings.static_dir)
+    for url, digest in pairs:
+        target = static_root / url[len("/static/"):]
+        assert target.is_file(), f"{url} 不存在"
+        real = hashlib.sha256(target.read_bytes()).hexdigest()[: len(digest)]
+        assert digest == real, f"{url} 的版本串与文件内容不一致：重新跑 npm run build:assets"
 
 
 def test_bridge_mirror_scripts_share_index_urls():

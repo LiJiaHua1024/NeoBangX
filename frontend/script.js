@@ -200,6 +200,8 @@ const LS = {
   model: "nbx_model",
   auth: "nbx_auth",
   code: "nbx_code",
+  // 工具目录快照：跨境线路上 /api/tools/ 要一个来回，先用上次的结果把界面顶上
+  toolsCache: "nbx_tools_cache",
 };
 /* 侧栏布局分界：视口 ≥ WIDE_MIN（CSS 像素）时左右侧栏并入同一行（三栏并排），
    以下一律为浮层抽屉（盖在内容之上）。与 index.html 的 2xl: 前缀、
@@ -234,8 +236,11 @@ const QUOTA_RING_C = 2 * Math.PI * QUOTA_RING_R;
 const CONTINUE_DONE_SRC = "[＠@]*\\s*CONTINUE[\\s_-]*DONE\\s*[＠@]*";
 
 /* 历史全文检索引擎（nbx-history-search.js）。运行期对象不进 Alpine 响应式数据：
-   里面是索引、Bloom 位图与文档引用，深代理既没必要也会拖慢查询。 */
+   里面是索引、Bloom 位图与文档引用，深代理既没必要也会拖慢查询。
+   内核本身已移出首屏关键路径，首次要用时才拉（见 nbxEnsureHistorySearch）。 */
 let _historySearch = null;
+/* 是否已经为「内核还没到」挂过一次补索引的回调（避免每个 getter 都挂一遍） */
+let _historySearchDeferred = false;
 
 /* ---------------- 「描述需求找工具」参数 ----------------
    用户不需要按 Enter：只要「有意停顿」就自动搜。什么叫有意停顿分两档：
@@ -1286,7 +1291,11 @@ const NBX_ASSET_URLS = {
   htmlDocx: "/static/vendor/html-docx-0.3.1.js",
   qrcode: "/static/vendor/qrcode-generator-1.4.4.js",
   vpPrint: "/static/vp-print.js",
-  // 首屏之后才需要的模块：不占 8 个关键步骤
+  // 渲染与检索内核：同样不占首屏关键步骤，首屏后的空闲或首次用到时才拉
+  marked: "/static/vendor/marked-15.0.12.min.js",
+  dompurify: "/static/vendor/dompurify-3.4.12.min.js",
+  historySearch: "/static/nbx-history-search.js",
+  // 首屏之后才需要的模块：不占 6 个关键步骤
   background: "/static/nbx-background.js",
   clickFx: "/static/click-fx.js",
   thumbmark: "/static/vendor/thumbmark.umd.js",
@@ -1402,6 +1411,46 @@ function nbxEnsureMirrorAssets() {
     return typeof NbxMirrorStore !== "undefined" && typeof NbxMirrorPeer !== "undefined";
   })().catch(() => false);
   return _mirrorLoading;
+}
+
+/* marked + DOMPurify：渲染回答要用的两个库，已移出首屏关键路径（少两个跨境请求）。
+   它们必须**在渲染之前**就绪 —— renderMd 是同步函数，缺了 marked 会退化成纯文本
+   渲染、缺了 DOMPurify 则整段 HTML 不过滤，所以生成入口会 await 这里一次；
+   首屏放行后也会空闲预加载，正常路径下生成时它早就返回了。 */
+let _renderLibsLoading = null;
+function nbxEnsureRenderLibs() {
+  if (window.marked && window.DOMPurify) {
+    configureMarked();
+    return Promise.resolve(true);
+  }
+  if (_renderLibsLoading) return _renderLibsLoading;
+  const p = (async () => {
+    try {
+      if (!window.marked) await nbxLoadScript(NBX_ASSET_URLS.marked, 20000);
+      if (!window.DOMPurify) await nbxLoadScript(NBX_ASSET_URLS.dompurify, 20000);
+    } catch (e) {
+      console.warn("Markdown 渲染组件加载失败", e);
+    }
+    configureMarked();
+    return !!(window.marked && window.DOMPurify);
+  })();
+  _renderLibsLoading = p;
+  // 失败就清掉缓存的 promise，下一次调用重试；成功则一直复用
+  p.then((ok) => { if (!ok && _renderLibsLoading === p) _renderLibsLoading = null; });
+  return p;
+}
+
+/* 历史全文检索内核：同样是首屏之后才用得到的纯函数模块。 */
+let _historySearchLoading = null;
+function nbxEnsureHistorySearch() {
+  if (typeof NbxHistorySearch !== "undefined" && NbxHistorySearch) return Promise.resolve(true);
+  if (_historySearchLoading) return _historySearchLoading;
+  const p = nbxLoadScript(NBX_ASSET_URLS.historySearch, 20000)
+    .then(() => typeof NbxHistorySearch !== "undefined" && !!NbxHistorySearch)
+    .catch(() => false);
+  _historySearchLoading = p;
+  p.then((ok) => { if (!ok && _historySearchLoading === p) _historySearchLoading = null; });
+  return p;
 }
 
 async function ensureMammoth() {
@@ -1785,6 +1834,9 @@ function nbxNameViewTransition(el, name) {
   el.setAttribute("data-nbx-vt", name);
 }
 
+/* Markdown → HTML。marked / DOMPurify 现在由 nbxEnsureRenderLibs 按需加载
+   （生成入口与 OCR / 迁移入口都会先 await 它），所以这里的降级分支只是兜底：
+   真走到它说明组件没加载成功，宁可退化成纯文本也不把未过滤的 HTML 塞进页面。 */
 function renderMd(raw) {
   if (!raw) return "";
   const slotted = toolLinkPlaceholder(raw);
@@ -4535,12 +4587,17 @@ function nbx() {
       // 首屏 splash 放行标志：同步初始化已完成，/api/tools/ 不再阻塞应用可见
       try { window.__nbxBooted = true; } catch { /* 测试环境没有 window 时忽略 */ }
 
+      // 先用手上的缓存目录把工具列表渲染出来（跨境线路上省掉一个来回），
+      // 再让 /api/tools/ 的权威数据覆盖它。
+      this._loadToolsCache();
+
       // 工具列表是首屏之后第一个功能请求，先让它拿到带宽；
       // 背景 / 点击特效等增强模块等它结束后再空闲加载。
       await this.loadTools();
       this.loadParseConfig();
       this._scheduleBackground();
       this._scheduleClickFx();
+      this._scheduleDeferredLibs();
       // 仅供预览/联调：?dev=fallback / ?dev=network 时自动播放一次（正式使用无副作用）
       this.maybeRunDevPreview();
 
@@ -5063,6 +5120,51 @@ function nbx() {
     },
 
     /* ============ API：工具与模型 ============ */
+    /* 工具目录：缓存与网络返回共用这一段落盘逻辑，避免两处各写一份而漂 */
+    _applyToolsData(data) {
+      this.groups = data.groups || [];
+      // 自由对话工具推荐卡片用：编号 → 工具（含图标/名称）的本地查表
+      NBX_TOOLS_BY_ID = Object.create(null);
+      for (const group of this.groups) {
+        for (const tool of group.tools || []) {
+          if (tool && tool.id != null) NBX_TOOLS_BY_ID[String(tool.id)] = tool;
+        }
+      }
+      // models 为结构化列表：[{ id, name, description, aa_index, is_free, free_no_code }]
+      // 后端已滤掉禁用与仅 Chores 模型，该列表长度即「可见模型数」，折叠计数以它为准
+      this.models = data.models || [];
+      this.maxVisibleModels = Number(data.max_visible_models) || 0;
+      // 默认模型优先级：本机保存的选择 > 未登录时的免费（无码可用）模型 > 后端默认模型；
+      // 无码用户若默认落在收费模型上，一执行就被要求输码，免费试用形同虚设
+      const saved = localStorage.getItem(LS.model);
+      const savedValid = saved && this.models.some((m) => m.id === saved) ? saved : "";
+      const freeNoCode = (this.models.find((m) => m.is_free && m.free_no_code) || {}).id || "";
+      this.selectedModel =
+        savedValid ||
+        (!this.isAuthenticated && freeNoCode ? freeNoCode : "") ||
+        data.default_model ||
+        (this.models[0] && this.models[0].id) ||
+        "";
+      this.toolsLoaded = true;
+    },
+    /* 先拿上次的目录顶上：/api/tools/ 在跨境线路上要一个来回（≈240ms），缓存命中时
+       侧栏与首页工具网格可以跟首屏一起出现，网络数据回来后再覆盖。
+       缓存只负责「先让用户看见」，权威数据始终来自 /api/tools/。 */
+    _loadToolsCache() {
+      if (this.toolsLoaded) return;
+      const cached = lsGet(LS.toolsCache, null);
+      if (!cached || !Array.isArray(cached.groups) || !cached.groups.length) return;
+      this._applyToolsData(cached);
+    },
+    _saveToolsCache(data) {
+      if (!data || !Array.isArray(data.groups) || !data.groups.length) return;
+      lsSet(LS.toolsCache, {
+        groups: data.groups,
+        models: data.models,
+        default_model: data.default_model,
+        max_visible_models: data.max_visible_models,
+      });
+    },
     async loadTools() {
       this.toolsError = "";
       try {
@@ -5079,33 +5181,14 @@ function nbx() {
           throw new Error("HTTP " + res.status);
         }
         const data = await res.json();
-        this.groups = data.groups || [];
-        // 自由对话工具推荐卡片用：编号 → 工具（含图标/名称）的本地查表
-        NBX_TOOLS_BY_ID = Object.create(null);
-        for (const group of this.groups) {
-          for (const tool of group.tools || []) {
-            if (tool && tool.id != null) NBX_TOOLS_BY_ID[String(tool.id)] = tool;
-          }
-        }
-        // models 为结构化列表：[{ id, name, description, aa_index, is_free, free_no_code }]
-        // 后端已滤掉禁用与仅 Chores 模型，该列表长度即「可见模型数」，折叠计数以它为准
-        this.models = data.models || [];
-        this.maxVisibleModels = Number(data.max_visible_models) || 0;
-        // 默认模型优先级：本机保存的选择 > 未登录时的免费（无码可用）模型 > 后端默认模型；
-        // 无码用户若默认落在收费模型上，一执行就被要求输码，免费试用形同虚设
-        const saved = localStorage.getItem(LS.model);
-        const savedValid = saved && this.models.some((m) => m.id === saved) ? saved : "";
-        const freeNoCode = (this.models.find((m) => m.is_free && m.free_no_code) || {}).id || "";
-        this.selectedModel =
-          savedValid ||
-          (!this.isAuthenticated && freeNoCode ? freeNoCode : "") ||
-          data.default_model ||
-          (this.models[0] && this.models[0].id) ||
-          "";
-        this.toolsLoaded = true;
+        this._applyToolsData(data);
+        this._saveToolsCache(data);
       } catch (e) {
-        this.toolsError = "工具列表加载失败，请确认后端服务已启动。";
-        this.toolsLoaded = false;
+        // 缓存已经把列表渲染出来了就别用错误态顶掉它：下次请求成功会自动覆盖
+        if (!this.toolsLoaded) {
+          this.toolsError = "工具列表加载失败，请确认后端服务已启动。";
+          this.toolsLoaded = false;
+        }
       }
     },
 
@@ -7055,6 +7138,8 @@ function nbx() {
       if (this.ocrStreaming) return;
       // 使用码是识别的硬前提：先问码，再谈有没有图
       if (!this.requireCodeForOcr(OCR_CODE_HINT)) return;
+      // 识别结果同样交给 renderMd 渲染，先备好组件（正常路径已由空闲预加载备好）
+      await nbxEnsureRenderLibs();
       if (!this.ocrHasImage) {
         this.toast("请先选择图片", "warn");
         return;
@@ -7923,6 +8008,8 @@ function nbx() {
       }
     },
     async streamMigrationCard(card, index, batchId, batchSize) {
+      // 迁移卡片正文也要 renderMd 渲染，先备好组件
+      await nbxEnsureRenderLibs();
       const controller = new AbortController();
       this._migrationAbortControllers[card.requestId] = controller;
       try {
@@ -8899,6 +8986,9 @@ function nbx() {
 
     /* 通用 SSE 流式调用：返回 { state: "done" | "stopped" }，出错时抛出 Error */
     async _streamChat({ toolId, input, requestId, transferCount, visualQuestionNos, continueFrom, onToken, onReasoning, onFallback, onStage, onVisualTask }) {
+      // 结果要用 renderMd 渲染：先把 marked / DOMPurify 备好再发请求。
+      // 正常路径下空闲预加载早已完成，这里几乎立即返回；加载失败也继续（renderMd 有降级）。
+      await nbxEnsureRenderLibs();
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: {
@@ -11295,7 +11385,15 @@ function nbx() {
        查询本身在内存里完成，不读 localStorage，也不解析 JSON。 */
     _historySearchEngine() {
       if (_historySearch) return _historySearch;
-      if (typeof NbxHistorySearch === "undefined" || !NbxHistorySearch) return null;
+      if (typeof NbxHistorySearch === "undefined" || !NbxHistorySearch) {
+        // 内核已移出首屏关键路径：这次查询先用不上，把它拉回来之后再补一次索引。
+        // 回调只挂一次 —— 这个函数被多个入口调用，挂多了会重复建索引。
+        if (!_historySearchDeferred) {
+          _historySearchDeferred = true;
+          nbxEnsureHistorySearch().then((ok) => { if (ok) this._historySearchInit(); });
+        }
+        return null;
+      }
       _historySearch = NbxHistorySearch.create();
       return _historySearch;
     },
@@ -13105,6 +13203,20 @@ function nbx() {
         window.requestIdleCallback(start, { timeout: 2400 });
       } else {
         setTimeout(start, 1000);
+      }
+    },
+    /* 首屏放行后空闲预加载渲染与检索内核：marked / DOMPurify / 历史检索内核都不在
+       关键路径上，但用户一点「生成」或一搜历史就要用。空闲时先备好，别让第一次
+       用到才等；检索内核回来后立刻补一次索引，之后搜索结果直接可用。 */
+    _scheduleDeferredLibs() {
+      const start = () => {
+        nbxEnsureRenderLibs();
+        nbxEnsureHistorySearch().then((ok) => { if (ok) this._historySearchInit(); });
+      };
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(start, { timeout: 2500 });
+      } else {
+        setTimeout(start, 900);
       }
     },
     _mirrorScheduleStart() {
