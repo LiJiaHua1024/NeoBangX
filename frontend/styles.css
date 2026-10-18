@@ -949,6 +949,77 @@ html[data-theme="sora"] .mascot-peeking {
 }
 
 /* ============================================================
+   额度显示仪（工具头部常驻）
+   圆环 = 当前剩余占比；环尾那一段缓慢明暗 = 本次将被扣掉的额度
+   ============================================================ */
+.quota-gauge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 999px;
+  color: var(--text-dim);
+  transition: color .2s ease, background .2s ease, transform .35s var(--ease-spring);
+}
+.quota-gauge:hover { background: var(--hover-bg); color: var(--text); }
+.quota-gauge:active { transform: scale(.94); transition-duration: .08s; }
+.quota-gauge-svg { display: block; width: 100%; height: 100%; }
+.qg-track { fill: none; stroke: var(--border); stroke-width: 2.4; }
+.qg-left {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  transition: stroke-dasharray .5s ease, stroke .3s ease;
+}
+/* 将被扣掉的一段：压在剩余弧的末端，固定「掺白」提亮——
+   语义是这段正在褪色、即将消失，所以无论深色还是浅色主题都必须变浅，
+   不能跟着正文色走（浅色主题下会变成加深，反过来像被强调）。
+   它只是预测，所以只做缓慢的明暗呼吸，不做位移、不闪成频闪灯 */
+.qg-burn {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 38%, #fff);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  animation: qg-burn 1.8s ease-in-out infinite;
+}
+.quota-gauge-num {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .64rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+  pointer-events: none;
+}
+.quota-gauge-num.sm { font-size: .48rem; }
+.quota-gauge.low { color: #d39133; }
+.quota-gauge.low .qg-left { stroke: #d39133; }
+.quota-gauge.empty { color: #e5604c; }
+.quota-gauge.empty .qg-left { stroke: #e5604c; }
+@keyframes qg-burn {
+  0%, 100% { opacity: .18; }
+  50% { opacity: .95; }
+}
+@media (max-width: 639.98px) {
+  .quota-gauge { width: 1.75rem; height: 1.75rem; }
+  .quota-gauge-num { font-size: .6rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qg-burn { animation: none; opacity: .6; }
+  .qg-left { transition: none; }
+}
+
+/* ============================================================
    自定义模型下拉
    ============================================================ */
 .ms-wrap { position: relative; }

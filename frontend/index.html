@@ -542,6 +542,20 @@
                 <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
               </div>
               <div class="ml-auto flex items-center gap-2">
+                <!-- 额度显示仪：环内=剩余次数，环尾缓慢明暗的一段=本次将扣掉的额度 -->
+                <button type="button" class="quota-gauge" x-show="isAuthenticated" x-cloak
+                        :class="{ 'low': quotaLow, 'empty': quotaEmpty }"
+                        :title="quotaTip" :aria-label="quotaTip"
+                        @click="openCodeModal()">
+                  <svg class="quota-gauge-svg" viewBox="0 0 28 28" aria-hidden="true">
+                    <circle class="qg-track" cx="14" cy="14" r="10.5"/>
+                    <circle class="qg-left" cx="14" cy="14" r="10.5" x-show="quotaPct > 0"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaRingDash"/>
+                    <circle class="qg-burn" cx="14" cy="14" r="10.5" x-show="quotaBurnOn"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaBurnDash"/>
+                  </svg>
+                  <span class="quota-gauge-num" :class="{ 'sm': quotaGaugeNum.length > 2 }" x-text="quotaGaugeNum"></span>
+                </button>
                 <span class="text-xs text-faint hidden sm:inline">模型</span>
                 <div class="ms-wrap" @click.outside="closeModelMenu()">
                   <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
@@ -810,6 +824,20 @@
                 <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
               </div>
               <div class="ml-auto flex items-center gap-2">
+                <!-- 额度显示仪：环内=剩余次数，环尾缓慢明暗的一段=本次将扣掉的额度 -->
+                <button type="button" class="quota-gauge" x-show="isAuthenticated" x-cloak
+                        :class="{ 'low': quotaLow, 'empty': quotaEmpty }"
+                        :title="quotaTip" :aria-label="quotaTip"
+                        @click="openCodeModal()">
+                  <svg class="quota-gauge-svg" viewBox="0 0 28 28" aria-hidden="true">
+                    <circle class="qg-track" cx="14" cy="14" r="10.5"/>
+                    <circle class="qg-left" cx="14" cy="14" r="10.5" x-show="quotaPct > 0"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaRingDash"/>
+                    <circle class="qg-burn" cx="14" cy="14" r="10.5" x-show="quotaBurnOn"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaBurnDash"/>
+                  </svg>
+                  <span class="quota-gauge-num" :class="{ 'sm': quotaGaugeNum.length > 2 }" x-text="quotaGaugeNum"></span>
+                </button>
                 <span class="text-xs text-faint hidden sm:inline">模型</span>
                 <div class="ms-wrap" @click.outside="closeModelMenu()">
                   <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
@@ -996,6 +1024,20 @@
                 <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
               </div>
               <div class="ml-auto flex items-center gap-2">
+                <!-- 额度显示仪：环内=剩余次数，环尾缓慢明暗的一段=本次将扣掉的额度 -->
+                <button type="button" class="quota-gauge" x-show="isAuthenticated" x-cloak
+                        :class="{ 'low': quotaLow, 'empty': quotaEmpty }"
+                        :title="quotaTip" :aria-label="quotaTip"
+                        @click="openCodeModal()">
+                  <svg class="quota-gauge-svg" viewBox="0 0 28 28" aria-hidden="true">
+                    <circle class="qg-track" cx="14" cy="14" r="10.5"/>
+                    <circle class="qg-left" cx="14" cy="14" r="10.5" x-show="quotaPct > 0"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaRingDash"/>
+                    <circle class="qg-burn" cx="14" cy="14" r="10.5" x-show="quotaBurnOn"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaBurnDash"/>
+                  </svg>
+                  <span class="quota-gauge-num" :class="{ 'sm': quotaGaugeNum.length > 2 }" x-text="quotaGaugeNum"></span>
+                </button>
                 <span class="text-xs text-faint hidden sm:inline">模型</span>
                 <div class="ms-wrap" @click.outside="closeModelMenu()">
                   <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
@@ -1929,10 +1971,26 @@
                 <h2 class="font-bold leading-tight truncate" style="font-size:.98rem" x-text="currentTool.name"></h2>
                 <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
               </div>
-              <!-- 窄档：历史入口（识别记录也回到这里看）；宽屏右侧栏常驻，不需要 -->
-              <button class="icon-btn ml-auto shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
-                      @click="rightMobileOpen = true" title="历史与收藏" aria-label="打开历史与收藏"
-                      x-html="icon('clock','w-5 h-5')"></button>
+              <div class="ml-auto flex items-center gap-2">
+                <!-- 额度显示仪：环内=剩余次数，环尾缓慢明暗的一段=本次将扣掉的额度 -->
+                <button type="button" class="quota-gauge" x-show="isAuthenticated" x-cloak
+                        :class="{ 'low': quotaLow, 'empty': quotaEmpty }"
+                        :title="quotaTip" :aria-label="quotaTip"
+                        @click="openCodeModal()">
+                  <svg class="quota-gauge-svg" viewBox="0 0 28 28" aria-hidden="true">
+                    <circle class="qg-track" cx="14" cy="14" r="10.5"/>
+                    <circle class="qg-left" cx="14" cy="14" r="10.5" x-show="quotaPct > 0"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaRingDash"/>
+                    <circle class="qg-burn" cx="14" cy="14" r="10.5" x-show="quotaBurnOn"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaBurnDash"/>
+                  </svg>
+                  <span class="quota-gauge-num" :class="{ 'sm': quotaGaugeNum.length > 2 }" x-text="quotaGaugeNum"></span>
+                </button>
+                <!-- 窄档：历史入口（识别记录也回到这里看）；宽屏右侧栏常驻，不需要 -->
+                <button class="icon-btn shrink-0" style="width:2.5rem;height:2.5rem" x-show="isCompact"
+                        @click="rightMobileOpen = true" title="历史与收藏" aria-label="打开历史与收藏"
+                        x-html="icon('clock','w-5 h-5')"></button>
+              </div>
             </div>
 
             <!-- 空状态：图片入口占满结果区，不做成角落里的小按钮 -->
@@ -2178,6 +2236,20 @@
               </div>
 
               <div class="ml-auto flex items-center gap-2">
+                <!-- 额度显示仪：环内=剩余次数，环尾缓慢明暗的一段=本次将扣掉的额度 -->
+                <button type="button" class="quota-gauge" x-show="isAuthenticated" x-cloak
+                        :class="{ 'low': quotaLow, 'empty': quotaEmpty }"
+                        :title="quotaTip" :aria-label="quotaTip"
+                        @click="openCodeModal()">
+                  <svg class="quota-gauge-svg" viewBox="0 0 28 28" aria-hidden="true">
+                    <circle class="qg-track" cx="14" cy="14" r="10.5"/>
+                    <circle class="qg-left" cx="14" cy="14" r="10.5" x-show="quotaPct > 0"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaRingDash"/>
+                    <circle class="qg-burn" cx="14" cy="14" r="10.5" x-show="quotaBurnOn"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaBurnDash"/>
+                  </svg>
+                  <span class="quota-gauge-num" :class="{ 'sm': quotaGaugeNum.length > 2 }" x-text="quotaGaugeNum"></span>
+                </button>
                 <span class="text-xs text-faint hidden sm:inline">模型</span>
                 <div class="ms-wrap" @click.outside="closeModelMenu()">
                   <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"
@@ -2429,6 +2501,20 @@
                 <p class="text-xs text-dim truncate mt-0.5" x-text="currentTool.description"></p>
               </div>
               <div class="ml-auto flex items-center gap-2">
+                <!-- 额度显示仪：环内=剩余次数，环尾缓慢明暗的一段=本次将扣掉的额度 -->
+                <button type="button" class="quota-gauge" x-show="isAuthenticated" x-cloak
+                        :class="{ 'low': quotaLow, 'empty': quotaEmpty }"
+                        :title="quotaTip" :aria-label="quotaTip"
+                        @click="openCodeModal()">
+                  <svg class="quota-gauge-svg" viewBox="0 0 28 28" aria-hidden="true">
+                    <circle class="qg-track" cx="14" cy="14" r="10.5"/>
+                    <circle class="qg-left" cx="14" cy="14" r="10.5" x-show="quotaPct > 0"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaRingDash"/>
+                    <circle class="qg-burn" cx="14" cy="14" r="10.5" x-show="quotaBurnOn"
+                            transform="rotate(-90 14 14)" :stroke-dasharray="quotaBurnDash"/>
+                  </svg>
+                  <span class="quota-gauge-num" :class="{ 'sm': quotaGaugeNum.length > 2 }" x-text="quotaGaugeNum"></span>
+                </button>
                 <span class="text-xs text-faint hidden sm:inline">模型</span>
                 <div class="ms-wrap" @click.outside="closeModelMenu()">
                   <button class="ms-trigger" :class="{ 'open': modelMenuOpen }"

@@ -223,6 +223,10 @@ const FAVORITES_LIMIT = 100;
 // 推理另有 max-height + 内部滚动双保险，盒子本身高度恒定。
 const REASONING_LIMIT = 3000;
 const CARD_REASONING_LIMIT = 2000;
+// 额度显示仪的圆环几何：dasharray 用真实周长换算，不用 pathLength
+// （Safari 对 <circle pathLength> 的历史支持不可靠，忽略时百分比会被当成用户单位）
+const QUOTA_RING_R = 10.5;
+const QUOTA_RING_C = 2 * Math.PI * QUOTA_RING_R;
 /* 续写指令约定的「其实已经写完」控制标记（见 prompts/继续生成.md）：模型只回这一行时，
    前端把它剥掉、保持记录原状态，并告诉用户内容已经完整——既不把标记拼进成品文档，
    也不误标成已完成。识别刻意放宽（大小写、@ 数量、空格/下划线/连字符、裸词都要认），
@@ -4739,6 +4743,8 @@ function nbx() {
         this.vocab.elapsed = ((performance.now() - this._startTs) / 1000).toFixed(1);
       }, 100);
 
+      // 全部替换按 1 次额度计费：跑完要和其它工具一样同步余额
+      const quotaBefore = this.quotaRemaining;
       try {
         const { state } = await this._streamChat({
           toolId: this.currentTool.id,
@@ -4813,6 +4819,8 @@ function nbx() {
           this.vocab.reasoningDone = true;
           this.vocab.reasoningOpen = false;
         }
+        // 用户停止时服务端在 finally 里扣费，延后刷才能读到新值
+        this._afterRunQuota(quotaBefore, this.vocab.status === "stopped" ? 900 : 0);
       }
     },
     stopVocabReplace() {
@@ -5049,11 +5057,15 @@ function nbx() {
 
     /* ============ 认证 ============ */
     _updateAuthUI(token, user) {
+      // 每次生成后都会 verifyAuth → saveAuth → 这里。标题轮询只在「换了使用码」时
+      // 重新起步：无条件 resumeTitleJobs 会把失败退避（最长 30s）重置成立即轮询
+      const tokenChanged = this.auth.token !== token;
+      const wasAuthenticated = this.isAuthenticated;
       this.auth.token = token;
       this.auth.user = user;
       this.isAuthenticated = !!token && !!user;
       this.authUser = user;
-      if (this.isAuthenticated) this.resumeTitleJobs();
+      if (this.isAuthenticated) { if (tokenChanged || !wasAuthenticated) this.resumeTitleJobs(); }
       else this.stopTitlePolling();
       if (user && user.code) {
         const c = user.code;
@@ -5104,6 +5116,19 @@ function nbx() {
       } catch {
         // 网络异常时保留本地 token，不直接清除
       }
+    },
+    /* 生成结束后的额度同步：done 事件之前服务端已经扣过费，直接刷；
+       用户停止/切换工具时服务端在 finally 里扣，客户端断开早于写库，需要等一会儿。
+       归零 toast 只在「这次跑之前还有、跑完变成 0」的那一次触发一次。 */
+    _afterRunQuota(before, delayMs = 0) {
+      const run = async () => {
+        await this.verifyAuth();
+        // isAuthenticated 必须带上：401 会把本地凭证清掉，那不是「用完」而是「失效」
+        if (before > 0 && this.isAuthenticated && !this.isUnlimitedQuota && this.quotaRemaining === 0) {
+          this.toast("使用码额度已用完，可换免费模型或更换使用码", "warn");
+        }
+      };
+      if (delayMs > 0) setTimeout(run, delayMs); else run();
     },
     authHeaders() {
       const h = {};
@@ -5295,6 +5320,83 @@ function nbx() {
       if (!this.isAuthenticated) return false;
       if (this.isFreeModel()) return false;
       return true;
+    },
+
+    /* ============ 额度显示仪 ============ */
+    /* 只读 authUser，不新增响应式字段；authUser 整体替换时这些 getter 自动重算 */
+    get quotaRemaining() {
+      const u = this.authUser;
+      return u && u.remaining != null ? Math.max(0, Number(u.remaining) || 0) : 0;
+    },
+    get quotaTotal() {
+      const u = this.authUser;
+      return u && u.quota != null ? Math.max(0, Number(u.quota) || 0) : 0;
+    },
+    get isUnlimitedQuota() {
+      return !!(this.authUser && this.authUser.is_unlimited);
+    },
+    get quotaPct() {
+      if (this.isUnlimitedQuota) return 100;
+      const t = this.quotaTotal;
+      if (t <= 0) return 0;
+      return Math.min(100, Math.max(0, (this.quotaRemaining / t) * 100));
+    },
+    /* 本次预计扣减：与 backend/app/routers/chat.py 的 quota_units 口径对齐。
+       识别恒 charged_free=True（识别始终不计费）；迁移按已选题数换算；
+       免费模型限额内为 0，超限转按次由后端裁定，前端不做乐观假设 */
+    get quotaChargeUnits() {
+      if (!this.isAuthenticated) return 0;
+      if (this.isFreeModel()) return 0;
+      if (this.isOcrTool) return 0;
+      if (this.isMigrationTool) {
+        return this.migrationSelectedCauses.length ? this.migrationChargeUnits : 0;
+      }
+      return 1;
+    },
+    /* 环上「即将被扣掉的那一段」：从当前剩余弧的末端往回量。
+       真实比例在 1/100 时不足 1px，给 6% 的最小可见长度——它是示意，
+       精确值在环内数字与 tooltip 里；段长永远不超过当前剩余弧。 */
+    get quotaBurnPct() {
+      if (this.isUnlimitedQuota) return 0;
+      const n = this.quotaChargeUnits;
+      const t = this.quotaTotal;
+      if (!n || t <= 0 || this.quotaRemaining < n) return 0;
+      return Math.min(this.quotaPct, Math.max((n / t) * 100, 6));
+    },
+    get quotaBurnStart() {
+      return Math.max(0, this.quotaPct - this.quotaBurnPct);
+    },
+    get quotaBurnOn() {
+      return this.quotaBurnPct > 0 && !this.streaming
+        && !(this.migration && this.migration.generating)
+        && !this.isUnlimitedQuota;
+    },
+    get quotaBurnDash() {
+      const start = (this.quotaBurnStart / 100) * QUOTA_RING_C;
+      const len = (this.quotaBurnPct / 100) * QUOTA_RING_C;
+      return `0 ${start} ${len} ${QUOTA_RING_C}`;
+    },
+    get quotaRingDash() {
+      const filled = (this.quotaPct / 100) * QUOTA_RING_C;
+      return `${filled} ${QUOTA_RING_C}`;
+    },
+    get quotaLow() {
+      return !this.isUnlimitedQuota && this.quotaTotal > 0 && this.quotaRemaining <= 2;
+    },
+    get quotaEmpty() {
+      return !this.isUnlimitedQuota && this.quotaRemaining <= 0;
+    },
+    get quotaGaugeNum() {
+      return this.isUnlimitedQuota ? "∞" : String(this.quotaRemaining);
+    },
+    get quotaTip() {
+      if (this.isUnlimitedQuota) return "无限额度";
+      const base = `剩余 ${this.quotaRemaining} 次 / 共 ${this.quotaTotal} 次`;
+      if (this.isMigrationTool && !this.migrationSelectedCauses.length) return base + "；勾选错因后显示本次消耗";
+      const n = this.quotaChargeUnits;
+      if (!n) return base + "；本次不消耗额度";
+      if (this.quotaRemaining < n) return `${base}；本次需 ${n} 次，额度不足`;
+      return `${base}；本次约扣 ${n} 次，完成后剩 ${this.quotaRemaining - n} 次`;
     },
     /* 不扣次数时的提示文案（免费 / 免码模型 / 需使用码），扣次数时为空串 */
     get chargeNote() {
@@ -8071,6 +8173,7 @@ function nbx() {
       }
 
       const state = this.migration;
+      const quotaBefore = this.quotaRemaining;
       this.retreatMascot();
       state.prechecking = true;
       try {
@@ -8130,7 +8233,6 @@ function nbx() {
             : `${failed.length}/${state.results.length} 张卡片生成失败`)
           : "";
         const item = this.pushMigrationHistory(partial, errText);
-        if (!partial) this.verifyAuth();
         if (partial) this.toast("部分迁移卡片未完成，请检查后重试", "warn");
         else this.toast(`已完成 ${state.results.length} 张迁移卡片`);
       } catch (e) {
@@ -8139,6 +8241,8 @@ function nbx() {
         this.toast(state.analysisError, "error");
       } finally {
         state.prechecking = false;
+        // 迁移按已交付卡片摊分扣费：部分完成也已经扣了，不能只在 !partial 时刷新
+        this._afterRunQuota(quotaBefore);
       }
     },
     async consumeSSE(res, onEvent) {
@@ -9112,6 +9216,9 @@ function nbx() {
       // modelUsed 一路带到收尾：请求 body 用的是它，记录里的「哪一版由谁生成」也必须用它。
       // 拿收尾时刻的 selectedModel 会记错——流式期间用户可以在右上角切模型。
       const ctx0 = { updateId, continueFrom, newVersion, modelUsed };
+      // 本轮结束后的额度基线：跑完对比，才能只在「刚好用掉最后一次」时提醒一次
+      const quotaBefore = this.quotaRemaining;
+      let quotaDelay = 0;
       const finish = finalize || ((state, errMsg, ctx) =>
         this.finalize(state, errMsg, ctx.seq, {
           updateId: ctx.updateId,
@@ -9146,8 +9253,9 @@ function nbx() {
         finish(state === "stopped" ? "stopped" : "done", undefined, { ...ctx0, seq });
       } catch (e) {
         // 已被「切换工具/新建题目」作废：旧流收尾交给新流程，不再回写状态
-        if (seq !== this._runSeq) return true;
+        if (seq !== this._runSeq) { quotaDelay = 900; return true; }
         if (e && e.name === "AbortError") {
+          quotaDelay = 900;
           finish("stopped", undefined, { ...ctx0, seq });
         } else {
           // 登录/额度类错误模型根本没执行，不标记；后端 error 事件回传的实际模型优先，快照兜底
@@ -9156,6 +9264,10 @@ function nbx() {
           this.errorLimited = !!(e && e.limited);
           finish("error", describeError(e, "生成失败，请稍后重试"), { ...ctx0, seq });
         }
+      } finally {
+        // 所有普通工具 + 解卷都在这里收尾：done 之前服务端已扣费，直接刷；
+        // 用户停止时服务端在 finally 里扣，断开早于写库，延后 900ms 再刷
+        this._afterRunQuota(quotaBefore, quotaDelay);
       }
       return true;
     },
