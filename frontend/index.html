@@ -166,6 +166,8 @@
                   flex flex-col overflow-hidden aside-fx
                   2xl:static 2xl:z-auto 2xl:translate-x-0 2xl:shrink-0"
            :class="leftOpen ? 'translate-x-0' : '-translate-x-[calc(100%+1.5rem)]'"
+           :inert="isCompact && !leftOpen"
+           :aria-hidden="isCompact && !leftOpen ? 'true' : null"
            aria-label="工具列表">
 
       <!-- Logo -->
@@ -2895,6 +2897,8 @@
              rightMobileOpen ? 'translate-x-0' : 'translate-x-[calc(100%+1.5rem)]',
              rightCollapsed ? '2xl:w-0 2xl:opacity-0 2xl:pointer-events-none' : ''
            ]"
+           :inert="isCompact ? !rightMobileOpen : rightCollapsed"
+           :aria-hidden="(isCompact ? !rightMobileOpen : rightCollapsed) ? 'true' : null"
            aria-label="历史与收藏">
       <div class="h-full flex flex-col w-full 2xl:w-[320px] 2xl:shrink-0">
 
