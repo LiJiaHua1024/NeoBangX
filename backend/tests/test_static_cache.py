@@ -84,6 +84,44 @@ def test_index_html_is_no_cache(client):
     assert r.headers["cache-control"] == "no-cache"
 
 
+def test_index_html_etag_revalidation_returns_304(client):
+    """根路径也要支持条件请求。
+
+    Starlette 的 FileResponse 不处理 If-None-Match，只有 StaticFiles 会；中间件
+    必须替它补上，否则浏览器每次打开页面都会重新下载整页 HTML。
+    """
+    r = client.get("/")
+    etag = r.headers["etag"]
+    r2 = client.get("/", headers={"if-none-match": etag})
+    assert r2.status_code == 304
+    assert r2.headers["cache-control"] == "no-cache"
+    assert r2.headers["etag"] == etag
+    assert "content-encoding" not in r2.headers
+
+
+def test_index_html_if_modified_since_returns_304(client):
+    """CF 线的 HTML 没有 ETag，只剩 Last-Modified，必须也能命中 304。"""
+    r = client.get("/")
+    last_modified = r.headers["last-modified"]
+    r2 = client.get("/", headers={"if-modified-since": last_modified})
+    assert r2.status_code == 304
+    assert r2.headers["cache-control"] == "no-cache"
+
+
+def test_index_html_stale_etag_returns_full_body(client):
+    r = client.get("/", headers={"if-none-match": '"stale-etag"'})
+    assert r.status_code == 200
+    assert len(r.content) > 0
+
+
+def test_woff2_content_type_is_font():
+    """Windows 的 mimetypes 会把 woff2 识别成 octet-stream，中间件要兜底成 font/woff2。"""
+    client = TestClient(main_app)
+    r = client.get("/static/vendor/katex-0.16.47/fonts/KaTeX_Main-Regular.woff2")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "font/woff2"
+
+
 def test_etag_revalidation_still_returns_304(client):
     r = client.get("/static/click-fx.js?v=fx260920f")
     etag = r.headers["etag"]

@@ -19,4 +19,25 @@
 自托管原因同上；未加载成功时配对弹窗自动退化为「显示完整网址 + 复制」，
 `script.js` 的 `qrSvg()` 返回空串即可，不影响其余功能。
 
-升级方式：重新下载上述地址覆盖本文件；保持文件名里的版本号同步更新，并改 `index.html` 里的 `?v=`。
+升级方式：重新下载上述地址覆盖本文件；保持文件名里的版本号同步更新。
+
+## 2026-10 依赖本地化（主站 + 管理端）
+
+以下文件按 npm 包原始内容复制，未改代码；许可证全文见 `licenses/`。
+
+| 文件 | 版本 | 许可证 | 用途 |
+|------|------|--------|------|
+| `marked-15.0.12.min.js` | 15.0.12 | MIT | Markdown 渲染 |
+| `dompurify-3.4.12.min.js` | 3.4.12 | MPL-2.0 OR Apache-2.0 | HTML 消毒 |
+| `alpinejs-3.15.12.min.js` | 3.15.12 | MIT | 前端响应式框架 |
+| `alpine-collapse-3.15.12.min.js` | 3.15.12 | MIT | Alpine x-collapse 插件 |
+| `marked-katex-extension-5.1.4.umd.js` | 5.1.4 | MIT | marked 的 KaTeX 扩展（必须后于 katex 加载） |
+| `mammoth-1.8.0.browser.min.js` | 1.8.0 | BSD-2-Clause | .docx 本地解析（按需加载） |
+| `html-docx-0.3.1.js` | 0.3.1 | MIT | Word 导出（按需加载） |
+| `katex-0.16.47/katex.min.js` | 0.16.47 | MIT | 数学公式渲染（首屏后按需加载） |
+| `katex-0.16.47/katex.min.css` | 0.16.47 | MIT | KaTeX 样式 |
+| `katex-0.16.47/fonts/*.woff2` | 0.16.47 | MIT | KaTeX 字体；只保留 woff2，现代浏览器不会回退到 woff/ttf |
+
+来源均为 npm 官方包（`npm pack <name>@<version>`）。升级步骤：换掉对应文件并同步文件名里的版本号，再改 `script.js` 的 `NBX_ASSET_URLS` / `index.html` 的引用。
+
+`admin-frontend/vendor/` 下的 marked、DOMPurify、Alpine 是本目录同版本文件的副本，供管理端使用；许可证同样见本目录 `licenses/`。

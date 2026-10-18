@@ -9,6 +9,9 @@
 - 缓存头：URL 带 query string（本项目 ?v= 版本化资源）→ immutable 长缓存；
   不带 query 与 `/` → no-cache（每次重验证，etag 命中即 304）。未版本化的
   资源绝不能长缓存：改了文件而 URL 不变时，浏览器会一直用旧代码。
+- 条件请求：`/` 由 FileResponse 提供，Starlette 的 FileResponse 不处理
+  If-None-Match / If-Modified-Since；中间件在这里补 304，HTML 未变时不再
+  重新下载整页。`/static/**` 的 304 仍由 StaticFiles 处理。
 - 透传：非 http scope、其它路径（API/SSE 绝不触碰）、非 200/304/206 状态、
   带 Range 的请求、HEAD、已带 Content-Encoding 或超出体积阈值的响应。
 
@@ -18,9 +21,12 @@ mtime+size 派生），条件请求 304 语义不变；304 与 206 也会补上�
 
 import asyncio
 import gzip
+import hashlib
 import os
 import threading
 from collections import OrderedDict
+from datetime import timezone
+from email.utils import formatdate, parsedate_to_datetime
 from typing import Optional, Tuple
 
 try:  # brotli 为可选依赖，缺失时自动退化为仅 gzip
@@ -89,6 +95,46 @@ def _compress(body: bytes, encoding: str) -> bytes:
         # MODE_TEXT：本中间件只压缩文本类静态资源
         return _brotli.compress(body, mode=_brotli.MODE_TEXT, quality=BROTLI_QUALITY)
     return gzip.compress(body, compresslevel=GZIP_LEVEL)
+
+
+def _etag_for_stat(st: os.stat_result) -> str:
+    """与 Starlette FileResponse 完全一致的强 ETag（mtime-秒 + size）。"""
+    base = str(st.st_mtime) + "-" + str(st.st_size)
+    digest = hashlib.md5(base.encode(), usedforsecurity=False).hexdigest()
+    return f'"{digest}"'
+
+
+def _etag_matches(header: Optional[str], etag: str) -> bool:
+    if not header:
+        return False
+    for raw in header.split(","):
+        token = raw.strip()
+        if not token:
+            continue
+        if token == "*":
+            return True
+        if token.startswith("W/"):
+            token = token[2:].strip()
+        if token == etag:
+            return True
+    return False
+
+
+def _not_modified_since(header: Optional[str], mtime: float) -> bool:
+    if not header:
+        return False
+    try:
+        dt = parsedate_to_datetime(header)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if dt is None:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    try:
+        return int(mtime) <= int(dt.timestamp())
+    except (OverflowError, OSError, ValueError):
+        return False
 
 
 class StaticCacheMiddleware:
@@ -200,6 +246,40 @@ class StaticCacheMiddleware:
         query: bytes = scope.get("query_string", b"") or b""
         cache_control = self._cache_control(path, query)
 
+        # `/` 走的是 FileResponse，而 Starlette 的 FileResponse 不会处理条件请求
+        # （只有 StaticFiles 会），于是浏览器每次都重新下载整页 HTML。这里在中间件
+        # 层补上 If-None-Match / If-Modified-Since，命中直接 304，不再读文件/压缩。
+        if is_root and method in ("GET", "HEAD"):
+            req_headers: dict[bytes, str] = {}
+            for k, v in scope.get("headers", []):
+                req_headers.setdefault(k.lower(), v.decode("latin-1"))
+            if b"range" not in req_headers:
+                full = self._resolve_path(path)
+                if full is not None:
+                    try:
+                        st = os.stat(full)
+                    except OSError:
+                        st = None
+                    if st is not None:
+                        etag = _etag_for_stat(st)
+                        inm = req_headers.get(b"if-none-match")
+                        ims = req_headers.get(b"if-modified-since")
+                        not_modified = (
+                            _etag_matches(inm, etag)
+                            if inm is not None
+                            else _not_modified_since(ims, st.st_mtime)
+                        )
+                        if not_modified:
+                            headers_304 = [
+                                (b"cache-control", cache_control.encode("latin-1")),
+                                (b"etag", etag.encode("latin-1")),
+                                (b"last-modified", formatdate(st.st_mtime, usegmt=True).encode("latin-1")),
+                                (b"vary", b"accept-encoding"),
+                            ]
+                            await send({"type": "http.response.start", "status": 304, "headers": headers_304})
+                            await send({"type": "http.response.body", "body": b"", "more_body": False})
+                            return
+
         encoding = ""
         if self.compress and method != "HEAD":
             encoding = _pick_encoding(scope.get("headers", []), brotli=self.brotli)
@@ -257,6 +337,12 @@ class StaticCacheMiddleware:
 
                 # 重新组装：去掉旧 content-length（压缩后长度必变），后续按需补回
                 headers = [(k, v) for k, v in raw_headers if k != b"content-length"]
+                if path.endswith(".woff2"):
+                    # Windows 的 mimetypes 常把 woff2 识别成 application/octet-stream；
+                    # 字体加载需要正确的 MIME，统一在这里兜底。woff2 本身不参与压缩。
+                    headers = [(k, v) for k, v in headers if k != b"content-type"]
+                    headers.append((b"content-type", b"font/woff2"))
+                    ctype = "font/woff2"
                 # 缓存头 + Vary 对所有 200 静态响应生效（压缩与否都可能因
                 # Accept-Encoding 而不同，Vary 让中间缓存按编码分别存放）
                 headers.append((b"cache-control", cache_control.encode("latin-1")))

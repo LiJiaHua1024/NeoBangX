@@ -1719,24 +1719,176 @@ function describeError(e, fallbackText = "操作失败，请稍后重试") {
   return raw || fallbackText;
 }
 
+/* ---------------- 运行时依赖按需加载 ----------------
+   首屏只保留 Alpine / marked / DOMPurify 这类必需库。mammoth、html-docx、
+   KaTeX、qrcode、vp-print 都改成用到时再拉，文件全部自托管在 /static/vendor/，
+   正常路径不再依赖 jsDelivr（thumbmark 仅在本文件缺失时有一次 CDN 兜底）。
+   加载失败只影响对应功能，不会拖垮整页。 */
+const NBX_ASSET_URLS = {
+  katexJs: "/static/vendor/katex-0.16.47/katex.min.js",
+  katexCss: "/static/vendor/katex-0.16.47/katex.min.css",
+  markedKatex: "/static/vendor/marked-katex-extension-5.1.4.umd.js",
+  mammoth: "/static/vendor/mammoth-1.8.0.browser.min.js",
+  htmlDocx: "/static/vendor/html-docx-0.3.1.js",
+  qrcode: "/static/vendor/qrcode-generator-1.4.4.js",
+  vpPrint: "/static/vp-print.js",
+};
+const _nbxAssetPromises = Object.create(null);
+
+function nbxLoadScript(src, timeoutMs = 20000) {
+  if (_nbxAssetPromises[src]) return _nbxAssetPromises[src];
+  const p = new Promise((resolve, reject) => {
+    if (typeof document === "undefined" || !document.createElement) {
+      reject(new Error("当前环境不支持动态加载脚本"));
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = src;
+    s.async = true;
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      s.remove();
+      reject(new Error("加载超时：" + src));
+    }, timeoutMs);
+    s.onload = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    s.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      s.remove();
+      reject(new Error("加载失败：" + src));
+    };
+    document.head.appendChild(s);
+  });
+  _nbxAssetPromises[src] = p;
+  p.catch(() => { if (_nbxAssetPromises[src] === p) delete _nbxAssetPromises[src]; });
+  return p;
+}
+
+function nbxLoadStyle(href, timeoutMs = 20000) {
+  const key = "css:" + href;
+  if (_nbxAssetPromises[key]) return _nbxAssetPromises[key];
+  const p = new Promise((resolve, reject) => {
+    if (typeof document === "undefined" || !document.createElement) {
+      reject(new Error("当前环境不支持动态加载样式"));
+      return;
+    }
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = href;
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      link.remove();
+      reject(new Error("样式加载超时：" + href));
+    }, timeoutMs);
+    link.onload = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    link.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      link.remove();
+      reject(new Error("样式加载失败：" + href));
+    };
+    document.head.appendChild(link);
+  });
+  _nbxAssetPromises[key] = p;
+  p.catch(() => { if (_nbxAssetPromises[key] === p) delete _nbxAssetPromises[key]; });
+  return p;
+}
+
+async function ensureMammoth() {
+  if (window.mammoth) return true;
+  try { await nbxLoadScript(NBX_ASSET_URLS.mammoth); } catch (e) { console.warn("mammoth 加载失败", e); return false; }
+  return !!window.mammoth;
+}
+
+async function ensureHtmlDocx() {
+  if (window.htmlDocx) return true;
+  try { await nbxLoadScript(NBX_ASSET_URLS.htmlDocx); } catch (e) { console.warn("html-docx 加载失败", e); return false; }
+  return !!window.htmlDocx;
+}
+
+async function ensureQrCode() {
+  if (typeof window.qrcode === "function") return true;
+  try { await nbxLoadScript(NBX_ASSET_URLS.qrcode); } catch (e) { console.warn("二维码库加载失败", e); return false; }
+  return typeof window.qrcode === "function";
+}
+
+async function ensureVpPrint() {
+  if (window.VPPrint) return true;
+  try { await nbxLoadScript(NBX_ASSET_URLS.vpPrint); } catch (e) { console.warn("打印组件加载失败", e); return false; }
+  return !!window.VPPrint;
+}
+
+let _katexPromise = null;
+function ensureKatex() {
+  if (_katexPromise) return _katexPromise;
+  _katexPromise = (async () => {
+    try {
+      await nbxLoadStyle(NBX_ASSET_URLS.katexCss);
+      await nbxLoadScript(NBX_ASSET_URLS.katexJs);
+      // UMD 扩展在加载时就把 global.katex 抓进闭包，顺序不能反
+      await nbxLoadScript(NBX_ASSET_URLS.markedKatex);
+      configureMarked();
+      return !!(window.katex && window.markedKatex);
+    } catch (e) {
+      console.warn("KaTeX 加载失败，公式将以原文显示", e);
+      _katexPromise = null;  // 允许下次重试
+      return false;
+    }
+  })();
+  return _katexPromise;
+}
+
+function scheduleKatexLoad() {
+  const run = () => { void ensureKatex(); };
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(run, { timeout: 1800 });
+  } else {
+    setTimeout(run, 900);
+  }
+}
+if (typeof document !== "undefined" && document && document.addEventListener) {
+  document.addEventListener("alpine:initialized", scheduleKatexLoad, { once: true });
+}
+
 /* ---------------- Markdown 渲染 ---------------- */
+let _markedKatexApplied = false;
+let _purifyHookAdded = false;
 function configureMarked() {
   if (window.marked) {
     marked.setOptions({ breaks: true, gfm: true });
     // KaTeX 数学公式（$...$ / $$...$$）：
     // nonStandard 容忍 LLM 常见的 $ 与内容间不留空格的写法；
-    // output:"html" 只输出 HTML（不含 MathML），保证能完整通过 DOMPurify
-    if (window.markedKatex) {
+    // output:"html" 只输出 HTML（不含 MathML），保证能完整通过 DOMPurify。
+    // KaTeX 是首屏后异步加载的，所以这里必须可重入；扩展只挂一次。
+    if (window.markedKatex && !_markedKatexApplied) {
       marked.use(markedKatex({ throwOnError: false, nonStandard: true, output: "html" }));
+      _markedKatexApplied = true;
     }
   }
-  if (window.DOMPurify) {
+  if (window.DOMPurify && !_purifyHookAdded) {
     DOMPurify.addHook("afterSanitizeAttributes", (node) => {
       if (node.tagName === "A") {
         node.setAttribute("target", "_blank");
         node.setAttribute("rel", "noopener noreferrer");
       }
     });
+    _purifyHookAdded = true;
   }
 }
 
@@ -4759,6 +4911,9 @@ function nbx() {
       // 恢复认证
       this.loadAuth();
 
+      // 首屏 splash 放行标志：同步初始化已完成，/api/tools/ 不再阻塞应用可见
+      try { window.__nbxBooted = true; } catch { /* 测试环境没有 window 时忽略 */ }
+
       await this.loadTools();
       this.loadParseConfig();
       // 仅供预览/联调：?dev=fallback / ?dev=network 时自动播放一次（正式使用无副作用）
@@ -6173,7 +6328,7 @@ function nbx() {
           } catch (e) {
             const msg = String((e && e.message) || "");
             if (!window.mammoth || /mammoth/i.test(msg)) {
-              this.openUploadError("文件上传失败", "解析组件未加载，请检查网络后刷新页面重试。", this._uploadErrDetail(file, msg || "解析组件缺失"));
+              this.openUploadError("文件上传失败", "解析组件未加载，请检查网络后重试。", this._uploadErrDetail(file, msg || "解析组件缺失"));
             } else if (/invalid|corrupt|damaged|encrypted|zip/i.test(msg)) {
               this.openUploadError("文件上传失败", "该 Word 文件可能已损坏或被加密，请重新保存为 .docx 后再试。", this._uploadErrDetail(file, msg || "文件损坏"));
             } else {
@@ -6307,7 +6462,8 @@ function nbx() {
     },
     async _readDocx(file) {
       if (!window.mammoth) {
-        throw new Error("mammoth.js 未加载，请检查网络后刷新页面");
+        const ok = await ensureMammoth();
+        if (!ok) throw new Error("mammoth.js 加载失败，请检查网络后重试");
       }
       const arrayBuffer = await file.arrayBuffer();
       const result = await mammoth.extractRawText({ arrayBuffer });
@@ -7534,6 +7690,8 @@ function nbx() {
       this._pairCount = 0;
       this.pairUrl = "";
       this.pairToken = "";
+      // 二维码库与配对接口并行加载；失败也不影响「复制网址」兜底
+      const qrReady = ensureQrCode();
       try {
         const res = await fetch("/api/ocr/pair", {
           method: "POST",
@@ -7559,6 +7717,7 @@ function nbx() {
         }
         const data = await res.json();
         this.pairToken = data.token || "";
+        await qrReady;
         // 绝对地址在前端拼：反代下由浏览器告诉我们真实的 origin 最可靠
         this.pairUrl = location.origin + (data.path || `/m/upload?token=${this.pairToken}`);
         this.pairExpiresIn = Number(data.expires_in) || 0;
@@ -11102,18 +11261,26 @@ function nbx() {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     },
 
-    exportWord() {
+    async exportWord() {
       if (!window.htmlDocx) {
-        this.toast("导出组件未加载，请检查网络后刷新", "error");
-        return;
+        this.toast("正在加载 Word 导出组件…");
+        if (!(await ensureHtmlDocx())) {
+          this.toast("导出组件加载失败，请检查网络后重试", "error");
+          return;
+        }
       }
-      const fullHtml = this.buildExportHtml(this.exportFontSize);
-      const converted = htmlDocx.asBlob(fullHtml, {
-        orientation: "portrait",
-        margins: { top: 720, right: 720, bottom: 720, left: 720 },
-      });
-      this.downloadBlob(converted, this.exportFilename("docx"));
-      this.toast("Word 文档已开始下载");
+      try {
+        const fullHtml = this.buildExportHtml(this.exportFontSize);
+        const converted = htmlDocx.asBlob(fullHtml, {
+          orientation: "portrait",
+          margins: { top: 720, right: 720, bottom: 720, left: 720 },
+        });
+        this.downloadBlob(converted, this.exportFilename("docx"));
+        this.toast("Word 文档已开始下载");
+      } catch (e) {
+        try { console.warn("Word 导出失败", e); } catch { /* 忽略 */ }
+        this.toast("Word 导出失败，请重试", "error");
+      }
     },
 
     /* PDF 导出：隐藏 iframe + 浏览器原生打印。
@@ -11133,7 +11300,7 @@ function nbx() {
     
       // 含公式时才引入 KaTeX 字体样式（与页面同版本）
       const katexLink = content.includes("class=\"katex") 
-        ? '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.47/dist/katex.min.css">'
+        ? '<link rel="stylesheet" href="/static/vendor/katex-0.16.47/katex.min.css">'
         : "";
       const doc = frame.contentDocument;
       doc.open();
@@ -11183,7 +11350,7 @@ function nbx() {
        刻意不复用页面的 @media print——分栏视图与暗色主题在纸上没法看，
        引擎会自己分页、自己数页数，并在弹窗里让老师选教师详解版 / 学生练习版 / 答案解析：
        学生练习版不含答案，老师要发的卷子和自己看的答案因此能分开出纸。 */
-    printVisualPaper() {
+    async printVisualPaper() {
       if (!this.vpHasData) {
         this.toast("暂无可打印的讲解内容", "error");
         return;
@@ -11194,11 +11361,15 @@ function nbx() {
         this.toast(`正在生成中（已完成 ${this.vpAnalyzedCount}/${this.vpTotal} 题讲解），完成后可打印`, "warn");
         return;
       }
-      if (!window.VPPrint) {
-        this.toast("打印组件未加载，请检查网络后刷新", "error");
-        return;
-      }
+      // 先收起菜单：组件是异步加载的，菜单开着时重复点击会弹两次对话框
       this.closeExportMenu();
+      if (!window.VPPrint) {
+        this.toast("正在加载打印组件…");
+        if (!(await ensureVpPrint())) {
+          this.toast("打印组件加载失败，请检查网络后重试", "error");
+          return;
+        }
+      }
       const paper = this.visualPaper && this.visualPaper.paper ? this.visualPaper.paper : {};
       const title = (paper.title || "").trim() || "试卷讲解";
       try {
