@@ -3032,10 +3032,10 @@
 
     <!-- ==================== 收藏编辑弹窗 ==================== -->
     <div x-show="favModal" class="modal-mask" x-transition.opacity @click.self="favModal = false">
-      <div class="modal-card glass-deep pop-in" @click.stop>
+      <div class="modal-card glass-deep pop-in" @click.stop role="dialog" aria-modal="true" aria-labelledby="fav-edit-title">
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('pen','w-4 h-4')"></span>
-          <h3 class="font-bold text-sm">编辑收藏</h3>
+          <h3 class="font-bold text-sm" id="fav-edit-title">编辑收藏</h3>
           <button class="icon-btn ml-auto" @click="favModal = false" title="关闭" x-html="icon('x','w-4 h-4')"></button>
         </div>
         <div class="p-5 space-y-4 overflow-y-auto scroll-thin">
@@ -3060,10 +3060,10 @@
     <!-- ==================== 导出可视化讲解（单文件 HTML） ==================== -->
     <div x-show="vpExportOpen" class="modal-mask" x-transition.opacity x-cloak
          @click.self="closeVpExport()" @keydown.escape.window="vpExportOpen && closeVpExport()">
-      <div class="modal-card modal-md glass-deep pop-in" @click.stop>
+      <div class="modal-card modal-md glass-deep pop-in" @click.stop role="dialog" aria-modal="true" aria-labelledby="vp-export-title">
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('projector','w-4 h-4')"></span>
-          <h3 class="font-bold text-sm">导出可视化讲解</h3>
+          <h3 class="font-bold text-sm" id="vp-export-title">导出可视化讲解</h3>
           <button class="icon-btn ml-auto" @click="closeVpExport()" title="关闭" x-html="icon('x','w-4 h-4')"></button>
         </div>
         <div class="p-5 space-y-4 overflow-y-auto scroll-thin">
@@ -3124,10 +3124,10 @@
                  并标出当前这一版是谁生成的） -->
     <div x-show="retryModelOpen" class="modal-mask" x-transition.opacity x-cloak
          @click.self="retryModelOpen = false" @keydown.escape.window="retryModelOpen = false">
-      <div class="modal-card modal-lg glass-deep pop-in" @click.stop>
+      <div class="modal-card modal-lg glass-deep pop-in" @click.stop role="dialog" aria-modal="true" aria-labelledby="retry-model-title">
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon(retryModelMode === 'regen' ? 'refresh' : 'replace','w-4 h-4')"></span>
-          <h3 class="font-bold text-sm" x-text="retryModelMode === 'regen' ? '重新生成' : '换个模型重试'"></h3>
+          <h3 class="font-bold text-sm" id="retry-model-title" x-text="retryModelMode === 'regen' ? '重新生成' : '换个模型重试'"></h3>
           <button class="icon-btn ml-auto" @click="retryModelOpen = false" title="关闭" x-html="icon('x','w-4 h-4')"></button>
         </div>
         <div class="p-5">
@@ -3301,10 +3301,10 @@
 
     <!-- ==================== 使用码输入弹窗 ==================== -->
     <div x-show="codeModal" class="modal-mask" x-transition.opacity @click.self="closeCodeModal()">
-      <div class="modal-card modal-sm glass-deep pop-in" @click.stop>
+      <div class="modal-card modal-sm glass-deep pop-in" @click.stop role="dialog" aria-modal="true" aria-labelledby="code-modal-title">
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('key','w-4 h-4')"></span>
-          <h3 class="font-bold text-sm">输入使用码</h3>
+          <h3 class="font-bold text-sm" id="code-modal-title">输入使用码</h3>
           <button class="icon-btn ml-auto" @click="closeCodeModal()" title="关闭" x-html="icon('x','w-4 h-4')"></button>
         </div>
 
@@ -3454,11 +3454,11 @@
 
     <!-- ==================== PDF 云端解析中 ==================== -->
     <div x-show="parsingFile && !scanWarnOpen" class="modal-mask" x-transition.opacity>
-      <div class="modal-card modal-xs glass-deep pop-in" @click.stop role="status" aria-live="polite">
+      <div class="modal-card modal-xs glass-deep pop-in" @click.stop role="dialog" aria-modal="true" aria-labelledby="pdf-parse-title">
         <div class="p-6 flex flex-col items-center text-center gap-4">
           <div class="thinking-orb-wrap"><div class="thinking-orb"><div class="thinking-orb-inner"></div></div></div>
           <div>
-            <h3 class="font-bold text-sm">正在解析 PDF，请稍候</h3>
+            <h3 class="font-bold text-sm" id="pdf-parse-title">正在解析 PDF，请稍候</h3>
             <p class="text-xs text-dim mt-1.5 truncate" style="max-width:18rem" x-text="pendingPdfFile ? pendingPdfFile.name : ''"></p>
             <p class="text-xs text-faint mt-1.5 flex items-center justify-center gap-1.5">
               <span class="thinking-dots"><span></span><span></span><span></span></span>大文件可能需要几分钟
