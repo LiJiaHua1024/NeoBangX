@@ -3872,8 +3872,19 @@
     <!-- 悠空 · 云扫转场（切入 / 切出悠空主题时扫过全屏） -->
     <div x-ref="skySweep" class="sky-sweep" aria-hidden="true"></div>
 
-    <!-- ==================== Toast ==================== -->
-    <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] flex flex-col items-center gap-2 pointer-events-none">
+    <!-- ==================== Toast / 删除撤销条 ==================== -->
+    <!-- aria-live 必须常驻在容器上：toast 是插入到既有区域里的，读屏才会念出
+         生成失败、额度不足这类一闪而过的关键信息 -->
+    <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] flex flex-col items-center gap-2 pointer-events-none"
+         role="region" aria-label="通知" aria-live="polite" aria-atomic="false">
+      <!-- 撤销条用 x-if：每次删除重建节点，倒计时进度条才会从头走 -->
+      <template x-if="undoAction">
+        <div class="undo-bar">
+          <span class="undo-bar-text" x-text="'已删除' + (undoAction.label ? '「' + undoAction.label + '」' : '') + '，仍可撤销'"></span>
+          <button type="button" class="undo-bar-btn" @click="undoDelete()">撤销</button>
+          <span class="undo-progress" aria-hidden="true" :style="'animation-duration:' + undoWindowMs + 'ms'"></span>
+        </div>
+      </template>
       <template x-for="t in toasts" :key="t.id">
         <div class="toast" :class="{ 'out': t.out }"
              :style="t.type === 'error' ? 'color:#fda4af' : (t.type === 'warn' ? 'color:#fcd34d' : '')">

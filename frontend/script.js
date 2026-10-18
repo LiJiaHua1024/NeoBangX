@@ -1251,6 +1251,9 @@ const TITLE_JOB_POLL_MS = 1000;
 const TITLE_JOB_POLL_HIDDEN_MS = 5000;
 // 索引里保留的输入摘要长度：够卡片在无标题时展示（模板用 excerpt 的默认 46 字）
 const HISTORY_HEAD_CHARS = 60;
+/* 删除后的撤销窗口：删除当场就落盘（墓碑 + 正文清理），撤销靠手里留的快照写回。
+   窗口只决定底部「撤销」条停留多久，不影响删除本身的持久性。 */
+const UNDO_WINDOW_MS = 5000;
 // 删除墓碑（线路镜像用）：合并是集合求并，没有墓碑的话，一端删掉的记录会被另一端
 // 的旧副本原样带回来。墓碑与内容一起同步，合并时「比内容新」即判死。
 const LS_TOMB = "nbx_tomb";
@@ -2939,6 +2942,13 @@ function nbx() {
 
     /* --- Toast --- */
     toasts: [],
+    /* 删除撤销条：同一时刻只保留最近一次删除（Telegram 式单槽位） */
+    undoAction: null,
+    undoWindowMs: UNDO_WINDOW_MS,
+    _undoTimer: null,
+    get undoSeconds() {
+      return Math.round(UNDO_WINDOW_MS / 1000);
+    },
 
     /* --- 内部 --- */
     _abortCtrl: null,
@@ -11704,20 +11714,24 @@ function nbx() {
       if (!_mirror.started) return;
       if (typeof NbxMirrorStore === "undefined" || !NbxMirrorStore.ready()) return;
       try {
-        if (!kind || kind === "history") this._mirrorMergeList(this.history, LS.history);
-        if (!kind || kind === "favorites") this._mirrorMergeList(this.favorites, LS.favorites);
+        if (!kind || kind === "history") this._mirrorMergeList(this.history, LS.history, "history");
+        if (!kind || kind === "favorites") this._mirrorMergeList(this.favorites, LS.favorites, "favorites");
       } catch (e) { /* 合并失败就按原样写，绝不因此中断本次落盘 */ }
     },
     /* 按 updatedAt 做 LWW 把存储里的行并进内存列表；同 id 就地改现有对象而不是
        替换 —— finalize 正持有某个条目的引用（_persistHistoryItem(origin)），
        换对象会让引用游离、这次的产出落不进索引。 */
-    _mirrorMergeList(list, lsKey) {
+    _mirrorMergeList(list, lsKey, kind = "history") {
       const stored = lsGet(lsKey, []);
       if (!Array.isArray(stored) || !stored.length) return;
+      const stones = this._tombstones()[kind] || [];
       const byId = new Map();
       for (const it of list) if (it && it.id) byId.set(it.id, it);
       for (const it of stored) {
         if (!it || !it.id) continue;
+        // 已判死的条目不许从磁盘旧索引里再捞回来：删除总是先记墓碑再写索引，
+        // 而写索引前的合并读到的仍是删除前那份磁盘内容。
+        if (stones.some((s) => s.id === it.id && Number(s.at) >= (Number(it.updatedAt) || 0))) continue;
         const mine = byId.get(it.id);
         // 内存里没有 → 桥刚新增的行，补进来（排序交给各写入点自己处理）
         if (!mine) {
@@ -12542,17 +12556,81 @@ function nbx() {
         this.scheduleMascotCheck(80);
       });
     },
-    removeHistory(id) {
-      const removed = this.history.find((h) => h.id === id);
-      if (removed && removed.titleJobId) this._removeTitleJournal(removed.titleJobId);
-      this.history = this.history.filter((h) => h.id !== id);
+    async removeHistory(id) {
+      const at = this.history.findIndex((h) => h && h.id === id);
+      if (at < 0) return;
+      const removed = this.history[at];
+      const name = this.excerpt(removed.title || removed.inputHead || "", 30);
+      const ok = await this.askConfirm({
+        title: "删除这条记录？",
+        message: `${name ? `「${name}」` : "这条记录"}删除后可在 ${this.undoSeconds} 秒内撤销。`,
+        confirmText: "删除",
+        danger: true,
+      });
+      if (!ok) return;
+      // 确认期间列表可能被镜像重读替换：按 id 重新定位，删的仍是同一条
+      const index = this.history.findIndex((h) => h && h.id === id);
+      if (index < 0) return;
+      const item = this.history[index];
+      // 删除要立刻落盘，撤销只能靠这份正文快照写回
+      const body = item._bodyLoaded ? historyBodyOf(item) : this._readBodyRaw(id);
+      if (item.titleJobId) this._removeTitleJournal(item.titleJobId);
+      this.history.splice(index, 1);
       // 删掉的正是屏幕上这条结果对应的记录：续写/重试改为收尾时新建，别再指向已删的 id
       if (this.activeHistoryId === id) this.activeHistoryId = null;
       lsRemove(HISTORY_BODY_PREFIX + id);
-      // 记墓碑：否则对端（另一条线路）的旧副本会在下次合并时把这条带回来
+      // 先记墓碑再写索引：写索引前的镜像合并会读磁盘旧内容，墓碑必须已生效
       this._addTombstones("history", [id]);
       this._persistHistoryIndex();
-      this.toast("已删除该条记录");
+      this._showUndo({ kind: "history", id, item, body, index, label: name });
+    },
+    /* 删除后的底部撤销条：单槽位，新的删除顶掉上一条（Telegram 式）。
+       删除当场已落盘，这里只负责在窗口内把快照写回。 */
+    _showUndo(action) {
+      this._cancelUndo();
+      // 先摘掉旧条再重建：进度条动画从满格重新开始，不会沿用上一次的残余时间
+      this.$nextTick(() => { this.undoAction = action; });
+      this._undoTimer = setTimeout(() => {
+        this._undoTimer = null;
+        this.undoAction = null;
+      }, UNDO_WINDOW_MS);
+    },
+    _cancelUndo() {
+      if (this._undoTimer) clearTimeout(this._undoTimer);
+      this._undoTimer = null;
+      this.undoAction = null;
+    },
+    /* 撤销删除：快照写回、撤掉本机墓碑、补一条更新的镜像 op。
+       对端若已收到删除也不要紧：墓碑只判「比内容新」，恢复后的 updatedAt 更晚。 */
+    undoDelete() {
+      const act = this.undoAction;
+      this._cancelUndo();
+      if (!act) return;
+      if (act.kind === "history") {
+        if (this.history.some((h) => h && h.id === act.id)) return;
+        const item = act.item;
+        if (act.body) {
+          // 正文也先并回内存：即使配额不足写不进磁盘，这一会话里打开仍看得到内容
+          Object.assign(item, act.body);
+          if (!lsWrite(HISTORY_BODY_PREFIX + act.id, JSON.stringify(act.body))) storageFullWarn(false);
+        }
+        item._bodyLoaded = true;
+        item.updatedAt = Date.now();
+        this.history.splice(Math.min(act.index, this.history.length), 0, item);
+        this._removeTombstones("history", [act.id]);
+        this._persistHistoryIndex(act.id);
+        this._mirrorChanged("h", act.id, false, item.updatedAt);
+        this.toast("已恢复该条记录");
+        return;
+      }
+      if (this.favorites.some((f) => f && f.id === act.id)) return;
+      const fav = act.item;
+      fav.updatedAt = Date.now();
+      this.favorites.splice(Math.min(act.index, this.favorites.length), 0, fav);
+      this._removeTombstones("favorites", [act.id]);
+      this._persistFavorites();
+      this._mirrorChanged("f", act.id, false, fav.updatedAt);
+      this.toast("已恢复该条收藏");
     },
     async clearHistory() {
       if (!this.history.length) return;
@@ -12563,6 +12641,8 @@ function nbx() {
         danger: true,
       });
       if (!ok) return;
+      // 清空是整批删除：上一条还在撤销窗口里的记录也一并作废
+      this._cancelUndo();
       for (const item of this.history) {
         lsRemove(HISTORY_BODY_PREFIX + item.id);
         if (item.titleJobId) this._removeTitleJournal(item.titleJobId);
@@ -12628,11 +12708,25 @@ function nbx() {
       }
       this.favModal = false;
     },
-    removeFavorite(id) {
-      this.favorites = this.favorites.filter((f) => f.id !== id);
+    async removeFavorite(id) {
+      const at = this.favorites.findIndex((f) => f && f.id === id);
+      if (at < 0) return;
+      const removed = this.favorites[at];
+      const name = this.excerpt(removed.title || removed.content || "", 30);
+      const ok = await this.askConfirm({
+        title: "删除这条收藏？",
+        message: `${name ? `「${name}」` : "这条收藏"}删除后可在 ${this.undoSeconds} 秒内撤销。`,
+        confirmText: "删除",
+        danger: true,
+      });
+      if (!ok) return;
+      const index = this.favorites.findIndex((f) => f && f.id === id);
+      if (index < 0) return;
+      const item = this.favorites[index];
+      this.favorites.splice(index, 1);
       this._addTombstones("favorites", [id]);
       this._persistFavorites();
-      this.toast("已删除该收藏");
+      this._showUndo({ kind: "favorite", id, item, index, label: name });
     },
 
     /* ============ 数据导出 / 导入 ============
@@ -12700,6 +12794,18 @@ function nbx() {
       const short = kind === "history" ? "h" : "f";
       for (const id of list) this._mirrorChanged(short, id, true, now);
       return now;
+    },
+    /* 撤销删除时撤掉本机墓碑。对端那份由后续的 set op（updatedAt 更新）压过：
+       合并只判「墓碑比内容新」，更晚的恢复内容不会被旧墓碑判死。 */
+    _removeTombstones(kind, ids) {
+      const list = (ids || []).filter(Boolean);
+      if (!list.length || !this.mirrorAvailable) return;
+      const stone = this._tombstones();
+      const drop = new Set(list);
+      const next = (stone[kind] || []).filter((s) => !drop.has(s.id));
+      if (next.length === (stone[kind] || []).length) return;
+      stone[kind] = next;
+      lsSet(LS_TOMB, stone);
     },
     /* 本机全量数据 → envelope。正文优先取内存里的版本（可能刚改过还没落盘），
        未水合的条目直读 localStorage —— 不走 _hydrateHistory，避免把整份正文

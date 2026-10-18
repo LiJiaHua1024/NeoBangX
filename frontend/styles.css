@@ -3383,6 +3383,75 @@ mark, .vp-hl {
   to { opacity: 0; transform: translateY(10px) scale(0.94); }
 }
 
+/* 删除撤销条：与 toast 同一条底部通道，但要能点，所以单独放开 pointer-events。
+   底边那条进度线就是剩余时间——用户不用读秒也知道还剩多久能撤。 */
+.undo-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  max-width: min(34rem, 88vw);
+  padding: 0.42rem 0.45rem 0.55rem 1rem;
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--panel-strong);
+  border: 1px solid var(--border-strong);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--glass-spec) 10%, transparent),
+    var(--shadow);
+  pointer-events: auto;
+  overflow: hidden;
+  animation: toast-in 0.35s var(--ease-spring) both;
+}
+.undo-bar-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.83rem;
+  font-weight: 600;
+}
+.undo-bar-btn {
+  flex: none;
+  padding: 0.36rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+.undo-bar-btn:hover { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+.undo-bar-btn:active { transform: scale(0.96); }
+.undo-bar-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 2px;
+}
+.undo-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 2px;
+  background: var(--accent);
+  transform-origin: left center;
+  animation-name: undo-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@keyframes undo-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .undo-bar { animation: none; }
+  .undo-progress { animation: none; opacity: 0.55; }
+}
+
 /* 侧栏遮罩：模糊底层做视觉分离。
    只做 opacity 过渡——backdrop-filter 动画要逐帧重绘整个底层，抽屉同时还在滑动，
    低端机上会掉帧；模糊常驻、随遮罩一起淡入，观感一致而代价小得多。 */
