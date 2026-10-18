@@ -233,6 +233,10 @@ const QUOTA_RING_C = 2 * Math.PI * QUOTA_RING_R;
    实测模型对定界符的写法会漂移（试卷工具的 @@TAG@@ 就吃过这个亏），严格匹配必漏。 */
 const CONTINUE_DONE_SRC = "[＠@]*\\s*CONTINUE[\\s_-]*DONE\\s*[＠@]*";
 
+/* 历史全文检索引擎（nbx-history-search.js）。运行期对象不进 Alpine 响应式数据：
+   里面是索引、Bloom 位图与文档引用，深代理既没必要也会拖慢查询。 */
+let _historySearch = null;
+
 /* ---------------- 「描述需求找工具」参数 ----------------
    用户不需要按 Enter：只要「有意停顿」就自动搜。什么叫有意停顿分两档：
    - 打完一句话自然停手（PAUSE_MS 内没有新输入）：这是最常见的一种，等待窗口
@@ -2494,6 +2498,20 @@ function nbx() {
 
     /* --- 本地数据 --- */
     history: [],
+    /* --- 历史搜索（索引与查询在 nbx-history-search.js） --- */
+    historyQuery: "",
+    historySearchRows: [],
+    historySearchActive: -1,
+    historySearchIndexing: false,
+    historySearchFocused: false,
+    historySearchDuration: 0,
+    historySearchTotal: 0,
+    _hsComposing: false,
+    _hsSearchTimer: null,
+    _hsLastQuery: "",
+    _hsBuildQueued: false,
+    _hsBuildTimer: null,
+    _hsBuildIdle: null,
     // 旧格式迁移失败时置真：本次会话退回整份历史写入，不破坏尚未拆分的旧数据
     _historyLegacy: false,
     _titlePollTimer: null,
@@ -4469,6 +4487,9 @@ function nbx() {
 
       // 本地数据（历史为索引 + 分条正文，旧格式在此一次性拆分）
       this.history = this._loadHistory();
+      // 先建元数据索引（标题 / 摘要 / 工具名），正文由空闲分片在后台补齐；
+      // 用户在补齐前就能搜到内容，补齐过程中结果会自动刷新。
+      this._historySearchInit();
       this.favorites = lsGet(LS.favorites, []);
       this.input = localStorage.getItem(LS.draft) || "";
 
@@ -11269,6 +11290,263 @@ function nbx() {
       }
     },
 
+    /* ============ 历史搜索 ============ */
+    /* 索引内核是纯函数模块；这里只负责喂数据、分片建索引和把结果接进 Alpine。
+       查询本身在内存里完成，不读 localStorage，也不解析 JSON。 */
+    _historySearchEngine() {
+      if (_historySearch) return _historySearch;
+      if (typeof NbxHistorySearch === "undefined" || !NbxHistorySearch) return null;
+      _historySearch = NbxHistorySearch.create();
+      return _historySearch;
+    },
+    _historySearchInit() {
+      const engine = this._historySearchEngine();
+      if (!engine) return;
+      const pending = engine.sync(this.history);
+      this.historySearchIndexing = pending.length > 0;
+      this._historySearchScheduleBuild(false);
+    },
+    /* 列表增删改后的统一对账。O(条数) 只比元数据，正文是否重建由引擎按签名判断。 */
+    _historySearchSync() {
+      const engine = this._historySearchEngine();
+      if (!engine) return;
+      engine.sync(this.history);
+      const stats = engine.stats();
+      this.historySearchIndexing = stats.pending > 0;
+      if (this.historyQuery.trim()) this._runHistorySearch(true);
+      if (stats.pending > 0) this._historySearchScheduleBuild(false);
+    },
+    /* 镜像重读 / 导入合并后整份换血：旧正文可能已经变了，全部退回元数据重新读。 */
+    _historySearchReload() {
+      const engine = this._historySearchEngine();
+      if (!engine) return;
+      engine.invalidateBodies();
+      const stats = engine.stats();
+      this.historySearchIndexing = stats.pending > 0;
+      this._historySearchSync();
+      this._historySearchScheduleBuild(true);
+    },
+    _historySearchClear() {
+      if (_historySearch) _historySearch.clear();
+      this.historyQuery = "";
+      this.historySearchRows = [];
+      this.historySearchActive = -1;
+      this.historySearchIndexing = false;
+      this.historySearchDuration = 0;
+      this.historySearchTotal = 0;
+      this._hsLastQuery = "";
+    },
+    /* 单条正文刚被读回内存（打开历史 / 后台补索引）：立刻纳入全文检索。 */
+    _historySearchHydrate(item) {
+      const engine = this._historySearchEngine();
+      if (!engine) return;
+      if (item && item.input !== undefined) engine.hydrate(item, item);
+      else engine.sync(this.history);
+      if (this.historyQuery.trim()) this._runHistorySearch(true);
+    },
+    /* 分片建索引：一次最多 6 条 / 6ms，优先用 requestIdleCallback。
+       正文可能有几 MB，绝不能在一次交互里同步读完。每片结束都会重跑当前查询，
+       所以用户会看到结果从「标题命中」逐步长成「正文命中」。 */
+    _historySearchScheduleBuild(prioritize) {
+      const engine = this._historySearchEngine();
+      if (!engine) return;
+      if (engine.stats().pending <= 0) {
+        this.historySearchIndexing = false;
+        return;
+      }
+      this.historySearchIndexing = true;
+      if (this._hsBuildQueued) {
+        if (!prioritize) return;
+        if (this._hsBuildIdle != null && typeof window !== "undefined" && typeof window.cancelIdleCallback === "function") {
+          try { window.cancelIdleCallback(this._hsBuildIdle); } catch (e) { /* ignore */ }
+        }
+        if (this._hsBuildTimer != null) clearTimeout(this._hsBuildTimer);
+        this._hsBuildIdle = null;
+        this._hsBuildTimer = null;
+        this._hsBuildQueued = false;
+      }
+      const run = () => {
+        this._hsBuildQueued = false;
+        this._hsBuildIdle = null;
+        this._hsBuildTimer = null;
+        this._historySearchBuildSlice();
+      };
+      this._hsBuildQueued = true;
+      if (!prioritize && typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+        this._hsBuildIdle = window.requestIdleCallback(run, { timeout: 900 });
+      } else {
+        this._hsBuildTimer = setTimeout(run, prioritize ? 0 : 120);
+      }
+    },
+    _historySearchBuildSlice() {
+      const engine = this._historySearchEngine();
+      if (!engine) return;
+      const started = Date.now();
+      let processed = 0;
+      while (processed < 6 && engine.stats().pending > 0) {
+        if (processed && Date.now() - started > 6) break;
+        const item = engine.nextPending();
+        if (!item) break;
+        if (item.input !== undefined) {
+          engine.hydrate(item, item);
+        } else {
+          const body = this._readBodyRaw(item.id);
+          if (body) engine.hydrate(item, body);
+          else engine.markMissing(item.id);
+        }
+        processed += 1;
+      }
+      const left = engine.stats().pending;
+      this.historySearchIndexing = left > 0;
+      if (this.historyQuery.trim()) this._runHistorySearch(true);
+      if (left > 0) this._historySearchScheduleBuild(true);
+    },
+    _runHistorySearch(keepActive) {
+      const raw = this.historyQuery;
+      if (!raw.trim()) {
+        this.historySearchRows = [];
+        this.historySearchActive = -1;
+        this.historySearchTotal = 0;
+        this._hsLastQuery = "";
+        return;
+      }
+      const engine = this._historySearchEngine();
+      if (!engine) return;
+      const result = engine.query(raw, { limit: 200 });
+      const rows = [];
+      for (const entry of result.results) {
+        const item = entry.item;
+        // 结果元数据挂在原条目上：打开 / 删除 / 重新生成仍拿到同一个对象，
+        // 不会出现「从搜索里打开的是副本，标题更新落不回列表」的问题。
+        item._hsTitle = entry.titleSegments;
+        item._hsSnippet = entry.snippet;
+        item._hsSnippetLabel = entry.snippetLabel;
+        rows.push(item);
+      }
+      const same = this._hsLastQuery === raw;
+      this.historySearchRows = rows;
+      this.historySearchTotal = result.total;
+      this.historySearchDuration = result.durationMs;
+      this._hsLastQuery = raw;
+      if (!keepActive || !same || this.historySearchActive < 0) {
+        this.historySearchActive = rows.length ? 0 : -1;
+      } else if (this.historySearchActive >= rows.length) {
+        this.historySearchActive = rows.length - 1;
+      }
+    },
+    _queueHistorySearch() {
+      this._historySearchScheduleBuild(true);
+      // 用 0ms 定时器合并同一帧内的连续输入，而不是 rAF：
+      // 后台标签页 / 无合成帧的环境里 rAF 会被节流甚至不触发，
+      // 搜索不能依赖「屏幕正在刷新」这个前提。
+      if (this._hsSearchTimer != null) return;
+      this._hsSearchTimer = setTimeout(() => {
+        this._hsSearchTimer = null;
+        this._runHistorySearch(false);
+      }, 0);
+    },
+    onHistorySearchInput(event) {
+      // 输入法组字期间不读值、不查询：半截拼音既搜不到东西，也会打断组字。
+      if (this._hsComposing) return;
+      this.historyQuery = event && event.target ? event.target.value : "";
+      this._queueHistorySearch();
+    },
+    onHistorySearchCompositionStart() {
+      this._hsComposing = true;
+    },
+    onHistorySearchCompositionEnd(event) {
+      this._hsComposing = false;
+      if (event && event.target) this.historyQuery = event.target.value;
+      this._queueHistorySearch();
+    },
+    clearHistorySearch() {
+      this.historyQuery = "";
+      this.historySearchRows = [];
+      this.historySearchActive = -1;
+      this.historySearchTotal = 0;
+      this._hsLastQuery = "";
+      this.$nextTick(() => {
+        const el = this.$refs.historySearchInput;
+        if (el) el.focus();
+      });
+    },
+    focusHistorySearch() {
+      if (!this.history.length) return;
+      if (this.isCompact) this.rightMobileOpen = true;
+      if (this.rightCollapsed) {
+        this.rightCollapsed = false;
+        this.persistUI();
+      }
+      this.setRightTab("history");
+      this._historySearchScheduleBuild(true);
+      this.$nextTick(() => {
+        const el = this.$refs.historySearchInput;
+        if (!el) return;
+        el.focus();
+        try { el.select(); } catch (e) { /* ignore */ }
+      });
+    },
+    onGlobalKeydown(event) {
+      if (!event || event.altKey || event.shiftKey) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (String(event.key).toLowerCase() !== "k") return;
+      event.preventDefault();
+      this.focusHistorySearch();
+    },
+    _historySearchScrollActive() {
+      this.$nextTick(() => {
+        const list = this.$refs.historySearchList;
+        if (!list) return;
+        const el = list.querySelector(`[data-hs-i="${this.historySearchActive}"]`);
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
+      });
+    },
+    onHistorySearchKeydown(event) {
+      if (!event || event.isComposing || this._hsComposing) return;
+      if (event.key === "Escape") {
+        if (this.historyQuery) {
+          event.preventDefault();
+          this.clearHistorySearch();
+        } else if (event.target && event.target.blur) {
+          event.target.blur();
+        }
+        return;
+      }
+      const rows = this.historySearchRows;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        if (!rows.length) return;
+        event.preventDefault();
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        const base = this.historySearchActive < 0 ? (delta > 0 ? -1 : 0) : this.historySearchActive;
+        this.historySearchActive = (base + delta + rows.length) % rows.length;
+        this._historySearchScrollActive();
+        return;
+      }
+      if (event.key === "Enter") {
+        if (!rows.length) return;
+        event.preventDefault();
+        const row = rows[this.historySearchActive >= 0 ? this.historySearchActive : 0];
+        if (row) this.openHistory(row);
+      }
+    },
+    get historyRows() {
+      return this.historyQuery.trim() ? this.historySearchRows : this.history;
+    },
+    get historySearchHasQuery() {
+      return !!this.historyQuery.trim();
+    },
+    get historySearchCountLabel() {
+      if (this.historySearchIndexing && !this.historySearchRows.length) return "检索中";
+      if (!this.historySearchRows.length) return "无匹配";
+      return this.historySearchRows.length + " 条";
+    },
+    get historySearchStats() {
+      const engine = this._historySearchEngine();
+      const stats = engine ? engine.stats() : { docs: this.history.length, bodies: 0 };
+      const ms = this.historySearchDuration > 0 ? Math.max(0.1, this.historySearchDuration).toFixed(1) : "0.1";
+      return `已索引 ${stats.bodies}/${stats.docs} 条记录 · 最近一次查询 ${ms} ms`;
+    },
+
     /* ============ 历史记录 ============ */
     /* --- 分键存储：索引 + 单条正文 --- */
     /* 淘汰最旧记录直到写入成功：write 用当前 history 生成 payload 并落盘，返回是否成功。
@@ -11287,12 +11565,24 @@ function nbx() {
       return write();
     },
     _historyIndexPayload() {
-      // 迁移失败的会话退回整份数组（含正文），与拆分前的行为一致
-      return JSON.stringify(this._historyLegacy ? this.history : this.history.map(historyIndexOf));
+      // 迁移失败的会话退回整份数组（含正文），与拆分前的行为一致。
+      // 搜索高亮是纯展示字段（_hs*），不能跟着旧格式一起落盘。
+      if (!this._historyLegacy) return JSON.stringify(this.history.map(historyIndexOf));
+      return JSON.stringify(this.history.map((item) => {
+        const copy = {};
+        for (const key of Object.keys(item)) {
+          if (key === "_hsTitle" || key === "_hsSnippet" || key === "_hsSnippetLabel") continue;
+          copy[key] = item[key];
+        }
+        return copy;
+      }));
     },
     _persistHistoryIndex(keepId = "") {
       this._mirrorMergeBeforeWrite("history");
-      return this._evictOldestUntil(() => lsWrite(LS.history, this._historyIndexPayload()), keepId);
+      const ok = this._evictOldestUntil(() => lsWrite(LS.history, this._historyIndexPayload()), keepId);
+      // 每次落盘都顺手对账：标题、删除、版本切换、新记录都会经过这里。
+      this._historySearchSync();
+      return ok;
     },
     /* 写索引/收藏之前，先把桥刚并进来的行吸收进内存。
 
@@ -11369,6 +11659,8 @@ function nbx() {
         const raw = localStorage.getItem(HISTORY_BODY_PREFIX + item.id);
         if (raw) Object.assign(item, JSON.parse(raw));
       } catch { /* 正文损坏：保留索引元数据，正文留空 */ }
+      // 正文已经进内存：立即补进全文索引，不必等后台分片轮到它
+      this._historySearchHydrate(item);
       return item;
     },
     /* 直读某条正文，不改动入参、也不把正文带进内存列表。
@@ -12244,6 +12536,8 @@ function nbx() {
       this._addTombstones("history", this.history.map((h) => h.id));
       this.history = [];
       lsWrite(LS.history, "[]");
+      // 清空时把搜索状态一起收掉：引擎里不能留下已删记录的正文快照
+      this._historySearchClear();
       this.toast("历史记录已清空");
     },
 
@@ -12477,6 +12771,8 @@ function nbx() {
 
       // 索引整体重写：复用既有的「配额不足 → 淘汰最旧 → 重试」路径
       this.history = merged.history.map((e) => e.index);
+      // 对端可能改过正文：旧索引条目不能继续拿老正文参与搜索
+      this._historySearchReload();
       this._persistHistoryIndex();
       // 与镜像重读同理：屏幕上这条记录要把正文读回来，否则版本切换器会凭空消失
       const curActive = this.history.find((h) => h && h.id === this.activeHistoryId);
@@ -12716,6 +13012,7 @@ function nbx() {
         }
         this._mirrorReloadPending = false;
         this.history = lsGet(LS.history, []);
+        this._historySearchReload();
         this.favorites = lsGet(LS.favorites, []);
         // 重读后列表只剩索引项，屏幕上那条记录得把正文读回来：版本数组在正文里，
         // 不水合就会出现「结果还在、切换器却消失」。此处必为空闲（上面刚判过 isBusy）。

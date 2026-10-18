@@ -1,7 +1,7 @@
 /* 首屏启动页静态回归用例
    目标不是测视觉，而是锁住几件容易在后续改动中悄悄退化的事实：
    1. 主题 id 必须和 script.js 的 THEMES 完全对齐（历史上 forest/jade 就错配过）；
-   2. m/n 的 8 个关键步骤必须和 index.html 里的标签一一对应；
+   2. m/n 的 9 个关键步骤必须和 index.html 里的标签一一对应；
    3. thumbmark / 镜像三件套 / click-fx 不得再回到首屏关键路径；
    4. 背景引擎必须留在独立模块里，由启动后的空闲调度加载。 */
 const assert = require("node:assert/strict");
@@ -36,20 +36,20 @@ test("splash 主题选择器覆盖 THEMES 的每个 id，且不再有 forest", (
   }
 });
 
-test("m/n 的 8 个关键资源与标签数量一致", () => {
+test("m/n 的 9 个关键资源与标签数量一致", () => {
   const cssMarks = [...HTML.matchAll(/__nbxBootMark\('(css:[^']+)'\)/g)].map((m) => m[1]);
   const jsMarks = [...HTML.matchAll(/__nbxBootMark\('(js:[^']+)'\)/g)].map((m) => m[1]);
   const all = [...cssMarks, ...jsMarks];
   assert.equal(cssMarks.length, 2, "应恰好有 2 份关键 CSS");
-  assert.equal(jsMarks.length, 6, "应恰好有 6 个关键脚本");
-  assert.equal(new Set(all).size, 8, "步骤名不能重复");
-  assert.ok(HTML.includes("total: 8"), "登记器 total 必须是 8");
-  assert.ok(HTML.includes("jsTotal: 6"), "登记器 jsTotal 必须是 6");
-  assert.match(HTML, /id="boot-splash-progress"[\s\S]*?aria-valuemax="8"/);
+  assert.equal(jsMarks.length, 7, "应恰好有 7 个关键脚本");
+  assert.equal(new Set(all).size, 9, "步骤名不能重复");
+  assert.ok(HTML.includes("total: 9"), "登记器 total 必须是 9");
+  assert.ok(HTML.includes("jsTotal: 7"), "登记器 jsTotal 必须是 7");
+  assert.match(HTML, /id="boot-splash-progress"[\s\S]*?aria-valuemax="9"/);
 
   const rail = HTML.match(/id="boot-splash-rail"[\s\S]*?<\/div>/);
   assert.ok(rail, "应有进度轨");
-  assert.equal((rail[0].match(/<i><\/i>/g) || []).length, 8, "进度轨应有 8 段");
+  assert.equal((rail[0].match(/<i><\/i>/g) || []).length, 9, "进度轨应有 9 段");
 });
 
 test("关键脚本标签都带 onload/onerror，且顺序保持依赖关系", () => {
@@ -60,6 +60,7 @@ test("关键脚本标签都带 onload/onerror，且顺序保持依赖关系", ()
     "/static/vendor/dompurify-3.4.12.min.js",
     "/static/vendor/alpine-collapse-3.15.12.min.js",
     "/static/nbx-versions.js",
+    "/static/nbx-history-search.js",
     "/static/script.js",
     "/static/vendor/alpinejs-3.15.12.min.js",
   ]);
@@ -150,7 +151,7 @@ function makeSplashSandbox({ failed = "", seen = null } = {}) {
     "boot-splash-phase", "boot-splash-progress", "boot-splash-rail", "boot-splash-hint",
     "boot-splash-retry",
   ]) elements.set(id, makeEl(id));
-  elements.get("boot-splash-rail").children = Array.from({ length: 8 }, (_, i) => makeEl("seg" + i));
+  elements.get("boot-splash-rail").children = Array.from({ length: 9 }, (_, i) => makeEl("seg" + i));
 
   const store = new Map();
   if (seen != null) store.set("nbx_boot_seen", seen);
@@ -158,7 +159,7 @@ function makeSplashSandbox({ failed = "", seen = null } = {}) {
   const timers = new Map();
   let timerId = 0;
   const window = {
-    __nbxBoot: { steps: Object.create(null), total: 8, jsTotal: 6, failed, startedAt: Date.now() },
+    __nbxBoot: { steps: Object.create(null), total: 9, jsTotal: 7, failed, startedAt: Date.now() },
   };
   const document = {
     documentElement: makeEl("html"),
@@ -192,17 +193,17 @@ function markAll(sandbox) {
   const boot = sandbox.window.__nbxBoot;
   for (const name of [
     "css:tailwind", "css:styles", "js:marked", "js:dompurify",
-    "js:alpine-collapse", "js:versions", "js:app", "js:alpine",
+    "js:alpine-collapse", "js:versions", "js:hsearch", "js:app", "js:alpine",
   ]) {
     boot.steps[name] = 1;
     sandbox.window.__nbxBootPaint();
   }
 }
 
-test("控制器：8/8 + Alpine + booted 后淡出并记录已访问", () => {
+test("控制器：9/9 + Alpine + booted 后淡出并记录已访问", () => {
   const sb = makeSplashSandbox({ seen: null });
   const splash = sb.elements.get("boot-splash");
-  assert.equal(sb.elements.get("boot-splash-count").textContent, "0/8");
+  assert.equal(sb.elements.get("boot-splash-count").textContent, "0/9");
   assert.equal(sb.elements.get("boot-splash-phase").textContent, "正在加载界面");
   assert.equal(
     sb.elements.get("boot-splash-hint").textContent,
@@ -210,8 +211,8 @@ test("控制器：8/8 + Alpine + booted 后淡出并记录已访问", () => {
   );
 
   markAll(sb);
-  assert.equal(sb.elements.get("boot-splash-count").textContent, "8/8");
-  assert.equal(sb.elements.get("boot-splash-progress").attrs["aria-valuenow"], "8");
+  assert.equal(sb.elements.get("boot-splash-count").textContent, "9/9");
+  assert.equal(sb.elements.get("boot-splash-progress").attrs["aria-valuenow"], "9");
   assert.equal(splash.classList.contains("boot-splash-done"), false, "Alpine 未就绪前不能放行");
 
   sb.window.__nbxBooted = true;

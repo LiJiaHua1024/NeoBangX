@@ -2996,6 +2996,99 @@ mark, .vp-hl {
 .side-card.clickable:hover { box-shadow: 0 8px 22px -10px rgba(0, 0, 0, 0.3); }
 .side-card.clickable:active { transform: scale(0.98); transition-duration: 0.08s; }
 
+/* —— 历史搜索：输入框 + 命中高亮 + 上下文摘要 —— */
+.hsearch-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.55rem 0.4rem 0.6rem;
+  border-radius: 0.7rem;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.hsearch-field:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: color-mix(in srgb, var(--accent) 4%, var(--panel-soft));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.hsearch-ico { display: inline-flex; flex: none; color: var(--text-faint); }
+.hsearch-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+.hsearch-input::placeholder { color: var(--text-faint); }
+.hsearch-count {
+  flex: none;
+  white-space: nowrap;
+  font-size: 0.66rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.hsearch-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  color: var(--text-faint);
+  transition: color 0.2s ease, background 0.2s ease;
+}
+.hsearch-clear:hover { color: var(--text); background: var(--hover-bg); }
+.hs-title { word-break: break-word; }
+.hs-snippet {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  font-size: 0.74rem;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.hs-snippet-label {
+  flex: none;
+  padding: 0.02rem 0.32rem;
+  border-radius: 0.35rem;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text-faint);
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+.hs-snippet-text {
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+/* 命中片段：内联底色，跨行时每行都带圆角（box-decoration-break） */
+.hs-hit {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-radius: 0.22rem;
+  padding: 0 0.06em;
+  font-weight: 650;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.side-card.hs-active {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-soft));
+  box-shadow: 0 6px 18px -12px var(--glow);
+}
+
 .title-shimmer {
   color: var(--text-dim);
   background-image: linear-gradient(100deg, var(--text-dim) 36%, var(--text) 50%, var(--text-dim) 64%);

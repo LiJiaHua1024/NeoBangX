@@ -165,12 +165,12 @@
     }
   </style>
   <!-- 首屏步骤登记器：必须早于 CSS/JS 的 onload，缓存命中时回调可能先于后面的 splash 控制器。
-       资源名只在这里登记一次；总数 8 = 2 份 CSS + 6 个关键脚本。 -->
+       资源名只在这里登记一次；总数 9 = 2 份 CSS + 7 个关键脚本。 -->
   <script>
     (function () {
       var steps = Object.create(null);
       var boot = window.__nbxBoot = {
-        steps: steps, failed: "", total: 8, jsTotal: 6, startedAt: Date.now(),
+        steps: steps, failed: "", total: 9, jsTotal: 7, startedAt: Date.now(),
       };
       window.__nbxBootMark = function (name) {
         if (!name || steps[name]) return;
@@ -225,6 +225,8 @@
   <script defer src="/static/vendor/alpine-collapse-3.15.12.min.js" onload="__nbxBootMark('js:alpine-collapse')" onerror="__nbxBootFail('js:alpine-collapse','折叠组件')"></script>
   <!-- 回答版本容器（重新生成保留旧结果）：纯函数层，必须先于 script.js 加载 -->
   <script defer src="/static/nbx-versions.js" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
+  <!-- 历史全文检索内核：纯函数层，必须先于 script.js 加载 -->
+  <script defer src="/static/nbx-history-search.js" onload="__nbxBootMark('js:hsearch')" onerror="__nbxBootFail('js:hsearch','历史搜索组件')"></script>
   <!-- 本地脚本同样不带 ?v=（理由见上面 styles.css 那一段） -->
   <script defer src="/static/script.js" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
   <script defer src="/static/vendor/alpinejs-3.15.12.min.js" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
@@ -232,7 +234,7 @@
 
 <body>
   <!-- 首屏加载态：纯内联 CSS，不依赖任何外部样式/脚本。
-       放行条件：8 个关键资源全部就绪 + Alpine 初始化完成 + script.js 同步初始化完成。
+       放行条件：9 个关键资源全部就绪 + Alpine 初始化完成 + script.js 同步初始化完成。
        快速网络下几乎无感；慢网显示 m/n、阶段、首次/再次提示，10s 给刷新入口，20s 失败重试。 -->
   <div id="boot-splash" role="presentation">
     <div class="boot-ambient" aria-hidden="true"><i></i><i></i></div>
@@ -247,12 +249,12 @@
         <span id="boot-splash-text">正在准备工作台…</span>
       </div>
       <div class="boot-progress" id="boot-splash-progress" role="progressbar"
-           aria-valuemin="0" aria-valuemax="8" aria-valuenow="0" aria-label="加载进度">
+           aria-valuemin="0" aria-valuemax="9" aria-valuenow="0" aria-label="加载进度">
         <div class="boot-rail" id="boot-splash-rail" aria-hidden="true">
-          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
         </div>
         <div class="boot-meta" aria-hidden="true">
-          <span class="boot-count" id="boot-splash-count">0/8</span>
+          <span class="boot-count" id="boot-splash-count">0/9</span>
           <span class="boot-phase" id="boot-splash-phase">正在加载界面</span>
         </div>
       </div>
@@ -277,9 +279,9 @@
       var hint = document.getElementById("boot-splash-hint");
       var retry = document.getElementById("boot-splash-retry");
       var segs = rail ? Array.prototype.slice.call(rail.children) : [];
-      var boot = window.__nbxBoot || (window.__nbxBoot = { steps: {}, total: 8, jsTotal: 6, failed: "" });
-      var total = Number(boot.total) || 8;
-      var jsTotal = Number(boot.jsTotal) || 6;
+      var boot = window.__nbxBoot || (window.__nbxBoot = { steps: {}, total: 9, jsTotal: 7, failed: "" });
+      var total = Number(boot.total) || 9;
+      var jsTotal = Number(boot.jsTotal) || 7;
       var hidden = false, failed = false, alpineReady = false;
       var phase = "", jsDoneAt = 0;
       var poll = null, slowTimer = null, refreshTimer = null, failTimer = null;
@@ -408,7 +410,8 @@
   <canvas id="bgfx" aria-hidden="true"></canvas>
 
   <!-- Alpine v3 会自动调用 x-data 对象中的 init()，不要再写 x-init="init()"（会执行两次） -->
-  <div x-data="nbx()" x-cloak inert class="app-root h-dvh w-full flex gap-3 p-3">
+  <div x-data="nbx()" x-cloak inert class="app-root h-dvh w-full flex gap-3 p-3"
+       @keydown.window="onGlobalKeydown($event)">
 
     <!-- 抽屉遮罩（窄档才有浮层侧栏；宽屏两侧栏并排，遮罩一律不出现） -->
     <div x-show="isCompact && (leftOpen || rightMobileOpen)" class="drawer-mask"
@@ -3177,6 +3180,34 @@
                   x-html="icon('chevrons-right','w-4 h-4')"></button></span>
         </div>
 
+        <!-- 历史全文检索：标题 / 输入 / 正文 / 旧版本 / 结构化内容一起搜。
+             输入即出结果（查询在内存索引上完成），Ctrl/⌘ K 可从任何位置聚焦。 -->
+        <div class="px-3.5 pb-2 shrink-0" x-show="rightTab === 'history' && history.length" x-cloak>
+          <div class="hsearch-field" :class="{ on: historySearchFocused }">
+            <span class="hsearch-ico" x-html="icon('search','w-3.5 h-3.5')"></span>
+            <input id="history-search-input" class="hsearch-input" type="text"
+                   x-ref="historySearchInput"
+                   :value="historyQuery"
+                   placeholder="搜索标题、正文、工具…"
+                   title="支持多个关键词（空格分隔）与“引号精确短语”；Ctrl / ⌘ K 随时聚焦"
+                   autocomplete="off" spellcheck="false" role="searchbox"
+                   aria-label="搜索历史记录"
+                   @input="onHistorySearchInput($event)"
+                   @focus="historySearchFocused = true; _historySearchScheduleBuild(true)"
+                   @blur="historySearchFocused = false"
+                   @keydown="onHistorySearchKeydown($event)"
+                   @compositionstart="onHistorySearchCompositionStart()"
+                   @compositionend="onHistorySearchCompositionEnd($event)">
+            <span class="hsearch-count" x-show="historySearchHasQuery" x-cloak
+                  role="status" aria-live="polite" :title="historySearchStats"
+                  x-text="historySearchCountLabel"></span>
+            <span class="ts-spin" x-show="historySearchHasQuery && historySearchIndexing" x-cloak></span>
+            <button class="hsearch-clear" x-show="historyQuery.length > 0" x-cloak
+                    @click="clearHistorySearch()" title="清空搜索" aria-label="清空搜索"
+                    x-html="icon('x','w-3.5 h-3.5')"></button>
+          </div>
+        </div>
+
         <!-- 列表区 -->
         <div class="flex-1 min-h-0 overflow-y-auto scroll-thin px-3 pb-3">
 
@@ -3188,9 +3219,37 @@
               <p class="text-sm text-dim mt-3" x-text="theme === 'sora' ? '天空还没有留下痕迹' : '还没有历史记录'"></p>
               <p class="text-xs text-faint mt-1 leading-relaxed">每次生成的结果都会自动保存在这里，方便随时回看。</p>
             </div>
-            <div class="space-y-2">
-              <template x-for="item in history" :key="item.id">
-                <div class="side-card clickable" @click="openHistory(item)">
+
+            <!-- 搜索：没有命中 -->
+            <div x-show="history.length && historySearchHasQuery && !historyRows.length && !historySearchIndexing"
+                 class="text-center py-10 px-4" x-cloak>
+              <div class="w-12 h-12 mx-auto rounded-xl glass-soft flex items-center justify-center text-faint"
+                   x-html="icon('search','w-5 h-5')"></div>
+              <p class="text-sm text-dim mt-3">没有找到匹配的记录</p>
+              <p class="text-xs text-faint mt-1 leading-relaxed">
+                试试更短的关键词，或把多个关键词用空格分开；引号内表示精确短语。
+              </p>
+              <button class="btn-ghost mt-4 mx-auto" @click="clearHistorySearch()"
+                      style="padding:.42rem .9rem;font-size:.78rem">
+                清空搜索
+              </button>
+            </div>
+
+            <!-- 搜索：正文索引还在后台分片建立 -->
+            <div x-show="history.length && historySearchHasQuery && !historyRows.length && historySearchIndexing"
+                 class="text-center py-10 px-4" x-cloak>
+              <div class="flex justify-center"><span class="ts-spin"></span></div>
+              <p class="text-sm text-dim mt-3">正在检索正文…</p>
+              <p class="text-xs text-faint mt-1 leading-relaxed">已建立索引的记录会先出现，其余内容就绪后自动补上。</p>
+            </div>
+
+            <div class="space-y-2" x-ref="historySearchList" x-show="historyRows.length">
+              <template x-for="(item, i) in historyRows" :key="item.id">
+                <div class="side-card clickable"
+                     :class="{ 'hs-active': historySearchHasQuery && i === historySearchActive }"
+                     :data-hs-i="i"
+                     @click="openHistory(item)"
+                     @mouseenter="historySearchHasQuery && (historySearchActive = i)">
                   <div class="flex items-center gap-1.5">
                     <span class="chip"><span x-html="icon(item.icon,'w-3 h-3')"></span><span x-text="item.toolName"></span></span>
                     <!-- 翻译记录：一眼看出这条是什么语言对（如「英→中」） -->
@@ -3208,12 +3267,27 @@
                   </div>
                   <p class="mt-1.5 leading-snug" style="font-size:.82rem"
                      :aria-busy="item.titlePending && isAuthenticated && !_titlePollBlocked ? 'true' : 'false'">
-                    <span x-show="item.title" class="font-medium" x-text="item.title"></span>
-                    <!-- 索引项只带 inputHead（正文摘要），列表不读正文 -->
-                    <span x-show="!item.title"
+                    <!-- 普通列表：标题优先，没有标题用索引里的输入摘要 -->
+                    <span x-show="!historySearchHasQuery && item.title" class="font-medium" x-text="item.title"></span>
+                    <span x-show="!historySearchHasQuery && !item.title"
                           :class="{ 'title-shimmer': item.titlePending && isAuthenticated && !_titlePollBlocked }"
                           x-text="item.inputHead || excerpt(item.input)"></span>
+                    <!-- 搜索态：标题按命中位置分段高亮（标题为空时用 inputHead） -->
+                    <span x-show="historySearchHasQuery" class="font-medium hs-title">
+                      <template x-for="(seg, si) in (item._hsTitle || [])" :key="si">
+                        <span :class="{ 'hs-hit': seg.h }" x-text="seg.t"></span>
+                      </template>
+                    </span>
                   </p>
+                  <!-- 命中正文时的上下文摘要：用户不必打开记录就能判断是不是要找的那条 -->
+                  <div class="hs-snippet" x-show="historySearchHasQuery && item._hsSnippet && item._hsSnippet.length" x-cloak>
+                    <span class="hs-snippet-label" x-show="item._hsSnippetLabel" x-text="item._hsSnippetLabel"></span>
+                    <span class="hs-snippet-text">
+                      <template x-for="(seg, si) in (item._hsSnippet || [])" :key="si">
+                        <span :class="{ 'hs-hit': seg.h }" x-text="seg.t"></span>
+                      </template>
+                    </span>
+                  </div>
                   <div class="flex items-center gap-1.5 mt-1.5 text-[11px] text-faint">
                     <span x-text="fmtTime(item.createdAt)"></span>
                     <!-- 模型由后台配置决定的工具（识别图片文字）拿不到模型名，这时别留一个孤零零的「·」 -->
