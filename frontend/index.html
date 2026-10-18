@@ -9,45 +9,190 @@
 
   <style>
     /* 首屏关键 CSS：不依赖 styles.css，保证 HTML 一到就有加载态。
-       [x-cloak] 也在这里再声明一次：styles.css 晚到时应用仍保持隐藏，不会闪模板。 */
+       [x-cloak] 也在这里再声明一次：styles.css 晚到时应用仍保持隐藏，不会闪模板。
+       视觉全部使用内联 CSS / 变量 / transform 动画：0 新请求、0 字体、0 图片。 */
     [x-cloak]{display:none!important}
     html.nbx-booting,html.nbx-booting body{height:100%;overflow:hidden}
     html,body{margin:0}
-    #boot-splash{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;
-      background:#f3f0e9;color:#2a211a;transition:opacity .28s ease;
-      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+    #boot-splash,#boot-splash *{box-sizing:border-box}
+    #boot-splash{
+      --b-bg:#f3f0e9;--b-fg:#1d1a15;--b-muted:#5f594d;
+      --b-accent:#b4502a;--b-accent2:#8c3316;
+      --b-glow:rgba(180,80,42,.20);--b-glow-2:rgba(180,80,42,.10);
+      --b-card:rgba(255,255,255,.58);--b-line:rgba(29,26,21,.10);
+      --b-track:rgba(29,26,21,.10);--b-shadow:0 30px 80px -40px rgba(70,40,20,.45);
+      position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;
+      overflow:hidden;background:var(--b-bg);color:var(--b-fg);transition:opacity .26s ease;
+      /* 刘海/圆角屏：内容居中在安全区内，横屏时也不会压到挖孔 */
+      padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+      -webkit-font-smoothing:antialiased;
+    }
+    html[data-theme="celadon"] #boot-splash{
+      --b-bg:#ecf1ee;--b-fg:#15211c;--b-muted:#4e5c56;
+      --b-accent:#0e6e5f;--b-accent2:#0a5245;
+      --b-glow:rgba(14,110,95,.18);--b-glow-2:rgba(14,110,95,.09);
+      --b-card:rgba(255,255,255,.56);--b-line:rgba(21,33,28,.10);
+      --b-track:rgba(21,33,28,.10);--b-shadow:0 30px 80px -40px rgba(10,60,50,.35);
+    }
+    html[data-theme="obsidian"] #boot-splash{
+      --b-bg:#0c0b0e;--b-fg:#f3ede2;--b-muted:#9b978c;
+      --b-accent:#e9a15b;--b-accent2:#cf7038;
+      --b-glow:rgba(233,161,91,.20);--b-glow-2:rgba(233,161,91,.08);
+      --b-card:rgba(255,255,255,.045);--b-line:rgba(243,237,226,.10);
+      --b-track:rgba(243,237,226,.12);--b-shadow:0 34px 90px -38px rgba(0,0,0,.85);
+      color-scheme:dark;
+    }
+    html[data-theme="jade"] #boot-splash{
+      --b-bg:#0a0f0c;--b-fg:#e4eee7;--b-muted:#80958b;
+      --b-accent:#5cb787;--b-accent2:#2f8a66;
+      --b-glow:rgba(92,183,135,.16);--b-glow-2:rgba(92,183,135,.07);
+      --b-card:rgba(255,255,255,.045);--b-line:rgba(228,238,231,.10);
+      --b-track:rgba(228,238,231,.12);--b-shadow:0 34px 90px -38px rgba(0,0,0,.85);
+      color-scheme:dark;
+    }
+    html[data-theme="sora"][data-sky="day"] #boot-splash{
+      --b-bg:#e9f0f7;--b-fg:#1c2a3a;--b-muted:#45525f;
+      --b-accent:#4f8cc4;--b-accent2:#2f6ea6;
+      --b-glow:rgba(79,140,196,.18);--b-glow-2:rgba(79,140,196,.08);
+      --b-card:rgba(255,255,255,.56);--b-line:rgba(28,42,58,.10);
+      --b-track:rgba(28,42,58,.10);--b-shadow:0 30px 80px -40px rgba(30,70,110,.35);
+    }
+    html[data-theme="sora"][data-sky="night"] #boot-splash{
+      --b-bg:#111c33;--b-fg:#e8eefc;--b-muted:#a1b2c5;
+      --b-accent:#8fb6e6;--b-accent2:#5a86bd;
+      --b-glow:rgba(143,182,230,.18);--b-glow-2:rgba(143,182,230,.08);
+      --b-card:rgba(255,255,255,.05);--b-line:rgba(232,238,252,.10);
+      --b-track:rgba(232,238,252,.12);--b-shadow:0 34px 90px -38px rgba(0,0,0,.8);
+      color-scheme:dark;
+    }
     #boot-splash.boot-splash-done{opacity:0;pointer-events:none}
-    html[data-theme="obsidian"] #boot-splash{background:#0c0b0e;color:#f3ede2}
-    html[data-theme="celadon"] #boot-splash{background:#ecf1ee;color:#1f2a26}
-    html[data-theme="forest"] #boot-splash{background:#0a0f0c;color:#e8f0ea}
-    html[data-theme="sora"][data-sky="day"] #boot-splash{background:#e9f0f7;color:#1c2a3a}
-    html[data-theme="sora"][data-sky="night"] #boot-splash{background:#111c33;color:#e8eefc}
-    .boot-card{display:flex;flex-direction:column;align-items:center;gap:.7rem;padding:1.5rem;text-align:center}
-    .boot-logo{width:48px;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;
-      background:linear-gradient(135deg,#e9a15b,#cf7038);box-shadow:0 10px 24px -10px rgba(207,112,56,.75)}
-    .boot-logo svg{width:24px;height:24px;display:block}
-    .boot-title{font-size:1.05rem;font-weight:800;letter-spacing:.01em}
-    .boot-sub{font-size:.8rem;opacity:.66;min-height:1.2em}
-    .boot-bar{width:132px;height:3px;border-radius:999px;overflow:hidden;background:rgba(127,127,127,.18);position:relative}
-    .boot-bar::after{content:"";position:absolute;top:0;bottom:0;width:42%;border-radius:inherit;
-      background:linear-gradient(90deg,transparent,#e9a15b,#cf7038,transparent);animation:boot-slide 1.15s ease-in-out infinite}
-    @keyframes boot-slide{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
-    .boot-retry{display:none;margin-top:.2rem;padding:.45rem 1rem;border-radius:999px;border:0;cursor:pointer;
-      font:inherit;font-size:.8rem;font-weight:600;color:#fff;background:linear-gradient(135deg,#e9a15b,#cf7038)}
-    .boot-splash-error .boot-bar{display:none}
+    .boot-ambient{position:absolute;inset:-24%;pointer-events:none;overflow:hidden}
+    .boot-ambient i{position:absolute;display:block;border-radius:50%;
+      background:radial-gradient(circle,var(--b-glow) 0%,transparent 68%);
+      animation:boot-drift 26s ease-in-out infinite alternate;will-change:transform}
+    .boot-ambient i:nth-child(1){width:62vmax;height:62vmax;left:-20vmax;top:-24vmax}
+    .boot-ambient i:nth-child(2){width:54vmax;height:54vmax;right:-20vmax;bottom:-22vmax;
+      background:radial-gradient(circle,var(--b-glow-2) 0%,transparent 68%);animation-delay:-11s}
+    .boot-card{position:relative;z-index:1;width:min(344px,calc(100vw - 40px));
+      display:flex;flex-direction:column;align-items:center;text-align:center;
+      padding:2rem 1.6rem 1.55rem;border-radius:1.65rem;
+      background:var(--b-card);border:1px solid var(--b-line);box-shadow:var(--b-shadow);
+      animation:boot-card-in .5s cubic-bezier(.2,.7,.2,1) both}
+    .boot-logo{width:58px;height:58px;border-radius:18px;display:flex;align-items:center;justify-content:center;
+      background:linear-gradient(135deg,var(--b-accent),var(--b-accent2));
+      box-shadow:0 18px 42px -18px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.42);
+      animation:boot-breathe 3.8s ease-in-out infinite}
+    .boot-logo svg{width:27px;height:27px;display:block}
+    .boot-title{margin-top:.95rem;font-size:1.08rem;font-weight:800;letter-spacing:-.01em}
+    .boot-kicker{margin-top:.18rem;font-size:.64rem;font-weight:600;letter-spacing:.18em;opacity:.45}
+    .boot-status{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:.5rem;
+      margin-top:1.35rem;min-height:1.25em;font-size:.8rem;line-height:1.5;opacity:.78}
+    .boot-dot{position:relative;width:6px;height:6px;flex:0 0 auto;border-radius:50%;
+      background:var(--b-accent);box-shadow:0 0 0 4px var(--b-glow)}
+    .boot-dot::after{content:"";position:absolute;inset:-4px;border-radius:inherit;
+      border:1px solid var(--b-accent);opacity:.5;animation:boot-pulse 1.8s ease-out infinite}
+    .boot-progress{width:100%;margin-top:1rem}
+    .boot-rail{display:flex;gap:4px;height:4px;width:100%}
+    .boot-rail i{flex:1;border-radius:999px;background:var(--b-track);
+      transition:background .25s ease,opacity .25s ease}
+    .boot-rail i.done{background:linear-gradient(90deg,var(--b-accent),var(--b-accent2))}
+    .boot-rail i.current{background:var(--b-accent);opacity:.5;animation:boot-seg 1.4s ease-in-out infinite}
+    .boot-meta{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;
+      margin-top:.55rem;font-size:.68rem;opacity:.55}
+    .boot-count{font-variant-numeric:tabular-nums;letter-spacing:.08em}
+    .boot-hint{min-height:2.3em;margin-top:1.05rem;font-size:.7rem;line-height:1.55;
+      color:var(--b-muted);opacity:0;transform:translateY(4px);animation:boot-hint-in .5s ease .9s forwards}
+    .boot-refresh{display:none;margin-top:.35rem;padding:.2rem .4rem;border:0;background:none;
+      color:var(--b-muted);font:inherit;font-size:.68rem;text-decoration:underline;
+      text-underline-offset:3px;cursor:pointer;opacity:.8}
+    .boot-splash-slow .boot-status{opacity:.62}
+    .boot-splash-slow .boot-dot::after{animation-duration:2.6s}
+    .boot-splash-very-slow .boot-refresh{display:inline-block}
+    .boot-retry{display:none;margin-top:.85rem;padding:.52rem 1.15rem;border-radius:999px;border:0;
+      cursor:pointer;font:inherit;font-size:.78rem;font-weight:700;color:#fff;
+      background:linear-gradient(135deg,var(--b-accent),var(--b-accent2));
+      box-shadow:0 10px 24px -12px rgba(0,0,0,.45)}
     .boot-splash-error .boot-retry{display:inline-flex}
-    .boot-noscript{max-width:17rem;font-size:.8rem;line-height:1.6;opacity:.75;margin-top:.4rem}
-    @media (prefers-reduced-motion: reduce){.boot-bar::after{animation:none;width:100%;opacity:.4}#boot-splash{transition:none}}
+    .boot-splash-error .boot-rail,.boot-splash-error .boot-meta,
+    .boot-splash-error .boot-dot,.boot-splash-error .boot-hint,
+    .boot-splash-error .boot-refresh{display:none}
+    .boot-splash-error .boot-card{animation:none}
+    .boot-splash-error .boot-status{opacity:1;color:var(--b-fg);font-weight:600}
+    .boot-noscript{max-width:17rem;font-size:.8rem;line-height:1.6;opacity:.75;margin-top:.5rem}
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+      clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    html.nbx-booting .app-root{opacity:0}
+    html.nbx-ready .app-root{animation:boot-app-in .22s ease-out both}
+    @keyframes boot-drift{0%{transform:translate3d(0,0,0) scale(1)}100%{transform:translate3d(4%,-3%,0) scale(1.06)}}
+    @keyframes boot-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.03)}}
+    @keyframes boot-pulse{0%{transform:scale(.9);opacity:.55}80%,100%{transform:scale(1.9);opacity:0}}
+    @keyframes boot-seg{0%,100%{opacity:.32}50%{opacity:.75}}
+    @keyframes boot-hint-in{to{opacity:.75;transform:none}}
+    @keyframes boot-card-in{from{opacity:0;transform:translateY(8px) scale(.985)}to{opacity:1;transform:none}}
+    @keyframes boot-app-in{from{opacity:0}to{opacity:1}}
+    @media (max-width:520px){
+      .boot-card{width:min(340px,calc(100vw - 32px));padding:1.7rem 1.25rem 1.35rem;
+        background:transparent;border-color:transparent;box-shadow:none}
+    }
+    @media (max-width:360px){
+      .boot-card{padding-left:1rem;padding-right:1rem}
+      .boot-title{font-size:1rem}
+    }
+    /* 横屏手机：高度比宽度更稀缺，压缩纵向间距并隐藏非必要说明 */
+    @media (max-height:460px) and (orientation:landscape){
+      .boot-card{padding:1.1rem 1.3rem 1rem;border-radius:1.25rem}
+      .boot-logo{width:46px;height:46px;border-radius:14px}
+      .boot-logo svg{width:22px;height:22px}
+      .boot-title{margin-top:.6rem;font-size:1rem}
+      .boot-kicker{display:none}
+      .boot-status{margin-top:.8rem}
+      .boot-progress{margin-top:.7rem}
+      .boot-hint{display:none}
+    }
+    /* 触屏：保证重试/刷新按钮有可靠的点击面积 */
+    @media (pointer: coarse){
+      .boot-retry{min-height:44px;min-width:132px;padding:.7rem 1.3rem;font-size:.82rem}
+      .boot-refresh{min-height:40px;padding:.45rem .8rem}
+    }
+    @media (prefers-reduced-motion: reduce){
+      .boot-ambient i,.boot-logo,.boot-dot::after,.boot-rail i.current{animation:none}
+      .boot-card{animation:none}
+      .boot-rail i{transition:none}
+      .boot-hint{animation:none;opacity:.75;transform:none}
+      html.nbx-ready .app-root{animation:none;opacity:1}
+      #boot-splash{transition:none}
+    }
   </style>
+  <!-- 首屏步骤登记器：必须早于 CSS/JS 的 onload，缓存命中时回调可能先于后面的 splash 控制器。
+       资源名只在这里登记一次；总数 8 = 2 份 CSS + 6 个关键脚本。 -->
+  <script>
+    (function () {
+      var steps = Object.create(null);
+      var boot = window.__nbxBoot = {
+        steps: steps, failed: "", total: 8, jsTotal: 6, startedAt: Date.now(),
+      };
+      window.__nbxBootMark = function (name) {
+        if (!name || steps[name]) return;
+        steps[name] = 1;
+        if (window.__nbxBootPaint) { try { window.__nbxBootPaint(); } catch (e) {} }
+      };
+      window.__nbxBootFail = function (name, label) {
+        if (boot.failed) return;
+        boot.failed = label || name || "核心组件";
+        if (window.__nbxBootPaint) { try { window.__nbxBootPaint(); } catch (e) {} }
+      };
+    })();
+  </script>
   <!-- 预编译 Tailwind：修改工具类后运行 npm run build:css，部署无需 Node。
        两份 CSS 改成 preload 非阻塞：首帧由上面的内联 splash 立即绘制，不再等 47KB CSS。
        隐藏 splash 前会检查两份 CSS 都已就绪，避免应用无样式闪现。 -->
-  <link rel="preload" as="style" href="/static/tailwind.css"
-        onload="this.onload=null;this.rel='stylesheet';window.__nbxCssReady=(window.__nbxCssReady||0)+1;window.__nbxCheckBoot&&window.__nbxCheckBoot()"
-        onerror="window.__nbxCssError=1;window.__nbxCheckBoot&&window.__nbxCheckBoot()">
-  <link rel="preload" as="style" href="/static/styles.css"
-        onload="this.onload=null;this.rel='stylesheet';window.__nbxCssReady=(window.__nbxCssReady||0)+1;window.__nbxCheckBoot&&window.__nbxCheckBoot()"
-        onerror="window.__nbxCssError=1;window.__nbxCheckBoot&&window.__nbxCheckBoot()">
+  <link rel="preload" as="style" href="/static/tailwind.css" fetchpriority="high"
+        onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:tailwind')"
+        onerror="this.onerror=null;__nbxBootFail('css:tailwind','界面样式')">
+  <link rel="preload" as="style" href="/static/styles.css" fetchpriority="high"
+        onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:styles')"
+        onerror="this.onerror=null;__nbxBootFail('css:styles','主题样式')">
   <noscript>
     <link rel="stylesheet" href="/static/tailwind.css">
     <link rel="stylesheet" href="/static/styles.css">
@@ -62,6 +207,7 @@
     document.documentElement.classList.add("nbx-booting");
     try {
       var t = localStorage.getItem("nbx_theme") || "paper";
+      if (["paper", "celadon", "obsidian", "jade", "sora"].indexOf(t) < 0) t = "paper";
       document.documentElement.dataset.theme = t;
       if (t === "sora") {
         var h = new Date().getHours();
@@ -72,78 +218,189 @@
   </script>
 
   <!-- 依赖库全部自托管（同源、无跨境 CDN）：首屏只保留启动与渲染必需的库。
-       KaTeX / mammoth / html-docx / qrcode / vp-print 由 script.js 按需加载。 -->
-  <script defer src="/static/vendor/marked-15.0.12.min.js"></script>
-  <script defer src="/static/vendor/dompurify-3.4.12.min.js"></script>
-  <script defer src="/static/vendor/alpine-collapse-3.15.12.min.js"></script>
-  <script defer src="/static/vendor/thumbmark.umd.js"></script>
-  <script defer src="/static/nbx-mirror.js"></script>
-  <script defer src="/static/nbx-mirror-store.js"></script>
-  <script defer src="/static/nbx-mirror-peer.js"></script>
+       KaTeX / mammoth / html-docx / qrcode / vp-print 由 script.js 按需加载；
+       thumbmark / 镜像三件套 / click-fx 也改为启动后按需加载，不占首屏关键路径。 -->
+  <script defer src="/static/vendor/marked-15.0.12.min.js" onload="__nbxBootMark('js:marked')" onerror="__nbxBootFail('js:marked','Markdown 组件')"></script>
+  <script defer src="/static/vendor/dompurify-3.4.12.min.js" onload="__nbxBootMark('js:dompurify')" onerror="__nbxBootFail('js:dompurify','安全过滤组件')"></script>
+  <script defer src="/static/vendor/alpine-collapse-3.15.12.min.js" onload="__nbxBootMark('js:alpine-collapse')" onerror="__nbxBootFail('js:alpine-collapse','折叠组件')"></script>
   <!-- 回答版本容器（重新生成保留旧结果）：纯函数层，必须先于 script.js 加载 -->
-  <script defer src="/static/nbx-versions.js"></script>
+  <script defer src="/static/nbx-versions.js" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
   <!-- 本地脚本同样不带 ?v=（理由见上面 styles.css 那一段） -->
-  <script defer src="/static/script.js"></script>
-  <!-- 点击特效接入层（懒加载 vendor/ba-click-fx，不抢首屏） -->
-  <script defer src="/static/click-fx.js"></script>
-  <script defer src="/static/vendor/alpinejs-3.15.12.min.js"></script>
+  <script defer src="/static/script.js" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
+  <script defer src="/static/vendor/alpinejs-3.15.12.min.js" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
 </head>
 
 <body>
-  <!-- 首屏加载态：纯内联 CSS，不依赖任何外部样式/脚本；Alpine 初始化完成且两份 CSS 就绪后淡出。
-       即使核心脚本失败，这里也会在 20s 后给出重试入口，而不是整页空白。 -->
-  <div id="boot-splash" role="status" aria-live="polite">
+  <!-- 首屏加载态：纯内联 CSS，不依赖任何外部样式/脚本。
+       放行条件：8 个关键资源全部就绪 + Alpine 初始化完成 + script.js 同步初始化完成。
+       快速网络下几乎无感；慢网显示 m/n、阶段、首次/再次提示，10s 给刷新入口，20s 失败重试。 -->
+  <div id="boot-splash" role="presentation">
+    <div class="boot-ambient" aria-hidden="true"><i></i><i></i></div>
     <div class="boot-card">
       <div class="boot-logo" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none"><path d="M12.75 3.75 6.75 13.5h3.75l-1.5 6.75 6.75-9.75h-3.75l.75-6.75z" fill="#fff"/></svg>
       </div>
       <div class="boot-title">NeoBangX</div>
-      <div class="boot-sub" id="boot-splash-text">正在加载工作台…</div>
-      <div class="boot-bar" aria-hidden="true"></div>
+      <div class="boot-kicker">教学工作台</div>
+      <div class="boot-status" aria-hidden="true">
+        <span class="boot-dot"></span>
+        <span id="boot-splash-text">正在准备工作台…</span>
+      </div>
+      <div class="boot-progress" id="boot-splash-progress" role="progressbar"
+           aria-valuemin="0" aria-valuemax="8" aria-valuenow="0" aria-label="加载进度">
+        <div class="boot-rail" id="boot-splash-rail" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </div>
+        <div class="boot-meta" aria-hidden="true">
+          <span class="boot-count" id="boot-splash-count">0/8</span>
+          <span class="boot-phase" id="boot-splash-phase">正在加载界面</span>
+        </div>
+      </div>
+      <div class="boot-hint" id="boot-splash-hint">首次加载会下载必要组件，之后会快很多</div>
+      <button class="boot-refresh" id="boot-splash-refresh" type="button" onclick="location.reload()">刷新页面</button>
       <button class="boot-retry" id="boot-splash-retry" type="button" onclick="location.reload()">重新加载</button>
       <noscript><div class="boot-noscript">NeoBangX 需要启用 JavaScript 才能使用，请开启后刷新页面。</div></noscript>
     </div>
+    <span class="sr-only" id="boot-splash-live" role="status" aria-live="polite">正在准备工作台</span>
   </div>
   <script>
     (function () {
       var root = document.documentElement;
       var el = document.getElementById("boot-splash");
-      var text = document.getElementById("boot-splash-text");
       if (!el) return;
-      var hidden = false, failed = false, cssStarted = 0, alpineReady = false;
-      document.addEventListener("alpine:initialized", function () { alpineReady = true; });
-      function cssReady() { return (window.__nbxCssReady || 0) >= 2; }
-      function hide() {
-        if (hidden) return;
-        hidden = true;
-        el.classList.add("boot-splash-done");
-        root.classList.remove("nbx-booting");
-        setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 320);
+      var text = document.getElementById("boot-splash-text");
+      var live = document.getElementById("boot-splash-live");
+      var countEl = document.getElementById("boot-splash-count");
+      var phaseEl = document.getElementById("boot-splash-phase");
+      var bar = document.getElementById("boot-splash-progress");
+      var rail = document.getElementById("boot-splash-rail");
+      var hint = document.getElementById("boot-splash-hint");
+      var retry = document.getElementById("boot-splash-retry");
+      var segs = rail ? Array.prototype.slice.call(rail.children) : [];
+      var boot = window.__nbxBoot || (window.__nbxBoot = { steps: {}, total: 8, jsTotal: 6, failed: "" });
+      var total = Number(boot.total) || 8;
+      var jsTotal = Number(boot.jsTotal) || 6;
+      var hidden = false, failed = false, alpineReady = false;
+      var phase = "", jsDoneAt = 0;
+      var poll = null, slowTimer = null, refreshTimer = null, failTimer = null;
+      var firstVisit = true;
+      try { firstVisit = !localStorage.getItem("nbx_boot_seen"); } catch (e) {}
+      if (hint) hint.textContent = firstVisit
+        ? "首次加载会下载必要组件，之后会快很多"
+        : "正在恢复上次的主题、历史与偏好";
+
+      function has(name) { return !!(boot.steps && boot.steps[name]); }
+      function count() {
+        var n = 0;
+        for (var k in boot.steps) {
+          if (Object.prototype.hasOwnProperty.call(boot.steps, k) && boot.steps[k]) n++;
+        }
+        return n;
       }
-      function fail(msg) {
+      function jsCount() {
+        var n = 0;
+        for (var k in boot.steps) {
+          if (Object.prototype.hasOwnProperty.call(boot.steps, k)
+            && k.indexOf("js:") === 0 && boot.steps[k]) n++;
+        }
+        return n;
+      }
+      function setText(node, value) {
+        if (node && node.textContent !== value) node.textContent = value;
+      }
+      function setPhase(value) {
+        if (phase === value) return;
+        phase = value;
+        setText(text, value);
+        setText(phaseEl, value);
+        setText(live, value);
+      }
+      function paint() {
+        if (hidden || failed) return;
+        var n = count();
+        for (var i = 0; i < segs.length; i++) {
+          segs[i].className = i < n ? "done" : (i === n ? "current" : "");
+        }
+        setText(countEl, n + "/" + total);
+        if (bar) bar.setAttribute("aria-valuenow", String(n));
+        if (boot.failed) return;
+        var cssDone = has("css:tailwind") && has("css:styles");
+        var jsDone = jsCount() >= jsTotal;
+        if (!cssDone) setPhase("正在加载界面");
+        else if (!jsDone) setPhase("正在加载核心组件");
+        else if (!alpineReady || !window.__nbxBooted) setPhase("正在恢复本地工作区");
+        else setPhase("即将完成");
+      }
+      function clearLoadingTimers() {
+        if (poll) { clearInterval(poll); poll = null; }
+        if (slowTimer) { clearTimeout(slowTimer); slowTimer = null; }
+        if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+        if (failTimer) { clearTimeout(failTimer); failTimer = null; }
+      }
+      function fail(message) {
         if (hidden || failed) return;
         failed = true;
+        clearLoadingTimers();
         el.classList.add("boot-splash-error");
-        if (text) text.textContent = msg;
+        el.classList.remove("boot-splash-slow", "boot-splash-very-slow");
+        setText(text, message);
+        setText(live, message);
+        setText(phaseEl, "加载未完成");
+        if (countEl) countEl.textContent = "";
+        if (bar) bar.setAttribute("aria-valuenow", String(count()));
+        if (retry) {
+          try { retry.focus({ preventScroll: true }); } catch (e) { try { retry.focus(); } catch (e2) {} }
+        }
+      }
+      function hide() {
+        if (hidden || failed) return;
+        hidden = true;
+        clearLoadingTimers();
+        el.classList.add("boot-splash-done");
+        root.classList.remove("nbx-booting");
+        root.classList.add("nbx-ready");
+        try {
+          var appRoot = document.querySelector(".app-root");
+          if (appRoot) appRoot.removeAttribute("inert");
+        } catch (e) {}
+        try { localStorage.setItem("nbx_boot_seen", "1"); } catch (e) {}
+        setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 320);
       }
       function tryHide() {
         if (hidden || failed) return;
-        if (window.__nbxCssError) { fail("样式加载失败，请检查网络后重新加载"); return; }
+        if (boot.failed) { fail(boot.failed + "加载失败，请检查网络后重新加载"); return; }
         if (!window.__nbxBooted || !alpineReady) return;
-        if (cssReady()) { hide(); return; }
-        if (!cssStarted) cssStarted = Date.now();
-        if (Date.now() - cssStarted > 6000) fail("样式加载超时，请检查网络后重新加载");
+        if (count() < total) {
+          if (jsCount() >= jsTotal && !jsDoneAt) jsDoneAt = Date.now();
+          if (jsDoneAt && Date.now() - jsDoneAt > 6000) fail("样式加载超时，请检查网络后重新加载");
+          return;
+        }
+        hide();
       }
-      window.__nbxCheckBoot = tryHide;
-      var poll = setInterval(function () {
+      window.__nbxBootPaint = function () { paint(); tryHide(); };
+      document.addEventListener("alpine:initialized", function () { alpineReady = true; paint(); tryHide(); });
+      paint();
+      tryHide();
+      if (hidden || failed) return;
+      poll = setInterval(function () {
+        paint();
         tryHide();
-        if (hidden || failed) clearInterval(poll);
+        if (hidden || failed) clearLoadingTimers();
       }, 200);
-      setTimeout(function () {
-        if (!hidden && !failed && (!window.__nbxBooted || !alpineReady) && text) text.textContent = "网络较慢，仍在加载…";
-      }, 8000);
-      setTimeout(function () {
-        if (!hidden && !failed && (!alpineReady || !window.__nbxBooted)) fail("加载超时，请检查网络后重新加载");
+      slowTimer = setTimeout(function () {
+        if (hidden || failed) return;
+        el.classList.add("boot-splash-slow");
+        if (hint) hint.textContent = "网络较慢，仍在加载…";
+        setText(live, "网络较慢，仍在加载…");
+      }, 3000);
+      refreshTimer = setTimeout(function () {
+        if (hidden || failed) return;
+        el.classList.add("boot-splash-very-slow");
+        if (hint) hint.textContent = "如果长时间没有变化，可以刷新页面";
+        setText(live, "如果长时间没有变化，可以刷新页面");
+      }, 10000);
+      failTimer = setTimeout(function () {
+        if (!hidden && !failed) fail("加载超时，请检查网络后重新加载");
       }, 20000);
     })();
   </script>
@@ -151,7 +408,7 @@
   <canvas id="bgfx" aria-hidden="true"></canvas>
 
   <!-- Alpine v3 会自动调用 x-data 对象中的 init()，不要再写 x-init="init()"（会执行两次） -->
-  <div x-data="nbx()" x-cloak class="app-root h-dvh w-full flex gap-3 p-3">
+  <div x-data="nbx()" x-cloak inert class="app-root h-dvh w-full flex gap-3 p-3">
 
     <!-- 抽屉遮罩（窄档才有浮层侧栏；宽屏两侧栏并排，遮罩一律不出现） -->
     <div x-show="isCompact && (leftOpen || rightMobileOpen)" class="drawer-mask"
@@ -327,7 +584,7 @@
              @dblclick="mascotSecretTap()"
              aria-hidden="true">
           <img src="/static/Sora_Rabbit_Plush.webp" alt="" draggable="false"
-               width="760" height="920" decoding="async" fetchpriority="low">
+               width="760" height="920" loading="lazy" decoding="async" fetchpriority="low">
         </div>
 
         <!-- 窄档：首页没有工具头部，历史入口浮在右上角（与工具页头部里那个同一角） -->

@@ -48,8 +48,11 @@ function background(file, { hidden = false, reduced = false } = {}) {
   return { api, env, events, frames, calls, step, resets: () => resets };
 }
 
-for (const dir of ["frontend", "admin-frontend"]) {
-  const file = path.resolve(__dirname, "../..", dir, "script.js");
+const targets = [
+  { dir: "frontend", file: path.resolve(__dirname, "../..", "frontend", "nbx-background.js") },
+  { dir: "admin-frontend", file: path.resolve(__dirname, "../..", "admin-frontend", "script.js") },
+];
+for (const { dir, file } of targets) {
   test(`${dir}: 隐藏与手动暂停互不覆盖，恢复只启动一条动画链`, () => {
     const bg = background(file, { hidden: true });
     assert.equal(bg.frames.size, 0);

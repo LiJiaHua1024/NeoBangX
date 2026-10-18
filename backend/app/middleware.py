@@ -24,6 +24,7 @@ import gzip
 import hashlib
 import os
 import threading
+import time
 from collections import OrderedDict
 from datetime import timezone
 from email.utils import formatdate, parsedate_to_datetime
@@ -34,7 +35,10 @@ try:  # brotli 为可选依赖，缺失时自动退化为仅 gzip
 except ImportError:  # pragma: no cover - 取决于部署环境
     _brotli = None
 
-BROTLI_QUALITY = 5
+# 预热用高质量：静态文件只压一次，之后全部命中内存缓存。
+# 请求路径的冷资源用 FAST 档，避免首个请求为了一次压缩多等几百毫秒。
+BROTLI_QUALITY = 11
+BROTLI_QUALITY_FAST = 5
 GZIP_LEVEL = 6
 
 # 小于该体积不压缩（压缩收益抵不上头部与 CPU 开销）
@@ -54,8 +58,10 @@ _COMPRESSIBLE_TYPES = frozenset(
     }
 )
 
-# 预压缩缓存的条目上限（本项目静态文件约 20 个，64 足够）
-_CACHE_MAX_ENTRIES = 64
+# 预压缩缓存的条目上限（每个文件会缓存 br + gzip 两份，
+# 当前可压缩静态文件约 57 个；160 可全部容纳，避免 q11 预热结果被 LRU 挤掉后
+# 又用快速档重新压缩。压缩后总量约 2MB 量级，代价可接受。）
+_CACHE_MAX_ENTRIES = 160
 
 
 def _pick_encoding(headers, *, brotli: bool = True) -> str:
@@ -90,10 +96,11 @@ def _pick_encoding(headers, *, brotli: bool = True) -> str:
     ) else ""
 
 
-def _compress(body: bytes, encoding: str) -> bytes:
+def _compress(body: bytes, encoding: str, *, quality: Optional[int] = None) -> bytes:
     if encoding == "br":
         # MODE_TEXT：本中间件只压缩文本类静态资源
-        return _brotli.compress(body, mode=_brotli.MODE_TEXT, quality=BROTLI_QUALITY)
+        q = BROTLI_QUALITY if quality is None else quality
+        return _brotli.compress(body, mode=_brotli.MODE_TEXT, quality=q)
     return gzip.compress(body, compresslevel=GZIP_LEVEL)
 
 
@@ -157,8 +164,9 @@ class StaticCacheMiddleware:
         self._cache: "OrderedDict[Tuple[str, int, int, str], bytes]" = OrderedDict()
         self._lock = threading.Lock()
         if self.compress:
-            # 后台预热：首请求零压缩开销，线程挂了也不影响服务
-            threading.Thread(target=self._prewarm, daemon=True).start()
+            # 后台预热：首请求零压缩开销，线程挂了也不影响服务。
+            # 延迟 1s 再开始，让首个请求/健康检查先拿到 CPU；冷资源仍走 FAST 档。
+            threading.Thread(target=self._prewarm_later, daemon=True).start()
 
     # ---------------- 内部工具 ----------------
 
@@ -204,6 +212,10 @@ class StaticCacheMiddleware:
     def _compressible_type(self, content_type: str) -> bool:
         ctype = content_type.split(";", 1)[0].strip().lower()
         return ctype.startswith(_COMPRESSIBLE_PREFIXES) or ctype in _COMPRESSIBLE_TYPES
+
+    def _prewarm_later(self) -> None:
+        time.sleep(1.0)
+        self._prewarm()
 
     def _prewarm(self) -> None:
         """启动时把全部可压缩静态资源预先压缩入缓存。"""
@@ -398,7 +410,7 @@ class StaticCacheMiddleware:
                     raw = b"".join(state["chunks"])
                     state["chunks"] = []
                     # 冷资源或文件更新后的压缩也不阻塞 API / SSE 所在事件循环。
-                    compressed = await asyncio.to_thread(_compress, raw, enc)
+                    compressed = await asyncio.to_thread(_compress, raw, enc, quality=BROTLI_QUALITY_FAST)
                     if key is not None:
                         self._cache_put(key, compressed)
                     headers.append((b"content-encoding", enc.encode("latin-1")))

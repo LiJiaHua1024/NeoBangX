@@ -459,6 +459,14 @@ html[data-theme="sora"] .mascot-peeking {
   width: 100%;
   height: 100%;
   pointer-events: none;
+  /* 背景引擎已拆成启动后空闲加载的独立脚本；加载完成前由 CSS 渐变兜底，
+     完成后淡入，避免 canvas 首帧的突兀弹出。 */
+  opacity: 0;
+  transition: opacity .35s ease;
+}
+#bgfx.bgfx-ready { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  #bgfx { transition: none; }
 }
 
 /* ============================================================

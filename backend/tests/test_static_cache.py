@@ -46,13 +46,18 @@ def test_bridge_mirror_scripts_share_index_urls():
     两个页面用不同 URL（比如一边带 ?v=、一边不带）时浏览器会各缓存一份，更新后
     桥接页可能仍在跑旧版本，而镜像协议版本不匹配是**静默失效**（消息被忽略、没有报错）。
     两边都不带版本串，才能真正保证是同一份代码。
+
+    主站已把镜像三件套移出首屏关键路径：index.html 不再直接引用，
+    由 script.js 的 nbxEnsureMirrorAssets() 在启动后按需加载；桥接页仍然直接引用。
     """
     main_html = (Path(settings.static_dir) / "index.html").read_text(encoding="utf-8")
+    main_js = (Path(settings.static_dir) / "script.js").read_text(encoding="utf-8")
     bridge_html = (Path(settings.static_dir) / "bridge.html").read_text(encoding="utf-8")
+    assert "/static/nbx-mirror" not in main_html
     for name in ("nbx-mirror.js", "nbx-mirror-store.js", "nbx-mirror-peer.js"):
-        main_ref = re.findall(rf'src="([^"]*{re.escape(name)}[^"]*)"', main_html)
-        bridge_ref = re.findall(rf'src="([^"]*{re.escape(name)}[^"]*)"', bridge_html)
-        assert main_ref == bridge_ref == [f"/static/{name}"]
+        url = f"/static/{name}"
+        assert url in main_js
+        assert f'src="{url}"' in bridge_html
 
 
 def test_static_versioned_asset_is_immutable_and_compressed(client):
@@ -211,22 +216,28 @@ def test_prewarm_is_reused_and_changed_files_invalidate(tmp_path, monkeypatch):
     original_compress = middleware._compress
     calls = []
 
-    def compress(body, encoding):
+    def compress(body, encoding, **kwargs):
         calls.append(body)
-        return original_compress(body, encoding)
+        return original_compress(body, encoding, **kwargs)
 
     monkeypatch.setattr(middleware, "_compress", compress)
+    # 其它 app（main/admin）的预热线程可能仍在后台压缩真实资源，会污染全局
+    # monkeypatch 的 calls。这里只关心本次 tmp 资源是否被重复压缩。
+    updated = raw + b"updated"
+
+    def is_tmp(body):
+        return body == raw or body == updated
+
     with TestClient(wrapped) as local_client:
         for url in ("/", "/static/index.html", "/static/index.html?v=test"):
             response = local_client.get(url, headers={"accept-encoding": "gzip"})
             assert response.content == raw
             assert response.headers["content-encoding"] == "gzip"
-        assert calls == [], "首请求必须复用预热字节，不能重新压缩"
+        assert not any(is_tmp(c) for c in calls), "首请求必须复用预热字节，不能重新压缩"
 
-        updated = raw + b"updated"
         asset.write_bytes(updated)
         response = local_client.get("/static/index.html", headers={"accept-encoding": "gzip"})
         assert response.content == updated
-        assert calls == [updated]
+        assert sum(1 for c in calls if c == updated) == 1
         assert local_client.get("/", headers={"accept-encoding": "gzip"}).content == updated
-        assert calls == [updated]
+        assert sum(1 for c in calls if c == updated) == 1
