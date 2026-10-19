@@ -4560,7 +4560,7 @@ function nbx() {
       // 用户在补齐前就能搜到内容，补齐过程中结果会自动刷新。
       this._historySearchInit();
       this.favorites = lsGet(LS.favorites, []);
-      this.input = localStorage.getItem(LS.draft) || "";
+      this.input = this._loadDraft();
 
       const ui = lsGet(LS.ui, {});
       this.collapsedGroups = ui.collapsedGroups || {};
@@ -4621,11 +4621,14 @@ function nbx() {
       const savedModel = localStorage.getItem(LS.model);
       if (savedModel && this.models.some((m) => m.id === savedModel)) this.selectedModel = savedModel;
 
-      // 输入草稿自动保存
+      // 输入草稿自动保存：按工具分键，在 A 工具写了一半切到 B 工具，
+      // B 的输入框不该出现 A 的草稿（键在输入变化时就定下来，
+      // 否则切工具后 400ms 才落盘的那次会写进新工具的草稿里）
       this.$watch("input", (v) => {
         clearTimeout(this._draftTimer);
+        const key = this._draftKey();
         this._draftTimer = setTimeout(() => {
-          try { localStorage.setItem(LS.draft, v || ""); } catch {}
+          try { localStorage.setItem(key, v || ""); } catch {}
         }, 400);
       });
       // 翻译：原文栏按内容长高。上传解析、拍照识别写回走的也是 input，
@@ -5109,10 +5112,16 @@ function nbx() {
       if (this.isFreeModel()) return "免费模型，限额内不消耗次数；超出后按次消耗次数";
       return "";
     },
-    /* 401/403 统一处理：已登录视为本机凭证失效/额度耗尽，清掉本地登录态
-       （原因由错误卡与 toast 呈现）；未登录（免码试用）则引导输入使用码，
-       并把原因写进弹窗 —— toast 会被弹窗遮罩糊住，等于看不见 */
-    handleAuthFailure(hint) {
+    /* 401/403 统一处理：401 是本机凭证失效（码被删 / 换过），403 是码还在、只是
+       不可用（被禁用 / 额度用尽）——后者把本机凭证清掉只会让用户白输一遍码，
+       问题根本不在码上，所以**保留凭证**，原因交给错误卡呈现。
+       未登录（免码试用）时两种情况都引导输入使用码，并把原因写进弹窗 ——
+       toast 会被弹窗遮罩糊住，等于看不见 */
+    handleAuthFailure(hint, status) {
+      if (status === 403) {
+        if (!this.isAuthenticated) this.openCodeModal(hint);
+        return;
+      }
       if (this.isAuthenticated) this.clearAuth();
       else this.openCodeModal(hint);
     },
@@ -5251,7 +5260,11 @@ function nbx() {
       const apply = () => {
         // 进了工具就收起搜索面板（用户写的那句话留着，回来还能接着改）
         this.closeToolSearch();
+        // 草稿按工具分键：先把上一个工具的草稿立刻落盘（不等 400ms 防抖），
+        // 再把当前工具的草稿填回输入框——写了一半切走的内容在切回来时还在
+        this.flushDraft();
         this.currentTool = tool;
+        this.input = this._loadDraft();
         this.output = "";
         this.rendered = "";
         this.outputTruncated = false;
@@ -7242,7 +7255,7 @@ function nbx() {
           return;
         }
         if (e && (e.status === 401 || e.status === 403)) {
-          this.handleAuthFailure(e.message || "请先输入使用码");
+          this.handleAuthFailure(e.message || "请先输入使用码", e.status);
         }
         this.ocrError = describeError(e, "识别失败，请稍后重试");
         this.flushOcrRender();
@@ -7692,7 +7705,8 @@ function nbx() {
     releasePairSession() {
       const token = this.ocrPairToken || this.pairToken;
       if (token) {
-        fetch(`/api/ocr/pair/${token}`, { method: "DELETE", headers: { ...this.authHeaders() } }).catch(() => {});
+        // keepalive：pagehide 阶段发起的普通请求会被浏览器取消，DELETE 就丢了
+        fetch(`/api/ocr/pair/${token}`, { method: "DELETE", headers: { ...this.authHeaders() }, keepalive: true }).catch(() => {});
       }
       this.ocrPairToken = "";
       this.pairToken = "";
@@ -7799,7 +7813,7 @@ function nbx() {
         });
         if (!res.ok) {
           const msg = await this.migrationReadError(res, "错因分析失败");
-          if (res.status === 401 || res.status === 403) this.handleAuthFailure(msg);
+          if (res.status === 401 || res.status === 403) this.handleAuthFailure(msg, res.status);
           throw new Error(msg);
         }
         const data = await res.json();
@@ -7849,7 +7863,7 @@ function nbx() {
         });
         if (!res.ok) {
           const msg = await this.migrationReadError(res, "继续生成错因失败");
-          if (res.status === 401 || res.status === 403) this.handleAuthFailure(msg);
+          if (res.status === 401 || res.status === 403) this.handleAuthFailure(msg, res.status);
           throw new Error(msg);
         }
         const data = await res.json();
@@ -8062,7 +8076,7 @@ function nbx() {
           }
           const msg = await this.migrationReadError(res, `HTTP ${res.status}`);
           if ((res.status === 401 || res.status === 403) && !quotaShortfall) {
-            this.handleAuthFailure(msg);
+            this.handleAuthFailure(msg, res.status);
           }
           throw new Error(msg);
         }
@@ -9049,8 +9063,9 @@ function nbx() {
           if (j && j.detail != null) detailMsg = formatApiDetail(j.detail) || "";
         } catch {}
         if (res.status === 401 || res.status === 403) {
-          // 已登录说明是本机凭证失效/额度耗尽，清掉本地登录态；未登录则引导输入使用码
-          this.handleAuthFailure(detailMsg);
+          // 401：本机凭证失效 → 清掉并请用户重输；403：码还在只是不可用
+          // （禁用 / 额度用尽）→ 保留凭证，别让用户白输一遍
+          this.handleAuthFailure(detailMsg, res.status);
           throw Object.assign(
             new Error(
               detailMsg ||
@@ -9339,11 +9354,46 @@ function nbx() {
       this.activeHistoryId = this.trHistoryId;
       return item;
     },
+    /* ============ 输入草稿（按工具分键） ============ */
+    /* 每个工具一份草稿：切工具时各看各的，刷新后也不会把上一个工具的草稿
+       填进当前工具的输入框 */
+    _draftKey() {
+      const id = (this.currentTool && this.currentTool.id) || "";
+      return `${LS.draft}:${id || "default"}`;
+    },
+    _loadDraft() {
+      try {
+        const key = this._draftKey();
+        const own = localStorage.getItem(key);
+        if (own !== null) return own;
+        // 首次升级：老版本只有一份全局草稿，认领给这次进来的工具（用户回到的
+        // 就是上次那个工具），认领后立刻删掉老键，免得它又被别的工具读走
+        const legacy = localStorage.getItem(LS.draft);
+        if (legacy) {
+          localStorage.setItem(key, legacy);
+          localStorage.removeItem(LS.draft);
+          return legacy;
+        }
+        return "";
+      } catch { return ""; }
+    },
+    /* 立刻落盘（不等 400ms 防抖）：切工具、关页前调用，别把刚敲的字丢掉 */
+    flushDraft() {
+      clearTimeout(this._draftTimer);
+      this._draftTimer = null;
+      try { localStorage.setItem(this._draftKey(), this.input || ""); } catch {}
+    },
+
     /* 关页 / 刷新：与「停止」同路收尾，只是通知要带 keepalive。
        用 pagehide 而不是 unload——后者在移动端与 bfcache 场景常常不触发。
        这里一并作废在途流（递增代次），否则页面若被 bfcache 留住、流又跑完了，
        finalize 会再写一条完整记录，与刚存下的残文重复。 */
     _onPageHide() {
+      /* 关页前把还在防抖里的草稿落盘，别把刚敲的字丢掉 */
+      try { this.flushDraft(); } catch { /* 卸载阶段不抛错 */ }
+      /* 手机扫码那一批照片存在服务器内存里：页面一关 / 一进后台就释放，
+         否则要等后端超时回收——用户已经走了，内存还占着 */
+      try { if (this.pairToken || this.ocrPairToken) this.releasePairSession(); } catch { /* 卸载阶段不抛错 */ }
       if (!this.streaming) return;
       try { this.abortActiveGeneration({ keepalive: true }); } catch { /* 落盘失败不阻塞卸载 */ }
     },
@@ -11210,6 +11260,24 @@ function nbx() {
       return f ? f.type === "copy" : true;
     },
 
+    /* 导出格式是单选列表：给了 role=radio 就得能用键盘选（↑↓/←→ 移动、回车确认），
+       否则读屏用户听到的是「单选框」却按不动 */
+    onExportFormatKeydown(event) {
+      if (!event || event.isComposing) return;
+      const list = this.exportFormats || [];
+      if (!list.length) return;
+      const forward = event.key === "ArrowDown" || event.key === "ArrowRight";
+      const backward = event.key === "ArrowUp" || event.key === "ArrowLeft";
+      if (!forward && !backward) return;
+      event.preventDefault();
+      const cur = list.findIndex((f) => f.id === this.exportFormat);
+      const idx = (cur + (forward ? 1 : -1) + list.length) % list.length;
+      this.exportFormat = list[idx].id;
+      // 焦点跟着走：范围限定在这个列表里（页面上有两个导出菜单）
+      const container = event.currentTarget;
+      const el = container && container.querySelector(`[data-export-i="${idx}"]`);
+      if (el && el.focus) el.focus();
+    },
     async doExport() {
       if (!this.getExportMarkdown()) return;
       switch (this.exportFormat) {

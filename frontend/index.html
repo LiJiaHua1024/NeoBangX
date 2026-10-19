@@ -192,12 +192,12 @@
   <link rel="preload" as="style" href="/static/tailwind.css?v=8e7f78ad1c" fetchpriority="high"
         onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:tailwind')"
         onerror="this.onerror=null;__nbxBootFail('css:tailwind','界面样式')">
-  <link rel="preload" as="style" href="/static/styles.min.css?v=6c41acd08d" fetchpriority="high"
+  <link rel="preload" as="style" href="/static/styles.min.css?v=dab6efe2a1" fetchpriority="high"
         onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:styles')"
         onerror="this.onerror=null;__nbxBootFail('css:styles','主题样式')">
   <noscript>
     <link rel="stylesheet" href="/static/tailwind.css?v=8e7f78ad1c">
-    <link rel="stylesheet" href="/static/styles.min.css?v=6c41acd08d">
+    <link rel="stylesheet" href="/static/styles.min.css?v=dab6efe2a1">
   </noscript>
   <!-- 本地静态资源带 ?v=<内容哈希> 版本串（npm run build:assets 按文件内容生成，勿手改）：
        带 query 的 /static/** 由后端中间件下发 immutable 长缓存，浏览器与 Cloudflare
@@ -232,7 +232,7 @@
        它，且只在生成完成后才出现；3KB 的体积换十几处 getter 的未加载兜底不划算。 -->
   <script defer src="/static/nbx-versions.js?v=7270a8ece4" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
   <!-- 压缩产物：源码是 frontend/script.js，改完跑 npm run build:js 重新生成 -->
-  <script defer src="/static/script.min.js?v=eb9c90c4fd" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
+  <script defer src="/static/script.min.js?v=8ada613eb9" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
   <script defer src="/static/vendor/alpinejs-3.15.12.min.js?v=57b37d7cae" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
 </head>
 
@@ -3050,10 +3050,13 @@
                              x-model.number="exportFontSize" :disabled="!exportSizeEnabled">
                       <span class="export-size-num" :class="{ 'disabled': !exportSizeEnabled }" x-text="exportFontSize"></span>
                     </div>
-                    <!-- 格式列表 -->
-                    <div class="export-list">
-                      <template x-for="f in exportFormats" :key="f.id">
+                    <!-- 格式列表：单选，键盘也能选（↑↓/←→ 移动） -->
+                    <div class="export-list" role="radiogroup" aria-label="导出格式"
+                         @keydown="onExportFormatKeydown($event)">
+                      <template x-for="(f, i) in exportFormats" :key="f.id">
                         <div class="export-item" :class="{ 'active': exportFormat === f.id }"
+                             role="radio" :aria-checked="exportFormat === f.id"
+                             :tabindex="exportFormat === f.id ? 0 : -1" :data-export-i="i"
                              @click="exportFormat = f.id">
                           <span class="export-item-icon" x-html="icon(f.icon, 'w-4 h-4')"></span>
                           <div class="export-item-text">
@@ -3151,9 +3154,12 @@
                x-model.number="exportFontSize" :disabled="!exportSizeEnabled">
         <span class="export-size-num" :class="{ 'disabled': !exportSizeEnabled }" x-text="exportFontSize"></span>
       </div>
-      <div class="export-list">
-        <template x-for="f in exportFormats" :key="f.id">
+      <div class="export-list" role="radiogroup" aria-label="导出格式"
+           @keydown="onExportFormatKeydown($event)">
+        <template x-for="(f, i) in exportFormats" :key="f.id">
           <div class="export-item" :class="{ 'active': exportFormat === f.id }"
+               role="radio" :aria-checked="exportFormat === f.id"
+               :tabindex="exportFormat === f.id ? 0 : -1" :data-export-i="i"
                @click="exportFormat = f.id">
             <span class="export-item-icon" x-html="icon(f.icon, 'w-4 h-4')"></span>
             <div class="export-item-text">
@@ -3656,7 +3662,7 @@
     </div>
 
     <!-- ==================== 使用码输入弹窗 ==================== -->
-    <div x-show="codeModal" class="modal-mask" x-transition.opacity @click.self="closeCodeModal()">
+    <div x-show="codeModal" class="modal-mask" x-transition.opacity @click.self="closeCodeModal()" @keydown.escape.window="codeModal && closeCodeModal()">
       <div class="modal-card modal-sm glass-deep pop-in" @click.stop role="dialog" aria-modal="true" aria-labelledby="code-modal-title">
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('key','w-4 h-4')"></span>

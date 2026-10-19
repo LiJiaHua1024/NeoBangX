@@ -58,6 +58,18 @@ html, body { height: 100%; }
   min-height: -webkit-fill-available;
   padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
 }
+/* 横屏刘海/挖孔在左右两侧：只让底部安全区的话，侧栏与输入区会被圆角切掉 */
+@media (orientation: landscape) {
+  .app-root {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+}
+/* 横屏紧凑档：手机横过来后竖向只剩一半，收紧上下两条常驻栏，正文多留几行 */
+@media (orientation: landscape) and (max-height: 520px) {
+  .mascot-keepout { padding-top: 0.4rem; padding-bottom: 0.4rem; }
+  .composer { padding: 0.5rem; }
+}
 @supports (height: 100dvh) {
   html.kb-open .app-root {
     height: calc(100dvh - max(var(--kb), var(--kbi)));
@@ -4546,6 +4558,9 @@ mark, .vp-hl {
   .ocr-crop-h.is-s { width: 1.6rem; height: 0.46rem; }
   .ocr-crop-h.is-w,
   .ocr-crop-h.is-e { width: 0.46rem; height: 1.6rem; }
+  /* 触控目标 44px 起：窄屏上那些小图标按钮（关闭、清空、折叠、翻页…）
+     手指点不中，桌面鼠标不受影响（pointer: fine 不匹配这条） */
+  .icon-btn { min-width: 2.75rem; min-height: 2.75rem; }
 }
 /* 一行操作说明：能做什么、改动什么时候生效都写在这里，跟着状态换文案 */
 .ocr-editor-tip {
