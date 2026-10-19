@@ -50,6 +50,8 @@ from typing import Any
 
 import httpx
 
+from app.services.decision import SOURCE_HEURISTIC, DecisionSpec, decide
+
 logger = logging.getLogger(__name__)
 
 # state 里错误原文的截断长度：给足判定信息，又不把网关长堆栈全塞进计费
@@ -83,6 +85,10 @@ _NON_RETRYABLE_KEYWORDS = (
     "moderation",
     "内容审核",
     "违规内容",
+    # 国内网关的中文措辞（与上面两条同义）：报错解读的机械分类复用同一张表，
+    # 少这两条会让「输入过长」这类中文报错落到 unknown，白白重试
+    "上下文",
+    "输入过长",
 )
 
 # 精确可判定的异常类（litellm 已按协议解析好的类名，非关键词模糊匹配）。
@@ -465,6 +471,66 @@ def _noul_value(answers: dict, question_key: str) -> float | None:
         return None
 
 
+def _ask_jev(cfg: dict, state: Any, questions: dict) -> Any:
+    """转一次 Jev 请求。
+
+    刻意包一层而不是把 `a_ask_jev` 直接交给 `DecisionSpec.ask`：函数体里对模块全局
+    的查找发生在调用时，测试 monkeypatch `jev_judge.a_ask_jev` 才能照旧生效。
+    """
+    return a_ask_jev(cfg, state, questions)
+
+
+def _combine_provider(answers: dict) -> bool | None:
+    """Provider 切换：任一否决题超过阈值才不切；回包缺题返回 None（转兜底）。"""
+    overflow = _noul_value(answers, "is_context_overflow")
+    filtered = _noul_value(answers, "is_content_filtered")
+    if overflow is None or filtered is None:
+        return None
+    return not (
+        overflow > PROVIDER_RETRY_SUPPRESS_THRESHOLD
+        or filtered > PROVIDER_RETRY_SUPPRESS_THRESHOLD
+    )
+
+
+def _combine_title(answers: dict) -> bool | None:
+    """标题任务：瞬态必须明确成立，且三类否决必须明确不成立；缺题返回 None。"""
+    transient = _noul_value(answers, "is_transient")
+    negatives = [
+        _noul_value(answers, key)
+        for key in ("is_context_overflow", "is_content_filtered", "is_permanent_request_error")
+    ]
+    if transient is None or any(value is None for value in negatives):
+        return None
+    return transient > TITLE_TRANSIENT_THRESHOLD and all(
+        value < TITLE_TRANSIENT_THRESHOLD for value in negatives  # type: ignore[operator]
+    )
+
+
+# 两处判定的全部可变部分（问题、规则、兜底、回包解析）集中在这里；
+# 「精确 → Jev → 兜底」的编排由 app.services.decision.decide 负责，不再各写一遍。
+PROVIDER_DECISION = DecisionSpec(
+    key="provider_retry",
+    questions=PROVIDER_QUESTIONS,
+    certain=_certain_provider_verdict,
+    heuristic=heuristic_is_retryable,
+    combine=_combine_provider,
+    ask=_ask_jev,
+    usable=_jev_usable,
+    build_state=build_provider_retry_state,
+)
+
+TITLE_DECISION = DecisionSpec(
+    key="title_retry",
+    questions=TITLE_QUESTIONS,
+    certain=_certain_title_verdict,
+    heuristic=heuristic_is_title_retryable,
+    combine=_combine_title,
+    ask=_ask_jev,
+    usable=_jev_usable,
+    build_state=build_title_retry_state,
+)
+
+
 async def a_judge_provider_retry(
     exc: BaseException,
     jev_cfg: dict | None,
@@ -480,30 +546,18 @@ async def a_judge_provider_retry(
     模糊的（400/422/无状态码）两道否决题一次并行问，只有 Jev 比较确信是
     "换谁都一样"（任一否决题 > 阈值）才不切，拿不准一律切。
     """
-    certain = _certain_provider_verdict(exc)
-    if certain is not None:
-        return certain
-    if not _jev_usable(jev_cfg):
-        return None
-    assert jev_cfg is not None
-    state = build_provider_retry_state(
+    result = await decide(
+        PROVIDER_DECISION,
         exc,
+        jev_cfg,
         model_id=model_id,
         provider_label=provider_label,
         provider_index=provider_index,
         provider_total=provider_total,
     )
-    try:
-        answers = await a_ask_jev(jev_cfg, state, PROVIDER_QUESTIONS)
-    except Exception as e:  # noqa: BLE001 - 任何 Jev 异常都只记日志并回退，不影响主流程
-        logger.warning("Jev 判定不可用，回退启发式: %s", e)
-        return None
-    overflow = _noul_value(answers, "is_context_overflow")
-    filtered = _noul_value(answers, "is_content_filtered")
-    if overflow is None or filtered is None:
-        logger.warning("Jev 回包无法解析，回退启发式: %s", answers)
-        return None
-    return not (overflow > PROVIDER_RETRY_SUPPRESS_THRESHOLD or filtered > PROVIDER_RETRY_SUPPRESS_THRESHOLD)
+    # 旧契约：只有「精确判定」或「Jev 给了结论」才返回 bool；
+    # 走了兜底就返回 None，把最终决定权留给调用方的启发式入口。
+    return result.verdict if result.source != SOURCE_HEURISTIC else None
 
 
 async def a_should_retry_provider(
@@ -512,14 +566,8 @@ async def a_should_retry_provider(
     **context: Any,
 ) -> bool:
     """Provider 切换总入口：Jev 优先，不可用立刻回退启发式。永远返回 bool，不抛异常。"""
-    try:
-        decided = await a_judge_provider_retry(exc, jev_cfg, **context)
-    except Exception as e:  # noqa: BLE001 - 判定本身绝不能把主流程拖下水
-        logger.warning("Jev 判定异常，回退启发式: %s", e)
-        decided = None
-    if decided is not None:
-        return decided
-    return heuristic_is_retryable(exc)
+    result = await decide(PROVIDER_DECISION, exc, jev_cfg, **context)
+    return result.verdict
 
 
 async def a_judge_title_retry(exc: BaseException, jev_cfg: dict | None) -> bool | None:
@@ -529,43 +577,16 @@ async def a_judge_title_retry(exc: BaseException, jev_cfg: dict | None) -> bool 
     模糊的（无状态码、文案不明）四道题一次并行问：瞬态必须明确成立，且三类否决
     必须明确不成立，才值得稍后重试；拿不准一律不重试（沿用旧规则）。
     """
-    certain = _certain_title_verdict(exc)
-    if certain is not None:
-        return certain
-    if not _jev_usable(jev_cfg):
-        return None
-    assert jev_cfg is not None
-    try:
-        answers = await a_ask_jev(jev_cfg, build_title_retry_state(exc), TITLE_QUESTIONS)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Jev 标题判定不可用，回退启发式: %s", e)
-        return None
-    transient = _noul_value(answers, "is_transient")
-    negatives = [_noul_value(answers, key) for key in (
-        "is_context_overflow", "is_content_filtered", "is_permanent_request_error",
-    )]
-    if transient is None or any(value is None for value in negatives):
-        logger.warning("Jev 标题回包无法解析，回退启发式: %s", answers)
-        return None
-    assert all(value is not None for value in negatives)
-    return (
-        transient > TITLE_TRANSIENT_THRESHOLD
-        and all(value < TITLE_TRANSIENT_THRESHOLD for value in negatives)  # type: ignore[misc]
-    )
+    result = await decide(TITLE_DECISION, exc, jev_cfg)
+    return result.verdict if result.source != SOURCE_HEURISTIC else None
 
 
 async def a_should_retry_title(exc: BaseException, jev_cfg: dict | None = None) -> bool:
     """标题任务重试总入口：Jev 优先，不可用立刻回退启发式。永远返回 bool，不抛异常。"""
     if exc.__class__.__name__ == "TitleJobPermanentError":
         return False
-    try:
-        decided = await a_judge_title_retry(exc, jev_cfg)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Jev 标题判定异常，回退启发式: %s", e)
-        decided = None
-    if decided is not None:
-        return decided
-    return heuristic_is_title_retryable(exc)
+    result = await decide(TITLE_DECISION, exc, jev_cfg)
+    return result.verdict
 
 
 async def a_probe_jev(jev_cfg: dict) -> tuple[bool, int]:
@@ -613,3 +634,23 @@ def load_jev_config_sync() -> dict | None:
     except Exception as e:  # noqa: BLE001
         logger.warning("读取 Jev 配置失败，按未启用处理: %s", e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# 对外复用面：给「用同一套 Jev + 兜底骨架、但规则不同」的调用方用
+# （目前是 app.services.error_explain 的报错解读重试判定）。
+# 这里只做别名，实现仍在上面各处——加一处新判定不必把 Jev 协议再抄一遍。
+# ---------------------------------------------------------------------------
+
+# Jev 是否配齐到可以发请求（启用 + 地址 + Key + 模型名）
+jev_usable = _jev_usable
+# 发一次 Jev decisions 请求（只试一次，失败抛给 decision.decide 转兜底）
+ask_jev_decision = _ask_jev
+# 取一道 Noul 题的概率值（缺失/非法返回 None）
+noul_value = _noul_value
+# 错误原文截断（state 里给足判定信息，又不把网关长堆栈全塞进计费）
+clip_error = _clip
+# 从异常里取数字 HTTP 状态码
+exception_status = _exception_status
+# 「换谁都一样」的关键词表（上下文超限 / 内容审核），机械兜底与分类复用同一张表
+NON_RETRYABLE_KEYWORDS = _NON_RETRYABLE_KEYWORDS

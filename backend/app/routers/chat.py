@@ -22,6 +22,7 @@ from app.routers.ocr import normalize_image_mime, pair_image_data_urls, sniff_im
 from app.routers.tools import (
     CONTINUE_PROMPT_NAME,
     DEFAULT_OCR_MODE,
+    ERROR_EXPLAIN_TOOL_ID,
     FREEFORM_TOOL_ID,
     OCR_MAX_IMAGES,
     OCR_MODES,
@@ -436,6 +437,93 @@ def _build_llm(cfg: dict, model: Optional[str] = None, chores: bool = False) -> 
         jev_config=cfg.get("jev") if isinstance(cfg.get("jev"), dict) else None,
     )
     return router
+
+
+async def _explain_failure_for_user(
+    cfg: dict,
+    loader: PromptLoader,
+    *,
+    exc: BaseException | None = None,
+    tool_name: str = "",
+    model: str = "",
+    stage: str = "生成",
+) -> "FailureExplanation":
+    """把失败翻译成用户能懂的两句话（Chores 模型转写 + Jev/机械兜底）。
+
+    这一步是**给人看的补充信息**，所以整段包住：Chores 没配、报错、超时都退回机械文案，
+    绝不让它影响 error 事件本身——前端拿到的 message 一定有内容。
+    细节见 app/services/error_explain.py。
+    """
+    from app.services.error_explain import (
+        EXPLAIN_PROMPT_NAME,
+        classify_failure,
+        explain_failure,
+        mechanical_explanation,
+        sanitize_error_text,
+    )
+    from app.services.jev_judge import exception_status
+
+    try:
+        chores_model = (cfg.get("chores_model") or "").strip()
+        llm = None
+        reasoning_effort = None
+        extra_body = None
+        if chores_model:
+            try:
+                llm = _build_llm(cfg, chores=True)
+            except Exception as error:  # noqa: BLE001
+                logger.warning("构建 Chores 模型失败，报错解释走机械兜底: %s", error)
+            # 推理强度：先取该模型自己的默认值（与主流程同一个口径），
+            # 再看管理后台「工具推理规则 → Chores 工作 → 报错解读」有没有专门覆盖。
+            # 有些模型关推理要写 off、有些写 none，这里只透传配置值，不做任何硬编码。
+            model_entry = find_model_entry(cfg.get("models") or [], chores_model)
+            if model_entry:
+                reasoning_effort = model_entry.get("reasoning_effort")
+                extra_body = model_entry.get("extra_body")
+            rule = find_tool_reasoning_rule(
+                cfg.get("tool_reasoning_rules") or [], ERROR_EXPLAIN_TOOL_ID
+            )
+            if rule is not None:
+                chain = getattr(llm, "providers", None) or []
+                actual_model = (chain[0].get("provider_model_id") if chain else "") or chores_model
+                supported = supports_reasoning(actual_model)
+                if supported is False and rule.get("on_unsupported") == "fail":
+                    # 规则配了「直接失败」：不调用 Chores，直接用机械文案。
+                    # 解释是补充信息，这里没有「拦下请求」可做，跳过就是它的语义
+                    logger.info("报错解读：%s 不支持推理且规则为直接失败，跳过解释", actual_model)
+                    return mechanical_explanation(
+                        classify_failure(exc=exc, raw_message=str(exc or ""))
+                    )
+                if supported is not False:
+                    reasoning_effort = rule.get("reasoning_effort")
+        status = exception_status(exc) if exc is not None else None
+        # 发给模型前先脱敏：上游原文里可能带网关地址与凭据（那正是它不回传给用户的原因）
+        prompt = loader.render(
+            EXPLAIN_PROMPT_NAME,
+            sanitize_error_text(str(exc or "")),
+            {
+                "tool": tool_name or "未知工具",
+                "model": model or "未知模型",
+                "stage": stage,
+                "status": status if status is not None else "无",
+            },
+        )
+        return await explain_failure(
+            llm,
+            chores_model,
+            prompt=prompt,
+            exc=exc,
+            status=status,
+            raw_message=str(exc or ""),
+            tool_name=tool_name,
+            stage=stage,
+            jev_cfg=cfg.get("jev") if isinstance(cfg.get("jev"), dict) else None,
+            reasoning_effort=reasoning_effort,
+            extra_body=extra_body,
+        )
+    except Exception as error:  # noqa: BLE001 - 解释是补充信息，不能反过来拖垮主链路
+        logger.warning("报错解释整体失败，使用机械文案: %s", error)
+        return mechanical_explanation(classify_failure(exc=exc, raw_message=str(exc or "")))
 
 
 def _mark_usage_context(
@@ -1670,15 +1758,20 @@ async def chat_stream(
                 # 免费额度内 quota_units=0 不扣，命中限额转按次计费时扣 1 次，OCR 恒为 0。
                 if client_disconnected or stop_event.is_set():
                     status = STATUS_CANCELLED
-                # 整卷转录、整卷翻译都很容易撞输出上限：撞上了要明说，
-                # 别让人拿着半份试卷（或半篇译文）往下走
-                if (is_ocr and _hit_output_cap(usage, cfg["ocr_max_tokens"])) or (
-                    is_translate and _hit_output_cap(usage, cfg["max_tokens"])
-                ):
+                # 撞输出上限：整卷转录、整卷翻译最容易撞，但**任何**工具都可能撞。
+                # 只对这两个工具提示的后果是：别的工具把半份内容当完整结果交付，
+                # 用户直接打印/投影（错误不可见），而且页面上不会出现「继续生成」入口
+                # ——只能整篇重来。所以一律发 truncated，由前端按工具决定怎么呈现。
+                cap_limit = cfg["ocr_max_tokens"] if is_ocr else cfg["max_tokens"]
+                if _hit_output_cap(usage, cap_limit):
                     yield {
                         "event": "truncated",
                         "data": json.dumps(
-                            {"limit": cfg["ocr_max_tokens"] if is_ocr else cfg["max_tokens"]},
+                            {
+                                "limit": cap_limit,
+                                "completion_tokens": usage.get("completion_tokens"),
+                                "finish_reason": usage.get("finish_reason") or "",
+                            },
                             ensure_ascii=False,
                         ),
                     }
@@ -1737,12 +1830,33 @@ async def chat_stream(
             logger.error(f"Stream error for {request_id}: {e}")
             status = STATUS_ERROR
             error_message = str(e)
-            # 原始异常可能内嵌上游网关地址/供应商报错，不回传给终端用户；
-            # model 供前端失败归因：禁用真正执行失败的模型，而非其当前选中的模型
+            # 先告诉前端「这次已经失败了、正在整理说明」：解释要花零点几到几秒
+            # （见 error_explain 的总预算），这段时间前端不能继续装作还在生成——
+            # 否则用户会以为模型还在写，白等一场
+            yield {
+                "event": "explaining",
+                "data": json.dumps({"model": model_used}, ensure_ascii=False),
+            }
+            # 原始异常可能内嵌上游网关地址/供应商报错，不回传给终端用户。
+            # 用户看到的是 Chores 模型转写的「发生了什么 + 该怎么做」（Chores 不可用时
+            # 退回机械文案），两者都不含上游原文；model 供前端失败归因：
+            # 禁用真正执行失败的模型，而非其当前选中的模型
+            explanation = await _explain_failure_for_user(
+                cfg,
+                loader,
+                exc=e,
+                tool_name=tool_name,
+                model=model_used,
+            )
             yield {
                 "event": "error",
                 "data": json.dumps(
-                    {"message": "生成失败，请稍后重试", "model": model_used},
+                    {
+                        "message": explanation.message,
+                        "advice": explanation.advice,
+                        "code": explanation.code,
+                        "model": model_used,
+                    },
                     ensure_ascii=False,
                 ),
             }

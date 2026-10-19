@@ -20,6 +20,7 @@ from app.routers import chat as chat_router
 from app.routers.tools import (
     CHORES_TOOLS,
     DEVICE_PROFILE_TOOL_ID,
+    ERROR_EXPLAIN_TOOL_ID,
     TITLE_TOOL_ID,
     VISUAL_FRAMEWORK_TOOL_ID,
 )
@@ -65,6 +66,8 @@ def test_admin_tools_includes_chores_group():
     assert TITLE_TOOL_ID in chores_tool_ids
     assert VISUAL_FRAMEWORK_TOOL_ID in chores_tool_ids
     assert DEVICE_PROFILE_TOOL_ID in chores_tool_ids
+    # 报错解读也是一次 Chores 调用，同样要能在后台按模型配推理等级
+    assert ERROR_EXPLAIN_TOOL_ID in chores_tool_ids
 
 
 def test_admin_config_accepts_chores_tool_ids():

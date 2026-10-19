@@ -677,7 +677,17 @@ def test_stream_records_error_status_without_charging(stream):
     response = _post_stream(client, input_text="boom")
     # SSE 已建连，错误以 error 事件下发而非 HTTP 状态码
     assert response.status_code == 200
-    assert "生成失败" in response.text
+    # 文案不再是固定的「生成失败，请稍后重试」：由 Chores 模型转写（不可用时走机械兜底），
+    # 契约是「message 一定有内容 + advice 说明该怎么办 + code 供前端/统计使用」
+    assert "event: error" in response.text
+    # 取 error 事件自己的载荷（它前面还有一条 explaining）
+    error_block = response.text.split("event: error", 1)[1]
+    payload = json.loads(error_block.split("data: ", 1)[1].split("\r\n", 1)[0])
+    assert payload["message"], response.text
+    assert payload["advice"], "错误卡第二行不能空着"
+    assert payload["code"], "要给出机器可读分类"
+    # 上游原文（可能带网关地址/凭据）绝不能回传给用户
+    assert "上游 500" not in response.text
 
     row = _logs_for(code.id)[0]
     assert row.status == "error"
@@ -689,6 +699,30 @@ def test_stream_records_error_status_without_charging(stream):
         assert db.get(UsageCode, code.id).used_count == 0
     finally:
         db.close()
+
+
+def test_explaining_event_precedes_error(stream):
+    """失败时先发 explaining 再发 error。
+
+    解释要花零点几到几秒（见 error_explain 的总预算），这段时间前端必须立刻停止显示
+    「生成中」——否则用户以为模型还在写，白等一场。顺序错了这个效果就没有了。
+    """
+    client, harness = stream
+    harness.llm = _FakeStreamLLM(["x"], error=RuntimeError("上游 500"))
+    db = SessionLocal()
+    try:
+        code = _make_code(db, "NBXU-LOG-S003-0007")
+    finally:
+        db.close()
+    harness.code = code
+
+    response = _post_stream(client, input_text="boom")
+    assert response.status_code == 200
+    assert "event: explaining" in response.text, response.text
+    assert response.text.index("event: explaining") < response.text.index("event: error")
+    # 两个事件都必须在终止之前，且 explaining 里不带上游原文
+    assert "上游 500" not in response.text
+
 
 
 # ---------------- GeneratorExit：流被 aclose 关掉时按取消记账 ----------------

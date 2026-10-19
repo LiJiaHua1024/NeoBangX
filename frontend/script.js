@@ -875,6 +875,8 @@ function historyIndexOf(item) {
     titlePayloadHash: item.titlePayloadHash || "",
     error: item.error || "",
     partial: !!item.partial,
+    // 撞过输出上限：列表角标据此显示「待补全」（与「已停止」区分开）
+    truncated: !!item.truncated,
     createdAt: item.createdAt,
     // 最后修改时间：线路镜像合并时「谁更新」的唯一判据。存量记录没有这个字段，
     // 回退到 createdAt（等于「从未改过」），镜像层 (updatedAtOf) 也做同样回退。
@@ -2270,6 +2272,12 @@ function nbx() {
     thinking: false,
     status: "idle",
     errorMsg: "",
+    // 后端随 error 事件下发的一句「该怎么做」（Chores 模型转写或机械兜底），
+    // 与 errorMsg 一起构成错误卡的两行；空串表示这次没有（老后端 / 未触发解释）
+    errorAdvice: "",
+    /* 失败已发生、后端正在整理说明（Chores 转写，有总预算）。
+       这段时间界面上不能再显示「生成中」——那会让用户以为模型还在写。 */
+    explaining: false,
     // 登录过期/额度用尽类错误不可通过重试解决，错误卡上隐藏重试按钮
     errorRetryable: true,
     // 本次失败是频次限制（免费模型限额 / 接口限速 429）：错误卡上给专门的解释，
@@ -2524,6 +2532,9 @@ function nbx() {
     trTargetLang: TR_DEFAULT_TARGET,   // 目标语言 id
     trSrcCollapsed: false,             // 折叠原文栏：译文独占工作区并在阅读栏宽里居中
     trTruncated: false,                // 本次译文撞到输出上限（可「继续翻译」接着译完）
+    /* 本次生成撞到输出上限（任何工具都会发生）：半份内容不能当完整结果交付，
+       结果区据此给出「继续生成」出口，记录也会标成待补全。 */
+    outputTruncated: false,
     trHistoryId: "",                   // 译文写回的历史记录 id；空 = 下一次生成新建一条
     trMenu: "",                        // 打开着的语言下拉："source" | "target" | ""
     trResultVisible: false,            // 窄屏：还没按下翻译时译文栏不占地方（宽屏不起作用）
@@ -5240,8 +5251,10 @@ function nbx() {
         this.currentTool = tool;
         this.output = "";
         this.rendered = "";
+        this.outputTruncated = false;
         this.outputFoldEligible = false;  // 切工具后展示的是新内容，清掉历史折叠态
         this.errorMsg = "";
+        this.errorAdvice = "";
         this.failedModel = "";
         // 换工具即与上一条记录脱钩：续写/重试不能再写回别的工具的记录
         this.activeHistoryId = null;
@@ -8872,8 +8885,11 @@ function nbx() {
 
       this.output = "";
       this.rendered = "";
+      this.outputTruncated = false;
       this.outputFoldEligible = false;  // 新生成的内容不做折叠
       this.errorMsg = "";
+      this.errorAdvice = "";
+      this.explaining = false;
       // 生成中状态条的导出/复制入口会隐藏，先把可能开着的导出面板收掉，
       // 否则流结束后它会带着旧定位重新弹出来
       this.closeExportMenu();
@@ -8980,6 +8996,8 @@ function nbx() {
           if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
           this.errorRetryable = !(e && e.authIssue);
           this.errorLimited = !!(e && e.limited);
+          // 后端转写的「该怎么做」：随错误一起落到错误卡的第二行
+          this.errorAdvice = (e && e.advice) || "";
           finish("error", describeError(e, "生成失败，请稍后重试"), { ...ctx0, seq });
         }
       } finally {
@@ -9056,15 +9074,30 @@ function nbx() {
         // （识别与迁移那条链路一直是这么判的，这里补齐）
         if (data === "[CANCELLED]") { stopped = true; sawTerminal = true; return; }
         if (ev === "done" || data === "[DONE]") { sawTerminal = true; return; }
+        if (ev === "explaining") {
+          // 失败已经发生，后端正在把报错转写成两句话（最多几秒，见后端总预算）。
+          // 立刻把界面从「生成中」切走：这段时间继续显示生成中，用户会白等一场
+          this.explaining = true;
+          this.thinking = false;
+          this.stopThinkTimer();
+          return;
+        }
         if (ev === "error") {
           let m = data;
           let model = "";
+          let advice = "";
           try {
             const j = JSON.parse(data);
-            if (j) { m = j.message || data; model = typeof j.model === "string" ? j.model : ""; }
+            if (j) {
+              m = j.message || data;
+              model = typeof j.model === "string" ? j.model : "";
+              // 后端转写的「该怎么做」：Chores 模型写的，或机械兜底文案。
+              // 老后端没有这个字段，留空即可（错误卡少一行，其余照旧）
+              advice = typeof j.advice === "string" ? j.advice : "";
+            }
           } catch {}
           // model 供失败归因：禁用真正失败的模型，而非此刻的 selectedModel
-          throw Object.assign(new Error(m), { model });
+          throw Object.assign(new Error(m), { model, advice });
         }
         if (ev === "fallback") {
           // 备用通道切换：{failed_index, total, next_index, reason}，只用于展示进度
@@ -9114,8 +9147,10 @@ function nbx() {
           return;
         }
         if (ev === "truncated") {
-          // 翻译撞到输出上限：只置标记，由译文栏提示「可继续翻译」。
-          // 不接住的话它会落到下面那句兜底里，被当成正文拼进译文
+          // 撞到输出上限：只置标记，由结果区提示「可继续生成」。
+          // 不接住的话它会落到下面那句兜底里，被当成正文拼进结果。
+          // 翻译工具读 trTruncated（译文栏有自己的一条提示），其余工具读 outputTruncated。
+          this.outputTruncated = true;
           this.trTruncated = true;
           return;
         }
@@ -9184,6 +9219,9 @@ function nbx() {
     abortActiveGeneration({ keepalive = false } = {}) {
       this._saveAbortedPartial();
       this._runSeq += 1;
+      // 作废的同时把「正在整理说明」也清掉：旧流的收尾被跳过（代次不符），
+      // 留着它会让新工具的界面一直显示「生成没有成功，正在整理说明…」
+      this.explaining = false;
       const requestId = this.requestId;
       try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
       this.streaming = false;
@@ -9463,6 +9501,10 @@ function nbx() {
     _showVersion(item, v) {
       this.output = item.output;
       this.errorMsg = item.error || "";
+      // 截断标记属于「最后一次生成」，切到别的版本就不适用了
+      this.outputTruncated = false;
+      // 历史里不存「该怎么做」，切版本时一并清掉（它只属于刚发生的那次失败）
+      this.errorAdvice = "";
       this.status = item.error ? "error" : (item.partial ? "stopped" : "history");
       this.failedModel = item.error ? (item.model || "") : "";
       this.errorRetryable = true;
@@ -9513,6 +9555,8 @@ function nbx() {
       // 代次不符 = 这次流已被切换工具/新建题目作废，收尾交给新流程
       if (seq !== undefined && seq !== this._runSeq) return;
       this.streaming = false;
+      // 到这里错误说明已经拿到（或已走兜底）：收尾状态由下面按 state 决定
+      this.explaining = false;
       this.thinking = false;
       this.fallbackInfo = null;
       // 打字机收尾：自然完成的余量交给它平滑放完（放完那帧是干净全文）；
@@ -9594,6 +9638,7 @@ function nbx() {
             if (producedNew) origin.output = this.output;
             origin.error = String(this.errorMsg).slice(0, 300);
             origin.partial = false;
+            origin.truncated = false;
             origin.model = this.failedModel || modelUsed;
             NbxVersions.syncActive(origin);
             this._persistHistoryItem(origin);
@@ -9610,6 +9655,7 @@ function nbx() {
         // 续写/重试成功后必须撤掉错误卡：这条路不再经过 run() 的 errorMsg 复位，
         // 否则上一次的失败提示会一直挂在一份已经写完的内容上
         this.errorMsg = "";
+        this.errorAdvice = "";
         if (producedNew) {
           if (origin) {
             if (opts.newVersion) {
@@ -9617,24 +9663,27 @@ function nbx() {
               NbxVersions.append(origin, {
                 output: this.output,
                 model: modelUsed,
-                partial: state === "stopped",
+                // 撞上限的残文同样按「未完成」记：否则重开后既没有待补全标记，也没有续写入口
+                partial: state === "stopped" || this.outputTruncated,
                 error: "",
               });
             } else {
               // 续写/重试回到原记录的活动版本：状态随最后一次结果刷新——成功即清掉
               // 失败标记，用户停止则落回「已停止」，续写入口继续留着
               origin.output = this.output;
-              origin.partial = state === "stopped";
+              origin.partial = state === "stopped" || this.outputTruncated;
               origin.error = "";
               origin.model = modelUsed;
               NbxVersions.syncActive(origin);
             }
+            // 截断标记跟着这一轮结果走：续写补完之后自然被清掉
+            origin.truncated = this.outputTruncated;
             this._persistHistoryItem(origin);
             this.activeHistoryId = origin.id;
             // 失败记录从来没生成过标题，续写成功后补一条，否则列表里永远只有输入摘要
             if (!origin.title) this.generateTitle(origin);
           } else {
-            const item = this.pushHistory(state === "stopped");
+            const item = this.pushHistory(state === "stopped" || this.outputTruncated);
             this.activeHistoryId = item ? item.id : null;
           }
         }
@@ -9768,6 +9817,7 @@ function nbx() {
       // 代次不符 = 这次流已被切换工具/新建题目作废，收尾交给新流程
       if (seq !== undefined && seq !== this._runSeq) return;
       this.streaming = false;
+      this.explaining = false;
       // 收尾方式决定「继续生成」入口是否保留，必须先于渲染落定
       this.vpRunState = state;
       this.vpTasks = this.vpTasks.map(t => ({ ...t,
@@ -11982,6 +12032,8 @@ function nbx() {
         output: this.output,
         model: modelUsed || this.selectedModel,
         partial: !!partial,
+        // 撞输出上限的记录：列表里显示「待补全」，重开后结果区给「继续生成」出口
+        truncated: !!this.outputTruncated,
         createdAt: Date.now(),
       });
     },
@@ -12468,6 +12520,8 @@ function nbx() {
       this.output = item.output;
       // 这条记录就是屏幕上这份结果的归属：续写/重试都写回它
       this.activeHistoryId = item.id;
+      // 撞过输出上限的记录（失败记录不算，错误卡自己会交代）：结果区给「继续生成」出口
+      this.outputTruncated = !!item.truncated && !item.error;
       // 失败记录：把错误原因一并还原，错误卡与「继续生成 / 直接重试 / 换个模型重试 / 编辑输入」照常可用
       if (item.error) {
         this.errorMsg = item.error;
@@ -12476,11 +12530,15 @@ function nbx() {
         this.errorRetryable = true;
         this.errorLimited = false;
       } else if (item.partial) {
-        // 上次是被停下的（不是写完的）：状态还原成「已停止」，页面上才会给出续写入口
+        // 上次是被停下的（不是写完的）：状态还原成「已停止」，页面上才会给出续写入口。
+        // 撞输出上限的记录除外——它由结果区那条「可继续生成」的提示负责给出口，
+        // 状态置成 stopped 会再多弹一条「已停止生成」，两处说同一件事
         this.errorMsg = "";
-        this.status = "stopped";
+        this.errorAdvice = "";
+        this.status = this.outputTruncated ? "history" : "stopped";
       } else {
         this.errorMsg = "";
+        this.errorAdvice = "";
         this.status = "history";
       }
       this.resetReasoning();
@@ -13643,6 +13701,8 @@ function nbx() {
       return dots;
     },
     get statusText() {
+      // 失败已发生、后端在整理说明：如实说明，别继续显示「生成中」
+      if (this.explaining) return "生成没有成功，正在整理说明…";
       switch (this.status) {
         case "connecting": return this.thinking ? this.liveWaitText : "正在连接模型…";
         case "streaming": return this.thinking ? this.liveWaitText : "生成中… " + this.elapsed + "s";
@@ -13654,6 +13714,7 @@ function nbx() {
       }
     },
     get statusDotClass() {
+      if (this.explaining) return "status-dot err";
       if (this.status === "connecting" || this.status === "streaming") return "status-dot live";
       if (this.status === "done" || this.status === "history") return "status-dot ok";
       if (this.status === "error") return "status-dot err";

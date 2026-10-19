@@ -232,7 +232,7 @@
        它，且只在生成完成后才出现；3KB 的体积换十几处 getter 的未加载兜底不划算。 -->
   <script defer src="/static/nbx-versions.js?v=7270a8ece4" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
   <!-- 压缩产物：源码是 frontend/script.js，改完跑 npm run build:js 重新生成 -->
-  <script defer src="/static/script.min.js?v=f2c7231bc8" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
+  <script defer src="/static/script.min.js?v=6e04825653" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
   <script defer src="/static/vendor/alpinejs-3.15.12.min.js?v=57b37d7cae" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
 </head>
 
@@ -1449,7 +1449,7 @@
 
                 <!-- 动作控制：停止 / 状态 -->
                 <div class="flex items-center gap-2 ml-auto shrink-0">
-                  <button x-show="streaming" class="btn-primary btn-stop" style="padding:.32rem .85rem;font-size:.78rem" @click="stop()" title="停止生成，已生成题目会保留，可继续生成"><span x-html="icon('stop','w-3.5 h-3.5')"></span>停止</button>
+                  <button x-show="streaming && !explaining" class="btn-primary btn-stop" style="padding:.32rem .85rem;font-size:.78rem" @click="stop()" title="停止生成，已生成题目会保留，可继续生成"><span x-html="icon('stop','w-3.5 h-3.5')"></span>停止</button>
                 </div>
               </div>
 
@@ -1571,7 +1571,7 @@
                     <div class="skel h-3 w-5/6"></div>
                     <div class="skel h-3 w-4/6"></div>
                   </div>
-                  <button x-show="streaming" class="btn-primary btn-stop mt-6" @click="stop()" title="停止生成，已生成题目会保留，可继续生成"><span x-html="icon('stop','w-4 h-4')"></span>停止生成</button>
+                  <button x-show="streaming && !explaining" class="btn-primary btn-stop mt-6" @click="stop()" title="停止生成，已生成题目会保留，可继续生成"><span x-html="icon('stop','w-4 h-4')"></span>停止生成</button>
                 </div>
               </template>
 
@@ -2043,6 +2043,9 @@
                 <div class="error-card">
                   <div class="font-semibold mb-1">这次生成没有成功</div>
                   <div x-text="errorMsg"></div>
+                  <!-- 后端转写的「该怎么做」（Chores 模型或机械兜底）。没有这一行时不占位，
+                       老后端 / 未触发解释时错误卡与从前完全一致 -->
+                  <div class="mt-1" x-show="errorAdvice" x-cloak x-text="errorAdvice"></div>
                   <div class="mt-2 text-xs opacity-80" x-show="errorLimited">这是调用频次限制（免费模型的防滥用限额或接口限速）。等一会儿再试即可；如果经常遇到，可以改用其他模型，或让管理员调大该免费模型的限额。</div>
                   <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && errorRetryable">试卷内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
                   <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && !errorRetryable">请先输入使用码（或改选免费模型）并确认额度充足，再重新解析。</div>
@@ -2935,11 +2938,26 @@
                 </div>
               </div>
 
+              <!-- 撞输出上限：半份内容不能当完整结果交付，给一条接着写的出口。
+                   试卷可视化全解有自己的完整性提示（部分题目待补全），这里不重复 -->
+              <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8" x-show="!streaming && outputTruncated && !isVisualPaperTool" x-cloak>
+                <div class="tr-note tr-note-warn">
+                  <div>结果可能不完整：输出已经达到上限。可以接着往下写，或把材料拆成两段分别处理。</div>
+                  <button type="button" class="btn-ghost tr-note-go" @click="continueChat()"
+                          title="从断点接着往下写，已生成的部分不变，也不会新增历史记录">
+                    <span x-html="icon('chevrons-right','w-3.5 h-3.5')"></span>继续生成
+                  </button>
+                </div>
+              </div>
+
               <!-- 错误 -->
               <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 pb-6" x-show="errorMsg">
                 <div class="error-card">
                   <div class="font-semibold mb-1">这次生成没有成功</div>
                   <div x-text="errorMsg"></div>
+                  <!-- 后端转写的「该怎么做」（Chores 模型或机械兜底）。没有这一行时不占位，
+                       老后端 / 未触发解释时错误卡与从前完全一致 -->
+                  <div class="mt-1" x-show="errorAdvice" x-cloak x-text="errorAdvice"></div>
                   <div class="mt-2 text-xs opacity-80" x-show="errorLimited">这是调用频次限制（免费模型的防滥用限额或接口限速）。等一会儿再试即可；如果经常遇到，可以改用其他模型，或让管理员调大该免费模型的限额。</div>
                   <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && errorRetryable && canContinue">已生成的内容已保留：点「继续生成」接着往下写，代价最小；也可以整篇重试，或换个模型重试——重试会把这一版留在底部的版本切换器里，不会被覆盖。</div>
                   <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && errorRetryable && !canContinue">输入内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
@@ -2981,7 +2999,7 @@
                         @click="startNewTopic()" title="开始新题目" aria-label="开始新题目"
                         x-html="icon('plus','w-4 h-4')"></button>
                 <!-- 生成中：输入区已收起，停止入口改驻状态条（不额外占竖直空间）；只留图标，方形不扁 -->
-                <button x-show="streaming" class="btn-primary btn-stop status-stop"
+                <button x-show="streaming && !explaining" class="btn-primary btn-stop status-stop"
                         @click="stop()" title="停止生成（已生成内容会保留）" aria-label="停止生成"
                         x-html="icon('stop','w-4 h-4')"></button>
                 <button class="icon-btn" style="width:2rem;height:2rem" x-show="!streaming && currentTool && currentTool.id === '13' && output"
@@ -3263,7 +3281,7 @@
                     <span x-show="item.trPair" class="chip neutral" x-text="item.trPair"
                           title="这条记录的语言对"></span>
                     <span x-show="item.error" class="chip danger">生成失败</span>
-                    <span x-show="item.partial && !item.error" class="chip neutral" x-text="item.toolId === '13' ? '待补全' : '已停止'"></span>
+                    <span x-show="item.partial && !item.error" class="chip neutral" x-text="(item.truncated || item.toolId === '13') ? '待补全' : '已停止'"></span>
                     <!-- 多版本记录：这条有过重新生成，打开后底部可切换新旧结果 -->
                     <span x-show="item.verCount > 1" class="chip neutral"
                           :title="'这条记录保留了 ' + item.verCount + ' 版生成结果，可逐个对比'"

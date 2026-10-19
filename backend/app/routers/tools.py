@@ -107,6 +107,12 @@ VISUAL_FRAMEWORK_TOOL_NAME = "可视化试卷全解框架"
 DEVICE_PROFILE_TOOL_ID = "device_profile"
 DEVICE_PROFILE_TOOL_NAME = "设备画像分析"
 
+# 报错解读：生成失败时把上游报错转写成给用户看的两句话（见 app/services/error_explain.py）。
+# 它同样是一次 Chores 调用，所以也注册成一个「Chores 工作」——推理等级由管理后台按模型配
+# （有些模型关推理写 off、有些写 none，代码里不做任何硬编码，只透传你配的值）。
+ERROR_EXPLAIN_TOOL_ID = "error_explain"
+ERROR_EXPLAIN_TOOL_NAME = "报错解读"
+
 CHORES_TOOLS = [
     {
         "id": TITLE_TOOL_ID,
@@ -125,6 +131,12 @@ CHORES_TOOLS = [
         "name": DEVICE_PROFILE_TOOL_NAME,
         "icon": "user",
         "description": "后台设备列表生成 AI 用户画像",
+    },
+    {
+        "id": ERROR_EXPLAIN_TOOL_ID,
+        "name": ERROR_EXPLAIN_TOOL_NAME,
+        "icon": "bug",
+        "description": "生成失败时把上游报错转写成给用户看的两句话",
     },
 ]
 
