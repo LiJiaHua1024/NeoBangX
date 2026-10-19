@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from app.config import settings
 from app.deps import CodeContext, get_code_context
 from app.services.free_access import identity_key
 from app.services.rate_limit import enforce_rate_limit
@@ -299,7 +300,10 @@ async def pair_events(token: str):
             session.event.clear()
             yield {"event": "state", "data": json.dumps(session.snapshot(), ensure_ascii=False)}
 
-    return EventSourceResponse(event_generator())
+    # 与主站流式接口同一套心跳：sse-starlette 的 ping 单位是秒，配置值为毫秒
+    return EventSourceResponse(
+        event_generator(), ping=max(1, settings.sse_retry_timeout // 1000)
+    )
 
 
 @router.delete("/pair/{token}")

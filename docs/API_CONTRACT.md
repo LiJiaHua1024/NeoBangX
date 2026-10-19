@@ -42,6 +42,8 @@
 | POST | `/api/chat/title-jobs` | 幂等创建持久标题任务（最多尝试 3 次） | 是 |
 | POST | `/api/chat/title-jobs/status` | 批量对账标题任务 | 是 |
 | POST | `/api/chat/title` | 同步标题生成（旧客户端兼容） | 是 |
+| GET | `/api/parse/config` | 文档解析配置（是否可用精准解析、体积上限、扫描件确认策略） | 否 |
+| POST | `/api/parse/file` | 上传 PDF / Word / TXT 解析成文字（扫描件返回 409 待确认；超体积 413；缺 MinerU Token 503；解析失败 502） | 可选（无码需免费+无码可用模型） |
 | POST | `/api/ocr/pair` | 建立手机扫码配对会话（返回 token 与手机页路径；请求体可选带电脑端主题 `theme` / `sky`） | 是（需有效使用码） |
 | POST | `/api/ocr/pair/{token}/hello` | 手机页报到（电脑端据此显示「手机已连接」；回传 `theme` / `sky` 供手机页定色） | token 即凭证 |
 | GET | `/api/ocr/pair/{token}/events` | 电脑端 SSE：等待扫码 → 已连接 → 已收到 N 张（只推状态，无终态，收尾只有过期） | token 即凭证 |
@@ -169,7 +171,7 @@
       "id": "openrouter/google/gemini-2.5-flash",
       "name": "Gemini 2.5 Flash",
       "description": "速度快、性价比高，适合日常使用",
-      "score": 8.5,
+      "aa_index": 85,
       "reasoning_effort": null,
       "thinking_budget": null,
       "user_usable": true,
@@ -241,7 +243,7 @@
       "id": "openrouter/google/gemini-2.5-flash",
       "name": "Gemini 2.5 Flash",
       "description": "速度快、性价比高，适合日常使用",
-      "score": 8.5,
+      "aa_index": 85,
       "is_free": true,
       "free_no_code": true
     }
@@ -339,7 +341,7 @@
       "id": "openrouter/google/gemini-2.5-flash",
       "label": "Gemini 2.5 Flash",
       "description": "速度快、性价比高，适合日常使用",
-      "score": 8.5,
+      "aa_index": 85,
       "is_free": true,
       "free_no_code": true
     }
@@ -1077,7 +1079,7 @@ data: [DONE]
         "id": "openrouter/google/gemini-2.0-flash",
         "name": "Gemini 2.0 Flash",
         "description": "",
-        "score": 8.5,
+        "aa_index": 85,
         "reasoning_effort": null,
         "thinking_budget": null,
         "user_usable": true,
@@ -1173,7 +1175,7 @@ data: [DONE]
 |------|------|------|
 | `id` | string | 必填，LiteLLM 格式模型 ID |
 | `name` / `description` | string | 用户端展示名与描述 |
-| `score` | number\|null | 推荐评分 0-10 |
+| `aa_index` | number\|null | 打击级别指数（0-100，越大越强；模型评级已由旧的 `score` 改为本字段） |
 | `reasoning_effort` / `thinking_budget` | string\|int\|null | 思考强度 / 思考 token 预算 |
 | `user_usable` | bool | 用户可用：出现在 8000 用户端的模型列表里 |
 | `ocr_usable` | bool | 用于 OCR：可作为「识别图片文字」的识别模型（需带视觉能力） |
@@ -1327,12 +1329,18 @@ openrouter/deepseek/deepseek-chat
 | 403 | 使用码被禁用或额度已用尽 |
 | 404 | 工具或 Prompt 文件不存在 |
 | 422 | 请求体验证失败 |
+| 409 | 需要用户确认后重试：上传的是扫描件（需二次确认走精准解析）、手机端尚未上传照片、标题任务 ID 冲突 |
+| 413 | 上传文件超过体积上限（精准解析 200MB） |
 | 429 | 免费模型超出防滥用限额且无可用使用码（持可用码时自动转为扣次数），或辅助接口请求过于频繁 |
 | 500 | 后端内部错误或 LLM 调用失败 |
+| 502 | 文档解析服务（MinerU）调用失败 |
+| 503 | 精准解析未配置（缺 MinerU Token），需管理员在后台补齐 |
 
 ---
 
 ## 15. 变更记录
+
+> 版本号与 `README.md` 第 12 节**同序列**：本节按接口变化逐条记录（粒度更细），产品级汇总见 README。两侧都可能出现只在一侧存在的版本号（如纯前端变更只记 README）。
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
@@ -1355,6 +1363,7 @@ openrouter/deepseek/deepseek-chat
 | 1.14.0 | 2026-09-23 | 新增翻译工具（33「翻译」）：`/api/chat/stream` 与 `/api/chat/preview` 新增 `source_lang` / `target_lang`（渲染进 `翻译.md`，缺省回落 `auto` / `简体中文`）；`truncated` 事件的适用范围放宽到工具 33（撞全局 `max_tokens` 时前端给出「继续翻译」出口）；`ocr_mode` 的手动选择名单增加工具 33（印刷试卷与手写作文都可能来）；工具 33 走普通工具链路：须正文、按模型计费、用用户所选模型。同批：本地静态资源不再带 `?v=` 版本串（改走 `no-cache` + `etag`，升级后无需强刷即可拿到新代码），`bridge.html` 与 `index.html` 引用镜像模块的 URL 必须一致 |
 | 1.15.0 | 2026-09-25 | 标题生成改为后端持久任务：新增 `title_jobs` 与 `/api/chat/title-jobs`、`/api/chat/title-jobs/status`；任务最多尝试 3 次，浏览器关闭或刷新不影响 worker；历史标题待生成时显示原文摘要 Shimmer，终态失败静默回退原文 |
 | 1.16.0 | 2026-10-06 | 试卷可视化全解（工具 13）改两阶段生成：阶段一由 Chores 模型按 `@@MARK` 插标协议（`prompts/试卷可视化全解框架.md`）在带行号的原卷上标出语篇/题目/选项/答案区，分组跟着语篇走（每篇一组，阅读理解 A/B/C/D 篇各自独立；GROUP 锚点必须落在本组第一题的标记之前——语篇在前的题型与 PASSAGE 同锚正文首行，写作两节锚在各自要求行且应用文/读后续写各自成组），读后续写的材料原文（含两段开头语）挂回本题展示，后端 `visual_paper_framework.FrameworkApplier` 按锚点（支持行中定位断行、短锚点行首优先、单字符拒收）派生出 `@@TAG@@` 骨架逐段流给前端，结构从流式一开始就逐步上屏；阶段二（`prompts/试卷可视化全解精讲.md`）材料换成骨架，主模型只输出讲解字段（题干/选项/语篇不再转录），解析端对同号 `@@Q@@` 重开合并。新增 SSE `stage` 事件（见 7）、标签 `@@KEY@@`（卷末答案区）与 `@@GROUP_INTRO@@`（分组导语）；续写输入携带骨架时后端跳过阶段一。进度条改两段式：浅色条为第一轮结构解析，跑完留作背景，深色条在其上展示第二轮讲解进度；进度行单一状态文案按阶段切换（解析结构 N/M → 撰写讲解 N/M），不再出现双计数。框架解析失败或产出为零时自动回退单阶段老路径（`@@TOTAL@@`/`@@PAPER@@` 头部重复对解析无害）；模型口头声明的总题数不可靠（实测 47 题报成 51，总数虚高让 UI 显示不存在的余题），applier 收尾按实际派生的题号数补一行 `@@TOTAL@@` 校正，解析端后者生效。配置键：`visual_paper_framework`（默认开）、`framework_model`（默认跟随 chores 模型）、`framework_max_tokens`（默认跟随全局 `max_tokens`，不受 chores 256 钳制）；阶段一单记一条使用日志（`tool_name`「试卷可视化全解·框架」，`request_id` 加 `_fw` 后缀，`units` 恒 0），与主记录分列，便于核对锚点命中率 |
-| 1.19.0 | 2026-10-19 | 撞输出上限改为**所有工具**都发 `truncated`（原先只对工具 32/33 发，其余工具把半份内容当完整结果交付且没有续写入口），载荷补 `completion_tokens` 与 `finish_reason`，前端据此在结果区给「继续生成」出口、把记录标成「待补全」；`error` 事件改为「Chores 模型转写的两句话 + 机器可读分类」：新增 `advice` 与 `code` 字段，`message` 不再是固定的「生成失败，请稍后重试」（新增提示词 `prompts/报错解释.md`；Chores 不可用时按「精确判定 → Jev → 机械兜底」决定要不要再试，最多 3 次，仍失败则用机械文案兜底，同类错误走进程内缓存）；Jev 的「精确 → Jev → 兜底」三层骨架抽成 `app/services/decision.py`，Provider 切换判定、标题任务重试判定与报错解读共用同一套编排 |
+| 1.17.0 | 2026-10-07 | 工具推理规则支持 Chores 系列工作：管理端工具注册表新增 `chores` 分组（含「生成标题」`title`、「可视化试卷全解框架」`visual_framework`、「设备画像分析」`device_profile` 与「报错解读」`error_explain`）；标题生成任务与试卷可视化全解阶段一（框架解析）及后台设备画像执行时均按配置的推理规则（`reasoning_effort`）与不支持处理策略（`fallback`/`fail`）应用推理强度 |
 | 1.18.0 | 2026-10-15 | 描述需求找工具：新增 `POST /api/tools/search`（无需使用码，不扣额度不写日志，`tool_search` 桶 30 次/60 秒限速）；Jev choice 单题判定（~70-500ms）映射 32 个工具并允许「以上都不合适」，未配齐/超时（上限 5s）/报错立即回退本地关键词 bigram 匹配；进程内缓存（TTL 600s、键含工具目录指纹）；新增配置键 `jev_tool_search_enabled`（缺键按开，可单独关闭搜索的 Jev 判定）；前端在侧栏与移动顶部提供「描述需求找工具」入口（输入停顿 500ms 自动搜、内容变化中断重发、查找中可见进度环、空态/兜底/不确定状态文案）；假后端打桩同形响应（`#mock` 场景 fallback/slow/error/empty） |
-| 1.17.0 | 2026-10-07 | 工具推理规则支持 Chores 系列工作：管理端工具注册表新增 `chores` 分组（含「生成标题」`title`、「可视化试卷全解框架」`visual_framework` 与「设备画像分析」`device_profile`）；标题生成任务与试卷可视化全解阶段一（框架解析）及后台设备画像执行时均按配置的推理规则（`reasoning_effort`）与不支持处理策略（`fallback`/`fail`）应用推理强度 |
+| 1.19.0 | 2026-10-19 | 前端行为变化（无接口变更）：生成中断（切工具 / 回首页 / 新建题目 / 查看历史 / 关页刷新）先落盘残文再作废在途流，关页走 `pagehide` 并把停止通知用 `keepalive` 送出，从 bfcache 回来不会卡在「生成中」；历史卡片键盘可达（`role="button"` + `tabindex` + 读屏名，Enter / 空格打开、↑↓ 移动焦点） |
+| 1.20.0 | 2026-10-19 | 撞输出上限改为**所有工具**都发 `truncated`（原先只对工具 32/33 发，其余工具把半份内容当完整结果交付且没有续写入口），载荷补 `completion_tokens` 与 `finish_reason`，前端据此在结果区给「继续生成」出口、把记录标成「待补全」；`error` 事件改为「Chores 模型转写的两句话 + 机器可读分类」：新增 `advice` 与 `code` 字段，`message` 不再是固定的「生成失败，请稍后重试」，失败时先发一条 `explaining` 非终态事件让前端立刻停止显示「生成中」（新增提示词 `prompts/报错解释.md`，注册为 Chores 工作 `error_explain` 以便按模型配推理等级；Chores 不可用时按「精确判定 → Jev → 机械兜底」决定要不要再试，总时长预算 3 秒，仍失败则用机械文案兜底，同类错误走进程内缓存）；失败分类 `error_code` 与上游结束原因 `finish_reason` 随使用日志落库，前端按 `code` 收起注定失败的重试、后台日志表据此显示「截断」与分类角标；Jev 的「精确 → Jev → 兜底」三层骨架抽成 `app/services/decision.py`，Provider 切换判定、标题任务重试判定与报错解读共用同一套编排 |

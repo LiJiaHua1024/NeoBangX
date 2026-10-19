@@ -110,7 +110,9 @@ class Settings(BaseSettings):
     mirror_banner_enabled: bool = True
 
     # SSE 配置
-    sse_retry_timeout: int = 30000  # 客户端重连时间（毫秒）
+    # 名字沿用历史键名（早期当「客户端重连时间」用），实际语义是**服务端心跳间隔**：
+    # 每隔这么久往流里发一次注释帧保活，见 chat.py / ocr.py 的 EventSourceResponse(ping=...)
+    sse_retry_timeout: int = 30000
 
     # Jev 决策模型（Provider 错误重试判定）：TypeSafe 官方 System One 接口。
     # Jev 是 TypeSafe 的决策模型（不是聊天模型）：POST {state, model, questions}
