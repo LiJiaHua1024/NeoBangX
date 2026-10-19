@@ -880,6 +880,12 @@
                   <td data-label="状态">
                     <span class="status-badge" :class="'st-' + (l.status || 'success')"
                           x-text="logStatusLabel(l.status)"></span>
+                    <!-- 撞上限（上游以 length 结束）与失败分类：一眼看出「半份结果」与错误类型，
+                         不必点进详情；老库的行没有这两列，显示为空 -->
+                    <span class="badge" x-show="l.finish_reason === 'length'" x-cloak style="margin-left:4px"
+                          title="上游以 length 结束：这次输出撞到了上限，结果可能不完整">截断</span>
+                    <span class="badge" x-show="l.error_code" x-cloak style="margin-left:4px"
+                          :title="'失败分类：' + l.error_code" x-text="errorCodeLabel(l.error_code)"></span>
                   </td>
                   <td class="num mono" data-label="耗时" x-text="fmtDuration(l.duration_ms)"></td>
                   <td class="num mono" data-label="Tokens"

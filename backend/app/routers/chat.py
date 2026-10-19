@@ -601,6 +601,7 @@ def _log_llm_call(
     log_payload: bool,
     request_id: str = "",
     error_message: str = "",
+    error_code: str = "",
     units: int = 0,
     counts_for_free_limit: bool | None = None,
     parent_log_id: int | None = None,
@@ -631,6 +632,7 @@ def _log_llm_call(
         request_id=request_id or "",
         status=status,
         error_message=error_message,
+        error_code=error_code,
         duration_ms=int((monotonic() - started) * 1000),
         usage=usage or {},
         ip=client[0],
@@ -1492,6 +1494,8 @@ async def chat_stream(
         client_disconnected = False
         status = STATUS_SUCCESS
         error_message = ""
+        # 失败分类（error_explain 给的机器可读 code）：随使用日志落库，供后台统计错误分布
+        explain_code = ""
         units = 0
         output_parts: list[str] = []
         usage: dict = {}
@@ -1848,6 +1852,7 @@ async def chat_stream(
                 tool_name=tool_name,
                 model=model_used,
             )
+            explain_code = explanation.code
             yield {
                 "event": "error",
                 "data": json.dumps(
@@ -1898,6 +1903,7 @@ async def chat_stream(
                     request_id=request_id, status=status, started=started, usage=usage,
                     client=(client_ip, user_agent), log_payload=log_payload_enabled,
                     error_message=error_message if explain_jobs else _final_error_message(llm, status, error_message),
+                    error_code=explain_code,
                     units=units,
                     counts_for_free_limit=(status != STATUS_ERROR or any(job.completed for job in explain_jobs))
                     if explain_jobs else None,

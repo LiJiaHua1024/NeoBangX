@@ -172,6 +172,13 @@ class UsageLog(Base):
     # 请求结果：success | cancelled | error
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     error_message: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    # 失败的机器可读分类（context_overflow / content_blocked / provider_auth /
+    # provider_busy / timeout / network / unknown，见 services/error_explain.py）。
+    # 可空：老库的行由 _add_missing_columns 补列后为 NULL，表示「未分类」。
+    error_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # 上游回传的结束原因（stop / length / …）。NULL 表示上游没回传（网关不回传或本地估算）。
+    # 配合 error_code 用于后台统计「截断率」与「错误分布」。
+    finish_reason: Mapped[str | None] = mapped_column(String(24), nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -220,6 +227,8 @@ class UsageLog(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "status": self.status or "success",
             "error_message": self.error_message or "",
+            "error_code": self.error_code or "",
+            "finish_reason": self.finish_reason or "",
             "duration_ms": self.duration_ms,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,

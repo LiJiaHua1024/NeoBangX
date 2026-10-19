@@ -2275,6 +2275,9 @@ function nbx() {
     // 后端随 error 事件下发的一句「该怎么做」（Chores 模型转写或机械兜底），
     // 与 errorMsg 一起构成错误卡的两行；空串表示这次没有（老后端 / 未触发解释）
     errorAdvice: "",
+    /* 失败的机器可读分类（后端 error 事件的 code）：错误卡据此决定给哪些动作。
+       老后端不发这个字段时为空串，动作与从前完全一致。 */
+    errorCode: "",
     /* 失败已发生、后端正在整理说明（Chores 转写，有总预算）。
        这段时间界面上不能再显示「生成中」——那会让用户以为模型还在写。 */
     explaining: false,
@@ -5255,6 +5258,7 @@ function nbx() {
         this.outputFoldEligible = false;  // 切工具后展示的是新内容，清掉历史折叠态
         this.errorMsg = "";
         this.errorAdvice = "";
+        this.errorCode = "";
         this.failedModel = "";
         // 换工具即与上一条记录脱钩：续写/重试不能再写回别的工具的记录
         this.activeHistoryId = null;
@@ -8889,6 +8893,7 @@ function nbx() {
       this.outputFoldEligible = false;  // 新生成的内容不做折叠
       this.errorMsg = "";
       this.errorAdvice = "";
+      this.errorCode = "";
       this.explaining = false;
       // 生成中状态条的导出/复制入口会隐藏，先把可能开着的导出面板收掉，
       // 否则流结束后它会带着旧定位重新弹出来
@@ -8998,6 +9003,8 @@ function nbx() {
           this.errorLimited = !!(e && e.limited);
           // 后端转写的「该怎么做」：随错误一起落到错误卡的第二行
           this.errorAdvice = (e && e.advice) || "";
+          // 失败分类：决定错误卡给哪些动作（见 errorRetryPointless / errorInputFixable）
+          this.errorCode = (e && e.code) || "";
           finish("error", describeError(e, "生成失败，请稍后重试"), { ...ctx0, seq });
         }
       } finally {
@@ -9086,6 +9093,7 @@ function nbx() {
           let m = data;
           let model = "";
           let advice = "";
+          let code = "";
           try {
             const j = JSON.parse(data);
             if (j) {
@@ -9094,10 +9102,12 @@ function nbx() {
               // 后端转写的「该怎么做」：Chores 模型写的，或机械兜底文案。
               // 老后端没有这个字段，留空即可（错误卡少一行，其余照旧）
               advice = typeof j.advice === "string" ? j.advice : "";
+              // 机器可读分类：前端据此决定给哪些动作（如密钥/权限问题就别劝人重试）
+              code = typeof j.code === "string" ? j.code : "";
             }
           } catch {}
           // model 供失败归因：禁用真正失败的模型，而非此刻的 selectedModel
-          throw Object.assign(new Error(m), { model, advice });
+          throw Object.assign(new Error(m), { model, advice, code });
         }
         if (ev === "fallback") {
           // 备用通道切换：{failed_index, total, next_index, reason}，只用于展示进度
@@ -9344,6 +9354,19 @@ function nbx() {
       return !this.streaming && !!this.output.trim() && !!this.submittedInput;
     },
 
+    /* 错误卡的动作取舍（按后端给的失败分类 code）：
+       这几类错误重试同一个输入注定一样，别再劝用户白点一次——
+       provider_auth 是服务端的密钥/权限问题（用户改不了），
+       上下文超限与内容拦截要改的是输入。老后端不发 code 时两个 getter 都是 false，
+       错误卡与从前完全一致。 */
+    get errorRetryPointless() {
+      return ["context_overflow", "content_blocked", "provider_auth"].includes(this.errorCode);
+    },
+    /* 需要改输入才有出路的错误：把「编辑输入」提为主按钮 */
+    get errorInputFixable() {
+      return ["context_overflow", "content_blocked"].includes(this.errorCode);
+    },
+
     /* 继续生成：接着已生成的部分往下写，不是整篇重来。
        残文回传给后端当上一条 assistant 消息，新 token 追加在 output 后面；
        收尾写回 activeHistoryId 那条记录，历史里不会多出一条。 */
@@ -9505,6 +9528,7 @@ function nbx() {
       this.outputTruncated = false;
       // 历史里不存「该怎么做」，切版本时一并清掉（它只属于刚发生的那次失败）
       this.errorAdvice = "";
+      this.errorCode = "";
       this.status = item.error ? "error" : (item.partial ? "stopped" : "history");
       this.failedModel = item.error ? (item.model || "") : "";
       this.errorRetryable = true;
@@ -9656,6 +9680,7 @@ function nbx() {
         // 否则上一次的失败提示会一直挂在一份已经写完的内容上
         this.errorMsg = "";
         this.errorAdvice = "";
+        this.errorCode = "";
         if (producedNew) {
           if (origin) {
             if (opts.newVersion) {
@@ -12535,10 +12560,12 @@ function nbx() {
         // 状态置成 stopped 会再多弹一条「已停止生成」，两处说同一件事
         this.errorMsg = "";
         this.errorAdvice = "";
+        this.errorCode = "";
         this.status = this.outputTruncated ? "history" : "stopped";
       } else {
         this.errorMsg = "";
         this.errorAdvice = "";
+        this.errorCode = "";
         this.status = "history";
       }
       this.resetReasoning();

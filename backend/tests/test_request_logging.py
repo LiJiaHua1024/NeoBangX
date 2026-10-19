@@ -701,6 +701,44 @@ def test_stream_records_error_status_without_charging(stream):
         db.close()
 
 
+def test_stream_log_records_error_code_and_finish_reason(stream):
+    """失败分类与上游结束原因要落库。
+
+    后台据此统计「错误分布」（哪些错误最多）与「截断率」（有多少次是半份结果），
+    这是靠日志事后判断不了的——只有落库才能聚合。
+    """
+    client, harness = stream
+
+    class _ServerError(Exception):
+        status_code = 500
+
+    db = SessionLocal()
+    try:
+        code = _make_code(db, "NBXU-LOG-S003-0008")
+    finally:
+        db.close()
+    harness.code = code
+
+    # 1) 失败：分类落库
+    harness.llm = _FakeStreamLLM(["x"], error=_ServerError("上游 500"))
+    response = _post_stream(client, input_text="boom")
+    assert response.status_code == 200
+    row = _logs_for(code.id)[0]
+    assert row.status == "error"
+    assert row.error_code == "provider_busy", row.error_code
+
+    # 2) 成功但撞输出上限：finish_reason 落库
+    harness.llm = _FakeStreamLLM(
+        ["半篇"], usage={"completion_tokens": 8000, "finish_reason": "length"}
+    )
+    response = _post_stream(client, input_text="再来一次")
+    assert response.status_code == 200
+    # _logs_for 按 id 升序返回，最新一条在末尾
+    row2 = _logs_for(code.id)[-1]
+    assert row2.status == "success", row2.error_message
+    assert row2.finish_reason == "length", row2.finish_reason
+
+
 def test_explaining_event_precedes_error(stream):
     """失败时先发 explaining 再发 error。
 

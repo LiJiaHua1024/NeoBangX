@@ -232,7 +232,7 @@
        它，且只在生成完成后才出现；3KB 的体积换十几处 getter 的未加载兜底不划算。 -->
   <script defer src="/static/nbx-versions.js?v=7270a8ece4" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
   <!-- 压缩产物：源码是 frontend/script.js，改完跑 npm run build:js 重新生成 -->
-  <script defer src="/static/script.min.js?v=6e04825653" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
+  <script defer src="/static/script.min.js?v=eb9c90c4fd" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
   <script defer src="/static/vendor/alpinejs-3.15.12.min.js?v=57b37d7cae" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
 </head>
 
@@ -2050,7 +2050,7 @@
                   <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && errorRetryable">试卷内容已保留：可直接重试，也可以换个模型重试，在弹窗中选择模型后会自动切换并重新生成。多次失败通常是模型服务繁忙或网络问题。</div>
                   <div class="mt-2 text-xs opacity-80" x-show="!errorLimited && !errorRetryable">请先输入使用码（或改选免费模型）并确认额度充足，再重新解析。</div>
                   <div class="error-actions mt-3" x-show="errorRetryable && submittedInput && !streaming">
-                    <button class="btn-primary" x-show="!errorLimited" @click="retryVisualPaper()"
+                    <button class="btn-primary" x-show="!errorLimited && !errorRetryPointless" @click="retryVisualPaper()"
                             :title="'用当前选中的模型（' + shortModel(selectedModel) + '）重新解析整份试卷，内容不变'">
                       <span x-html="icon('refresh','w-4 h-4')"></span>直接重试
                     </button>
@@ -2058,7 +2058,7 @@
                             title="在弹窗中选择一个其他模型，会自动切换并用同样的试卷内容重新生成">
                       <span x-html="icon('replace','w-4 h-4')"></span>换个模型重试…
                     </button>
-                    <button class="btn-ghost" @click="editSubmittedInput()"
+                    <button :class="errorInputFixable ? 'btn-primary' : 'btn-ghost'" @click="editSubmittedInput()"
                             title="把试卷内容放回下方输入框，编辑后再解析">
                       <span x-html="icon('pen','w-4 h-4')"></span>编辑内容
                     </button>
@@ -2970,7 +2970,7 @@
                             :title="'从断点接着往下写，已保留的 ' + output.length + ' 字不变'">
                       <span x-html="icon('chevrons-right','w-4 h-4')"></span>继续生成
                     </button>
-                    <button :class="!errorLimited && canContinue ? 'btn-ghost' : 'btn-primary'" x-show="!errorLimited" @click="retryChat()"
+                    <button :class="!errorLimited && canContinue ? 'btn-ghost' : 'btn-primary'" x-show="!errorLimited && !errorRetryPointless" @click="retryChat()"
                             :title="'用当前选中的模型（' + shortModel(selectedModel) + '）整篇重新生成，输入内容不变，旧结果会保留'">
                       <span x-html="icon('refresh','w-4 h-4')"></span>直接重试
                     </button>
@@ -2978,7 +2978,7 @@
                             title="在弹窗中选择一个其他模型，会自动切换并用同样的输入内容整篇重新生成">
                       <span x-html="icon('replace','w-4 h-4')"></span>换个模型重试…
                     </button>
-                    <button class="btn-ghost" @click="editSubmittedInput()"
+                    <button :class="errorInputFixable ? 'btn-primary' : 'btn-ghost'" @click="editSubmittedInput()"
                             title="把输入内容放回下方输入框，编辑后再执行">
                       <span x-html="icon('pen','w-4 h-4')"></span>编辑输入
                     </button>

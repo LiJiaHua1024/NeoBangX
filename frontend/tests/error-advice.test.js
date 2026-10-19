@@ -17,9 +17,10 @@ const HTML = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 test("解析 error 事件时读出 advice（老后端缺字段也不报错）", () => {
   const start = SRC.indexOf('if (ev === "error")');
   assert.ok(start > 0, "解析器里没有 error 分支");
-  const branch = SRC.slice(start, start + 700);
+  // 分支体包含注释在内约 900 字符；窗口给宽一点，避免加了字段就把断言挤出范围
+  const branch = SRC.slice(start, start + 1100);
   assert.match(branch, /advice = typeof j\.advice === "string" \? j\.advice : "";/, "缺字段要回落空串");
-  assert.match(branch, /Object\.assign\(new Error\(m\), \{ model, advice \}\)/, "advice 要随错误一起带走");
+  assert.match(branch, /Object\.assign\(new Error\(m\), \{ model, advice, code \}\)/, "advice 与 code 要随错误一起带走");
 });
 
 test("失败收尾把 advice 落到界面状态上", () => {
@@ -46,6 +47,25 @@ test("explaining 事件把界面从「生成中」切走，并收起停止按钮
 test("explaining 状态在收尾、作废、新生成时都会清掉", () => {
   const resets = SRC.split("this.explaining = false;").length - 1;
   assert.ok(resets >= 4, `复位点太少（找到 ${resets} 处）：收尾 / 试卷收尾 / 作废在途流 / 新生成`);
+});
+
+test("失败分类驱动错误卡的动作（后端发的 code 不再白发）", () => {
+  assert.match(SRC, /code = typeof j\.code === "string" \? j\.code : "";/, "解析要读出 code");
+  assert.match(SRC, /Object\.assign\(new Error\(m\), \{ model, advice, code \}\)/, "code 要随错误带走");
+  assert.match(SRC, /this\.errorCode = \(e && e\.code\) \|\| "";/);
+  assert.match(
+    SRC,
+    /get errorRetryPointless\(\) \{\s*\n\s*return \["context_overflow", "content_blocked", "provider_auth"\]/
+  );
+  assert.match(
+    SRC,
+    /get errorInputFixable\(\) \{\s*\n\s*return \["context_overflow", "content_blocked"\]/
+  );
+  // 两处错误卡（通用结果区 + 试卷工具）都要按分类收起「直接重试」、把「编辑输入」提为主按钮
+  assert.equal(HTML.split("!errorLimited && !errorRetryPointless").length - 1, 2);
+  assert.equal(HTML.split("errorInputFixable ? 'btn-primary' : 'btn-ghost'").length - 1, 2);
+  const resets = SRC.split("this.errorCode = \"\";").length - 1;
+  assert.ok(resets >= 6, `errorCode 复位点太少（找到 ${resets} 处）`);
 });
 
 test("五个入口都会复位 advice，不会粘在下一次错误上", () => {

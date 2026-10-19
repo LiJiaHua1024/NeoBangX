@@ -15,6 +15,26 @@ function setup() {
   return { app, requests, errors, env };
 }
 
+test("失败分类标签与后端的 code 一一对应，未知取值原样回显", () => {
+  const { app } = setup();
+  assert.equal(app.errorCodeLabel("context_overflow"), "上下文超限");
+  assert.equal(app.errorCodeLabel("content_blocked"), "内容拦截");
+  assert.equal(app.errorCodeLabel("provider_auth"), "密钥权限");
+  assert.equal(app.errorCodeLabel("provider_busy"), "服务繁忙");
+  assert.equal(app.errorCodeLabel("timeout"), "超时");
+  assert.equal(app.errorCodeLabel("network"), "网络");
+  assert.equal(app.errorCodeLabel("unknown"), "未分类");
+  assert.equal(app.errorCodeLabel(""), "", "空值不显示");
+  assert.equal(app.errorCodeLabel("brand_new_code"), "brand_new_code", "没见过的取值原样回显，别吞信息");
+});
+
+test("日志表在状态列旁边给出「截断」与失败分类角标", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "../../admin-frontend/index.html"), "utf8");
+  assert.match(html, /l\.finish_reason === 'length'/, "上游以 length 结束要标「截断」");
+  assert.match(html, /errorCodeLabel\(l\.error_code\)/, "失败分类用中文短标签展示");
+});
+
+
 test("日志列表与统计单请求加载，使用同一筛选条件", async () => {
   const { app, requests } = setup();
   app.logCode = " code ";

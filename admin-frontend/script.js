@@ -1632,6 +1632,21 @@ function adminApp() {
       return map[status] || "成功";
     },
 
+    /* 失败分类的中文短标签：取值与后端 app/services/error_explain.py 的 CODE_* 一一对应。
+       只用于日志列表里那枚小角标，措辞求短；完整解释由报错解读那条链路负责。 */
+    errorCodeLabel(code) {
+      const map = {
+        context_overflow: "上下文超限",
+        content_blocked: "内容拦截",
+        provider_auth: "密钥权限",
+        provider_busy: "服务繁忙",
+        timeout: "超时",
+        network: "网络",
+        unknown: "未分类",
+      };
+      return map[code] || code || "";
+    },
+
     fmtNum(value) {
       if (value == null || value === "" || !Number.isFinite(Number(value))) return "—";
       return Number(value).toLocaleString("zh-CN");
