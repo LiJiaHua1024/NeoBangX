@@ -657,7 +657,17 @@
               </tr>
             </thead>
             <tbody>
-              <tr x-show="!codes.length">
+              <!-- 三态：加载中 / 加载失败（可重试）/ 真的没有数据 -->
+              <tr x-show="codesLoading" x-cloak>
+                <td colspan="8" class="empty">正在加载…</td>
+              </tr>
+              <tr x-show="codesError && !codesLoading" x-cloak>
+                <td colspan="8" class="empty">
+                  <span x-text="codesError"></span>
+                  <button class="link-btn" style="margin-left:.5rem" @click="loadCodes()">重试</button>
+                </td>
+              </tr>
+              <tr x-show="!codes.length && !codesLoading && !codesError">
                 <td colspan="8" class="empty">暂无使用码</td>
               </tr>
               <template x-for="c in codes" :key="c.id">
@@ -863,7 +873,18 @@
               </tr>
             </thead>
             <tbody>
-              <tr x-show="!logs.length">
+              <!-- 三态：加载中 / 加载失败（可重试）/ 真的没有数据。
+                   原先三者都显示「暂无数据」，慢请求或后端挂掉时会被当成「确实没日志」 -->
+              <tr x-show="logsLoading" x-cloak>
+                <td colspan="11" class="empty">正在加载…</td>
+              </tr>
+              <tr x-show="logsError && !logsLoading" x-cloak>
+                <td colspan="11" class="empty">
+                  <span x-text="logsError"></span>
+                  <button class="link-btn" style="margin-left:.5rem" @click="loadLogs()">重试</button>
+                </td>
+              </tr>
+              <tr x-show="!logs.length && !logsLoading && !logsError">
                 <td colspan="11" class="empty">暂无日志</td>
               </tr>
               <template x-for="l in logs" :key="l.id">
@@ -961,7 +982,17 @@
               </tr>
             </thead>
             <tbody>
-              <tr x-show="!devices.length">
+              <!-- 三态：加载中 / 加载失败（可重试）/ 真的没有数据 -->
+              <tr x-show="devicesLoading" x-cloak>
+                <td colspan="9" class="empty">正在加载…</td>
+              </tr>
+              <tr x-show="devicesError && !devicesLoading" x-cloak>
+                <td colspan="9" class="empty">
+                  <span x-text="devicesError"></span>
+                  <button class="link-btn" style="margin-left:.5rem" @click="loadDevices()">重试</button>
+                </td>
+              </tr>
+              <tr x-show="!devices.length && !devicesLoading && !devicesError">
                 <td colspan="9" class="empty">暂无设备（有指纹上报的请求后自动出现）</td>
               </tr>
               <template x-for="d in devices" :key="d.id">
@@ -1135,9 +1166,14 @@
           <div class="card-head-row">
             <div>
               <h2 class="card-title">Provider 聚合</h2>
-              <p class="muted">接入多个 OpenAI 兼容网关（OpenRouter / 官方 / 自建网关等），每个 Provider 独立配置 Base URL 与 API Key。模型的可用 Provider 与优先级在上方“模型管理”中按模型独立拖拽排序（首位优先，失败自动 fallback）。Chores 复用同一池。</p>
+              <p class="muted">接入多个 OpenAI 兼容网关（OpenRouter / 官方 / 自建网关等），每个 Provider 独立配置 Base URL 与 API Key。模型的可用 Provider 与优先级在上方“模型管理”中按模型独立拖拽排序（首位优先，失败自动 fallback）。Chores 复用同一池。<b>「启用」开关即时生效</b>（与模型改动不同，不需要点保存）；改完密钥后可用「重置熔断」立即让该家重新参与调度。</p>
             </div>
-            <button class="btn-primary" @click="openAddProvider()">+ 添加 Provider</button>
+            <div style="display:flex; gap:.5rem; flex-wrap:wrap">
+              <!-- 改好 Key / 换好地址后不必等冷却期：熔断是进程内的健康记忆，最长 5 分钟 -->
+              <button class="btn-ghost" @click="resetProviderBreakers()"
+                      title="清空进程内的熔断记忆（改好密钥或地址后，不必等冷却期就让这一家重新参与调度）">重置熔断</button>
+              <button class="btn-primary" @click="openAddProvider()">+ 添加 Provider</button>
+            </div>
           </div>
 
           <div class="provider-stats" x-show="providers.length">

@@ -2481,6 +2481,20 @@ async def delete_provider_api(provider_id: str, db: Annotated[Session, Depends(g
     return {"status": "deleted", "id": provider_id}
 
 
+@router.post("/providers/reset-breakers")
+async def reset_provider_breakers() -> dict:
+    """清空进程级熔断状态：管理员改好 Key / 换好地址后不必等冷却期。
+
+    这是**当前进程**的健康记忆（本项目单进程 uvicorn，一次调用即覆盖全站）。
+    重置不影响在途请求的计数，也不改任何配置。
+    """
+    from app.services import provider_health
+
+    cleared = provider_health.reset()
+    logger.info("熔断状态已重置：清掉 %s 家", cleared)
+    return {"status": "ok", "cleared": cleared}
+
+
 @router.post("/providers/{provider_id}/test")
 async def test_provider_api(provider_id: str, req: ProviderTestRequest, db: Annotated[Session, Depends(get_db)]):
     from time import monotonic

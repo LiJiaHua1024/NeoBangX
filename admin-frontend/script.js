@@ -582,6 +582,8 @@ function adminApp() {
     rotatingSecret: false,
     codes: [],
     codesTotal: 0,
+    codesLoading: false,
+    codesError: "",
     codesPage: 1,
     codesPageSize: 20,
     codeQuery: "",
@@ -589,6 +591,10 @@ function adminApp() {
     codeEnabledMenuOpen: false,
     logs: [],
     logsTotal: 0,
+    /* 列表三态：加载中 / 加载失败（带重试）/ 真的没有数据。
+       原先三者都显示「暂无数据」，慢请求或后端挂掉时会被当成「确实没日志」 */
+    logsLoading: false,
+    logsError: "",
     logsPage: 1,
     logsPageSize: 30,
     logsPageSizeOptions: [30, 50, 100],
@@ -773,6 +779,8 @@ function adminApp() {
     // 设备指纹
     devices: [],
     devicesTotal: 0,
+    devicesLoading: false,
+    devicesError: "",
     devicesPage: 1,
     devicesPageSize: 50,
     deviceQuery: "",
@@ -1046,6 +1054,38 @@ function adminApp() {
       const saved = localStorage.getItem("nbx_admin_theme");
       if (saved && ADMIN_THEMES.some((t) => t.id === saved)) this.theme = saved;
       this.applyTheme();
+
+      // 日志筛选：日期与文本条件一变就自动查询（防抖见 scheduleLogReload）。
+      // 用 watcher 而不是在每个输入框上挂 @input，改动点集中在一处
+      for (const key of ["logCode", "logToolId", "logModel", "logProvider", "logDevice", "logStart", "logEnd"]) {
+        this.$watch(key, () => this.scheduleLogReload());
+      }
+
+      // 弹窗语义与 Esc：11 个弹窗共用一套处理，避免逐个补属性时漏掉一两个
+      // （主站那边是逐处写 role/aria-modal，这里弹窗多、且都要跟着同一个关闭函数走）。
+      // 背景内容对读屏/键盘仍可达的问题留给焦点陷阱，本次先补齐「能识别 + 能 Esc 关」
+      document.querySelectorAll(".modal-mask > .modal").forEach((el) => {
+        if (!el.hasAttribute("role")) el.setAttribute("role", "dialog");
+        el.setAttribute("aria-modal", "true");
+        if (!el.hasAttribute("aria-label") && !el.hasAttribute("aria-labelledby")) {
+          const title = el.querySelector("h3, .modal-title");
+          if (title && title.textContent.trim()) el.setAttribute("aria-label", title.textContent.trim());
+        }
+      });
+      window.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        if (this.confirmOpen) { this.resolveConfirm(false); return; }
+        if (this.createOpen) { this.createOpen = false; return; }
+        if (this.quotaModalOpen) { this.quotaModalOpen = false; return; }
+        if (this.resetUsageModalOpen) { this.resetUsageModalOpen = false; return; }
+        if (this.codeNoteModalOpen) { this.codeNoteModalOpen = false; return; }
+        if (this.modelModalOpen) { this.modelModalOpen = false; return; }
+        if (this.ruleModalOpen) { this.ruleModalOpen = false; return; }
+        if (this.providerModalOpen) { this.providerModalOpen = false; return; }
+        if (this.providerTestModalOpen) { this.providerTestModalOpen = false; return; }
+        if (this.modelProvidersModalOpen) { this.modelProvidersModalOpen = false; return; }
+        if (this.deviceModalOpen) { this.deviceModalOpen = false; }
+      });
 
       // 悠空 · 两时段天空：每分钟校准一次，回到前台时立即校准
       this._skyTimer = setInterval(() => this.updateSkyPeriod(), 60000);
@@ -1440,6 +1480,8 @@ function adminApp() {
     },
 
     async loadCodes() {
+      this.codesLoading = true;
+      this.codesError = "";
       try {
         const params = new URLSearchParams({
           page: String(this.codesPage),
@@ -1458,7 +1500,11 @@ function adminApp() {
           return this.loadCodes();
         }
       } catch (e) {
-        this.toast(e.message || "加载使用码失败", "error");
+        // 常驻错误条 + 重试按钮，不再只飘一个 2.8 秒的 toast（飘完页面上不留任何痕迹）
+        this.codesError = e.message || "加载使用码失败";
+        this.toast(this.codesError, "error");
+      } finally {
+        this.codesLoading = false;
       }
     },
 
@@ -1880,6 +1926,8 @@ function adminApp() {
       if (logsAbort) logsAbort.abort();
       const controller = new AbortController();
       logsAbort = controller;
+      this.logsLoading = true;
+      this.logsError = "";
       try {
         const params = this._logFilterParams();
         params.set("page", String(this.logsPage));
@@ -1913,10 +1961,26 @@ function adminApp() {
         this.logSummary = summary;
       } catch (e) {
         if (request !== logsRequest || e.name === "AbortError") return;
-        this.toast(e.message || "加载日志失败", "error");
+        // 常驻错误条 + 重试：日志查询本身可能是慢请求，失败后不能只飘一个 toast，
+        // 否则管理员会以为「确实没有日志」
+        this.logsError = e.message || "加载日志失败";
+        this.toast(this.logsError, "error");
       } finally {
-        if (request === logsRequest) logsAbort = null;
+        if (request === logsRequest) {
+          logsAbort = null;
+          this.logsLoading = false;
+        }
       }
+    },
+
+    /* 筛选条件一变就自动查询（300ms 防抖）：日期选完即查、文本输入不必逐个敲回车。
+       与状态下拉（选完立即查）行为统一；连点/连输只发最后一次请求 */
+    scheduleLogReload() {
+      clearTimeout(this._logReloadTimer);
+      this._logReloadTimer = setTimeout(() => {
+        this.logsPage = 1;
+        this.loadLogs();
+      }, 300);
     },
 
     async loadPayloadFlag() {
@@ -2428,6 +2492,10 @@ function adminApp() {
       if (!this.logDetail) return;
       this.logCode = this.logDetail.code || "";
       this.logsPage = 1;
+      // 与「查看该设备的全部日志」同一套：关掉详情抽屉、切回日志页签再查，
+      // 否则抽屉盖在列表上、界面看起来像没反应
+      this.closeLogDetail();
+      this.tab = "logs";
       this.loadLogs();
     },
 
@@ -2598,6 +2666,8 @@ function adminApp() {
     },
 
     async loadDevices() {
+      this.devicesLoading = true;
+      this.devicesError = "";
       try {
         const params = new URLSearchParams({
           page: String(this.devicesPage),
@@ -2613,7 +2683,10 @@ function adminApp() {
           return this.loadDevices();
         }
       } catch (e) {
-        this.toast(e.message || "加载设备失败", "error");
+        this.devicesError = e.message || "加载设备失败";
+        this.toast(this.devicesError, "error");
+      } finally {
+        this.devicesLoading = false;
       }
     },
 
@@ -2707,9 +2780,18 @@ function adminApp() {
         this.toast("保留天数为 0 表示永久保留，不会删除任何日志", "error");
         return;
       }
+      // 不可恢复的操作不能让人盲猜「会删多少」：先按同一条时间上界问一次条数。
+      // 拿不到就只少一句提示，不阻塞清理本身
+      let countText = "";
+      try {
+        const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+        const summary = await this.api(`/api/admin/logs/summary?end=${encodeURIComponent(cutoff)}`);
+        const total = Number(summary && summary.total);
+        if (Number.isFinite(total)) countText = `（约 ${this.fmtNum(total)} 条）`;
+      } catch { /* 忽略：条数只是提示 */ }
       const ok = await this.askConfirm({
         title: "永久清理使用日志？",
-        message: `将永久删除 ${days} 天之前的全部使用日志（含原始输入/输出），此操作不可恢复。`,
+        message: `将永久删除 ${days} 天之前的全部使用日志${countText}（含原始输入/输出），此操作不可恢复。`,
         confirmText: "立即清理",
         danger: true,
       });
@@ -2984,7 +3066,7 @@ function adminApp() {
       const editingOldId = this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
       const targetId = id;
       if (!userUsable && targetId && this.configForm.default_model === targetId) {
-        this.toast("默认模型必须勾选「用户可用」，请先切换默认模型", "error");
+        this.validationError("默认模型必须勾选「用户可用」，请先切换默认模型", "模型管理");
         return;
       }
       if (!enabled && targetId && this.configForm.default_model === targetId) {
@@ -3238,63 +3320,78 @@ function adminApp() {
       m.enabled = nextEnabled;
     },
 
+    /* 校验失败时把视线带到出问题的那一块：只弹 toast 的话，配置页这种长表单
+       （模型表 / Provider 表 / 规则表都在滚动区里）用户不知道该往哪滚。
+       按卡片标题定位，找不到卡片就只弹提示，不打断保存流程 */
+    validationError(message, cardTitle) {
+      this.toast(message, "error");
+      if (!cardTitle) return;
+      const card = [...document.querySelectorAll(".card")].find((c) => {
+        const title = (c.querySelector(".card-title") || {}).textContent || "";
+        return title.trim().startsWith(cardTitle);
+      });
+      if (card && typeof card.scrollIntoView === "function") {
+        card.scrollIntoView({ block: "start", behavior: "smooth" });
+      }
+    },
+
     async saveConfig() {
       if (!this.configForm.models.length) {
-        this.toast("模型列表不能为空，请至少添加一个模型", "error");
+        this.validationError("模型列表不能为空，请至少添加一个模型", "模型管理");
         return;
       }
       if (this.defaultModelMissing || !this.configForm.default_model) {
-        this.toast("请从模型列表中选择默认模型", "error");
+        this.validationError("请从模型列表中选择默认模型", "模型管理");
         return;
       }
       const defaultHit = this.configForm.models.find(m => m.id === this.configForm.default_model);
       if (defaultHit && defaultHit.user_usable === false) {
-        this.toast("默认模型必须勾选「用户可用」", "error");
+        this.validationError("默认模型必须勾选「用户可用」", "模型管理");
         return;
       }
       if (defaultHit && defaultHit.enabled === false) {
-        this.toast("默认模型已禁用，请先切换默认模型再保存", "error");
+        this.validationError("默认模型已禁用，请先切换默认模型再保存", "模型管理");
         return;
       }
       for (const m of this.configForm.models) {
         if (m.enabled !== false && !m.user_usable && !m.ocr_usable && !m.chores_usable) {
-          this.toast(`模型「${m.name || m.id}」没有勾选任何用途，请至少勾一项或把它禁用`, "error");
+          this.validationError(`模型「${m.name || m.id}」没有勾选任何用途，请至少勾一项或把它禁用`, "模型管理");
           return;
         }
       }
       if (this.configForm.chores_model) {
         const cm = this.configForm.models.find(m => m.id === this.configForm.chores_model);
         if (!cm) {
-          this.toast("Chores 模型不存在于模型列表", "error");
+          this.validationError("Chores 模型不存在于模型列表", "高级设置");
           return;
         }
         if (cm.enabled === false) {
-          this.toast("Chores 模型已禁用，请先切换 Chores 模型再保存", "error");
+          this.validationError("Chores 模型已禁用，请先切换 Chores 模型再保存", "高级设置");
           return;
         }
         if (!cm.chores_usable) {
-          this.toast("Chores 模型未勾选「用于 Chores」，请先切换或补上该项", "error");
+          this.validationError("Chores 模型未勾选「用于 Chores」，请先切换或补上该项", "高级设置");
           return;
         }
       }
       if (this.configForm.ocr_model) {
         const om = this.configForm.models.find(m => m.id === this.configForm.ocr_model);
         if (!om) {
-          this.toast("OCR 模型不存在于模型列表", "error");
+          this.validationError("OCR 模型不存在于模型列表", "高级设置");
           return;
         }
         if (om.enabled === false) {
-          this.toast("OCR 模型已禁用，请先切换 OCR 模型再保存", "error");
+          this.validationError("OCR 模型已禁用，请先切换 OCR 模型再保存", "高级设置");
           return;
         }
         if (!om.ocr_usable) {
-          this.toast("OCR 模型未勾选「用于 OCR」，请先切换或补上该项", "error");
+          this.validationError("OCR 模型未勾选「用于 OCR」，请先切换或补上该项", "高级设置");
           return;
         }
       }
       for (const r of this.configForm.tool_reasoning_rules) {
         if (!r.tool_ids.length) {
-          this.toast("工具推理规则至少需要选择一个工具", "error");
+          this.validationError("工具推理规则至少需要选择一个工具", "工具推理规则");
           return;
         }
       }
@@ -3552,11 +3649,24 @@ function adminApp() {
       } catch (e) { this.toast(e.message || "删除失败", "error"); }
     },
     async toggleProviderEnabled(p) {
+      const next = !p.enabled;
+      // 先乐观置位：这个开关是**即时生效**的（与同卡片里「模型改动是草稿」不同，
+      // 页面上有文案说明）。失败必须翻回去——Alpine 只按 p.enabled 重渲染，
+      // 不改回去的话复选框会停在服务端并未生效的状态上，刷新才发现回弹
+      p.enabled = next;
       try {
-        await this.api(`/api/admin/providers/${p.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !p.enabled }) });
-        p.enabled = !p.enabled;
-        this.toast(p.enabled ? "已启用" : "已禁用");
-      } catch (e) { this.toast(e.message || "更新失败", "error"); }
+        await this.api(`/api/admin/providers/${p.id}`, { method: "PATCH", body: JSON.stringify({ enabled: next }) });
+        this.toast(next ? "已启用" : "已禁用");
+      } catch (e) {
+        p.enabled = !next;
+        this.toast(e.message || "更新失败，开关已复原", "error");
+      }
+    },
+    async resetProviderBreakers() {
+      try {
+        const data = await this.api("/api/admin/providers/reset-breakers", { method: "POST" });
+        this.toast(`已清空 ${data.cleared || 0} 家的熔断状态`);
+      } catch (e) { this.toast(e.message || "重置熔断失败", "error"); }
     },
     openTestProvider(p) {
       const pid = p.id;

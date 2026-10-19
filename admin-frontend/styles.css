@@ -1561,7 +1561,20 @@ body.modal-open .panel-stack {
   .page-desc { display: none; }
   /* 配置保存入口常驻顶栏：窄屏下按钮另起一行、撑满可点，不过度挤压标题 */
   .topbar-actions { flex-wrap: wrap; row-gap: 0.5rem; }
-  .config-bar { flex: 1 1 100%; }
+  /* 保存条钉在屏幕底部：窄屏是整页滚动，顶栏会随页面滚走，改完最后一项还得一路滚回顶部才能保存。
+     两个 config-bar 分别挂在 isConfigTab / isParseTab 上，同时只会有一个存在，不会互相压住 */
+  .config-bar {
+    position: fixed;
+    left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom));
+    z-index: 40;
+    padding: 0.5rem;
+    border-radius: 0.9rem;
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--panel-strong) 94%, transparent);
+    box-shadow: 0 12px 26px -16px rgba(0, 0, 0, 0.45);
+  }
+  /* 给固定条让位，别压住最后一行 */
+  .main { padding-bottom: 4.75rem; }
   .config-bar .btn-primary, .config-bar .btn-ghost { flex: 1 1 auto; min-height: 44px; }
 
   /* ---------- 4. 安全横幅：文字独占整行，按钮另起一行 ---------- */

@@ -211,6 +211,21 @@ def claim_attempt(provider_id: str) -> bool:
         return True
 
 
+def reset(provider_id: str | None = None) -> int:
+    """清空熔断状态（全部，或指定某家），返回被清掉的条目数。
+
+    给管理后台的「重置熔断」用：管理员改好 Key / 换好地址之后，不该再等冷却期
+    （默认 OPEN 30 秒、指数退避封顶 300 秒）——用户侧的「一直走备用通道 / 这个模型
+    不可用」正是这段时间的表现。
+    """
+    with _lock:
+        if provider_id is None:
+            cleared = len(_registry)
+            _registry.clear()
+            return cleared
+        return 1 if _registry.pop(provider_id, None) is not None else 0
+
+
 def snapshot() -> dict[str, dict[str, Any]]:
     """当前健康状态快照（测试与诊断用）。"""
     with _lock:
