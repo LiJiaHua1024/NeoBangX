@@ -232,7 +232,7 @@
        它，且只在生成完成后才出现；3KB 的体积换十几处 getter 的未加载兜底不划算。 -->
   <script defer src="/static/nbx-versions.js?v=7270a8ece4" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
   <!-- 压缩产物：源码是 frontend/script.js，改完跑 npm run build:js 重新生成 -->
-  <script defer src="/static/script.min.js?v=b9cac56c11" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
+  <script defer src="/static/script.min.js?v=f2c7231bc8" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
   <script defer src="/static/vendor/alpinejs-3.15.12.min.js?v=57b37d7cae" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
 </head>
 
@@ -3250,9 +3250,12 @@
             <div class="space-y-2" x-ref="historySearchList" x-show="historyRows.length">
               <template x-for="(item, i) in historyRows" :key="item.id">
                 <div class="side-card clickable"
+                     role="button" tabindex="0"
                      :class="{ 'hs-active': historySearchHasQuery && i === historySearchActive }"
                      :data-hs-i="i"
+                     :aria-label="historyCardLabel(item)"
                      @click="openHistory(item)"
+                     @keydown="onHistoryCardKey($event, item, i)"
                      @mouseenter="historySearchHasQuery && (historySearchActive = i)">
                   <div class="flex items-center gap-1.5">
                     <span class="chip"><span x-html="icon(item.icon,'w-3 h-3')"></span><span x-text="item.toolName"></span></span>

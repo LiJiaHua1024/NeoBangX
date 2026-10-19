@@ -4537,6 +4537,9 @@ function nbx() {
         }
       });
 
+      // 关页 / 刷新：在途生成要留下残文并通知后端停止（见 _onPageHide）
+      window.addEventListener("pagehide", () => this._onPageHide());
+
       // 本地数据（历史为索引 + 分条正文，旧格式在此一次性拆分）
       this.history = this._loadHistory();
       // 先建元数据索引（标题 / 摘要 / 工具名），正文由空闲分片在后台补齐；
@@ -5220,7 +5223,7 @@ function nbx() {
       if (this.isBusy) {
         const ok = await this.askConfirm({
           title: "停止本次生成？",
-          message: "正在生成中，切换工具将停止本次生成。",
+          message: "正在生成中，切换工具会停止本次生成；已经生成的部分会保存到历史记录。",
           confirmText: "停止并切换",
           danger: true,
         });
@@ -5429,7 +5432,7 @@ function nbx() {
       if (this.isBusy) {
         const ok = await this.askConfirm({
           title: "停止本次生成？",
-          message: "正在生成中，返回首页将停止本次生成。",
+          message: "正在生成中，返回首页会停止本次生成；已经生成的部分会保存到历史记录。",
           confirmText: "停止并回首页",
           danger: true,
         });
@@ -8928,6 +8931,9 @@ function nbx() {
       // modelUsed 一路带到收尾：请求 body 用的是它，记录里的「哪一版由谁生成」也必须用它。
       // 拿收尾时刻的 selectedModel 会记错——流式期间用户可以在右上角切模型。
       const ctx0 = { updateId, continueFrom, newVersion, modelUsed };
+      // 在途流的模式快照：中断（切工具/回首页/新建题目/关页刷新）时按它决定残文写回
+      // 哪条记录、要不要作为新版本追加。正常收尾走 finalize，用不到它。
+      this._streamCtx = ctx0;
       // 本轮结束后的额度基线：跑完对比，才能只在「刚好用掉最后一次」时提醒一次
       const quotaBefore = this.quotaRemaining;
       let quotaDelay = 0;
@@ -9148,8 +9154,10 @@ function nbx() {
       return { state: stopped ? "stopped" : "done" };
     },
 
-    // 通知后端尽早释放上游调用。不 await：本地中断不依赖网络往返，通知失败也不影响已停止的事实
-    notifyStop(requestId) {
+    /* 通知后端尽早释放上游调用。不 await：本地中断不依赖网络往返，通知失败也不影响已停止的事实。
+       keepalive 供关页 / 刷新时用：不带它，请求会随文档卸载被浏览器掐掉，
+       后端只能等下一次写 SSE 时才发现连接已断。 */
+    notifyStop(requestId, keepalive = false) {
       if (!requestId) return;
       fetch("/api/chat/stop", {
         method: "POST",
@@ -9158,6 +9166,7 @@ function nbx() {
           ...this.authHeaders(),
         },
         body: JSON.stringify({ request_id: requestId }),
+        keepalive,
       }).catch(() => {});
     },
     stop() {
@@ -9167,8 +9176,13 @@ function nbx() {
       try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
       this.notifyStop(requestId);
     },
-    // 切换工具/新建题目时作废在途生成：递增代次让旧流的收尾失效，同步复位 UI，再通知后端
-    abortActiveGeneration() {
+    /* 作废在途生成：先落盘残文，再递增代次让旧流的收尾失效，复位 UI，最后通知后端。
+       keepalive 供关页 / 刷新用——那种场景下请求必须活过文档卸载。
+
+       残文必须先落盘：代次一递增，在途流的 catch 就直接 return（不再走 finalize），
+       屏幕上那份内容会随 apply() 的清空一起消失。 */
+    abortActiveGeneration({ keepalive = false } = {}) {
+      this._saveAbortedPartial();
       this._runSeq += 1;
       const requestId = this.requestId;
       try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
@@ -9177,7 +9191,113 @@ function nbx() {
       this.fallbackInfo = null;
       this.stopTimer();
       this.stopThinkTimer();
-      this.notifyStop(requestId);
+      // 收尾不再经过 finalize，状态得在这里落定：有残文就是「已停止」（继续生成入口保留），
+      // 否则回 idle。少了这一步，关页回来会一直挂在「生成中」。
+      if (this.status === "connecting" || this.status === "streaming") {
+        this.status = String(this.output || "").trim() ? "stopped" : "idle";
+      }
+      this.notifyStop(requestId, keepalive);
+    },
+
+    /* ============ 中断落盘：「停止并保存残文」 ============ */
+    /* 试卷可视化（工具 13）的结构化快照：残文之外还要带上已解析出的题目，
+       重开后「继续生成」才接得上。判据与 finalizeVisualPaper 一致。 */
+    _vpPartialSnapshot() {
+      if (!this.isVisualPaperTool) return null;
+      const vp = this.visualPaper;
+      if (!vp || !(vp.groups?.length || vp.total || (vp.paper && vp.paper.title))) return null;
+      try { return JSON.parse(JSON.stringify(vp)); } catch { return null; }
+    },
+    /* 把已经生成的部分存成一条记录。
+
+       切工具 / 回首页 / 新建题目 / 查看历史 / 关页刷新这五条路径都会作废在途生成，
+       而作废后的收尾（finalize）因代次不符直接 return，残文与这条记录一起消失。
+       这里在作废之前先落盘：续写/重试就地更新原记录，否则新建一条 partial 记录——
+       与用户点「停止」走 finalize 得到的形状一致，重开后照常有「继续生成」入口。 */
+    _saveAbortedPartial() {
+      if (!this.streaming) return null;
+      const text = String(this.output || "");
+      if (!text.trim()) return null;   // 零产出不占位（与 finalize / finalizeTr 同一口径）
+      const ctx = this._streamCtx || {};
+      const modelUsed = ctx.modelUsed || this.selectedModel;
+      if (this.isTranslateTool) return this._saveAbortedTranslate(text, modelUsed);
+      const snapshot = this._vpPartialSnapshot();
+      const origin = ctx.updateId ? this.history.find((h) => h.id === ctx.updateId) : null;
+      if (origin) {
+        this._hydrateHistory(origin);
+        if (ctx.newVersion) {
+          // 整篇重来跑到一半被停：残文作为新版本留下，旧结果仍留在切换器里
+          NbxVersions.append(origin, { output: text, model: modelUsed, partial: true, error: "" });
+        } else {
+          origin.output = text;
+          origin.partial = true;
+          origin.error = "";
+          origin.model = modelUsed;
+          NbxVersions.syncActive(origin);
+        }
+        if (snapshot) origin.visualPaper = snapshot;
+        this._persistHistoryItem(origin);
+        if (snapshot && this.visualPaper) this.visualPaper.historyId = origin.id;
+        return origin;
+      }
+      const item = this.pushHistory(true, modelUsed);
+      if (!item) return null;
+      if (snapshot) {
+        item.visualPaper = snapshot;
+        this._persistHistoryItem(item);
+      }
+      if (snapshot && this.visualPaper) this.visualPaper.historyId = item.id;
+      // 记录指针接回这一条：屏幕上这份残文就是它，之后「继续生成」要写回同一条而不是新建
+      this.activeHistoryId = item.id;
+      return item;
+    },
+    /* 翻译（工具 33）中断：与 finalizeTr 同一口径——改而不增，写回已有记录 */
+    _saveAbortedTranslate(text, modelUsed) {
+      const snap = this._trSnap || {};
+      const source = snap.source || this.submittedInput || "";
+      const fields = {
+        toolId: TRANSLATE_TOOL_ID,
+        toolName: "翻译",
+        icon: TRANSLATE_TOOL_ICON,
+        input: source,
+        title: historyTitleFromText(source),
+        output: text,
+        model: modelUsed,
+        partial: true,
+        error: "",
+        // 语言对存 id：显示名与提示词里的名字随时可由 TR_LANGS 换，记录不必跟着改
+        translate: {
+          source: snap.sourceId || TR_DEFAULT_SOURCE,
+          target: snap.targetId || TR_DEFAULT_TARGET,
+          truncated: !!this.trTruncated,
+        },
+      };
+      const id = this.trHistoryId || this.activeHistoryId;
+      const origin = id ? this.history.find((h) => h.id === id) : null;
+      if (origin) {
+        this._hydrateHistory(origin);
+        Object.assign(origin, fields);
+        this._persistHistoryItem(origin);
+        this.trHistoryId = origin.id;
+        this.activeHistoryId = origin.id;
+        return origin;
+      }
+      const item = this._unshiftHistory({
+        id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+        createdAt: Date.now(),
+        ...fields,
+      });
+      this.trHistoryId = item ? item.id : "";
+      this.activeHistoryId = this.trHistoryId;
+      return item;
+    },
+    /* 关页 / 刷新：与「停止」同路收尾，只是通知要带 keepalive。
+       用 pagehide 而不是 unload——后者在移动端与 bfcache 场景常常不触发。
+       这里一并作废在途流（递增代次），否则页面若被 bfcache 留住、流又跑完了，
+       finalize 会再写一条完整记录，与刚存下的残文重复。 */
+    _onPageHide() {
+      if (!this.streaming) return;
+      try { this.abortActiveGeneration({ keepalive: true }); } catch { /* 落盘失败不阻塞卸载 */ }
     },
 
     /* ============ 失败恢复：错误卡上的继续生成 / 重试 / 换模型 / 编辑输入 ============ */
@@ -11627,6 +11747,46 @@ function nbx() {
         if (row) this.openHistory(row);
       }
     },
+    /* 历史卡片的键盘操作：Enter / 空格打开，↑↓ 在卡片之间移动焦点。
+       卡片里还有删除按钮，它的 Enter/空格会冒泡到这里 —— 只认事件源就是卡片本身的那次，
+       否则按删除会顺手把记录打开。 */
+    onHistoryCardKey(ev, item, i) {
+      if (!ev || ev.target !== ev.currentTarget) return;
+      const key = ev.key;
+      if (key === "Enter" || key === " " || key === "Spacebar") {
+        ev.preventDefault();
+        this.openHistory(item);
+        return;
+      }
+      if (key === "ArrowDown" || key === "ArrowUp") {
+        ev.preventDefault();
+        this.focusHistoryCard(i + (key === "ArrowDown" ? 1 : -1));
+      }
+    },
+    /* 焦点在卡片之间移动：按 data-hs-i 找目标卡片（渲染时已带上该标记） */
+    focusHistoryCard(index) {
+      const rows = this.historyRows || [];
+      if (index < 0 || index >= rows.length) return;
+      this.$nextTick(() => {
+        const list = this.$refs.historySearchList;
+        const el = list && list.querySelector ? list.querySelector(`[data-hs-i="${index}"]`) : null;
+        if (el && el.focus) el.focus();
+      });
+    },
+    /* 卡片的读屏名称：工具 + 标题（或输入摘要）+ 状态。
+       role=button 会把卡片内所有文字读成按钮名，那串里还夹着时间与模型名，
+       太长且重点不突出，所以显式给一个。 */
+    historyCardLabel(item) {
+      if (!item) return "";
+      const bits = [
+        item.toolName || "记录",
+        item.title || item.inputHead || this.excerpt(item.input || "", 40) || "无标题",
+      ];
+      if (item.error) bits.push("生成失败");
+      else if (item.partial) bits.push(item.toolId === "13" ? "待补全，可继续生成" : "已停止，可继续生成");
+      if (item.verCount > 1) bits.push(item.verCount + " 个版本");
+      return bits.join("，");
+    },
     get historyRows() {
       return this.historyQuery.trim() ? this.historySearchRows : this.history;
     },
@@ -12245,7 +12405,7 @@ function nbx() {
       if (this.isBusy) {
         const ok = await this.askConfirm({
           title: "停止本次生成？",
-          message: "正在生成中，查看历史将停止本次生成。",
+          message: "正在生成中，查看历史会停止本次生成；已经生成的部分会保存到历史记录。",
           confirmText: "停止并查看",
           danger: true,
         });
@@ -12479,7 +12639,7 @@ function nbx() {
       if (this.isBusy) {
         const ok = await this.askConfirm({
           title: "停止本次生成？",
-          message: "正在生成中，开始新题目将停止本次生成。",
+          message: "正在生成中，开始新题目会停止本次生成；已经生成的部分会保存到历史记录。",
           confirmText: "停止并新建",
           danger: true,
         });
