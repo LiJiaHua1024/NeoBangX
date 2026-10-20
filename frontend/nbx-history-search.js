@@ -1219,25 +1219,36 @@
 
   /* ---------------- 打分与结果 ---------------- */
 
-  function makeMatch(doc, recs, loose) {
+  /* ---------------- BM25F ----------------
+     旧打分是「字段权重 × 命中质量 + 各种手调加成」：没有长度归一化，同样是命中一次，
+     命中在 20 字的标题和 2 万字的正文里得到的分数一模一样；词频也只能靠 +4% 硬堆。
+     这里换成 BM25F：每个字段一次饱和（tf 超过 k1 就不再线性加分）与长度归一化，
+     字段权重保留为 boost，命中质量（整字段 / 词边界 / 子串）仍作为倍乘因子。
+     参数用检索领域的常用缺省值，不针对本库调参：数据量小的时候，稳定的默认值
+     比拟合出来的数字更不容易过拟合。 */
+  var BM25_K1 = 1.2;
+  var BM25_B = 0.65;
+
+  function bm25Sat(tf, len, avg) {
+    if (!tf) return 0;
+    if (!(avg > 0)) avg = len || 1;
+    var norm = len / avg;
+    var denom = tf + BM25_K1 * (1 - BM25_B + BM25_B * norm);
+    return denom > 0 ? (tf * (BM25_K1 + 1)) / denom : 0;
+  }
+
+  function makeMatch(doc, recs, loose, fieldAvg) {
     var score = 0;
-    var titleHits = 0;
-    var fieldHits = Object.create(null);
-    var fieldCount = 0;
     var anyLoose = false;
     for (var i = 0; i < recs.length; i += 1) {
       var rec = recs[i];
-      score += rec.score;
       if (rec.loose) anyLoose = true;
-      if (rec.field.key === "title") titleHits += 1;
-      if (!fieldHits[rec.field.key]) {
-        fieldHits[rec.field.key] = 1;
-        fieldCount += 1;
-      }
+      var len = rec.field.norm.length;
+      var avg = fieldAvg && fieldAvg[rec.field.key];
+      // 同一条记录里同一个词最多算 8 次：再高就是复读，不该继续加分
+      score += rec.field.weight * bm25Sat(Math.min(rec.count, 8), len, avg) * rec.quality;
     }
     if (loose || anyLoose) score *= 0.8;
-    if (titleHits) score += titleHits === recs.length ? 7 : titleHits * 1.4;
-    if (fieldCount === 1 && recs.length > 1) score += 1.5;
 
     // 时间只做细小的破同分因素：相关内容永远高于「仅仅更新」。
     var createdAt = Number(doc.item.createdAt) || 0;
@@ -1546,6 +1557,34 @@
       addGrams(doc);
     }
 
+    /* 字段平均长度（BM25F 的长度归一化需要它）。按 docVersion 缓存：
+       一次查询只算一次，连续输入时只要库没变就直接复用。 */
+    var avgVersion = -1;
+    var avgCache = null;
+
+    function fieldAverages() {
+      if (avgVersion === docVersion && avgCache) return avgCache;
+      var sums = Object.create(null);
+      var counts = Object.create(null);
+      for (var id in docs) {
+        if (!Object.prototype.hasOwnProperty.call(docs, id)) continue;
+        var doc = docs[id];
+        for (var i = 0; i < doc.fieldList.length; i += 1) {
+          var field = doc.fieldList[i];
+          sums[field.key] = (sums[field.key] || 0) + field.norm.length;
+          counts[field.key] = (counts[field.key] || 0) + 1;
+        }
+      }
+      var avg = Object.create(null);
+      for (var key in sums) {
+        if (!Object.prototype.hasOwnProperty.call(sums, key)) continue;
+        avg[key] = sums[key] / Math.max(1, counts[key]);
+      }
+      avgVersion = docVersion;
+      avgCache = avg;
+      return avg;
+    }
+
     function candidatesFor(terms) {
       var base = null;
       for (var t = 0; t < terms.length; t += 1) {
@@ -1729,6 +1768,7 @@
       var looseMatches = [];
       var matched = Object.create(null);
       var limit = options && options.limit ? Math.max(1, Math.min(MAX_RESULTS, options.limit | 0)) : MAX_RESULTS;
+      var fieldAvg = fieldAverages();
 
       if (terms.length) {
         // 精确阶段只需要看倒排表给出的候选；单字查询没有双字可查，退回全库扫。
@@ -1754,7 +1794,7 @@
           }
           if (!ok) continue;
           matched[doc.uid] = 1;
-          exactMatches.push(makeMatch(doc, recs, false));
+          exactMatches.push(makeMatch(doc, recs, false, fieldAvg));
         }
 
         // 宽松匹配不再看「精确结果够不够多」。用条数决定召回会让同一句话时灵时不灵：
@@ -1778,7 +1818,7 @@
               }
               looseRecs.push(loose);
             }
-            if (looseOk) looseMatches.push(makeMatch(looseDoc, looseRecs, true));
+            if (looseOk) looseMatches.push(makeMatch(looseDoc, looseRecs, true, fieldAvg));
           }
         }
       }

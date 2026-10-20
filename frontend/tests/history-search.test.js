@@ -401,6 +401,15 @@ test("排序：标题命中 > 正文完整词 > 正文子串；同分时新的�
   );
 });
 
+test("BM25F：同样命中一次时，短正文排在长正文之前", () => {
+  const engine = engineWith([
+    item({ id: "long", title: "长文记录", output: "grammar " + "填充内容。".repeat(500) }),
+    item({ id: "short", title: "短文记录", output: "grammar point" }),
+  ]);
+  const rows = engine.query("grammar").results;
+  assert.deepEqual(rows.map((row) => row.item.id), ["short", "long"]);
+});
+
 test("高亮片段是纯文本分段，不把用户内容当 HTML", () => {
   const engine = engineWith([
     item({
