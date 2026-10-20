@@ -266,6 +266,38 @@ test("拼音：全拼与首字母都能找到中文记录，且不污染纯英�
   assert.deepEqual(en, ["py-2"]);
 });
 
+test("同音字：定语丛句也能找到定语从句（含引号短语）", () => {
+  const engine = engineWith([
+    item({ id: "homo-1", title: "定语从句精讲", input: "定语从句是什么", output: "由关系代词引导。" }),
+    item({ id: "homo-2", title: "数学", output: "二次函数与方程。" }),
+  ]);
+
+  assert.deepEqual(titles(engine, "定语丛句"), ["定语从句精讲"]);
+  assert.deepEqual(titles(engine, '"定语丛句"'), ["定语从句精讲"], "引号短语也要过同音");
+  // 同音是兜底，不能把不相关记录拉进来
+  assert.equal(engine.query("定语丛句").total, 1);
+  assert.equal(engine.query("动物世界").total, 0);
+
+  const row = engine.query("定语丛句").results[0];
+  assert.equal(row.loose, true);
+  assert.ok(row.snippet.some((seg) => seg.h));
+});
+
+test("近音容错：平翘舌、前后鼻音、n-l 混用都能命中", () => {
+  const engine = engineWith([
+    item({ id: "near-1", title: "从句用法", output: "从句由关系代词引导。" }),
+    item({ id: "near-2", title: "心里描写", output: "人物的心理活动。" }),
+    item({ id: "near-3", title: "动物世界", output: "纪录片旁白。" }),
+  ]);
+
+  // chong → con，与 cong 同键
+  assert.deepEqual(titles(engine, "冲句"), ["从句用法"]);
+  // xing → xin，与 xin 同键
+  assert.deepEqual(titles(engine, "星里"), ["心里描写"]);
+  // 近音也要能收束：不相关记录不进场
+  assert.equal(engine.query("冲句").total, 1);
+});
+
 test("长中文串允许双字覆盖率匹配，但不会召回无关记录", () => {
   const engine = engineWith([
     item({ id: "cov-1", title: "写作指导", output: "如何写好一篇英语作文：先列提纲，再补细节。" }),

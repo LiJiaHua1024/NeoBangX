@@ -190,7 +190,11 @@
   function hasLoosePotential(terms) {
     for (var i = 0; i < terms.length; i += 1) {
       var term = terms[i];
-      if (!term.allowLoose) continue;
+      // 短语不参与子序列/拼写容错，但仍可能靠同音字命中，所以也要跑宽松阶段
+      if (!term.allowLoose) {
+        if (term.phrase && term.text.length >= 2 && (term.cjk || term.latin)) return true;
+        continue;
+      }
       if (term.pureCjk && term.text.length >= 2) return true;
       if (term.latin && term.text.length >= 3) return true;
     }
@@ -392,6 +396,35 @@
     return out;
   }
 
+  /* 近音折叠：把容易混的读音归并成同一个键。
+     中文输入选错字大多是「读音相近」而不仅是「完全同音」：平翘舌（zh/ch/sh ↔ z/c/s）、
+     前后鼻音（ing/en/ang ↔ in/en/an）、n↔l（部分方言）。折叠只用于最后一档兜底，
+     所以它把两类读音合并后即使有额外误召回，也只会排在精确、同音结果后面。 */
+  function pyFoldSyllable(syl) {
+    var s = syl;
+    if (s.length > 1) {
+      if (s.charAt(0) === "z" && s.charAt(1) === "h") s = "z" + s.slice(2);
+      else if (s.charAt(0) === "c" && s.charAt(1) === "h") s = "c" + s.slice(2);
+      else if (s.charAt(0) === "s" && s.charAt(1) === "h") s = "s" + s.slice(2);
+      else if (s.charAt(0) === "n") s = "l" + s.slice(1);
+    }
+    if (s.length > 3) s = s.replace(/ing$/, "in").replace(/eng$/, "en").replace(/ang$/, "an");
+    return s;
+  }
+
+  function pyOfTextFolded(text) {
+    if (!text) return "";
+    var table = pyLoad();
+    if (!table) return "";
+    var out = "";
+    for (var i = 0; i < text.length; i += 1) {
+      if (text.charCodeAt(i) < 0x2e80) continue;
+      var syl = pyOfChar(text.charAt(i));
+      if (syl) out += pyFoldSyllable(syl);
+    }
+    return out;
+  }
+
   /* 把拼音串上的区间映射回原文字符区间：拼音是一对多展开，只能顺序走一遍。 */
   function pyRangeOf(text, fromPy, toPy) {
     var out = 0;
@@ -411,10 +444,50 @@
     return [start, end];
   }
 
+  /* 折叠串上的区间 → 原文字符区间。折叠后的音节长度与原音节不一定相同，
+     所以不能复用 pyRangeOf。 */
+  function pyRangeOfFolded(text, fromPy, toPy) {
+    var out = 0;
+    var start = -1;
+    var end = -1;
+    for (var i = 0; i < text.length; i += 1) {
+      if (text.charCodeAt(i) < 0x2e80) continue;
+      var syl = pyOfChar(text.charAt(i));
+      if (!syl) continue;
+      var stop = out + pyFoldSyllable(syl).length;
+      if (start < 0 && fromPy >= out && fromPy < stop) start = i;
+      if (toPy > out && toPy <= stop) end = i + 1;
+      out = stop;
+    }
+    if (start < 0) return null;
+    if (end < 0) end = start + 1;
+    return [start, end];
+  }
+
   function pyTextOfField(field) {
     if (!field) return "";
     if (field.pyText === undefined) field.pyText = pyOfText(field.norm);
     return field.pyText;
+  }
+
+  function pyFoldedOfField(field) {
+    if (!field) return "";
+    if (field.pyFolded === undefined) field.pyFolded = pyOfTextFolded(field.norm);
+    return field.pyFolded;
+  }
+
+  /* 整条记录的折叠串：只用于判「要不要继续查」，真正定位仍回到单字段。
+     懒建 + 缓存在 doc 上，用户不打近音输入就不会付出这份开销。 */
+  function docPyFolded(doc) {
+    if (doc.pyFoldedText !== undefined) return doc.pyFoldedText;
+    var out = "";
+    for (var i = 0; i < doc.fieldList.length; i += 1) {
+      var field = doc.fieldList[i];
+      if (field.py) continue;
+      out += pyFoldedOfField(field);
+    }
+    doc.pyFoldedText = out;
+    return out;
   }
 
   function pyInitialsOfField(field) {
@@ -535,6 +608,7 @@
     doc.bodySig = hasBody ? bodySignature(item, src) : "";
     doc.metaSig = metaSignature(item);
     doc.queryTokens = null;
+    doc.pyFoldedText = undefined;
     return doc;
   }
 
@@ -549,7 +623,8 @@
       hasBody: false,
       bodySig: "",
       metaSig: "",
-      queryTokens: null
+      queryTokens: null,
+      pyFoldedText: undefined
     };
   }
 
@@ -899,13 +974,14 @@
       var field = fields[i];
       if (field.py) continue;
       if (snippetOnly && !field.snippet) continue;
-      var py = kind === "pinyin" ? pyTextOfField(field) : pyInitialsOfField(field);
+      var py = kind === "pinyin" ? pyTextOfField(field)
+        : (kind === "pinyinInit" ? pyInitialsOfField(field) : pyFoldedOfField(field));
       if (!py) continue;
       var pos = py.indexOf(needle);
       if (pos < 0) continue;
-      var range = kind === "pinyin"
-        ? pyRangeOf(field.norm, pos, pos + needle.length)
-        : pyInitialRange(field.norm, pos, pos + needle.length);
+      var range = kind === "pinyin" ? pyRangeOf(field.norm, pos, pos + needle.length)
+        : (kind === "pinyinInit" ? pyInitialRange(field.norm, pos, pos + needle.length)
+          : pyRangeOfFolded(field.norm, pos, pos + needle.length));
       if (!range) continue;
       // 同一串拼音在多个字段里都可能出现（标题 + 正文）：取权重最高的那个作证据
       if (!best || field.weight > best.field.weight) best = { field: field, start: range[0], end: range[1] };
@@ -918,49 +994,66 @@
      - 中文输入（定语丛句）先转拼音，再做同音比对——这就是汉字错别字容错。
      返回的 rec 携带原文里的字段与区间，所以标题高亮与摘要片段不用特殊处理。 */
   function pinyinInDoc(doc, term, snippetOnly) {
-    var needle = "";
+    var exact = "";
     if (term.cjk) {
       if (term.pyTextNorm === undefined) term.pyTextNorm = pyOfText(term.text);
-      needle = term.pyTextNorm;
+      exact = term.pyTextNorm;
     } else if (term.latin) {
-      needle = term.text;
+      exact = term.text;
     }
-    if (!needle || needle.length < 2) return null;
-    var full = doc.fields.pinyin;
-    var init = doc.fields.pinyinInit;
+    if (!exact || exact.length < 2) return null;
+
     var kinds = [];
-    if (full && full.norm.indexOf(needle) >= 0) kinds.push("pinyin");
+    var full = doc.fields.pinyin;
+    if (full && full.norm.indexOf(exact) >= 0) {
+      // 中文输入进这里是同音字（定语丛句 → 定语从句）；拉丁输入进这里是打拼音。
+      kinds.push({ kind: "pinyin", needle: exact, quality: term.cjk ? 0.58 : 0.66 });
+    }
     // 首字母只对拉丁输入有意义：中文查询没有「首字母」形态
-    if (!term.cjk && init && init.norm.indexOf(needle) >= 0) kinds.push("pinyinInit");
+    if (!term.cjk && doc.fields.pinyinInit && doc.fields.pinyinInit.norm.indexOf(exact) >= 0) {
+      kinds.push({ kind: "pinyinInit", needle: exact, quality: 0.5 });
+    }
+    // 近音（平翘舌 / 前后鼻音 / n-l）垫底：它比同音宽松，只在词级容错时用，
+    // 并强制排在精确与同音结果之后。短语要求精确，不走这一档。
+    if (term.cjk && term.allowLoose) {
+      if (term.pyFoldedNorm === undefined) term.pyFoldedNorm = pyOfTextFolded(term.text);
+      var folded = term.pyFoldedNorm;
+      if (folded && folded.length >= 2 && folded !== exact && docPyFolded(doc).indexOf(folded) >= 0) {
+        kinds.push({ kind: "pinyinFuzzy", needle: folded, quality: 0.46 });
+      }
+    }
+
     for (var k = 0; k < kinds.length; k += 1) {
-      var ev = pinyinEvidence(doc, needle, kinds[k], snippetOnly);
+      var hit = kinds[k];
+      var ev = pinyinEvidence(doc, hit.needle, hit.kind, snippetOnly);
       if (!ev) continue;
-      // 同音字比「打拼音」更弱：输入法选错字很常见，不能压过真正的正文命中
-      var quality = kinds[k] === "pinyin" ? (term.cjk ? 0.58 : 0.66) : 0.5;
       return {
         term: term,
         field: ev.field,
         start: ev.start,
         end: ev.end,
         count: 1,
-        quality: quality,
-        score: ev.field.weight * quality,
+        quality: hit.quality,
+        score: ev.field.weight * hit.quality,
         loose: true,
         positions: null,
-        pinyin: true
+        pinyin: hit.kind
       };
     }
     return null;
   }
 
   function bestLoose(doc, term) {
-    if (!term.allowLoose) return null;
+    // 短语不允许子序列/覆盖率这类宽松匹配，但同音字仍然成立：
+    // 用户加引号是为了「别拆词」，不是为了「读音必须完全一样」。
     var best = null;
-    var fields = doc.fieldList;
-    for (var i = 0; i < fields.length; i += 1) {
-      if (fields[i].py) continue;
-      var rec = looseInField(fields[i], term);
-      if (rec && (!best || rec.score > best.score)) best = rec;
+    if (term.allowLoose) {
+      var fields = doc.fieldList;
+      for (var i = 0; i < fields.length; i += 1) {
+        if (fields[i].py) continue;
+        var rec = looseInField(fields[i], term);
+        if (rec && (!best || rec.score > best.score)) best = rec;
+      }
     }
     var py = pinyinInDoc(doc, term);
     if (py && (!best || py.score > best.score)) best = py;
