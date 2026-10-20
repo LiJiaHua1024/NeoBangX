@@ -121,6 +121,26 @@ test("多关键词是 AND；短语要求连续出现", () => {
   assert.equal(engine.query('"book the"').total, 0);
 });
 
+test("邻近查询：定语 ... 从句 要求按顺序、在同一窗口内出现", () => {
+  const engine = engineWith([
+    item({ id: "prox-1", title: "语法讲解", output: "定语从句由关系代词引导，例如 the book that I bought." }),
+    item({ id: "prox-2", title: "相隔很远", output: "定语是修饰语。" + "无关内容。".repeat(40) + "从句很难。" }),
+    item({ id: "prox-3", title: "顺序相反", output: "从句在前，定语在后。" }),
+  ]);
+
+  const result = engine.query('"定语 ... 从句"');
+  assert.equal(result.total, 1);
+  assert.deepEqual(titles(engine, '"定语 ... 从句"'), ["语法讲解"]);
+
+  // 顺序反过来命中的是另一条（从句在前、定语在后），说明顺序真的被约束了
+  assert.deepEqual(titles(engine, '"从句 ... 定语"'), ["顺序相反"]);
+  // "关系代词" 之后并没有 定语，不能因为全文里两个词都有就算命中
+  assert.equal(engine.query('"关系代词 ... 定语"').total, 0);
+
+  const hits = result.results[0].snippet.filter((seg) => seg.h).map((seg) => seg.t).join("");
+  assert.ok(hits.includes("定语") && hits.includes("从句"), "两段都应高亮");
+});
+
 test("元数据先行：正文还没读回来也能按标题/摘要/工具搜到", () => {
   const indexOnly = item({
     id: "meta-1",

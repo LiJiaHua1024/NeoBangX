@@ -39,6 +39,9 @@
   var MAX_LOOSE_RESULTS = 60;
 
   var MAX_TERMS = 8;
+  // 邻近查询 "a ... b" 的允许跨度（字符）：两个词在这个距离内按顺序出现才算命中。
+  // 再大就退化成「同一篇里都有」，那就不是短语了。
+  var PROXIMITY_WINDOW = 60;
   var MAX_TERM_CHARS = 48;
   var MAX_FIELD_CHARS = 400000;
   var MAX_RESULTS = 200;
@@ -125,6 +128,34 @@
     return out;
   }
 
+  /* 引号里的 `...` / `…` 是邻近查询："定语 ... 从句" 要求两部分按顺序、在
+     一个窗口内出现。它属于精确匹配（约束更严而不是更松），所以不走宽松阶段。 */
+  function pushProximity(terms, seen, raw) {
+    var chunks = fold(raw).split(/\.{2,}|…/);
+    var parts = [];
+    for (var i = 0; i < chunks.length; i += 1) {
+      var part = chunks[i].trim();
+      if (part) parts.push(part.length > MAX_TERM_CHARS ? part.slice(0, MAX_TERM_CHARS) : part);
+    }
+    if (parts.length < 2) {
+      pushTerm(terms, seen, raw, true);
+      return;
+    }
+    var key = "x:" + parts.join("\u0000");
+    if (seen[key]) return;
+    seen[key] = 1;
+    terms.push({
+      text: parts.join(" "),
+      phrase: true,
+      proximity: true,
+      parts: parts,
+      latin: false,
+      cjk: CJK_RE.test(parts.join("")),
+      pureCjk: false,
+      allowLoose: false
+    });
+  }
+
   function pushTerm(terms, seen, raw, phrase) {
     var text = fold(raw).trim();
     if (!text) return;
@@ -165,7 +196,9 @@
       if (ch === '"' || ch === "“") {
         var close = text.indexOf(ch === '"' ? '"' : "”", i + 1);
         if (close > i) {
-          pushTerm(terms, seen, text.slice(i + 1, close), true);
+          var inner = text.slice(i + 1, close);
+          if (/\.{2,}|…/.test(inner)) pushProximity(terms, seen, inner);
+          else pushTerm(terms, seen, inner, true);
           i = close + 1;
           continue;
         }
@@ -681,7 +714,58 @@
     return hit.start === 0 ? 1.14 : 0.92;
   }
 
+  /* 邻近匹配：各部分按顺序出现，且整个跨度不超过 PROXIMITY_WINDOW。
+     从第一个词的前几个出现位置分别试，取跨度最小的一次（最紧凑=最可能是同一句）。 */
+  function proximityInField(field, term) {
+    var norm = field.norm;
+    var parts = term.parts;
+    if (!norm || !parts || parts.length < 2) return null;
+    var best = null;
+    var from = 0;
+    var tries = 0;
+    while (tries < 8) {
+      tries += 1;
+      var first = norm.indexOf(parts[0], from);
+      if (first < 0) break;
+      var spans = [[first, first + parts[0].length]];
+      var ok = true;
+      var cursor = first + parts[0].length;
+      for (var i = 1; i < parts.length; i += 1) {
+        var pos = norm.indexOf(parts[i], cursor);
+        if (pos < 0) { ok = false; break; }
+        spans.push([pos, pos + parts[i].length]);
+        cursor = pos + parts[i].length;
+      }
+      if (ok) {
+        var span = spans[spans.length - 1][1] - first;
+        if (span <= PROXIMITY_WINDOW && (!best || span < best.span)) {
+          best = { spans: spans, span: span, start: first, end: spans[spans.length - 1][1] };
+          if (span === cursor - first) break; // 已经紧邻，不可能更紧凑
+        }
+      }
+      from = first + 1;
+    }
+    if (!best) return null;
+    // 跨度越紧凑越可信：parts 的总长度 / 实际跨度，1 就是紧挨着
+    var partChars = 0;
+    for (var p = 0; p < parts.length; p += 1) partChars += parts[p].length;
+    var quality = 0.9 + 0.35 * Math.min(1, partChars / best.span);
+    return {
+      term: term,
+      field: field,
+      start: best.start,
+      end: best.end,
+      count: 1,
+      quality: quality,
+      score: field.weight * quality,
+      loose: false,
+      positions: null,
+      spans: best.spans
+    };
+  }
+
   function exactInField(field, term) {
+    if (term.proximity) return proximityInField(field, term);
     var hit = findExact(field, term);
     if (!hit) return null;
     var quality = qualityOf(field, term, hit);
@@ -1221,7 +1305,9 @@
     for (var i = 0; i < recs.length; i += 1) {
       var rec = recs[i];
       if (rec.field.key !== field.key) continue;
-      if (rec.positions && rec.positions.length) {
+      if (rec.spans && rec.spans.length) {
+        for (var s = 0; s < rec.spans.length; s += 1) ranges.push(rec.spans[s]);
+      } else if (rec.positions && rec.positions.length) {
         for (var p = 0; p < rec.positions.length; p += 1) {
           ranges.push([rec.positions[p], rec.positions[p] + 1]);
         }
@@ -1256,7 +1342,11 @@
     for (var ri = 0; ri < recs.length; ri += 1) {
       var rangeRec = recs[ri];
       if (rangeRec.field.key !== field.key) continue;
-      if (rangeRec.positions && rangeRec.positions.length) {
+      if (rangeRec.spans && rangeRec.spans.length) {
+        if (rangeRec.spans[0][0] < requiredStart) requiredStart = rangeRec.spans[0][0];
+        var lastSpan = rangeRec.spans[rangeRec.spans.length - 1][1];
+        if (lastSpan > requiredEnd) requiredEnd = lastSpan;
+      } else if (rangeRec.positions && rangeRec.positions.length) {
         if (rangeRec.positions[0] < requiredStart) requiredStart = rangeRec.positions[0];
         var lastPos = rangeRec.positions[rangeRec.positions.length - 1] + 1;
         if (lastPos > requiredEnd) requiredEnd = lastPos;
@@ -1287,7 +1377,9 @@
     for (var i = 0; i < recs.length; i += 1) {
       var rec = recs[i];
       if (rec.field.key !== field.key) continue;
-      if (rec.positions && rec.positions.length) {
+      if (rec.spans && rec.spans.length) {
+        for (var s2 = 0; s2 < rec.spans.length; s2 += 1) ranges.push(rec.spans[s2]);
+      } else if (rec.positions && rec.positions.length) {
         for (var p = 0; p < rec.positions.length; p += 1) {
           ranges.push([rec.positions[p], rec.positions[p] + 1]);
         }
