@@ -245,6 +245,27 @@ test("中文子序列：定从 → 定语从句", () => {
   assert.ok(result.results[0].snippet.some((seg) => seg.h));
 });
 
+test("拼音：全拼与首字母都能找到中文记录，且不污染纯英文记录", () => {
+  const engine = engineWith([
+    item({ id: "py-1", title: "定语从句精讲", input: "定语从句是什么", output: "由关系代词引导。" }),
+    item({ id: "py-2", title: "English grammar", output: "present tense drill" }),
+  ]);
+
+  assert.deepEqual(titles(engine, "dingyu"), ["定语从句精讲"]);
+  assert.deepEqual(titles(engine, "dingyucongju"), ["定语从句精讲"]);
+  assert.deepEqual(titles(engine, "dingyucong"), ["定语从句精讲"], "前缀也应命中");
+  assert.deepEqual(titles(engine, "dycj"), ["定语从句精讲"], "首字母缩写");
+
+  const row = engine.query("dingyu").results[0];
+  assert.equal(row.loose, true, "拼音命中属于宽松召回");
+  assert.ok(row.snippet.some((seg) => seg.h), "拼音命中也要在原文里高亮");
+  assert.ok(text(row).includes("定语从句"), "摘要取原文，不是拼音串");
+
+  // 拼音只在宽松阶段兜底，正文里的英文命中不受影响
+  const en = engine.query("grammar").results.map((r) => r.item.id);
+  assert.deepEqual(en, ["py-2"]);
+});
+
 test("长中文串允许双字覆盖率匹配，但不会召回无关记录", () => {
   const engine = engineWith([
     item({ id: "cov-1", title: "写作指导", output: "如何写好一篇英语作文：先列提纲，再补细节。" }),

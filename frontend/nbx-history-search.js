@@ -20,6 +20,8 @@
       - 英文拼写容错（Damerau-Levenshtein，按词长限制编辑距离）；
       - 中文子序列缩写容错（「定从」可以找到「定语从句」）；
       - 长中文串允许双字覆盖率匹配（「写好英语作文」也能找到「如何写好一篇英语作文」）；
+      - 拼音：`dingyu` / `dycj` 能找到「定语从句」（汉字→拼音查表在 nbx-pinyin-data.js，
+        由 tools/gen-pinyin-data.mjs 生成）；中文同音字也走同一条投影，`定语丛句` 同样能命中；
       - 标题/工具名/正文/旧版本/结构化内容分字段加权，再叠加词频、整句命中与时间衰减；
       - 返回可直接渲染的高亮片段与上下文摘要，不把用户文本塞进 HTML。
 
@@ -51,6 +53,10 @@
   // snippet=true 的字段可以在命中时生成摘要行。
   var FIELD_SPECS = [
     { key: "title", weight: 14, snippet: false, label: "" },
+    // 拼音投影（只由汉字生成，英文内容不会进这两个字段）：不参与严格匹配，
+    // 只在宽松阶段兜底，所以权重压在正文之下。py: true 表示「不是正文」。
+    { key: "pinyin", weight: 2.8, snippet: false, label: "", py: true },
+    { key: "pinyinInit", weight: 2.0, snippet: false, label: "", py: true },
     { key: "toolName", weight: 7, snippet: false, label: "" },
     { key: "input", weight: 8, snippet: true, label: "输入" },
     { key: "fileName", weight: 5, snippet: true, label: "文件" },
@@ -292,6 +298,131 @@
     return FIELD_BY_KEY[key] || { key: key, weight: 1, snippet: false, label: "" };
   }
 
+  /* ---------------- 拼音表 ----------------
+     运行时不带 pinyin-pro：汉字→拼音是一张只读表（构建产物），这里只负责解码与
+     查询。表加载失败（老浏览器、静态资源缺失）时全部拼音能力静默关闭，
+     检索退回纯文本 —— 拼音是增强，不能成为搜索能不能用的前提。 */
+  var PY_TABLE = null;
+  var PY_TRIED = false;
+
+  function pyBase64(text) {
+    var alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    var lookup = pyBase64.lookup;
+    if (!lookup) {
+      lookup = pyBase64.lookup = new Int16Array(128);
+      for (var k = 0; k < lookup.length; k += 1) lookup[k] = -1;
+      for (var a = 0; a < alphabet.length; a += 1) lookup[alphabet.charCodeAt(a)] = a;
+    }
+    var out = [];
+    var buf = 0;
+    var bits = 0;
+    for (var i = 0; i < text.length; i += 1) {
+      var code = text.charCodeAt(i);
+      var value = code < 128 ? lookup[code] : -1;
+      if (value < 0) continue;
+      buf = (buf << 6) | value;
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        out.push((buf >>> bits) & 0xff);
+      }
+    }
+    return out;
+  }
+
+  function pyLoad() {
+    if (PY_TRIED) return PY_TABLE;
+    PY_TRIED = true;
+    var raw = null;
+    try {
+      if (typeof require === "function" && typeof module !== "undefined" && module.exports) {
+        raw = require("./nbx-pinyin-data.js");
+      }
+    } catch (e) { /* 浏览器里没有 require */ }
+    if (!raw && typeof globalThis !== "undefined") raw = globalThis.NbxPinyinData || null;
+    if (!raw || !raw.SYL || !raw.CODES || !raw.COUNT) return (PY_TABLE = null);
+    var bytes = pyBase64(raw.CODES);
+    var codes = new Uint32Array(raw.COUNT);
+    for (var i = 0; i < raw.COUNT; i += 1) {
+      var bit = i * 12;
+      var from = bit >> 3;
+      var off = bit & 7;
+      var packed = (bytes[from] || 0) | ((bytes[from + 1] || 0) << 8) | ((bytes[from + 2] || 0) << 16);
+      codes[i] = (packed >>> off) & 0xfff;
+    }
+    PY_TABLE = { base: raw.BASE, count: raw.COUNT, syl: raw.SYL, codes: codes };
+    return PY_TABLE;
+  }
+
+  function pyOfChar(ch) {
+    var table = pyLoad();
+    if (!table) return "";
+    var index = ch.charCodeAt(0) - table.base;
+    if (index < 0 || index >= table.count) return "";
+    var code = table.codes[index];
+    return code ? table.syl[code - 1] : "";
+  }
+
+  /* 只把汉字换成拼音、其余字符全部丢掉：英文内容不会污染投影，
+     也不会因为原文里的空格/标点把「ding|yu」切成两段。 */
+  function pyOfText(text) {
+    if (!text) return "";
+    var table = pyLoad();
+    if (!table) return "";
+    var out = "";
+    for (var i = 0; i < text.length; i += 1) {
+      var code = text.charCodeAt(i);
+      if (code < 0x2e80) continue;
+      var syl = pyOfChar(text.charAt(i));
+      if (syl) out += syl;
+    }
+    return out;
+  }
+
+  function pyInitials(text) {
+    if (!text) return "";
+    var table = pyLoad();
+    if (!table) return "";
+    var out = "";
+    for (var i = 0; i < text.length; i += 1) {
+      if (text.charCodeAt(i) < 0x2e80) continue;
+      var syl = pyOfChar(text.charAt(i));
+      if (syl) out += syl.charAt(0);
+    }
+    return out;
+  }
+
+  /* 把拼音串上的区间映射回原文字符区间：拼音是一对多展开，只能顺序走一遍。 */
+  function pyRangeOf(text, fromPy, toPy) {
+    var out = 0;
+    var start = -1;
+    var end = -1;
+    for (var i = 0; i < text.length; i += 1) {
+      if (text.charCodeAt(i) < 0x2e80) continue;
+      var syl = pyOfChar(text.charAt(i));
+      if (!syl) continue;
+      var stop = out + syl.length;
+      if (start < 0 && fromPy >= out && fromPy < stop) start = i;
+      if (toPy > out && toPy <= stop) end = i + 1;
+      out = stop;
+    }
+    if (start < 0) return null;
+    if (end < 0) end = start + 1;
+    return [start, end];
+  }
+
+  function pyTextOfField(field) {
+    if (!field) return "";
+    if (field.pyText === undefined) field.pyText = pyOfText(field.norm);
+    return field.pyText;
+  }
+
+  function pyInitialsOfField(field) {
+    if (!field) return "";
+    if (field.pyInit === undefined) field.pyInit = pyInitials(field.norm);
+    return field.pyInit;
+  }
+
   function addField(fields, key, value) {
     var raw = textOf(value, MAX_FIELD_CHARS).trim();
     if (!raw) return;
@@ -301,6 +432,7 @@
       weight: spec.weight,
       snippet: spec.snippet,
       label: spec.label,
+      py: !!spec.py,
       raw: raw,
       norm: fold(raw, MAX_FIELD_CHARS),
       tokens: null
@@ -366,6 +498,25 @@
     var textBloom = new Uint32Array(TEXT_BLOOM_BITS / 32);
     var charBloom = new Uint32Array(CHAR_BLOOM_BITS / 32);
     var totalChars = 0;
+    // 先把原始字段收集成表：拼音投影要从它们身上生成
+    for (var sk in fields) {
+      if (!Object.prototype.hasOwnProperty.call(fields, sk)) continue;
+      list.push(fields[sk]);
+    }
+    // 拼音投影进字段表：这样 Bloom 与非严格匹配都自动覆盖它，不需要另建一套索引。
+    // 只由汉字生成，纯英文记录不会多出一份重复文本。
+    var pyText = "";
+    var pyInit = "";
+    for (var pf = 0; pf < list.length; pf += 1) {
+      pyText += pyTextOfField(list[pf]);
+      pyInit += pyInitialsOfField(list[pf]);
+      if (pyText.length > MAX_FIELD_CHARS) break;
+    }
+    if (pyText) addField(fields, "pinyin", pyText);
+    if (pyInit) addField(fields, "pinyinInit", pyInit);
+
+    list = [];
+    totalChars = 0;
     for (var key in fields) {
       if (!Object.prototype.hasOwnProperty.call(fields, key)) continue;
       var field = fields[key];
@@ -494,6 +645,9 @@
     var best = null;
     var fields = doc.fieldList;
     for (var i = 0; i < fields.length; i += 1) {
+      // 拼音投影不参与严格匹配：它是「另一种写法」，不是原文命中。
+      // 混进来会让 loose 标记失真，也会让权重排序凭空多出一份分数。
+      if (fields[i].py) continue;
       var rec = exactInField(fields[i], term);
       if (rec && (!best || rec.score > best.score)) best = rec;
     }
@@ -719,14 +873,97 @@
     };
   }
 
+  function pyInitialRange(text, fromPy, toPy) {
+    var out = 0;
+    var start = -1;
+    var end = -1;
+    for (var i = 0; i < text.length; i += 1) {
+      if (text.charCodeAt(i) < 0x2e80) continue;
+      var syl = pyOfChar(text.charAt(i));
+      if (!syl) continue;
+      if (start < 0 && fromPy === out) start = i;
+      if (toPy === out + 1) end = i + 1;
+      out += 1;
+    }
+    if (start < 0) return null;
+    if (end < 0) end = start + 1;
+    return [start, end];
+  }
+
+  /* 拼音证据：在正文里把拼音命中重新定位到汉字区间。
+     命中的是「哪个字」——高亮和摘要都要回到原文，不能拿拼音串上的偏移。 */
+  function pinyinEvidence(doc, needle, kind, snippetOnly) {
+    var fields = doc.fieldList;
+    var best = null;
+    for (var i = 0; i < fields.length; i += 1) {
+      var field = fields[i];
+      if (field.py) continue;
+      if (snippetOnly && !field.snippet) continue;
+      var py = kind === "pinyin" ? pyTextOfField(field) : pyInitialsOfField(field);
+      if (!py) continue;
+      var pos = py.indexOf(needle);
+      if (pos < 0) continue;
+      var range = kind === "pinyin"
+        ? pyRangeOf(field.norm, pos, pos + needle.length)
+        : pyInitialRange(field.norm, pos, pos + needle.length);
+      if (!range) continue;
+      // 同一串拼音在多个字段里都可能出现（标题 + 正文）：取权重最高的那个作证据
+      if (!best || field.weight > best.field.weight) best = { field: field, start: range[0], end: range[1] };
+    }
+    return best;
+  }
+
+  /* 拼音命中（宽松阶段才能走）：
+     - 拉丁输入（dingyu / dycj）本身就是拼音串，直接在全拼/首字母投影里找；
+     - 中文输入（定语丛句）先转拼音，再做同音比对——这就是汉字错别字容错。
+     返回的 rec 携带原文里的字段与区间，所以标题高亮与摘要片段不用特殊处理。 */
+  function pinyinInDoc(doc, term, snippetOnly) {
+    var needle = "";
+    if (term.cjk) {
+      if (term.pyTextNorm === undefined) term.pyTextNorm = pyOfText(term.text);
+      needle = term.pyTextNorm;
+    } else if (term.latin) {
+      needle = term.text;
+    }
+    if (!needle || needle.length < 2) return null;
+    var full = doc.fields.pinyin;
+    var init = doc.fields.pinyinInit;
+    var kinds = [];
+    if (full && full.norm.indexOf(needle) >= 0) kinds.push("pinyin");
+    // 首字母只对拉丁输入有意义：中文查询没有「首字母」形态
+    if (!term.cjk && init && init.norm.indexOf(needle) >= 0) kinds.push("pinyinInit");
+    for (var k = 0; k < kinds.length; k += 1) {
+      var ev = pinyinEvidence(doc, needle, kinds[k], snippetOnly);
+      if (!ev) continue;
+      // 同音字比「打拼音」更弱：输入法选错字很常见，不能压过真正的正文命中
+      var quality = kinds[k] === "pinyin" ? (term.cjk ? 0.58 : 0.66) : 0.5;
+      return {
+        term: term,
+        field: ev.field,
+        start: ev.start,
+        end: ev.end,
+        count: 1,
+        quality: quality,
+        score: ev.field.weight * quality,
+        loose: true,
+        positions: null,
+        pinyin: true
+      };
+    }
+    return null;
+  }
+
   function bestLoose(doc, term) {
     if (!term.allowLoose) return null;
     var best = null;
     var fields = doc.fieldList;
     for (var i = 0; i < fields.length; i += 1) {
+      if (fields[i].py) continue;
       var rec = looseInField(fields[i], term);
       if (rec && (!best || rec.score > best.score)) best = rec;
     }
+    var py = pinyinInDoc(doc, term);
+    if (py && (!best || py.score > best.score)) best = py;
     return best;
   }
 
@@ -739,6 +976,10 @@
       var rec = looseInField(fields[i], term);
       if (rec && (!best || rec.score > best.score)) best = rec;
     }
+    // 摘要证据只能从可出摘要的字段里找：拼音命中常落在标题上，
+    // 但片段要从正文里取（与 titleSegments 各管一段互不干扰）。
+    var py = pinyinInDoc(doc, term, true);
+    if (py && (!best || py.score > best.score)) best = py;
     return best;
   }
 

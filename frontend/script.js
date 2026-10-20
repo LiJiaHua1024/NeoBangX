@@ -1297,6 +1297,9 @@ const NBX_ASSET_URLS = {
   marked: "/static/vendor/marked-15.0.12.min.js",
   dompurify: "/static/vendor/dompurify-3.4.12.min.js",
   historySearch: "/static/nbx-history-search.js",
+  // 汉字→拼音表（构建产物，见 tools/gen-pinyin-data.mjs）。必须早于检索内核加载：
+  // 内核在建索引时就要用它做拼音投影。
+  pinyinData: "/static/nbx-pinyin-data.js",
   // 首屏之后才需要的模块：不占 6 个关键步骤
   background: "/static/nbx-background.js",
   clickFx: "/static/click-fx.js",
@@ -1447,7 +1450,10 @@ let _historySearchLoading = null;
 function nbxEnsureHistorySearch() {
   if (typeof NbxHistorySearch !== "undefined" && NbxHistorySearch) return Promise.resolve(true);
   if (_historySearchLoading) return _historySearchLoading;
-  const p = nbxLoadScript(NBX_ASSET_URLS.historySearch, 20000)
+  // 拼音表只是增强：加载失败也要把内核拉起来，检索退回纯文本
+  const p = nbxLoadScript(NBX_ASSET_URLS.pinyinData, 20000)
+    .catch(() => false)
+    .then(() => nbxLoadScript(NBX_ASSET_URLS.historySearch, 20000))
     .then(() => typeof NbxHistorySearch !== "undefined" && !!NbxHistorySearch)
     .catch(() => false);
   _historySearchLoading = p;
