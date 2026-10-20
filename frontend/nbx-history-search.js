@@ -886,15 +886,75 @@
     };
   }
 
+  /* ---------------- 英文词干 ----------------
+     英文记录里同一个词会以不同形态出现（teach / teaches / teaching / taught），
+     用户记得哪个形态就敲哪个。这里只做「够用」的规则化归并，不做完整 Porter：
+     多一条规则就多一分过切风险，而过切会凭空造出根本不存在的匹配。
+     不规则动词只收录教学材料里常见的双 / 三态。 */
+  var STEM_IRREGULAR = {
+    taught: "teach", teaches: "teach", teaching: "teach",
+    bought: "buy", brought: "bring", thought: "think",
+    wrote: "write", written: "write", writing: "write",
+    spoke: "speak", spoken: "speak",
+    read: "read", learnt: "learn", learned: "learn",
+    studies: "study", studied: "study", studying: "study",
+    children: "child", people: "person", men: "man", women: "woman",
+    went: "go", gone: "go", did: "do", done: "do", had: "have",
+    made: "make", took: "take", taken: "take", came: "come",
+    saw: "see", seen: "see", gave: "give", given: "give",
+    knew: "know", known: "know", better: "good", best: "good",
+  };
+
+  function stemOf(word) {
+    var w = word;
+    if (STEM_IRREGULAR[w]) return STEM_IRREGULAR[w];
+    if (w.length <= 3) return w;
+    if (/[^aeiou]ies$/.test(w)) w = w.slice(0, -3) + "y";
+    else if (/(ches|shes|xes|zes|sses)$/.test(w)) w = w.slice(0, -2);
+    else if (/[^su]s$/.test(w)) w = w.slice(0, -1);
+    if (/ing$/.test(w) && w.length > 5) w = w.slice(0, -3);
+    else if (/ed$/.test(w) && w.length > 4) w = w.slice(0, -2);
+    else if (/est$/.test(w) && w.length > 5) w = w.slice(0, -3);
+    else if (/er$/.test(w) && w.length > 4) w = w.slice(0, -2);
+    if (/e$/.test(w) && w.length > 3) w = w.slice(0, -1);
+    // 双写尾字母（running → runn → run）：只处理常见的几个辅音
+    if (/([bdgmnprt])\1$/.test(w)) w = w.slice(0, -1);
+    return w;
+  }
+
+  /* 词干索引懒建：只有真的需要做词形兜底时才扫一遍去重后的词，
+     平时（精确命中就够了）一分钱不花。 */
+  function stemToken(field, term) {
+    if (term.stem === undefined) term.stem = stemOf(term.text);
+    var target = term.stem;
+    if (!target || target.length < 3) return null;
+    var index = field.stemIndex;
+    if (!index) {
+      index = field.stemIndex = Object.create(null);
+      var tokens = tokensOf(field);
+      for (var i = 0; i < tokens.length; i += 1) {
+        var s = stemOf(tokens[i]);
+        if (s && s.length >= 3 && !index[s]) index[s] = tokens[i];
+      }
+    }
+    var token = index[target];
+    if (!token) return null;
+    var pos = field.norm.indexOf(token);
+    if (pos < 0) return null;
+    return { start: pos, end: pos + token.length, similarity: 0.9 };
+  }
+
   function looseInField(field, term) {
     var sub = null;
     var cov = null;
     var fuzzy = null;
+    var stem = null;
     if (term.pureCjk) {
       sub = subsequenceMatch(field.norm, term);
       if (term.text.length >= 4) cov = coverageMatch(field.norm, term);
     } else if (term.latin) {
       fuzzy = fuzzyToken(field, term);
+      stem = stemToken(field, term);
     }
 
     var candidate = null;
@@ -931,6 +991,21 @@
           positions: null,
           quality: fuzzyQuality,
           score: fuzzyScore
+        };
+      }
+    }
+    // 词形变化比「拼错一个字母」可信得多：teaching 命中 teach 是同一词，
+    // 而 grammer 命中 grammar 只是可能打错。所以词干分高于拼写容错。
+    if (stem) {
+      var stemQuality = 0.62 + 0.3 * stem.similarity;
+      var stemScore = field.weight * stemQuality;
+      if (!candidate || stemScore > candidate.score) {
+        candidate = {
+          start: stem.start,
+          end: stem.end,
+          positions: null,
+          quality: stemQuality,
+          score: stemScore
         };
       }
     }

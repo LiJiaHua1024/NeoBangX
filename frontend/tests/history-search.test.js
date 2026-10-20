@@ -235,6 +235,26 @@ test("英文拼写容错：少一个字母、字母换位都能找到", () => {
   assert.ok(row.snippet.some((seg) => seg.h), "混淆命中也要给出高亮片段");
 });
 
+test("英文词干：teaching / taught / studies 都能找到对应词", () => {
+  const engine = engineWith([
+    item({ id: "stem-1", title: "Grammar tip", output: "Teach the present tense." }),
+    item({ id: "stem-2", title: "Reading skills", output: "Study skills for exams." }),
+    item({ id: "stem-3", title: "Past tense", output: "I taught him yesterday." }),
+  ]);
+
+  // 同一个词的不同形态互相可搜：teaching / taught / teach 都指向同一个词干
+  const teach = ["Grammar tip", "Past tense"];
+  assert.deepEqual(titles(engine, "teaching").sort(), teach.sort());
+  assert.deepEqual(titles(engine, "taught").sort(), teach.sort());
+  assert.deepEqual(titles(engine, "teach").sort(), teach.sort());
+  assert.deepEqual(titles(engine, "studies"), ["Reading skills"]);
+  assert.equal(engine.query("teaching").results.every((row) => row.loose), true);
+
+  const row = engine.query("teaching").results[0];
+  assert.equal(row.loose, true, "词形变化属于宽松召回");
+  assert.ok(row.snippet.some((seg) => seg.h));
+});
+
 test("中文子序列：定从 → 定语从句", () => {
   const engine = engineWith([
     item({ id: "cjk-1", title: "定语从句精讲", input: "定语从句是什么", output: "由关系代词引导。" }),
