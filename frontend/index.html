@@ -232,7 +232,7 @@
        它，且只在生成完成后才出现；3KB 的体积换十几处 getter 的未加载兜底不划算。 -->
   <script defer src="/static/nbx-versions.js?v=7270a8ece4" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
   <!-- 压缩产物：源码是 frontend/script.js，改完跑 npm run build:js 重新生成 -->
-  <script defer src="/static/script.min.js?v=9df561407c" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
+  <script defer src="/static/script.min.js?v=291affa407" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
   <script defer src="/static/vendor/alpinejs-3.15.12.min.js?v=57b37d7cae" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
 </head>
 
@@ -3273,6 +3273,17 @@
 
             <div class="space-y-2" x-ref="historySearchList" x-show="historyRows.length">
               <template x-for="(item, i) in historyRows" :key="item.id">
+                <div>
+                  <!-- 分组：精确命中与「相关结果」分开。分隔线只出现在两组交界处，
+                       全精确或全相关时不占位。 -->
+                  <div x-show="historySearchHasQuery && i === historySearchExactCount && historySearchExactCount < historyRows.length"
+                       x-cloak
+                       style="display:flex;align-items:center;gap:.5rem;padding:.15rem .15rem .35rem;font-size:11px;color:var(--text-faint,#8a8f98)"
+                       role="separator">
+                    <span style="height:1px;flex:1;background:currentColor;opacity:.22"></span>
+                    <span x-text="historySearchExactCount ? '相关结果' : '没有精确匹配，以下为相关结果'"></span>
+                    <span style="height:1px;flex:1;background:currentColor;opacity:.22"></span>
+                  </div>
                 <div class="side-card clickable"
                      role="button" tabindex="0"
                      :class="{ 'hs-active': historySearchHasQuery && i === historySearchActive }"
@@ -3324,6 +3335,7 @@
                     <!-- 模型由后台配置决定的工具（识别图片文字）拿不到模型名，这时别留一个孤零零的「·」 -->
                     <span class="truncate" x-show="item.model" x-text="'· ' + shortModel(item.model)"></span>
                   </div>
+                </div>
                 </div>
               </template>
             </div>

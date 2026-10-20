@@ -38,9 +38,9 @@
   var TEXT_BLOOM_BITS = 65536;
   var CHAR_BLOOM_BITS = 16384;
 
-  // 严格命中不足这么多条时，才启用拼写/子序列等宽松匹配：
-  // 结果已经很充足时，不应再用低置信度结果稀释排序。
-  var LOOSE_MIN_RESULTS = 12;
+  // 宽松结果的上限：分段展示后它们不会抢走精确结果的位置，但总量仍要封顶，
+  // 否则一个短中文词能靠覆盖率把整库拉成「相关结果」。
+  var MAX_LOOSE_RESULTS = 60;
 
   var MAX_TERMS = 8;
   var MAX_TERM_CHARS = 48;
@@ -1478,7 +1478,8 @@
       if (cacheKey === key && cacheVersion === docVersion) return cacheResult;
       var terms = parseQuery(key);
       var started = nowMs();
-      var matches = [];
+      var exactMatches = [];
+      var looseMatches = [];
       var matched = Object.create(null);
       var limit = options && options.limit ? Math.max(1, Math.min(MAX_RESULTS, options.limit | 0)) : MAX_RESULTS;
       var ids = [];
@@ -1500,11 +1501,13 @@
           }
           if (!ok) continue;
           matched[id] = 1;
-          matches.push(makeMatch(doc, recs, false));
+          exactMatches.push(makeMatch(doc, recs, false));
         }
 
-        // 严格结果不足时才走宽松匹配。拼写错误、中文缩写、长句拆词都在这里兜底。
-        if (matches.length < LOOSE_MIN_RESULTS && hasLoosePotential(terms)) {
+        // 宽松匹配不再看「精确结果够不够多」。用条数决定召回会让同一句话时灵时不灵：
+        // 库里恰好有 12 条精确命中时，拼错的那个词就永远搜不到。现在两档都跑，
+        // 结果按「精确 / 相关」分组展示，低置信结果不会抢精确结果的位置。
+        if (hasLoosePotential(terms)) {
           for (var looseId in docs) {
             if (!Object.prototype.hasOwnProperty.call(docs, looseId) || matched[looseId]) continue;
             var looseDoc = docs[looseId];
@@ -1520,30 +1523,42 @@
               }
               looseRecs.push(loose);
             }
-            if (looseOk) matches.push(makeMatch(looseDoc, looseRecs, true));
+            if (looseOk) looseMatches.push(makeMatch(looseDoc, looseRecs, true));
           }
         }
       }
 
-      matches.sort(function (a, b) {
+      var byScore = function (a, b) {
         if (b.score !== a.score) return b.score - a.score;
         var ac = Number(a.doc.item.createdAt) || 0;
         var bc = Number(b.doc.item.createdAt) || 0;
         if (bc !== ac) return bc - ac;
         return String(a.doc.item.id).localeCompare(String(b.doc.item.id));
-      });
+      };
+      exactMatches.sort(byScore);
+      looseMatches.sort(byScore);
 
-      var shown = matches.length > limit ? matches.slice(0, limit) : matches;
+      // 精确结果先占名额，剩下的才分给相关结果（最多 MAX_LOOSE_RESULTS 条）。
+      var exactShown = exactMatches.length > limit ? exactMatches.slice(0, limit) : exactMatches;
+      var room = Math.min(limit - exactShown.length, MAX_LOOSE_RESULTS);
+      var looseShown = room > 0
+        ? (looseMatches.length > room ? looseMatches.slice(0, room) : looseMatches)
+        : [];
+      var shown = exactShown.concat(looseShown);
       var results = new Array(shown.length);
       for (var i = 0; i < shown.length; i += 1) results[i] = buildView(shown[i], terms);
       var out = {
         query: key,
         terms: terms,
         results: results,
-        total: matches.length,
+        total: exactMatches.length + looseMatches.length,
+        // exactCount 是「结果列表里精确条目的条数」：界面靠它插入分组分隔线
+        exact: exactMatches.length,
+        exactCount: exactShown.length,
+        looseTotal: looseMatches.length,
         docs: stats().docs,
         bodies: stats().bodies,
-        loose: matches.length ? !!matches[0].loose : false,
+        loose: shown.length ? !!shown[0].loose : false,
         durationMs: Math.max(0, nowMs() - started)
       };
       cacheKey = key;

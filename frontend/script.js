@@ -2578,6 +2578,8 @@ function nbx() {
     historySearchFocused: false,
     historySearchDuration: 0,
     historySearchTotal: 0,
+    // 结果列表里「精确」条目的条数：界面在它后面插入「相关结果」分隔线
+    historySearchExactCount: 0,
     _hsComposing: false,
     _hsSearchTimer: null,
     _hsLastQuery: "",
@@ -11773,6 +11775,7 @@ function nbx() {
       if (!raw.trim()) {
         this.historySearchRows = [];
         this.historySearchActive = -1;
+        this.historySearchExactCount = 0;
         this.historySearchTotal = 0;
         this._hsLastQuery = "";
         return;
@@ -11792,6 +11795,7 @@ function nbx() {
       }
       const same = this._hsLastQuery === raw;
       this.historySearchRows = rows;
+      this.historySearchExactCount = result.exactCount || 0;
       this.historySearchTotal = result.total;
       this.historySearchDuration = result.durationMs;
       this._hsLastQuery = raw;
@@ -11830,6 +11834,7 @@ function nbx() {
       this.historyQuery = "";
       this.historySearchRows = [];
       this.historySearchActive = -1;
+      this.historySearchExactCount = 0;
       this.historySearchTotal = 0;
       this._hsLastQuery = "";
       this.$nextTick(() => {
@@ -11945,13 +11950,18 @@ function nbx() {
     get historySearchCountLabel() {
       if (this.historySearchIndexing && !this.historySearchRows.length) return "检索中";
       if (!this.historySearchRows.length) return "无匹配";
-      return this.historySearchRows.length + " 条";
+      const exact = Math.min(this.historySearchExactCount, this.historySearchRows.length);
+      const loose = this.historySearchRows.length - exact;
+      // 两档混在一起时分开报：只看到总数会以为「相关结果」也是精确命中
+      if (!loose) return exact + " 条";
+      if (!exact) return "相关 " + loose + " 条";
+      return exact + " 条 · 相关 " + loose;
     },
     get historySearchStats() {
       const engine = this._historySearchEngine();
       const stats = engine ? engine.stats() : { docs: this.history.length, bodies: 0 };
       const ms = this.historySearchDuration > 0 ? Math.max(0.1, this.historySearchDuration).toFixed(1) : "0.1";
-      return `已索引 ${stats.bodies}/${stats.docs} 条记录 · 最近一次查询 ${ms} ms`;
+      return `已索引 ${stats.bodies}/${stats.docs} 条记录 · 共 ${this.historySearchTotal} 条命中 · 最近一次查询 ${ms} ms`;
     },
 
     /* ============ 历史记录 ============ */

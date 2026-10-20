@@ -307,17 +307,35 @@ test("长中文串允许双字覆盖率匹配，但不会召回无关记录", ()
   assert.equal(engine.query("如何写好英语作文").total, 1);
 });
 
-test("严格结果充足时不用宽松匹配稀释排序", () => {
+test("精确结果充足时宽松结果仍保留，但排在精确结果之后", () => {
   const items = [];
   for (let i = 0; i < 15; i += 1) {
     items.push(item({ id: "strict-" + i, title: "Grammar " + i, output: "grammar exercise " + i }));
   }
   items.push(item({ id: "typo", title: "Grammer typo" }));
   const engine = engineWith(items);
-  const rows = engine.query("grammar").results;
-  assert.equal(rows.length, 15);
-  assert.ok(rows.every((row) => row.loose === false));
-  assert.equal(rows.some((row) => row.item.id === "typo"), false);
+  const result = engine.query("grammar");
+  assert.equal(result.exactCount, 15, "前 15 条都是精确命中");
+  assert.equal(result.results.length, 16);
+  assert.ok(result.results.slice(0, 15).every((row) => row.loose === false));
+  assert.equal(result.results[15].item.id, "typo");
+  assert.equal(result.results[15].loose, true);
+  assert.equal(result.looseTotal, 1);
+});
+
+test("分组：相关结果的分数再高也排在精确结果之后", () => {
+  const engine = engineWith([
+    // 正文里是真正的连续命中（精确，分数低）
+    item({ id: "exact", title: "普通记录", output: "这里提到了定从这条规则。" }),
+    // 标题只能靠子序列擦到（宽松，标题权重高，单看分数反而更高）
+    item({ id: "loose", title: "定制的从属连词", output: "无关内容。" }),
+  ]);
+  const result = engine.query("定从");
+  assert.equal(result.exactCount, 1);
+  assert.equal(result.results[0].item.id, "exact");
+  assert.equal(result.results[0].loose, false);
+  assert.equal(result.results[1].item.id, "loose");
+  assert.equal(result.results[1].loose, true);
 });
 
 /* ---------------- 4. 排序、片段与性能 ---------------- */
