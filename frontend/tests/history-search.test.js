@@ -445,7 +445,23 @@ test("性能基线：100 条 × 约 12 KB 正文，常见词查询 P95 < 25ms", 
   assert.ok(p95 < 25, `查询 P95 过慢：${p95.toFixed(2)}ms`);
 });
 
-test("性能：Bloom 过滤不产生漏召回（每个文档都能被唯一词找到）", () => {
+test("倒排失效：文档被删或改写后，旧双字不再指向它", () => {
+  const record = item({ id: "gram-1", title: "观测记录", output: "台风将于今夜登陆。" });
+  const engine = engineWith([record]);
+  assert.equal(engine.query("台风").total, 1);
+
+  record.output = "晴空观测记录";
+  record.updatedAt += 1;
+  engine.sync([record]);
+  assert.equal(engine.query("台风").total, 0, "改写后旧双字必须摘掉");
+  assert.equal(engine.query("晴空").total, 1, "新双字必须登记");
+
+  engine.remove(record.id);
+  assert.equal(engine.query("晴空").total, 0);
+  assert.equal(engine.stats().docs, 0);
+});
+
+test("性能：双字倒排不产生漏召回（每个文档都能被唯一词找到）", () => {
   const docs = [];
   for (let i = 0; i < 120; i += 1) {
     docs.push(item({
@@ -457,7 +473,7 @@ test("性能：Bloom 过滤不产生漏召回（每个文档都能被唯一词�
   const engine = engineWith(docs);
   for (let i = 0; i < 120; i += 1) {
     const result = engine.query("rareid" + i + "z");
-    assert.equal(result.total, 1, `第 ${i} 条被 Bloom 误杀`);
+    assert.equal(result.total, 1, `第 ${i} 条被倒排误杀`);
     assert.equal(result.results[0].item.id, "bloom-" + i);
   }
 });

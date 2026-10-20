@@ -10,9 +10,9 @@
    1. 只建一次索引：正文进内存后转成规范化文本，查询只做内存扫描；后续增删改走
       增量 upsert，不重建整表。
 
-   2. 先筛后扫：每条记录带两个 Bloom 位图（字符 + 相邻双字）。查询词的双字全部
-      存在才可能命中，绝大多数不相关记录在没有扫任何正文之前就被排除。Bloom 只会
-      误判「可能存在」，不会漏掉真实命中。
+   2. 先筛后扫：全局「双字 → 文档」倒排表。查询词的双字全部存在才可能命中，
+      候选集从最短的一条 posting 起步，不再遍历全库；倒排只做「可能」判断，
+      真正的命中仍由逐字段匹配确认，不会漏报。
 
    3. 不只全等匹配：
       - 空格分隔的多个关键词是 AND；引号内是连续短语；
@@ -33,10 +33,6 @@
 
   /* ---------------- 可调参数 ---------------- */
 
-  // 每条记录两个 Bloom 位图。双字图 65536 bit（8 KB），字符图 16384 bit（2 KB）。
-  // 100 条记录约 1 MB，换来查询时几乎不碰正文的候选过滤。
-  var TEXT_BLOOM_BITS = 65536;
-  var CHAR_BLOOM_BITS = 16384;
 
   // 宽松结果的上限：分段展示后它们不会抢走精确结果的位置，但总量仍要封顶，
   // 否则一个短中文词能靠覆盖率把整库拉成「相关结果」。
@@ -201,55 +197,49 @@
     return false;
   }
 
-  /* ---------------- Bloom 位图 ---------------- */
+  /* ---------------- 双字倒排 ----------------
+     查询先要回答「哪些记录可能包含这些词」。旧做法是每条记录两张 Bloom 位图：
+     省内存，但只能逐条问「你可能吗」，候选过滤依旧要遍历全库。
+     现在改成全局倒排表：双字 → 文档 uid 列表（升序）。查询从最短的那条 posting
+     起步，再用其余双字验证候选——代价随命中数走，不随库大小走。
 
-  function bloomBit(hash, bits) {
-    return hash & (bits - 1);
+     只索引双字：单字查询仍然全量扫（一两百条记录时比维护一张字符表便宜）。 */
+
+  function bigramKey(a, b) {
+    return (a << 16) | b;
   }
 
-  function textBloomAdd(bloom, text) {
+  function gramKeysOfText(text) {
+    var keys = [];
+    var seen = Object.create(null);
     for (var i = 0; i + 1 < text.length; i += 1) {
-      var h = Math.imul(text.charCodeAt(i), 0x9e3779b1) ^ Math.imul(text.charCodeAt(i + 1), 0x85ebca6b);
-      h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-      h ^= h >>> 16;
-      var a = h & 0xffff;
-      var b = (h >>> 16) & 0xffff;
-      bloom[a >>> 5] |= 1 << (a & 31);
-      bloom[b >>> 5] |= 1 << (b & 31);
+      var key = bigramKey(text.charCodeAt(i), text.charCodeAt(i + 1));
+      if (seen[key]) continue;
+      seen[key] = 1;
+      keys.push(key);
     }
+    return keys;
   }
 
-  function textBloomHas(bloom, text) {
-    for (var i = 0; i + 1 < text.length; i += 1) {
-      var h = Math.imul(text.charCodeAt(i), 0x9e3779b1) ^ Math.imul(text.charCodeAt(i + 1), 0x85ebca6b);
-      h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-      h ^= h >>> 16;
-      var a = h & 0xffff;
-      var b = (h >>> 16) & 0xffff;
-      if (!(bloom[a >>> 5] & (1 << (a & 31)))) return false;
-      if (!(bloom[b >>> 5] & (1 << (b & 31)))) return false;
+  function gramKeysOfDoc(doc) {
+    var out = [];
+    var seen = Object.create(null);
+    for (var f = 0; f < doc.fieldList.length; f += 1) {
+      var field = doc.fieldList[f];
+      var keys = gramKeysOfText(field.norm);
+      for (var k = 0; k < keys.length; k += 1) {
+        if (seen[keys[k]]) continue;
+        seen[keys[k]] = 1;
+        out.push(keys[k]);
+      }
     }
-    return true;
+    return out;
   }
 
-  function charBloomAdd(bloom, text) {
-    for (var i = 0; i < text.length; i += 1) {
-      var code = text.charCodeAt(i);
-      var h = Math.imul(code + 1, 0x9e3779b1) >>> 0;
-      var a = h & (CHAR_BLOOM_BITS - 1);
-      var b = (h >>> 13) & (CHAR_BLOOM_BITS - 1);
-      bloom[a >>> 5] |= 1 << (a & 31);
-      bloom[b >>> 5] |= 1 << (b & 31);
-    }
-  }
-
-  function charBloomHas(bloom, text) {
-    if (!text) return true;
-    var code = text.charCodeAt(0);
-    var h = Math.imul(code + 1, 0x9e3779b1) >>> 0;
-    var a = h & (CHAR_BLOOM_BITS - 1);
-    var b = (h >>> 13) & (CHAR_BLOOM_BITS - 1);
-    return !!(bloom[a >>> 5] & (1 << (a & 31))) && !!(bloom[b >>> 5] & (1 << (b & 31)));
+  function termGramKeys(term) {
+    if (term.gramKeys) return term.gramKeys;
+    term.gramKeys = term.text.length >= 2 ? gramKeysOfText(term.text) : [];
+    return term.gramKeys;
   }
 
   /* ---------------- 字段与结构化内容 ---------------- */
@@ -568,15 +558,13 @@
     }
 
     var list = [];
-    var textBloom = new Uint32Array(TEXT_BLOOM_BITS / 32);
-    var charBloom = new Uint32Array(CHAR_BLOOM_BITS / 32);
     var totalChars = 0;
     // 先把原始字段收集成表：拼音投影要从它们身上生成
     for (var sk in fields) {
       if (!Object.prototype.hasOwnProperty.call(fields, sk)) continue;
       list.push(fields[sk]);
     }
-    // 拼音投影进字段表：这样 Bloom 与非严格匹配都自动覆盖它，不需要另建一套索引。
+    // 拼音投影进字段表：这样倒排与非严格匹配都自动覆盖它，不需要另建一套索引。
     // 只由汉字生成，纯英文记录不会多出一份重复文本。
     var pyText = "";
     var pyInit = "";
@@ -595,14 +583,9 @@
       var field = fields[key];
       list.push(field);
       totalChars += field.norm.length;
-      textBloomAdd(textBloom, field.norm);
-      charBloomAdd(charBloom, field.norm);
     }
-    // 很短的内容不值得付出位图查询成本，直接让候选通过（扫描本身已经足够便宜）
     doc.fields = fields;
     doc.fieldList = list;
-    doc.textBloom = totalChars >= 64 ? textBloom : null;
-    doc.charBloom = totalChars >= 8 ? charBloom : null;
     doc.textChars = totalChars;
     doc.hasBody = !!hasBody;
     doc.bodySig = hasBody ? bodySignature(item, src) : "";
@@ -612,13 +595,12 @@
     return doc;
   }
 
-  function createDoc(item) {
+  function createDoc(item, uid) {
     return {
       item: item,
+      uid: uid,
       fields: {},
       fieldList: [],
-      textBloom: null,
-      charBloom: null,
       textChars: 0,
       hasBody: false,
       bodySig: "",
@@ -1380,23 +1362,13 @@
     };
   }
 
-  function bloomRejects(doc, terms) {
-    if (!doc.textBloom) return false;
-    for (var i = 0; i < terms.length; i += 1) {
-      var term = terms[i];
-      if (term.text.length >= 2) {
-        if (!textBloomHas(doc.textBloom, term.text)) return true;
-      } else if (doc.charBloom && !charBloomHas(doc.charBloom, term.text)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   /* ---------------- 引擎 ---------------- */
 
   function create() {
     var docs = Object.create(null);
+    // 双字 → 文档 uid 升序列表。uid 只在本引擎内有效，删掉的文档在 uidDocs 里置空。
+    var postings = new Map();
+    var uidDocs = [];
     var docVersion = 0;
     var cacheKey = null;
     var cacheVersion = -1;
@@ -1408,10 +1380,112 @@
       cacheResult = null;
     }
 
+    function newDoc(item) {
+      var uid = uidDocs.length;
+      var doc = createDoc(item, uid);
+      uidDocs.push(doc);
+      return doc;
+    }
+
+    function postingAdd(key, uid) {
+      var list = postings.get(key);
+      if (!list) {
+        postings.set(key, [uid]);
+        return;
+      }
+      var lo = 0;
+      var hi = list.length - 1;
+      while (lo <= hi) {
+        var mid = (lo + hi) >> 1;
+        if (list[mid] === uid) return;
+        if (list[mid] < uid) lo = mid + 1;
+        else hi = mid - 1;
+      }
+      list.splice(lo, 0, uid);
+    }
+
+    function postingHas(key, uid) {
+      var list = postings.get(key);
+      if (!list) return false;
+      var lo = 0;
+      var hi = list.length - 1;
+      while (lo <= hi) {
+        var mid = (lo + hi) >> 1;
+        if (list[mid] === uid) return true;
+        if (list[mid] < uid) lo = mid + 1;
+        else hi = mid - 1;
+      }
+      return false;
+    }
+
+    function postingRemove(key, uid) {
+      var list = postings.get(key);
+      if (!list) return;
+      var lo = 0;
+      var hi = list.length - 1;
+      while (lo <= hi) {
+        var mid = (lo + hi) >> 1;
+        if (list[mid] === uid) {
+          list.splice(mid, 1);
+          if (!list.length) postings.delete(key);
+          return;
+        }
+        if (list[mid] < uid) lo = mid + 1;
+        else hi = mid - 1;
+      }
+    }
+
+    function addGrams(doc) {
+      var keys = gramKeysOfDoc(doc);
+      for (var i = 0; i < keys.length; i += 1) postingAdd(keys[i], doc.uid);
+    }
+
+    function dropGrams(doc) {
+      // 旧字段还在时算一遍旧键：不把键留在内存里（每条记录几千个）
+      var keys = gramKeysOfDoc(doc);
+      for (var i = 0; i < keys.length; i += 1) postingRemove(keys[i], doc.uid);
+    }
+
+    /* 重建文档的统一入口：先摘掉旧的双字，再重建字段，最后登记新双字。
+       直接调 rebuild 会留下旧词条，变成「幽灵命中」。 */
+    function rebuildDoc(doc, src, hasBody) {
+      dropGrams(doc);
+      rebuild(doc, src, hasBody);
+      addGrams(doc);
+    }
+
+    function candidatesFor(terms) {
+      var base = null;
+      for (var t = 0; t < terms.length; t += 1) {
+        var keys = termGramKeys(terms[t]);
+        for (var k = 0; k < keys.length; k += 1) {
+          var list = postings.get(keys[k]);
+          if (!list) return [];
+          if (!base || list.length < base.length) base = list;
+        }
+      }
+      if (!base) return null; // 单字查询：交给上层全量扫
+      var out = [];
+      for (var i = 0; i < base.length; i += 1) {
+        var uid = base[i];
+        var doc = uidDocs[uid];
+        if (!doc) continue;
+        var ok = true;
+        for (var t2 = 0; t2 < terms.length && ok; t2 += 1) {
+          var ks = termGramKeys(terms[t2]);
+          for (var k2 = 0; k2 < ks.length; k2 += 1) {
+            if (!postingHas(ks[k2], uid)) { ok = false; break; }
+          }
+        }
+        if (ok) out.push(doc);
+      }
+      return out;
+    }
+
     function hydrate(item, body) {
       if (!item || !item.id) return null;
       var id = String(item.id);
-      var doc = docs[id] || (docs[id] = createDoc(item));
+      var doc = docs[id] || (docs[id] = newDoc(item));
       doc.item = item;
       var src = body;
       var hasBody = false;
@@ -1422,7 +1496,7 @@
         hasBody = true;
       }
       if (!hasBody) return null;
-      rebuild(doc, src, true);
+      rebuildDoc(doc, src, true);
       bump();
       return doc;
     }
@@ -1440,6 +1514,8 @@
     function remove(id) {
       var key = String(id);
       if (!docs[key]) return false;
+      dropGrams(docs[key]);
+      uidDocs[docs[key].uid] = null;
       delete docs[key];
       bump();
       return true;
@@ -1447,6 +1523,8 @@
 
     function clear() {
       docs = Object.create(null);
+      postings = new Map();
+      uidDocs = [];
       bump();
     }
 
@@ -1464,9 +1542,9 @@
         var doc = docs[id];
         var bodyReady = item.input !== undefined;
         if (!doc) {
-          doc = docs[id] = createDoc(item);
-          if (bodyReady) rebuild(doc, item, true);
-          else rebuild(doc, null, false);
+          doc = docs[id] = newDoc(item);
+          if (bodyReady) rebuildDoc(doc, item, true);
+          else rebuildDoc(doc, null, false);
           bump();
         } else {
           doc.item = item;
@@ -1474,19 +1552,19 @@
           if (bodyReady) {
             var sig = bodySignature(item, item);
             if (!doc.hasBody || sig !== doc.bodySig) {
-              rebuild(doc, item, true);
+              rebuildDoc(doc, item, true);
               bump();
             } else if (metaChanged) {
-              rebuild(doc, item, true);
+              rebuildDoc(doc, item, true);
               bump();
             }
           } else if (metaChanged && doc.hasBody) {
             // 索引项改了标题/工具名，但正文不在手上：先退回元数据检索，
             // 正文由后台重新读取（不拿旧正文配上新标题继续搜）。
-            rebuild(doc, null, false);
+            rebuildDoc(doc, null, false);
             bump();
           } else if (metaChanged) {
-            rebuild(doc, null, false);
+            rebuildDoc(doc, null, false);
             bump();
           }
         }
@@ -1500,6 +1578,8 @@
       for (var key in docs) {
         if (!Object.prototype.hasOwnProperty.call(docs, key)) continue;
         if (!seen[key]) {
+          dropGrams(docs[key]);
+          uidDocs[docs[key].uid] = null;
           delete docs[key];
           removed = true;
         }
@@ -1514,7 +1594,7 @@
         var doc = docs[key];
         // 正文可能已被对端改写：这里无条件退回元数据，等 sync / 后台分片重新读；
         // 不能拿旧的内存正文续上（否则镜像同步后搜索还在用旧内容）。
-        rebuild(doc, null, false);
+        rebuildDoc(doc, null, false);
       }
       bump();
       return pending();
@@ -1557,13 +1637,19 @@
       var looseMatches = [];
       var matched = Object.create(null);
       var limit = options && options.limit ? Math.max(1, Math.min(MAX_RESULTS, options.limit | 0)) : MAX_RESULTS;
-      var ids = [];
 
       if (terms.length) {
-        for (var id in docs) {
-          if (!Object.prototype.hasOwnProperty.call(docs, id)) continue;
-          var doc = docs[id];
-          if (bloomRejects(doc, terms)) continue;
+        // 精确阶段只需要看倒排表给出的候选；单字查询没有双字可查，退回全库扫。
+        var candidates = candidatesFor(terms);
+        if (!candidates) {
+          candidates = [];
+          for (var allId in docs) {
+            if (!Object.prototype.hasOwnProperty.call(docs, allId)) continue;
+            candidates.push(docs[allId]);
+          }
+        }
+        for (var ci = 0; ci < candidates.length; ci += 1) {
+          var doc = candidates[ci];
           var recs = [];
           var ok = true;
           for (var t = 0; t < terms.length; t += 1) {
@@ -1575,7 +1661,7 @@
             recs.push(rec);
           }
           if (!ok) continue;
-          matched[id] = 1;
+          matched[doc.uid] = 1;
           exactMatches.push(makeMatch(doc, recs, false));
         }
 
@@ -1584,8 +1670,10 @@
         // 结果按「精确 / 相关」分组展示，低置信结果不会抢精确结果的位置。
         if (hasLoosePotential(terms)) {
           for (var looseId in docs) {
-            if (!Object.prototype.hasOwnProperty.call(docs, looseId) || matched[looseId]) continue;
+            if (!Object.prototype.hasOwnProperty.call(docs, looseId)) continue;
             var looseDoc = docs[looseId];
+            // 精确阶段已经命中的记录不再重复入场
+            if (matched[looseDoc.uid]) continue;
             var looseRecs = [];
             var looseOk = true;
             for (var lt = 0; lt < terms.length; lt += 1) {
