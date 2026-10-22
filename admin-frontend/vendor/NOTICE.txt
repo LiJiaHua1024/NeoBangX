@@ -1,10 +1,10 @@
 # 管理端 vendor 说明
 
-`marked-15.0.12.min.js`、`dompurify-3.4.12.min.js`、`alpinejs-3.15.12.min.js`
+`marked-15.0.12.min.js`、`dompurify-3.4.17.min.js`、`alpinejs-3.15.12.min.js`
 是从主站 `frontend/vendor/` 同版本复制的 npm 包原始文件，未改代码。
 
 - marked 15.0.12 — MIT
-- DOMPurify 3.4.12 — MPL-2.0 OR Apache-2.0
+- DOMPurify 3.4.17 — MPL-2.0 OR Apache-2.0
 - Alpine.js 3.15.12 — MIT
 
 许可证全文见 `frontend/vendor/licenses/`。升级时与主站同步替换即可；

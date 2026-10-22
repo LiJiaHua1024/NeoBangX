@@ -130,7 +130,7 @@ def test_index_html_stale_etag_returns_full_body(client):
 def test_woff2_content_type_is_font():
     """Windows 的 mimetypes 会把 woff2 识别成 octet-stream，中间件要兜底成 font/woff2。"""
     client = TestClient(main_app)
-    r = client.get("/static/vendor/katex-0.16.47/fonts/KaTeX_Main-Regular.woff2")
+    r = client.get("/static/vendor/katex-0.18.11/fonts/KaTeX_Main-Regular.woff2")
     assert r.status_code == 200
     assert r.headers["content-type"] == "font/woff2"
 

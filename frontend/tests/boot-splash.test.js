@@ -78,7 +78,7 @@ test("thumbmark、镜像三件套、click-fx、渲染与检索内核都不占首
     "/static/nbx-mirror-peer.js",
     "/static/click-fx.js",
     "/static/vendor/marked-15.0.12.min.js",
-    "/static/vendor/dompurify-3.4.12.min.js",
+    "/static/vendor/dompurify-3.4.17.min.js",
     "/static/nbx-history-search.js",
   ]) {
     const name = url.slice(url.lastIndexOf("/") + 1);

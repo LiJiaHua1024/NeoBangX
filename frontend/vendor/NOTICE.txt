@@ -28,15 +28,15 @@
 | 文件 | 版本 | 许可证 | 用途 |
 |------|------|--------|------|
 | `marked-15.0.12.min.js` | 15.0.12 | MIT | Markdown 渲染 |
-| `dompurify-3.4.12.min.js` | 3.4.12 | MPL-2.0 OR Apache-2.0 | HTML 消毒 |
+| `dompurify-3.4.17.min.js` | 3.4.17 | MPL-2.0 OR Apache-2.0 | HTML 消毒 |
 | `alpinejs-3.15.12.min.js` | 3.15.12 | MIT | 前端响应式框架 |
 | `alpine-collapse-3.15.12.min.js` | 3.15.12 | MIT | Alpine x-collapse 插件 |
-| `marked-katex-extension-5.1.4.umd.js` | 5.1.4 | MIT | marked 的 KaTeX 扩展（必须后于 katex 加载） |
-| `mammoth-1.8.0.browser.min.js` | 1.8.0 | BSD-2-Clause | .docx 本地解析（按需加载） |
+| `marked-katex-extension-5.1.13.umd.js` | 5.1.13 | MIT | marked 的 KaTeX 扩展（必须后于 katex 加载） |
+| `mammoth-1.13.0.browser.min.js` | 1.13.0 | BSD-2-Clause | .docx 本地解析（按需加载） |
 | `html-docx-0.3.1.js` | 0.3.1 | MIT | Word 导出（按需加载） |
-| `katex-0.16.47/katex.min.js` | 0.16.47 | MIT | 数学公式渲染（首屏后按需加载） |
-| `katex-0.16.47/katex.min.css` | 0.16.47 | MIT | KaTeX 样式 |
-| `katex-0.16.47/fonts/*.woff2` | 0.16.47 | MIT | KaTeX 字体；只保留 woff2，现代浏览器不会回退到 woff/ttf |
+| `katex-0.18.11/katex.min.js` | 0.18.11 | MIT | 数学公式渲染（首屏后按需加载） |
+| `katex-0.18.11/katex.min.css` | 0.18.11 | MIT | KaTeX 样式 |
+| `katex-0.18.11/fonts/*.woff2` | 0.18.11 | MIT | KaTeX 字体；只保留 woff2，现代浏览器不会回退到 woff/ttf |
 
 来源均为 npm 官方包（`npm pack <name>@<version>`）。升级步骤：换掉对应文件并同步文件名里的版本号，再改 `script.js` 的 `NBX_ASSET_URLS` / `index.html` 的引用。
 

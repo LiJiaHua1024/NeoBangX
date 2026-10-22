@@ -1286,16 +1286,16 @@ function describeError(e, fallbackText = "操作失败，请稍后重试") {
    正常路径不再依赖 jsDelivr（thumbmark 仅在本文件缺失时有一次 CDN 兜底）。
    加载失败只影响对应功能，不会拖垮整页。 */
 const NBX_ASSET_URLS = {
-  katexJs: "/static/vendor/katex-0.16.47/katex.min.js",
-  katexCss: "/static/vendor/katex-0.16.47/katex.min.css",
-  markedKatex: "/static/vendor/marked-katex-extension-5.1.4.umd.js",
-  mammoth: "/static/vendor/mammoth-1.8.0.browser.min.js",
+  katexJs: "/static/vendor/katex-0.18.11/katex.min.js",
+  katexCss: "/static/vendor/katex-0.18.11/katex.min.css",
+  markedKatex: "/static/vendor/marked-katex-extension-5.1.13.umd.js",
+  mammoth: "/static/vendor/mammoth-1.13.0.browser.min.js",
   htmlDocx: "/static/vendor/html-docx-0.3.1.js",
   qrcode: "/static/vendor/qrcode-generator-1.4.4.js",
   vpPrint: "/static/vp-print.js",
   // 渲染与检索内核：同样不占首屏关键步骤，首屏后的空闲或首次用到时才拉
   marked: "/static/vendor/marked-15.0.12.min.js",
-  dompurify: "/static/vendor/dompurify-3.4.12.min.js",
+  dompurify: "/static/vendor/dompurify-3.4.17.min.js",
   historySearch: "/static/nbx-history-search.js",
   // 汉字→拼音表（构建产物，见 tools/gen-pinyin-data.mjs）。必须早于检索内核加载：
   // 内核在建索引时就要用它做拼音投影。
@@ -11398,7 +11398,7 @@ function nbx() {
     
       // 含公式时才引入 KaTeX 字体样式（与页面同版本）
       const katexLink = content.includes("class=\"katex") 
-        ? '<link rel="stylesheet" href="/static/vendor/katex-0.16.47/katex.min.css">'
+        ? '<link rel="stylesheet" href="/static/vendor/katex-0.18.11/katex.min.css">'
         : "";
       const doc = frame.contentDocument;
       doc.open();
