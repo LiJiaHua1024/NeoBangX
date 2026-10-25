@@ -32,10 +32,10 @@
 ## 自动化与性能
 
 - `browser-report.json`：最近一次 `node tools/test-claude-agent-browser.mjs` 的 15 组场景全部通过，0 个浏览器错误。
-- `performance.json`：200 条轨迹 + 30 万字符成果、12,428 个 DOM 节点下，40 次工作区页签切换 p95 为 110 ms、最大 113 ms（Ubuntu 22.04，Chromium 141 无头软件渲染，无 GPU）。
+- `performance.json`：200 条轨迹 + 30 万字符成果、12,428 个 DOM 节点下，40 次工作区页签切换 p95 为 104 ms、最大 138 ms（Ubuntu 22.04，Chromium 141 无头软件渲染，无 GPU）。
 - 同一场景下 200 条步骤完整保留，30 万字符成果导出 SHA-256 与种子值一致，分页单页正文 ≤ 13,000 字符。
 - 20 万字符以上思考：折叠计数、展开全文、阅读器搜索、下载完整文本；30 万字符成果：分页、导出、原文末行保留。
-- 交互视频与 trace 由验收脚本写在 `.debug/claude-port/<run>/video/` 与 `trace.zip`，不提交到仓库。最近一次 trace 含 1,295 个 screencast 帧、599 个 DOM 快照、264 组动作、0 个 console error；已抽取帧与快照检查等待行动画、输入卡片、阅读器、冲突态与长文滚动。
+- 交互视频与 trace 由验收脚本写在 `.debug/claude-port/<run>/video/` 与 `trace.zip`，不提交到仓库。最近一次 trace 含 1,276 个 screencast 帧、609 个 DOM 快照、269 组动作、0 个 console error；已抽取帧与快照检查等待行动画、输入卡片、阅读器、冲突态与长文滚动。
 
 ## 启动项目
 

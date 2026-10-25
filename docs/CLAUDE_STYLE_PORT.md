@@ -193,12 +193,12 @@
 
 ## 9 验收证据
 
-最近一次完整验收：`node tools/test-claude-agent-browser.mjs`，15 组场景全部通过，0 个浏览器错误（`.debug/claude-port/2026-10-25T15-51-51-581Z/`）。提交到仓库的证据在 `docs/evidence/claude-port/`：
+最近一次完整验收：`node tools/test-claude-agent-browser.mjs`，15 组场景全部通过，0 个浏览器错误（`.debug/claude-port/2026-10-25T16-10-49-667Z/`）。提交到仓库的证据在 `docs/evidence/claude-port/`：
 
-- 15 组场景：登录、双主题持久化、空目标执行与刷新恢复、20 万字符以上思考、长成果折叠、审阅忽略、版本编辑/比较/采用/导出、工作区配置、补充要求刷新恢复、失败/停止、跨窗口冲突、9 种视口、1440×1240 双主题、200 步 + 30 万字符、减少动效。
-- 200 条轨迹 + 30 万字符成果、12,428 个 DOM 节点时，40 次页签切换 p95 110 ms、最大 113 ms（软件渲染，无 GPU）。
+- 15 组场景：登录、双主题持久化、空目标执行与刷新恢复、20 万字符以上思考、长成果折叠、审阅忽略、版本编辑/比较/采用/导出、工作区配置、补充要求刷新恢复、失败/停止、跨窗口冲突、10 种视口、1440×1240 双主题、200 步 + 30 万字符、减少动效。
+- 200 条轨迹 + 30 万字符成果、12,428 个 DOM 节点时，40 次页签切换 p95 104 ms、最大 138 ms（软件渲染，无 GPU）。
 - 30 万字符导出 SHA-256 与测试种子一致；20 万字符以上思考展开 715 ms 内完成，阅读器搜索与下载全文正常。
-- 录屏与 trace 在 `.debug/claude-port/<run>/video/` 与 `trace.zip`（未提交）。最近一次 trace 含 1,295 个 screencast 帧、599 个 DOM 快照、264 组动作，0 个 console error；已抽取录屏帧与 trace 快照检查等待行动画、输入卡片、阅读器、冲突态与长文滚动。
+- 录屏与 trace 在 `.debug/claude-port/<run>/video/` 与 `trace.zip`（未提交）。最近一次 trace 含 1,276 个 screencast 帧、609 个 DOM 快照、269 组动作，0 个 console error；已抽取录屏帧与 trace 快照检查等待行动画、输入卡片、阅读器、冲突态与长文滚动。
 - 对照图：`docs/evidence/claude-port/compare-{light,dark}.png`，上游固定提交与本次 1440×1240 对话并排。
 - 逐项截图与说明：`docs/evidence/claude-port/README.md`。
 
@@ -233,7 +233,7 @@ Playwright 浏览器：`~/.cache/ms-playwright/chromium-1194`。系统缺少的 
 
 ## 12 待联调与限制
 
-- 软件渲染环境（SwiftShader，无独立显卡；Chromium 141 headless）：滚动帧率、长列表合成层数量与真实硬件不同；不冒充硬件加速结果。验收 p95 110 ms / 最大 113 ms 是该环境下的数字。
+- 软件渲染环境（SwiftShader，无独立显卡；Chromium 141 headless）：滚动帧率、长列表合成层数量与真实硬件不同；不冒充硬件加速结果。验收 p95 104 ms、最大 138 ms 是该环境下的数字。
 - 真实模型 API、真实文件解析、真机触控和 iOS 软键盘未在本服务器验证；假模型只覆盖接口契约、流式分块与错误/停止路径，不评估真实模型质量或真实文档解析。IE/旧版 Safari 未验证。
 - 上游 `smoke` 的两个失败项已记录，不作为本移植的通过依据。
 - Anthropic 字体只作个人使用；商业分发前需替换。
