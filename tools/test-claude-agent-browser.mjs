@@ -1,0 +1,649 @@
+// Claude 风格 Agent 工作台浏览器验收。
+// 启动隔离后端（假模型、临时数据库），用 Playwright 无头 Chromium 覆盖双主题、
+// 多设备、流式跟随、长思考/长成果、200 步、错误/停止/恢复与现有业务。
+//
+// 用法：node tools/test-claude-agent-browser.mjs
+// 可选：BROWSER_PATH=/path/to/chrome、KEEP_EVIDENCE=1、NBX_TEST_PORT=8790
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile, copyFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
+import path from "node:path";
+import assert from "node:assert/strict";
+
+const ROOT = path.resolve(import.meta.dirname, "..");
+const STAMP = new Date().toISOString().replace(/[:.]/g, "-");
+const OUT = path.join(ROOT, ".debug", "claude-port", STAMP);
+const VIDEO = path.join(OUT, "video");
+const SHOTS = path.join(OUT, "shots");
+await mkdir(VIDEO, { recursive: true });
+await mkdir(SHOTS, { recursive: true });
+
+const libPath = process.env.PW_LIBS ||
+  path.join(homedir(), ".local", "pwlibs", "usr", "lib", "x86_64-linux-gnu");
+if (existsSync(libPath)) {
+  process.env.LD_LIBRARY_PATH = [libPath, process.env.LD_LIBRARY_PATH]
+    .filter(Boolean)
+    .join(":");
+}
+
+const { chromium } = await import("playwright");
+
+const python = existsSync(path.join(ROOT, "backend", ".venv", "bin", "python"))
+  ? path.join(ROOT, "backend", ".venv", "bin", "python")
+  : "python3";
+const dataDir = await mkdtemp(path.join(tmpdir(), "nbx-claude-port-"));
+let port = Number(process.env.NBX_TEST_PORT || 8790 + (process.pid % 80));
+const BASE = `http://127.0.0.1:${port}`;
+const report = { passed: [], failed: [], startedAt: new Date().toISOString() };
+const errors = [];
+const logLines = [];
+
+async function waitForServer(url, timeout = 30000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`服务未启动：${url}`);
+}
+
+const server = spawn(python, ["tests/workspace_browser_server.py"], {
+  cwd: path.join(ROOT, "backend"),
+  env: {
+    ...process.env,
+    NBX_TEST_DATA_DIR: dataDir,
+    NBX_TEST_PORT: String(port),
+    LITELLM_LOCAL_MODEL_COST_MAP: "true",
+    PYTHONUNBUFFERED: "1",
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+server.stdout.on("data", (chunk) => logLines.push(chunk.toString()));
+server.stderr.on("data", (chunk) => logLines.push(chunk.toString()));
+
+function stopServer() {
+  if (!server.killed) server.kill("SIGTERM");
+}
+process.on("exit", stopServer);
+process.on("SIGINT", () => {
+  stopServer();
+  process.exit(130);
+});
+
+async function checked(name, run) {
+  try {
+    await run();
+    report.passed.push(name);
+    console.log("PASS", name);
+  } catch (error) {
+    report.failed.push({ name, error: error.stack || String(error) });
+    console.error("FAIL", name, error.message);
+    throw error;
+  }
+}
+
+let browser;
+let context;
+let page;
+let firstTaskUrl = "";
+
+try {
+  await waitForServer(`${BASE}/agent`);
+  browser = await chromium.launch({
+    headless: true,
+    ...(process.env.BROWSER_PATH
+      ? { executablePath: process.env.BROWSER_PATH }
+      : {}),
+  });
+  context = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+    acceptDownloads: true,
+    recordVideo: { dir: VIDEO, size: { width: 1440, height: 1000 } },
+  });
+  await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+  page = await context.newPage();
+  page.on("pageerror", (error) => {
+    errors.push(error.message);
+    console.log("PAGEERROR", error.message);
+  });
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    const text = message.text();
+    if (text.includes("Failed to fetch")) return;
+    errors.push(text);
+    console.log("CONSOLE", text);
+  });
+  const shots = (name) => path.join(SHOTS, name);
+
+  await checked("登录并建立空白任务", async () => {
+    await page.goto(`${BASE}/agent`, { waitUntil: "networkidle" });
+    await page.locator("#login-code").waitFor({ state: "visible" });
+    await page.locator("#login-code").fill("WORKSPACE-TEST");
+    await page.locator("#modal-actions button").click();
+    await page.waitForURL(/\/agent\/tasks\//, { timeout: 20000 });
+    await page.waitForFunction(
+      () => document.querySelector("#save-state")?.textContent === "已保存",
+      {},
+      { timeout: 20000 },
+    );
+    await page.locator("#new-task").click();
+    await page.waitForTimeout(800);
+    assert(await page.locator("#empty").isVisible(), "空态未显示");
+    assert.equal(await page.locator("#composer-seat").getAttribute("data-hero"), "true");
+    firstTaskUrl = page.url();
+    await page.screenshot({ path: shots("01-empty-light.png") });
+  });
+
+  await checked("双主题切换与持久化", async () => {
+    await page.locator("#theme-toggle").click();
+    await page.locator("[data-theme-pref=dark]").click();
+    await page.waitForFunction(
+      () => document.documentElement.dataset.agentTheme === "dark",
+    );
+    await page.screenshot({ path: shots("02-empty-dark.png") });
+    await page.locator("#theme-toggle").click();
+    await page.locator("[data-theme-pref=light]").click();
+    await page.waitForFunction(
+      () => document.documentElement.dataset.agentTheme === "light",
+    );
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(700);
+    assert.equal(
+      await page.evaluate(() => document.documentElement.dataset.agentTheme),
+      "light",
+    );
+  });
+
+  await checked("空目标直接执行、流式跟随、刷新恢复", async () => {
+    await page.locator("#goal").fill("");
+    await page.locator("#message").fill("");
+    await page.waitForTimeout(900);
+    await page.locator("#send").click();
+    await page.waitForTimeout(1800);
+    assert.equal(await page.locator("#task-status").textContent(), "执行中");
+    assert(await page.locator(".waiting").count(), "缺少等待行");
+    await page.screenshot({ path: shots("03-streaming-light.png") });
+    await page.waitForFunction(
+      () => document.querySelectorAll(".reasoning").length > 0,
+      {},
+      { timeout: 15000 },
+    );
+    await page.waitForTimeout(900);
+    const height = await page.locator("#transcript").evaluate((el) => el.scrollHeight);
+    assert(height > 500, "对话没有形成可滚动内容");
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForFunction(
+      () => document.querySelector("#task-status")?.textContent === "已完成",
+      {},
+      { timeout: 90000 },
+    );
+    await page.waitForFunction(
+      () => document.querySelectorAll(".result-card").length > 0,
+      {},
+      { timeout: 30000 },
+    );
+    assert(await page.locator(".assistant").count() >= 2);
+    assert(await page.locator(".tool-call").count() >= 2);
+    assert(
+      (await page.locator(".turn-start").count()) >= 1,
+      "空目标执行缺少开始状态行",
+    );
+    await page.screenshot({ path: shots("04-conversation-light.png") });
+  });
+
+  await checked("二十万字符思考：展开、全文搜索、下载", async () => {
+    const countText = await page.locator(".reasoning-count").first().textContent();
+    const count = Number(countText.replace(/[^\d]/g, ""));
+    assert(count >= 200000, `长思考不足：${countText}`);
+    await page.locator(".reasoning-head").first().click();
+    await page.waitForFunction(
+      () => (document.querySelector(".reasoning-text")?.textContent.length || 0) > 200000,
+      {},
+      { timeout: 30000 },
+    );
+    const loaded = await page.locator(".reasoning-text").first().evaluate(
+      (el) => el.textContent.length,
+    );
+    assert(loaded >= count, "思考正文读取不完整");
+    await page.screenshot({ path: shots("05-reasoning-expanded.png") });
+    await page.locator("[data-full]").first().click();
+    await page.waitForFunction(
+      (n) => document.querySelector(".reader-meta")?.textContent.includes(n),
+      count.toLocaleString("zh-CN"),
+      { timeout: 30000 },
+    );
+    const meta = await page.locator(".reader-meta").textContent();
+    assert(meta.includes(count.toLocaleString("zh-CN")), "阅读器字符数不一致");
+    await page.locator(".reader-search input").fill("浏览器性能");
+    await page.locator("[data-a=find]").click();
+    await page.locator(".reader-window mark").waitFor({ state: "visible" });
+    const download = page.waitForEvent("download");
+    await page.locator("[data-a=download]").click();
+    const file = await download;
+    await file.saveAs(path.join(OUT, "reasoning.txt"));
+    const downloaded = await readFile(path.join(OUT, "reasoning.txt"), "utf8");
+    assert.equal(downloaded.length, count, "思考下载不完整");
+    await page.locator("#modal-close").click();
+  });
+
+  await checked("长成果折叠、展开保留全文", async () => {
+    await page.locator(".message-fold-toggle").first().click();
+    await page.waitForFunction(
+      () => {
+        const blocks = [...document.querySelectorAll(".assistant-block .md")];
+        return blocks.some((el) => el.textContent.includes("最终内容 END"));
+      },
+      {},
+      { timeout: 30000 },
+    );
+    const texts = await page
+      .locator(".assistant-block")
+      .evaluateAll((blocks) => blocks.map((block) => block.textContent));
+    assert(texts.some((text) => text.includes("最终内容 END")), "长成果末尾丢失");
+    assert(
+      Math.max(...texts.map((text) => text.length)) > 30000,
+      "长成果展开后长度不足",
+    );
+    await page.screenshot({ path: shots("06-long-output-expanded.png") });
+  });
+
+  await checked("审阅意见、忽略与再次打开", async () => {
+    const review = page.locator(".tool-call").filter({ hasText: "审阅" }).first();
+    await review.click();
+    await page.locator("#review-issues .aw-issue").first().waitFor();
+    await page.locator("#review-issues input").first().check();
+    await page.getByRole("button", { name: "忽略选中意见" }).click();
+    await page.locator("#modal").waitFor({ state: "hidden" });
+    await review.click();
+    await page.getByText(/已忽略/).waitFor();
+    await page.locator("#modal-close").click();
+  });
+
+  await checked("成果版本编辑、比较、采用、导出", async () => {
+    await page.locator(".result-card").first().click();
+    await page.waitForTimeout(700);
+    assert(await page.locator("[data-tab=results]").getAttribute("aria-current") !== null);
+    await page.locator("#versions-list .version-row").last().click();
+    await page.waitForTimeout(600);
+    await page.locator("#edit-version").click();
+    await page.locator("#dialog-value").fill("# 人工修订\n\n保留题目原文与全部材料。");
+    await page.locator("#modal-actions button").last().click();
+    await page.waitForFunction(
+      () => document.querySelectorAll("#versions-list .version-row").length >= 2,
+      {},
+      { timeout: 20000 },
+    );
+    await page.locator("#compare-version").click();
+    await page.locator(".diff-view").waitFor();
+    const diffText = await page.locator(".diff-view").textContent();
+    assert(diffText.includes("原版") && diffText.includes("修改版"), "差异块缺失");
+    await page.locator("#modal-close").click();
+    if (await page.locator("#adopt").isEnabled()) await page.locator("#adopt").click();
+    await page.waitForTimeout(500);
+    assert(await page.locator("#document-adopted").isVisible());
+    const download = page.waitForEvent("download");
+    await page.locator("#export-md").click();
+    const file = await download;
+    await file.saveAs(path.join(OUT, "version.md"));
+    assert((await readFile(path.join(OUT, "version.md"))).length > 0);
+  });
+
+  await checked("工作区：提示词、材料、工具、教学工具、模板", async () => {
+    await page.locator("#new-task").click();
+    await page.waitForTimeout(700);
+    await page.locator("[data-tab=prompt]").click();
+    await page.locator("#prompt").fill("自定义提示词：只处理阅读材料，保留原文。");
+    await page.waitForTimeout(1100);
+    await page.waitForFunction(
+      () => document.querySelector("#save-state")?.textContent === "已保存",
+    );
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(900);
+    assert(
+      (await page.locator("#prompt").inputValue()).includes("自定义提示词"),
+      "提示词未保存",
+    );
+    await page.locator("[data-tab=materials]").click();
+    await page.locator("#upload").setInputFiles({
+      name: "试卷.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("第一题原文\n第二题原文\n听力原文未提供"),
+    });
+    await page.waitForFunction(
+      () => document.querySelectorAll("#materials-list .material-row").length === 1,
+      {},
+      { timeout: 20000 },
+    );
+    assert.equal(await page.locator("#composer-material-count").textContent(), "1");
+    await page.locator("#composer-card #composer-context .context-chip").first().waitFor();
+    await page.locator("[data-tab=tools]").click();
+    const toggle = page.locator("#tools-list .switch input").first();
+    const before = await toggle.isChecked();
+    await toggle.click();
+    await page.waitForTimeout(900);
+    assert.notEqual(await toggle.isChecked(), before);
+    await page.locator("#teaching-select").selectOption({ index: 0 });
+    await page.locator("#add-teaching").click();
+    await page.locator("#teaching-list .teaching-item").first().waitFor();
+    await page.locator("#teaching-list summary").first().click();
+    await page.locator("#teaching-list textarea").first().fill("只根据阅读材料分析。");
+    await page.waitForTimeout(300);
+    await page.locator("[data-tab=prompt]").click();
+    await page.locator("#template").selectOption({ index: 1 });
+    await page.locator("#modal-actions button").last().click();
+    await page.waitForTimeout(600);
+    assert(await page.locator("#undo-template").isVisible());
+    await page.locator("#undo-template").click();
+    await page.locator("#save-template").click();
+    await page.locator("#dialog-value").fill("验收模板");
+    await page.locator("#modal-actions button").last().click();
+    await page.waitForTimeout(700);
+    await page.locator("#my-library").click();
+    await page.locator("#library .tool-card").first().waitFor();
+    await page.locator("#modal-close").click();
+  });
+
+  await checked("补充要求在刷新后仍是用户消息", async () => {
+    await page.goto(firstTaskUrl, { waitUntil: "networkidle" });
+    await page.waitForTimeout(900);
+    const before = await page.locator(".turn").count();
+    await page.locator("#message").fill("补充：只保留阅读材料");
+    await page.waitForTimeout(700);
+    await page.locator("#send").click();
+    await page.waitForFunction(
+      (n) => document.querySelectorAll(".turn").length > n,
+      before,
+      { timeout: 15000 },
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#task-status")?.textContent === "已完成",
+      {},
+      { timeout: 60000 },
+    );
+    await page.waitForTimeout(900);
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(1100);
+    const bubbles = await page.locator(".user-bubble").allTextContents();
+    assert(
+      bubbles.some((text) => text.includes("补充：只保留阅读材料")),
+      "刷新后补充要求丢失",
+    );
+  });
+
+  await checked("失败与停止状态可读、可恢复", async () => {
+    await page.locator("#new-task").click();
+    await page.waitForTimeout(700);
+    await page.locator("#goal").fill("模拟失败");
+    await page.waitForTimeout(900);
+    await page.locator("#send").click();
+    await page.waitForFunction(
+      () => document.querySelector("#task-status")?.textContent === "失败",
+      {},
+      { timeout: 30000 },
+    );
+    assert((await page.locator(".error-box").first().innerText()).length > 0);
+    await page.screenshot({ path: shots("07-failed.png") });
+    await page.locator("#new-task").click();
+    await page.waitForTimeout(700);
+    await page.locator("#goal").fill("慢速执行");
+    await page.waitForTimeout(900);
+    await page.locator("#send").click();
+    await page.waitForTimeout(2400);
+    await page.locator("#stop").click();
+    await page.waitForFunction(
+      () => document.querySelector("#task-status")?.textContent === "已停止",
+      {},
+      { timeout: 30000 },
+    );
+    await page.waitForTimeout(900);
+    assert((await page.locator(".error-box").last().innerText()).includes("已停止"));
+    await page.screenshot({ path: shots("08-stopped.png") });
+  });
+
+  await checked("跨窗口冲突保留本地输入", async () => {
+    const second = await context.newPage();
+    await second.goto(firstTaskUrl, { waitUntil: "networkidle" });
+    await second.waitForTimeout(900);
+    await second.evaluate(() => {
+      document
+        .querySelector("#prompt")
+        .dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    });
+    await second.locator("#prompt").fill("第二窗口本地草稿，不能丢");
+    await page.goto(firstTaskUrl, { waitUntil: "networkidle" });
+    await page.waitForTimeout(900);
+    await page.locator("#prompt").fill("第一窗口已保存版本");
+    await page.waitForFunction(
+      () => document.querySelector("#save-state")?.textContent === "已保存",
+      {},
+      { timeout: 15000 },
+    );
+    await second.waitForSelector("#conflict:not([hidden])", { timeout: 15000 });
+    assert.equal(
+      await second.locator("#prompt").inputValue(),
+      "第二窗口本地草稿，不能丢",
+    );
+    await second.close({ runBeforeUnload: false });
+  });
+
+  await checked("桌面、平板、手机布局与抽屉", async () => {
+    await page.goto(firstTaskUrl, { waitUntil: "networkidle" });
+    await page.waitForTimeout(900);
+    for (const [width, height, name] of [
+      [1920, 1080, "1920"],
+      [1440, 1000, "1440"],
+      [1366, 768, "1366"],
+      [1280, 800, "1280"],
+      [1024, 768, "1024"],
+      [768, 1024, "768"],
+      [390, 844, "390"],
+      [360, 640, "360"],
+      [844, 390, "844x390"],
+    ]) {
+      await page.setViewportSize({ width, height });
+      await page.waitForTimeout(350);
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > innerWidth,
+      );
+      assert(!overflow, `${name} 横向溢出`);
+      if (width <= 767) {
+        assert(await page.locator(".mobile-switch").isVisible(), `${name} 缺少手机切换`);
+      } else {
+        assert(!(await page.locator(".mobile-switch").isVisible()), `${name} 不应显示手机切换`);
+      }
+      await page.screenshot({ path: shots(`09-layout-${name}.png`) });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(300);
+    await page.locator("#menu").click();
+    await page.waitForTimeout(350);
+    assert(await page.locator("#nav").isVisible());
+    assert(
+      (await page.locator(".mobile-switch").evaluate(
+        (el) => getComputedStyle(el).display,
+      )) === "none",
+      "抽屉打开时切换条未隐藏",
+    );
+    await page.locator("#close-nav").click();
+    await page.waitForTimeout(300);
+    assert.equal(await page.locator("#app").getAttribute("data-sidebar"), "collapsed");
+    await page.locator(".mobile-switch [data-view=work]").click();
+    await page.waitForTimeout(350);
+    assert(await page.locator("#work").isVisible());
+    await page.screenshot({ path: shots("10-mobile-work.png") });
+    await page.locator(".mobile-switch [data-view=chat]").click();
+    await page.waitForTimeout(300);
+    await page.locator(".mobile-switch [data-view=work]").click();
+    await page.waitForTimeout(350);
+    await page.screenshot({ path: shots("11-mobile-workspace.png") });
+    await page.locator("#workspace-close").click();
+  });
+
+  await checked("1440×1240 双主题截图（上游同视口）", async () => {
+    await page.setViewportSize({ width: 1440, height: 1240 });
+    await page.goto(firstTaskUrl, { waitUntil: "networkidle" });
+    await page.waitForTimeout(1200);
+    await page.locator("#theme-toggle").click();
+    await page.locator("[data-theme-pref=light]").click();
+    await page.waitForTimeout(400);
+    await page.locator("#transcript").evaluate((el) => (el.scrollTop = 0));
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: shots("12-conversation-light-1440x1240.png") });
+    await page.locator("#theme-toggle").click();
+    await page.locator("[data-theme-pref=dark]").click();
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: shots("13-conversation-dark-1440x1240.png") });
+  });
+
+  await checked("200 个步骤与 30 万字符成果", async () => {
+    const seeded = await page.evaluate(async () => {
+      const token = localStorage.getItem("nbx_auth");
+      const headers = {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json",
+      };
+      const cat = await (
+        await fetch("/api/workspace/catalog", { headers })
+      ).json();
+      const task = await (
+        await fetch("/api/workspace/tasks", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "压力验收", config: cat.defaults }),
+        })
+      ).json();
+      const result = await (
+        await fetch("/__test__/pressure", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ task_id: task.id }),
+        })
+      ).json();
+      return { id: task.id, sha256: result.sha256 };
+    });
+    await page.goto(`${BASE}/agent/tasks/${seeded.id}`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(1500);
+    assert(
+      (await page.locator("#timeline [data-entry]").count()) >= 200,
+      "200 条轨迹未完整显示",
+    );
+    assert((await page.locator(".tool-call").count()) >= 200, "对话中的 200 步缺失");
+    const metrics = await page.evaluate(async () => {
+      const durations = [];
+      for (let i = 0; i < 40; i++) {
+        const start = performance.now();
+        document
+          .querySelector(`[data-tab=${i % 2 ? "results" : "prompt"}]`)
+          .click();
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        );
+        durations.push(performance.now() - start);
+      }
+      durations.sort((a, b) => a - b);
+      return {
+        p95: durations[Math.floor(durations.length * 0.95)],
+        max: Math.max(...durations),
+        dom: document.querySelectorAll("*").length,
+      };
+    });
+    await page.locator("[data-tab=results]").click();
+    await page.locator("#versions-list .version-row").last().click();
+    await page.waitForTimeout(900);
+    const firstPage = await page.locator("#result-body").textContent();
+    assert(firstPage.includes("30 万字符成果"), "成果首页缺失");
+    assert(firstPage.length <= 13000, "成果分页没有限制单页 DOM");
+    const download = page.waitForEvent("download");
+    await page.locator("#export-md").click();
+    const file = await download;
+    await file.saveAs(path.join(OUT, "pressure.md"));
+    const content = await readFile(path.join(OUT, "pressure.md"));
+    assert.equal(
+      createHash("sha256").update(content).digest("hex"),
+      seeded.sha256,
+      "30 万字符成果导出哈希不一致",
+    );
+    await page.locator("#result-next").click();
+    await page.waitForTimeout(200);
+    assert(
+      !(await page.locator("#result-body").textContent()).includes("30 万字符成果"),
+      "成果分页未前进",
+    );
+    await page.screenshot({ path: shots("14-pressure-result.png") });
+    await page.locator(".view-tabs [data-mode=trajectory]").click();
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: shots("15-pressure-trajectory.png") });
+    await writeFile(
+      path.join(OUT, "performance.json"),
+      JSON.stringify({ metrics }, null, 2),
+    );
+    assert(metrics.p95 < 200, `切换 p95 过高：${metrics.p95}`);
+  });
+
+  await checked("减少动效偏好生效", async () => {
+    const reduced = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      reducedMotion: "reduce",
+    });
+    const reducedPage = await reduced.newPage();
+    await reducedPage.goto(`${BASE}/agent`, { waitUntil: "networkidle" });
+    await reducedPage.waitForTimeout(600);
+    assert.equal(
+      await reducedPage.evaluate(
+        () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      ),
+      true,
+    );
+    const duration = await reducedPage
+      .locator("#message")
+      .evaluate((el) => getComputedStyle(el).transitionDuration);
+    assert(
+      duration === "0.01ms" || duration === "0s" || duration === "1e-05s",
+      `动效未关闭：${duration}`,
+    );
+    await reduced.close();
+  });
+
+  assert.deepEqual(errors, [], `浏览器错误：${errors.join(" | ")}`);
+  report.completedAt = new Date().toISOString();
+  report.errors = errors;
+  report.performance = JSON.parse(
+    await readFile(path.join(OUT, "performance.json"), "utf8"),
+  );
+  await context.tracing.stop({ path: path.join(OUT, "trace.zip") });
+  await context.close();
+  await browser.close();
+  await writeFile(path.join(OUT, "report.json"), JSON.stringify(report, null, 2));
+  await writeFile(
+    path.join(OUT, "server.log"),
+    logLines.join(""),
+  );
+  console.log(`\nEVIDENCE ${OUT}`);
+  console.log(`PASSED ${report.passed.length}`);
+  if (!process.env.KEEP_EVIDENCE) {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+} catch (error) {
+  report.failed.push({ name: "run", error: error.stack || String(error) });
+  report.completedAt = new Date().toISOString();
+  report.errors = errors;
+  try {
+    if (page) await page.screenshot({ path: path.join(OUT, "failure.png") });
+    if (context) await context.tracing.stop({ path: path.join(OUT, "trace.zip") });
+    if (context) await context.close();
+    if (browser) await browser.close();
+  } catch {}
+  await writeFile(path.join(OUT, "report.json"), JSON.stringify(report, null, 2));
+  await writeFile(path.join(OUT, "server.log"), logLines.join(""));
+  console.error(`\nEVIDENCE ${OUT}`);
+  console.error(error);
+  stopServer();
+  process.exitCode = 1;
+} finally {
+  stopServer();
+}

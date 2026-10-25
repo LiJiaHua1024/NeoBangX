@@ -8,12 +8,14 @@
     "build:assets": "node tools/build-assets.mjs",
     "build:pinyin": "node tools/gen-pinyin-data.mjs",
     "build": "npm run build:css && npm run build:styles && npm run build:js && npm run build:assets",
-    "test": "node --test frontend/tests/*.test.js"
+    "test": "node --test frontend/tests/*.test.js",
+    "test:agent-browser": "node tools/test-claude-agent-browser.mjs"
   },
   "devDependencies": {
     "@tailwindcss/cli": "4.3.3",
     "lightningcss": "^1.32.0",
     "pinyin-pro": "^3.29.5",
+    "playwright": "^1.56.1",
     "tailwindcss": "4.3.3",
     "terser": "^5.51.2"
   }

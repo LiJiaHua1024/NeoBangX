@@ -340,8 +340,8 @@ Agent 根据目标决定何时查材料、调用教学工具、搜索、检查�
 
 ### 17.1 改了什么
 
-- 工作台接入普通工具页的设计系统：引用 `styles.min.css` 的主题变量与通用组件，新增 `agent/icons.mjs`（同源图标子集）与 `agent/theme.mjs`（主题读取、切换、跨标签页同步、悠空昼夜）。
-- 重写 `agent/index.html` 与 `agent/workspace.css`：顶栏、任务栏、任务流、工作区四段重新排布；面板改为两块（导航 + 主舞台），主舞台内部用可拖拽分隔条分成任务流与工作区。
+- 工作台视觉改为 Claude 浅色/深色基线（见 `docs/CLAUDE_STYLE_PORT.md`）：`agent/claude/` 下的令牌、外壳、对话、输入卡片、工作区与弹层样式；`agent/claude-theme.mjs` 管理独立的 `nbx_agent_theme`（浅色/深色/跟随系统），不再跟随普通工具页的五套主题。
+- `agent/index.html` 重写为侧栏 + 顶栏 + 对话/轨迹 + 可拖拽工作区；`agent/conversation.mjs` 负责流式对话、思考折叠、工具行、结果卡片与滚动跟随；`agent/workspace.js` 保留原有业务与 API 契约。
 - 全部浏览器默认控件改为自绘：下拉箭头、复选框、数字框、滑块、文件上传区、折叠三角、弹窗、滚动条；保留原生元素语义。
 - 时间线改为纵向流水线：左侧节点与竖线、状态徽章、按内容显隐的操作按钮；空任务重新显示三步引导（此前打开任务后空状态会被清空）。
 - 任务列表改为两行条目（标题 + 状态徽章 + 最近更新时间），选中项用左侧竖条与浅底标记。
@@ -350,7 +350,7 @@ Agent 根据目标决定何时查材料、调用教学工具、搜索、检查�
 
 ### 17.2 验收状态
 
-- `npm test` 270 项通过；`node --check` 覆盖 `workspace.js`、`icons.mjs`、`theme.mjs`、`reader.mjs`、`core.mjs`。
+- `npm test` 270 项通过；`node --check` 覆盖 `workspace.js`、`conversation.mjs`、`claude-theme.mjs`、`icons.mjs`、`reader.mjs`、`core.mjs`。浏览器验收见 `tools/test-claude-agent-browser.mjs`。
 - `backend/tests/test_static_cache.py` 32 项通过（在 `backend/` 目录运行；主站资源版本串已由 `npm run build:styles && npm run build:assets` 重新生成）。
 - 视觉与真机表现仍需人工检查：五种主题下的深浅对比、1920/1440/1366/1280/768/390/360 与 844×390 横屏、软键盘与系统缩放、减少动效偏好。
 

@@ -21,6 +21,7 @@ NeoBangX —— 面向中学英语教师的 AI 辅助教学平台。
 - **历史 / 收藏**：存于浏览器 localStorage（后端不存用户数据）。
 - **双线路支持**：同一套应用可由多条线路（主线路 + 备份线路）提供服务，历史、收藏与主题 / 模型偏好都在两条线路间自动镜像；也可导出 / 导入 JSON 手动搬运。见 [9. 数据存储](#9-数据存储)。
 - **多主题切换**：毛玻璃 / 科技感视觉风格。
+- **Agent 工作台**：`/agent` 是独立、可恢复的持久任务空间。提示词、材料、工具、执行、审阅和成果版本都在同一条任务里；目标可留空直接执行，关闭网页后后台继续。界面按 Claude Code Desktop 的浅色/深色、字体、折叠、等待与滚动跟随移植，长思考与长成果完整保留。来源、取舍、验收命令与证据见 [docs/CLAUDE_STYLE_PORT.md](docs/CLAUDE_STYLE_PORT.md) 与 [docs/evidence/claude-port/](docs/evidence/claude-port/)。
 
 ---
 
@@ -67,7 +68,7 @@ NeoBangX —— 面向中学英语教师的 AI 辅助教学平台。
 │   ├── tests/
 │   ├── pyproject.toml
 │   └── .env.example
-├── frontend/                    # 主站前端（Alpine.js + Tailwind v4，纯静态）
+├── frontend/                    # 主站前端 + agent/（Agent 工作台，Claude 风格）
 ├── admin-frontend/              # 管理后台前端
 ├── prompts/                     # 32 个工具 Prompt 文件 + 续写 / 报错解释等非工具 Prompt
 ├── Dockerfile
