@@ -1,0 +1,258 @@
+/* Claude 风格工作台 · 设计令牌
+   来源：dsh-claude-style@1e7acc5be061be06cd3850962abd3ad103259bfd
+   （packages/client/src/theme/tokens.json、typography.css、docs/STYLE.md）
+   上游按色阶在构建期解析颜色；这里直接写出 Claude 卡在浅色/深色下的最终值。 */
+
+/* ---------- 字体 ---------- */
+/* Anthropic 字体来自上游仓库副本，仅作个人界面复刻；商业分发前替换为 OFL 字体。 */
+@font-face {
+  font-family: "Anthropic Sans Web Text";
+  src: url("/static/agent/fonts/AnthropicSansWebText.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anthropic Serif Web Text";
+  src: url("/static/agent/fonts/AnthropicSerifWebText.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anthropic Mono Web";
+  src: url("/static/agent/fonts/AnthropicMonoWeb.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Claude Style Inter";
+  src: url("/static/agent/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Claude Style Noto Serif";
+  src: url("/static/agent/fonts/NotoSerifVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/static/agent/fonts/JetBrainsMonoVariable.ttf") format("truetype-variations");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/static/agent/fonts/JetBrainsMonoItalicVariable.ttf") format("truetype-variations");
+  font-weight: 100 800;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  --font-sans: "Anthropic Sans Web Text", "Claude Style Inter", "Noto Sans SC",
+    "Source Han Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-serif: "Anthropic Serif Web Text", "Claude Style Noto Serif", Georgia,
+    "Times New Roman", "Noto Sans SC", "Source Han Sans SC", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-prose: var(--font-serif);
+  --font-code: "Anthropic Mono Web", "JetBrains Mono", "Noto Sans SC",
+    "Source Han Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    ui-monospace, "SF Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, Courier,
+    monospace;
+
+  /* 字号与行高 */
+  --text-ui: 13px;
+  --text-ui-sm: 12px;
+  --text-body: 15px;
+  --text-prose: 15px;
+  --line-prose: 25px;
+  --text-title: 26px;
+  --text-h1: 22px;
+  --text-h2: 18px;
+  --text-h3: 16px;
+  --text-caption: 12px;
+  --text-micro: 11px;
+
+  /* 形状 */
+  --radius-1: 4px;
+  --radius-2: 8px;
+  --radius-3: 16px;
+  --radius-popover: 12px;
+  --radius-row: 6px;
+  --radius-card: 16px;
+  --radius-composer: 18px;
+  --radius-segment: 7px;
+  --radius-pill: 9999px;
+
+  /* 间距 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* 版面 */
+  --sidebar-w: 280px;
+  --sidebar-collapsed-w: 52px;
+  --conversation-w: 752px;
+  --workspace-w: 420px;
+  --header-h: 56px;
+  --composer-fade-h: 40px;
+
+  /* 动效 · 与上游 tokens.json 同名同值 */
+  --dur-instant: 80ms;
+  --dur-feedback: 120ms;
+  --dur-reveal: 120ms;
+  --dur-enter: 320ms;
+  --dur-surface: 150ms;
+  --dur-exit: 120ms;
+  --dur-open: 250ms;
+  --dur-swap: 150ms;
+  --dur-roll: 160ms;
+  --dur-move: 200ms;
+  --dur-slide: 240ms;
+  --dur-fade: 300ms;
+  --dur-flight: 400ms;
+  --dur-bounce: 350ms;
+  --dur-preview: 4000ms;
+  --dur-pulse: 1600ms;
+  --dur-spin: 850ms;
+  --dur-breathe: 2400ms;
+  --dur-settle: 240ms;
+  --ease-standard: ease;
+  --ease-out: ease-out;
+  --ease-enter: cubic-bezier(0.34, 1.3, 0.64, 1);
+  --ease-in-out: ease-in-out;
+  --ease-glide: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-roll: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.45, 0.64, 1);
+  --ease-settle: cubic-bezier(0.22, 1, 0.36, 1);
+  --timing-feedback: var(--dur-feedback) var(--ease-standard);
+  --timing-surface: var(--dur-surface) var(--ease-standard);
+  --timing-reveal: var(--dur-reveal) var(--ease-out);
+  --timing-slide: var(--dur-slide) var(--ease-glide);
+
+  /* 层级 · 上游 D9 */
+  --layer-base: 0;
+  --layer-sticky: 5;
+  --layer-control: 10;
+  --layer-picker: 20;
+  --layer-chrome: 30;
+  --layer-overlay: 40;
+  --layer-float: 100;
+  --layer-takeover: 200;
+  --layer-toast: 300;
+}
+
+/* ---------- Claude 浅色 ---------- */
+html[data-agent-theme="light"] {
+  color-scheme: light;
+  --canvas: #ffffff;
+  --sidebar: #fafafa;
+  --surface-1: #ffffff;
+  --surface-2: #ffffff;
+  --surface-3: #ffffff;
+  --overlay: #ffffff;
+  --card: #ffffff;
+  --ink: #161616;
+  --ink-2: #70686a;
+  --ink-3: #91888a;
+  --ink-4: #b2acad;
+  --border-1: #e9e9e9;
+  --border-2: #dedede;
+  --border-3: #cfcfcf;
+  --divider: rgba(22, 22, 22, 0.05);
+  --accent: #d97757;
+  --accent-hover: #c46343;
+  --accent-tint: #f6ded7;
+  --on-accent: #ffffff;
+  --bubble: #f4f2f3;
+  --hover: rgba(6, 6, 6, 0.08);
+  --hover-solid: #f4f4f4;
+  --chip: #f9f9f9;
+  --inset: #ffffff;
+  --code-block: #ffffff;
+  --code-wash: rgba(6, 6, 6, 0.05);
+  --code-ink: #943333;
+  --table-head: #f4f4f4;
+  --link: #184f95;
+  --link-underline: rgba(24, 79, 149, 0.6);
+  --focus-ring: rgba(20, 20, 19, 0.45);
+  --selection: #3366d0;
+  --selection-ink: #ffffff;
+  --scrollbar: rgba(213, 213, 213, 0.9);
+  --scrollbar-hover: rgba(138, 138, 138, 0.8);
+  --shadow-popover: 0 8px 28px rgba(20, 20, 19, 0.12), 0 1px 3px rgba(20, 20, 19, 0.06);
+  --shadow-card: 0 4px 12px rgba(20, 20, 19, 0.04), 0 1px 3px rgba(20, 20, 19, 0.02);
+  --shadow-composer-focus:           0 0 0 1px rgba(20, 20, 19, 0.065), 0 6px 18px rgba(20, 20, 19, 0.03),
+    0 2px 6px rgba(20, 20, 19, 0.015);
+  --composer-focus-border: rgba(20, 20, 19, 0.18);
+  --sweep-ink: rgba(22, 22, 22, 0.55);
+}
+
+/* ---------- Claude 深色 ---------- */
+html[data-agent-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #191919;
+  --sidebar: #1f1f1f;
+  --surface-1: #212121;
+  --surface-2: #282828;
+  --surface-3: #323232;
+  --overlay: #282828;
+  --card: #232323;
+  --ink: #fdfdfd;
+  --ink-2: #beb6b8;
+  --ink-3: #9c9395;
+  --ink-4: #776f71;
+  --border-1: rgba(255, 255, 255, 0.09);
+  --border-2: rgba(255, 255, 255, 0.18);
+  --border-3: rgba(255, 255, 255, 0.3);
+  --divider: rgba(255, 255, 255, 0.06);
+  --accent: #d97757;
+  --accent-hover: #eb9170;
+  --accent-tint: #48261b;
+  --on-accent: #fbfbfb;
+  --bubble: rgba(255, 255, 255, 0.06);
+  --hover: rgba(255, 255, 255, 0.08);
+  --hover-solid: #323232;
+  --chip: #282828;
+  --inset: #141414;
+  --code-block: #212121;
+  --code-wash: rgba(255, 255, 255, 0.05);
+  --code-ink: #e8a08a;
+  --table-head: #282828;
+  --link: #8ab4f8;
+  --link-underline: rgba(138, 180, 248, 0.6);
+  --focus-ring: rgba(250, 249, 245, 0.6);
+  --selection: #3366d0;
+  --selection-ink: #ffffff;
+  --scrollbar: rgba(62, 62, 62, 0.9);
+  --scrollbar-hover: rgba(113, 113, 113, 0.9);
+  --shadow-popover: 0 8px 30px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.15);
+  --shadow-composer-focus: 0 0 0 1px rgba(250, 249, 245, 0.09), 0 6px 24px rgba(0, 0, 0, 0.22),
+    0 2px 8px rgba(0, 0, 0, 0.11);
+  --composer-focus-border: rgba(250, 249, 245, 0.22);
+  --sweep-ink: rgba(253, 253, 253, 0.6);
+}
+
+/* 主题切换的 300ms 交叉淡入；只作用于页面底色与面板，不给长文加动画。 */
+html body,
+html .sidebar,
+html .workspace-card,
+html .composer-card,
+html .topbar {
+  transition: background-color var(--dur-fade) var(--ease-standard),
+    color var(--dur-fade) var(--ease-standard),
+    border-color var(--dur-fade) var(--ease-standard);
+}

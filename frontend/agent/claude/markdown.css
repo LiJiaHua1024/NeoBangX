@@ -1,0 +1,349 @@
+/* Claude 风格工作台 · Markdown 正文
+   来源：dsh-claude-style@1e7acc5b 的 theme/typography.css 与 docs/STYLE.md
+   “Markdown material / Inline code / 表格”。 */
+
+.md {
+  font-family: var(--font-prose);
+  font-size: var(--text-prose);
+  line-height: var(--line-prose);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.md > :first-child {
+  margin-top: 0 !important;
+}
+.md > :last-child {
+  margin-bottom: 0 !important;
+}
+.md p {
+  margin: 12px 0;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  font-family: var(--font-prose);
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+.md h1 {
+  margin: 26px 0 12px;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.md h2 {
+  margin: 24px 0 12px;
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.md h3 {
+  margin: 20px 0 10px;
+  font-size: 16.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.md h4,
+.md h5,
+.md h6 {
+  margin: 16px 0 8px;
+  font-family: var(--font-sans);
+  font-weight: 600;
+}
+.md h4 {
+  font-size: 15px;
+}
+.md h5 {
+  font-size: 14px;
+}
+.md h6 {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.md :is(h1, h2, h3, h4) + :is(h1, h2, h3, h4) {
+  margin-top: 8px;
+}
+.md strong {
+  font-weight: 650;
+}
+.md em {
+  font-style: italic;
+}
+.md del {
+  color: var(--ink-3);
+}
+.md a {
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-color: var(--link-underline);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.md a:hover {
+  text-decoration-color: var(--link);
+}
+.md ul,
+.md ol {
+  margin: 10px 0;
+  padding-left: 24px;
+}
+.md li {
+  margin: 4px 0;
+  padding-left: 2px;
+}
+.md li > p {
+  margin: 4px 0;
+}
+.md li::marker {
+  color: var(--ink-3);
+}
+.md ul ul,
+.md ol ol,
+.md ul ol,
+.md ol ul {
+  margin: 3px 0;
+}
+.md hr {
+  height: 0.5px;
+  margin: 24px 0;
+  border: 0;
+  background: var(--divider);
+}
+.md blockquote {
+  margin: 14px 0;
+  padding: 8px 14px;
+  border-left: 2px solid var(--ink-4);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+  color: var(--ink-2);
+  font-style: normal;
+}
+.md blockquote > :first-child {
+  margin-top: 0;
+}
+.md blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+/* 行内代码：贴合字形，暖红墨色，浅底 */
+.md code,
+.md kbd,
+.md samp {
+  font-family: var(--font-code);
+  font-size: 0.86em;
+  line-height: 1.2;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--code-wash);
+  color: var(--code-ink);
+  overflow-wrap: anywhere;
+}
+.md kbd {
+  border: 0.5px solid var(--border-2);
+  background: var(--chip);
+  color: var(--ink-2);
+}
+
+/* 代码块：12px 圆角、0.5px 边框、语言标签与复制 */
+.md-code {
+  margin: 16px 0;
+  border: 1px solid var(--border-1);
+  border-radius: 12px;
+  background: var(--code-block);
+  overflow: hidden;
+}
+.md-code-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px 0 14px;
+  border-bottom: 0.5px solid var(--divider);
+  color: var(--ink-3);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+.md-code-head .lang {
+  font-family: var(--font-code);
+  font-size: 11px;
+}
+.md-code-head .spacer {
+  flex: 1;
+}
+.md-code-head button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--ink-3);
+}
+.md-code-head button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.md-code-head button .aw-svg {
+  width: 13px;
+  height: 13px;
+}
+.md-code pre {
+  margin: 0;
+  padding: 13px 16px 15px;
+  overflow-x: auto;
+  font-family: var(--font-code);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink);
+  tab-size: 2;
+}
+.md-code pre code {
+  padding: 0;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  border-radius: 0;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+/* 表格：外框 0.5px、圆角 12、表头浅底、窄屏容器内滚动 */
+.md-table-scroll {
+  margin: 16px 0;
+  border: 0.5px solid var(--border-2);
+  border-radius: 12px;
+  overflow-x: auto;
+  background: var(--surface-1);
+  max-width: 100%;
+}
+.md table {
+  width: max-content;
+  min-width: 100%;
+  border-spacing: 0;
+  border-collapse: collapse;
+  font-family: var(--font-prose);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.md thead th,
+.md thead td {
+  background: var(--table-head);
+  color: var(--ink);
+  font-weight: 600;
+  text-align: left;
+}
+.md th,
+.md td {
+  padding: 8px 16px;
+  border-bottom: 0.5px solid var(--divider);
+  vertical-align: top;
+}
+.md tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.md tbody tr:hover {
+  background: color-mix(in srgb, var(--ink) 2%, transparent);
+}
+.md th {
+  white-space: nowrap;
+}
+.md table th:first-child {
+  width: 1%;
+}
+.md td {
+  min-width: 80px;
+}
+
+/* 任务列表 */
+.md input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin: 0 6px 0 -18px;
+  vertical-align: -2px;
+  accent-color: var(--accent);
+}
+
+/* 图片：工作台不加载外部图片；仅保留可读说明 */
+.md img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+/* 引用内的链接/代码保留自己的材质 */
+.md blockquote a {
+  color: var(--link);
+}
+.md blockquote code {
+  color: var(--code-ink);
+}
+
+/* 行内文件提及 */
+.md .file-mention {
+  color: var(--link);
+  font-weight: 500;
+}
+
+/* Markdown 流式渲染时的未完成块：保持原样的纯文本，避免半截表格 */
+.md .md-pending {
+  white-space: pre-wrap;
+  font-family: var(--font-prose);
+  color: var(--ink-2);
+}
+
+/* 长文中的表格在手机上变成逐条阅读（现有能力，保留切换） */
+@media (max-width: 720px) {
+  .md table {
+    font-size: 13px;
+  }
+  .md th,
+  .md td {
+    padding: 7px 12px;
+  }
+}
+.document table.cards,
+.md table.cards {
+  display: block;
+  width: 100%;
+  border-collapse: separate;
+}
+.document table.cards thead,
+.md table.cards thead {
+  display: none;
+}
+.document table.cards tbody,
+.md table.cards tbody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+.document table.cards tr,
+.md table.cards tr {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--canvas);
+}
+.document table.cards td,
+.md table.cards td {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 8px;
+  padding: 2px 0;
+  border: 0;
+  min-width: 0;
+}
+.document table.cards td::before,
+.md table.cards td::before {
+  content: attr(data-label);
+  color: var(--ink-3);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}

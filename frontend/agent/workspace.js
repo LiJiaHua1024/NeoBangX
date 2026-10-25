@@ -1,24 +1,23 @@
-import {
-  ACTIVE,
-  STATUS,
-  escapeHTML as esc,
-  newKey,
-  pageText,
-} from "./core.mjs";
-import { FullReader, saveBlob } from "./reader.mjs";
+import { ACTIVE, STATUS, escapeHTML as esc, newKey, pageText } from "./core.mjs";
+import { FullReader, saveBlob, copyText } from "./reader.mjs";
 import { fillIcons, icon } from "./icons.mjs";
-import { enhanceSelects, refreshSelects } from "./select.mjs";
-import {
-  applyTheme,
-  initThemeMenu,
-  readTheme,
-  watchStorage,
-} from "./theme.mjs";
+import { initTheme } from "./claude-theme.mjs";
+import { Conversation } from "./conversation.mjs";
 
-const $ = (s) => document.querySelector(s),
-  $$ = (s) => [...document.querySelectorAll(s)];
-
-/* 图标只在这里集中映射，业务代码不写 SVG。 */
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const app = $("#app");
+const base = "/api/workspace";
+const FIELDS = {
+  goal: "goal",
+  prompt: "prompt",
+  behavior: "behavior",
+  model: "model",
+  review: "review",
+  "review-prompt": "review_prompt",
+  "auto-improve": "auto_improve",
+  "review-rounds": "review_rounds",
+};
 const KIND_ICON = {
   reasoning: "sparkle",
   output: "file-text",
@@ -26,51 +25,7 @@ const KIND_ICON = {
   prompt: "list-checks",
   arguments: "route",
 };
-function labelOf(selector, text) {
-  const host = $(selector);
-  if (!host) return;
-  const label = host.querySelector("[data-label]");
-  if (label) label.textContent = text;
-  else host.textContent = text;
-}
-function saveState(text, state) {
-  const el = $("#save-state");
-  if (!el) return;
-  el.textContent = text;
-  el.dataset.state = state;
-}
-function connState(text, state, detail = "") {
-  const el = $("#connection");
-  if (!el) return;
-  el.textContent = text;
-  el.dataset.state = state;
-  el.title = detail || text;
-}
-function setText(el, text) {
-  if (el && el.textContent !== text) el.textContent = text;
-}
-function stepIcon(item) {
-  const label = String(item.label || "");
-  if (item.kind === "review") return "list-checks";
-  if (/审阅/.test(label)) return "list-checks";
-  if (/搜索|检索/.test(label)) return "search";
-  if (/材料|读取/.test(label)) return "file-text";
-  if (/修订|改写/.test(label)) return "wand";
-  if (/试运行/.test(label)) return "play";
-  if (/成果|生成|输出/.test(label)) return "sparkle";
-  return "route";
-}
-function shortTime(iso) {
-  const value = Date.parse(iso || "");
-  if (!Number.isFinite(value)) return "";
-  const diff = Date.now() - value;
-  if (diff < 60_000) return "刚刚";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
-  const d = new Date(value);
-  return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
-}
+const TAB_IDS = new Set(["prompt", "materials", "tools", "results"]);
 
 const state = {
   catalog: null,
@@ -88,15 +43,20 @@ const state = {
   pages: [],
   page: 0,
   composing: false,
+  conversation: null,
+  menuClose: null,
 };
+
 let reader = null,
   saveTimer,
   pollTimer,
   toastTimer,
   taskOffset = 0,
   taskQuery = "",
+  shadeFor = "",
   modalCleanup = null;
-const base = "/api/workspace";
+
+/* ---------------- 基础 ---------------- */
 function token() {
   return localStorage.getItem("nbx_auth") || "";
 }
@@ -119,165 +79,203 @@ async function api(url, options = {}) {
       data = { detail: `请求失败 (${res.status})` };
     }
     const e = new Error(
-      typeof data.detail === "string"
-        ? data.detail
-        : JSON.stringify(data.detail),
+      typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail),
     );
     e.status = res.status;
     throw e;
   }
   return options.blob ? res.blob() : res.json();
 }
-function toast(message) {
-  $("#toast").textContent = String(message);
-  $("#toast").hidden = false;
+function toast(message, kind = "") {
+  const el = $("#toast");
+  el.textContent = String(message);
+  el.dataset.kind = kind;
+  el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => ($("#toast").hidden = true), 5500);
+  toastTimer = setTimeout(() => (el.hidden = true), 6000);
 }
 function error(e) {
   console.error(e);
-  toast(e.message || String(e));
+  toast(e.message || String(e), "error");
   if (e.status === 401) {
-    labelOf("#account", "重新登录");
-    $("#account").title = "重新登录";
+    $("#account-name").textContent = "重新登录";
+    $("#account-note").textContent = "使用码已失效";
   }
 }
-function action(id, fn) {
-  $(id).addEventListener("click", async (e) => {
-    const b = e.currentTarget;
-    b.disabled = true;
-    try {
-      await fn(e);
-    } catch (err) {
-      error(err);
-    } finally {
-      b.disabled = false;
-      updateStatus();
-    }
-  });
+function setText(el, text) {
+  if (el && el.textContent !== text) el.textContent = text;
 }
-function modal(title, body, buttons = []) {
-  closeModal();
-  $("#modal-title").textContent = title;
-  $("#modal-body").replaceChildren();
-  if (typeof body === "string") $("#modal-body").innerHTML = body;
-  else $("#modal-body").append(body);
-  $("#modal-actions").replaceChildren();
-  for (const item of buttons) {
-    const b = document.createElement("button");
-    b.textContent = item.text;
-    b.className = item.primary ? "btn-primary" : "btn-ghost";
-    b.onclick = async () => {
-      b.disabled = true;
-      try {
-        await item.run();
-      } catch (e) {
-        error(e);
-      } finally {
-        b.disabled = false;
-      }
-    };
-    $("#modal-actions").append(b);
-  }
-  $("#modal").showModal();
+function saveState(text, stateName) {
+  const el = $("#save-state");
+  el.textContent = text;
+  el.dataset.state = stateName;
 }
-function closeModal() {
-  reader?.destroy();
-  reader = null;
-  modalCleanup?.();
-  modalCleanup = null;
-  if ($("#modal").open) $("#modal").close();
+function connState(text, stateName, detail = "") {
+  const el = $("#connection");
+  el.textContent = text;
+  el.dataset.state = stateName;
+  el.title = detail || text;
 }
-$("#modal-close").onclick = closeModal;
-$("#modal").addEventListener("cancel", closeModal);
-function readText(title, text, download) {
-  modal(title, '<div id="full-reader"></div>');
-  reader = new FullReader($("#full-reader"), {
-    text,
-    download,
-    onError: error,
-  });
+function shortTime(iso) {
+  const value = Date.parse(iso || "");
+  if (!Number.isFinite(value)) return "";
+  const diff = Date.now() - value;
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  const d = new Date(value);
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
 }
-function askText(title, label, initial, run) {
-  modal(
-    title,
-    `<label for="dialog-value">${esc(label)}</label><textarea id="dialog-value"></textarea>`,
-    [
-      { text: "取消", run: closeModal },
-      {
-        text: "保存",
-        primary: true,
-        run: async () => {
-          await run($("#dialog-value").value);
-          closeModal();
-        },
-      },
-    ],
-  );
-  $("#dialog-value").value = initial;
+function fmtChars(n) {
+  return `${Number(n || 0).toLocaleString("zh-CN")} 字符`;
 }
-function confirmAction(title, text, run) {
-  modal(title, `<p>${esc(text)}</p>`, [
-    { text: "取消", run: closeModal },
-    {
-      text: "确认",
-      primary: true,
-      run: async () => {
-        await run();
-        closeModal();
-      },
-    },
-  ]);
+function autoGrow(textarea) {
+  textarea.style.height = "auto";
+  const max =
+    Number(getComputedStyle(textarea).maxHeight.replace("px", "")) || 520;
+  textarea.style.height = `${Math.min(textarea.scrollHeight, max)}px`;
 }
-function drawer(open) {
-  document.body.classList.toggle("nav-open", open);
-  $("#shade").hidden = !open;
+function isNarrow() {
+  return matchMedia("(max-width: 1099px)").matches;
+}
+function isMobile() {
+  return matchMedia("(max-width: 767px)").matches;
+}
+function isOverlayWorkspace() {
+  return matchMedia("(max-width: 1439px)").matches;
+}
+
+/* ---------------- 外壳：侧栏、工作区、视图、菜单 ---------------- */
+function showShade(kind) {
+  shadeFor = kind;
+  $("#shade").hidden = false;
+  $("#shade").dataset.open = "true";
+}
+function hideShade() {
+  shadeFor = "";
+  $("#shade").dataset.open = "false";
+  $("#shade").hidden = true;
+}
+function drawer(open, { focus = true } = {}) {
+  app.dataset.sidebar = open ? "open" : "collapsed";
+  document.body.classList.toggle("nav-open", Boolean(open));
+  try {
+    if (!isNarrow()) localStorage.setItem("nbx_agent_sidebar", open ? "open" : "collapsed");
+  } catch {}
   $("#menu").setAttribute("aria-expanded", String(open));
-  if (open) $("#close-nav").focus();
-  else $("#menu").focus();
+  if (open && isNarrow()) {
+    showShade("nav");
+    if (focus) $("#close-nav").focus();
+  } else if (shadeFor === "nav") {
+    hideShade();
+    if (focus && isNarrow()) $("#menu").focus();
+  }
 }
-$("#menu").onclick = () =>
-  drawer(!document.body.classList.contains("nav-open"));
-$("#close-nav").onclick = () => drawer(false);
-$("#shade").onclick = () => drawer(false);
-document.addEventListener("click", (e) => {
-  for (const d of $$("details.aw-theme, details.aw-taskmenu"))
-    if (d.open && !d.contains(e.target)) d.open = false;
-});
+function setWorkspace(open, { persist = true } = {}) {
+  const overlay = isOverlayWorkspace();
+  if (isMobile()) {
+    setView(open ? "work" : "chat");
+    return;
+  }
+  app.dataset.workspace = open ? "open" : "closed";
+  $("#workspace-toggle").setAttribute("aria-expanded", String(open));
+  $("#workspace-toggle").setAttribute("aria-label", open ? "收起工作区" : "显示工作区");
+  if (overlay && open) showShade("workspace");
+  else if (shadeFor === "workspace") hideShade();
+  if (!open && app.dataset.focus === "work") delete app.dataset.focus;
+  if (persist) {
+    try {
+      localStorage.setItem("nbx_agent_workspace", open ? "open" : "closed");
+    } catch {}
+  }
+}
 function setView(view, push = true) {
-  document.body.dataset.view = view;
-  for (const b of $$("[data-view] button[data-view]")) {
-    b.toggleAttribute("aria-current", b.dataset.view === view);
+  if (view !== "work") view = "chat";
+  app.dataset.view = view;
+  for (const button of $$(".mobile-switch [data-view]")) {
+    button.toggleAttribute("aria-current", button.dataset.view === view);
   }
   if (view === "chat") $("#activity-dot").textContent = "";
-  if (push && state.task)
+  if (push && state.task) {
     history.replaceState({ ...history.state, view }, "", location.href);
+  }
 }
-$$(".view-switch button").forEach(
-  (b) => (b.onclick = () => setView(b.dataset.view)),
-);
+function setMode(mode, push = true) {
+  if (mode !== "trajectory") mode = "chat";
+  app.dataset.mode = mode;
+  for (const button of $$(".view-tabs [data-mode]")) {
+    button.toggleAttribute("aria-current", button.dataset.mode === mode);
+  }
+  state.conversation?.setMode(mode, { push });
+  if (mode === "trajectory") $("#activity-dot").textContent = "";
+  if (push && state.task) {
+    const url = new URL(location.href);
+    if (mode === "trajectory") url.hash = "trajectory";
+    else if (url.hash === "#trajectory") url.hash = "";
+    history.replaceState(history.state, "", url);
+  }
+}
 function setTab(tab, push = true) {
-  $$("[data-panel]").forEach((p) => (p.hidden = p.dataset.panel !== tab));
-  $$("[data-tab]").forEach((b) =>
-    b.toggleAttribute("aria-current", b.dataset.tab === tab),
-  );
-  if (tab === "results") $("#result-dot").textContent = "";
-  setView("work", false);
+  if (!TAB_IDS.has(tab)) tab = "prompt";
+  $$("[data-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.panel !== tab;
+  });
+  $$("[data-tab]").forEach((button) => {
+    button.toggleAttribute("aria-current", button.dataset.tab === tab);
+  });
+  if (tab === "results") {
+    $("#result-dot").textContent = "";
+    ensureResultSelection().catch(error);
+  }
+  if (isMobile()) setView("work");
+  else if (!isOverlayWorkspace()) setWorkspace(true, { persist: false });
   if (push && state.task) {
     const u = new URL(location.href);
     u.hash = tab;
-    history.pushState({ view: "work" }, "", u);
+    history.pushState({ view: app.dataset.view }, "", u);
   }
 }
-$$("[data-tab]").forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
-$$("[data-focus]").forEach(
-  (b) =>
-    (b.onclick = () => {
-      if (document.body.dataset.focus === b.dataset.focus)
-        delete document.body.dataset.focus;
-      else document.body.dataset.focus = b.dataset.focus;
-    }),
-);
+function closeMenus() {
+  $("#task-menu").hidden = true;
+  $("#task-menu-btn").setAttribute("aria-expanded", "false");
+  $("#theme-menu").hidden = true;
+  $("#theme-toggle").setAttribute("aria-expanded", "false");
+  state.menuClose?.();
+  state.menuClose = null;
+}
+function menuAt(anchor, html, onClick) {
+  closeMenus();
+  const menu = document.createElement("div");
+  menu.className = "popover";
+  menu.dataset.side = "left";
+  menu.style.position = "fixed";
+  menu.style.minWidth = "160px";
+  menu.innerHTML = html;
+  document.body.append(menu);
+  const box = anchor.getBoundingClientRect();
+  const width = menu.offsetWidth;
+  menu.style.left = `${Math.min(box.left, innerWidth - width - 8)}px`;
+  menu.style.top = `${Math.min(box.bottom + 4, innerHeight - menu.offsetHeight - 8)}px`;
+  menu.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    onClick(button.dataset.action, button);
+  });
+  const close = () => {
+    menu.remove();
+    document.removeEventListener("click", outside, true);
+    state.menuClose = null;
+  };
+  const outside = (event) => {
+    if (!menu.contains(event.target) && event.target !== anchor) close();
+  };
+  setTimeout(() => document.addEventListener("click", outside, true), 0);
+  state.menuClose = close;
+  return menu;
+}
+
+/* ---------------- 主题、视口、分隔条 ---------------- */
 function viewport() {
   document.documentElement.style.setProperty(
     "--vh",
@@ -286,41 +284,248 @@ function viewport() {
 }
 window.visualViewport?.addEventListener("resize", viewport);
 viewport();
-matchMedia("(max-width: 1099px)").addEventListener("change", (e) => {
-  if (e.matches) delete document.body.dataset.focus;
-});
-function width(value) {
-  const w = Math.round(Math.min(680, Math.max(380, value)));
-  document.body.style.setProperty("--aw-inspector", w + "px");
+
+/* 「有新进展」浮在输入卡片上方；卡片高度随附件/多行变化，用实测值定位。 */
+const composerSeat = $("#composer-seat");
+function placeLatest() {
+  const latest = $("#latest");
+  const seat = composerSeat.getBoundingClientRect();
+  const conversation = $("#chat").getBoundingClientRect();
+  if (!seat.height || !conversation.height) return;
+  const bottom = Math.max(12, Math.round(conversation.bottom - seat.top + 8));
+  latest.style.bottom = `${bottom}px`;
+  app.style.setProperty("--composer-h", `${composerSeat.offsetHeight}px`);
+}
+if ("ResizeObserver" in window) {
+  new ResizeObserver(placeLatest).observe(composerSeat);
+}
+window.addEventListener("resize", placeLatest);
+placeLatest();
+
+function workspaceWidth(value) {
+  const w = Math.round(Math.min(680, Math.max(360, value)));
+  app.style.setProperty("--workspace-width", `${w}px`);
   $("#separator").setAttribute("aria-valuenow", String(w));
   try {
     localStorage.setItem("nbx_agent_inspector", String(w));
   } catch {}
 }
-width(Number(localStorage.getItem("nbx_agent_inspector")) || 480);
-$("#separator").onkeydown = (e) => {
-  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-    e.preventDefault();
-    width(
-      Number(e.currentTarget.getAttribute("aria-valuenow")) +
-        (e.key === "ArrowRight" ? 24 : -24),
-    );
-  }
+workspaceWidth(Number(localStorage.getItem("nbx_agent_inspector")) || 420);
+$("#separator").onkeydown = (event) => {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  workspaceWidth(
+    Number(event.currentTarget.getAttribute("aria-valuenow")) +
+      (event.key === "ArrowRight" ? 24 : -24),
+  );
 };
-$("#separator").onpointerdown = (e) => {
-  const b = e.currentTarget;
-  b.setPointerCapture(e.pointerId);
-  b.classList.add("dragging");
-  b.onpointermove = (ev) => {
-    const r = $(".columns").getBoundingClientRect();
-    width(r.right - ev.clientX);
+$("#separator").onpointerdown = (event) => {
+  const handle = event.currentTarget;
+  handle.setPointerCapture(event.pointerId);
+  handle.classList.add("dragging");
+  handle.onpointermove = (move) => {
+    const box = $(".layout").getBoundingClientRect();
+    workspaceWidth(box.right - move.clientX);
   };
-  b.onpointerup = () => {
-    b.onpointermove = null;
-    b.classList.remove("dragging");
+  handle.onpointerup = () => {
+    handle.onpointermove = null;
+    handle.classList.remove("dragging");
   };
 };
 
+/* ---------------- 侧栏 ---------------- */
+$("#menu").onclick = () => {
+  if (isNarrow()) drawer(app.dataset.sidebar !== "open");
+  else drawer(app.dataset.sidebar === "collapsed");
+};
+$("#sidebar-collapse").onclick = () => {
+  if (isNarrow()) drawer(false);
+  else drawer(app.dataset.sidebar === "collapsed");
+};
+$("#close-nav").onclick = () => drawer(false);
+$("#shade").onclick = () => {
+  if (shadeFor === "workspace") setWorkspace(false);
+  else drawer(false);
+};
+$("#workspace-toggle").onclick = () => {
+  setWorkspace(app.dataset.workspace !== "open");
+};
+$("#workspace-close").onclick = () => {
+  if (app.dataset.focus === "work") delete app.dataset.focus;
+  setWorkspace(false);
+};
+$("#workspace-focus").onclick = () => {
+  if (app.dataset.focus === "work") delete app.dataset.focus;
+  else app.dataset.focus = "work";
+};
+$("#open-workspace").onclick = () => {
+  closeMenus();
+  setWorkspace(true);
+  setTab("prompt");
+};
+$("#task-menu-btn").onclick = (event) => {
+  event.stopPropagation();
+  const menu = $("#task-menu");
+  const open = menu.hidden;
+  closeMenus();
+  if (open) {
+    menu.hidden = false;
+    $("#task-menu-btn").setAttribute("aria-expanded", "true");
+  }
+};
+$("#theme-toggle").onclick = (event) => event.stopPropagation();
+document.addEventListener("click", (event) => {
+  if (!$("#task-menu").contains(event.target) && event.target !== $("#task-menu-btn"))
+    $("#task-menu").hidden = true;
+  if (!$("#theme-menu").contains(event.target) && event.target !== $("#theme-toggle"))
+    $("#theme-menu").hidden = true;
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    if (isNarrow() && app.dataset.sidebar === "open") drawer(false);
+    if (app.dataset.workspace === "open" && isOverlayWorkspace() && !isMobile())
+      setWorkspace(false);
+    if (!$("#task-menu").hidden) {
+      $("#task-menu").hidden = true;
+      $("#task-menu-btn").focus();
+    }
+    if (!$("#theme-menu").hidden) {
+      $("#theme-menu").hidden = true;
+      $("#theme-toggle").focus();
+    }
+    closePops();
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    $("#task-search").focus();
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
+    event.preventDefault();
+    if (state.catalog) createTask();
+  }
+});
+$("#rename-task").onclick = () => {
+  closeMenus();
+  $("#task-title").focus();
+  $("#task-title").select();
+};
+$("#my-library").onclick = () => {
+  if (!state.catalog) return login();
+  openLibrary();
+};
+$("#task-search").oninput = () => {
+  clearTimeout(window.__taskSearchTimer);
+  window.__taskSearchTimer = setTimeout(() => listTasks().catch(error), 240);
+};
+$("#more-tasks").onclick = () => listTasks(false).catch(error);
+$("#new-task").onclick = () => (state.catalog ? createTask() : login());
+
+/* 侧栏任务行：按更新时间分组。 */
+function groupLabel(iso) {
+  const time = Date.parse(iso || "");
+  if (!Number.isFinite(time)) return "更早";
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (time >= today) return "今天";
+  if (time >= today - 86_400_000) return "昨天";
+  if (time >= today - 6 * 86_400_000) return "过去 7 天";
+  return "更早";
+}
+async function listTasks(reset = true) {
+  if (!state.catalog) return;
+  const query = $("#task-search").value.trim();
+  if (reset) {
+    taskOffset = 0;
+    taskQuery = query;
+  }
+  const data = await api(
+    `/tasks?q=${encodeURIComponent(query)}&offset=${taskOffset}`,
+  );
+  if (query !== $("#task-search").value.trim()) return;
+  if (reset) $("#task-list").replaceChildren();
+  let lastGroup = "";
+  for (const task of data.tasks) {
+    const group = groupLabel(task.updated_at);
+    if (group !== lastGroup) {
+      const label = document.createElement("div");
+      label.className = "group-label";
+      label.textContent = group;
+      $("#task-list").append(label);
+      lastGroup = group;
+    }
+    const row = document.createElement("div");
+    row.className = "task-row";
+    row.dataset.id = task.id;
+    row.dataset.status = task.status;
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    row.setAttribute("aria-current", String(task.id === state.task?.id));
+    row.title = `${task.title} · ${STATUS[task.status] || task.status}`;
+    row.innerHTML = `
+      <span class="task-dot">${icon("message-square")}</span>
+      <span class="task-name"></span>
+      <span class="task-time"></span>
+      <button class="task-menu-btn" type="button" aria-label="任务操作" title="任务操作">${icon("more")}</button>`;
+    row.querySelector(".task-name").textContent = task.title;
+    row.querySelector(".task-time").textContent = shortTime(task.updated_at);
+    row.onclick = (event) => {
+      if (event.target.closest(".task-menu-btn")) return;
+      openTask(task.id).catch(error);
+    };
+    row.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openTask(task.id).catch(error);
+      }
+    };
+    row.querySelector(".task-menu-btn").onclick = (event) => {
+      event.stopPropagation();
+      taskRowMenu(task, event.currentTarget);
+    };
+    $("#task-list").append(row);
+  }
+  if (reset && !data.tasks.length) {
+    const empty = document.createElement("p");
+    empty.className = "task-empty";
+    empty.textContent = taskQuery ? "没有匹配的任务" : "还没有任务，先新建一个。";
+    $("#task-list").append(empty);
+  }
+  taskOffset += data.tasks.length;
+  $("#more-tasks").hidden = !data.has_more;
+}
+function taskRowMenu(task, anchor) {
+  menuAt(
+    anchor,
+    `<button data-action="copy">${icon("copy")}<span>复制任务</span></button>
+     <button data-action="delete" class="danger">${icon("trash")}<span>删除任务</span></button>`,
+    async (action) => {
+      closeMenus();
+      if (action === "copy") {
+        try {
+          await requireSaved();
+          const copy = await api(`/tasks/${task.id}/copy`, { method: "POST" });
+          await openTask(copy.id);
+          await listTasks();
+        } catch (e) {
+          error(e);
+        }
+      }
+      if (action === "delete") {
+        confirmAction("删除任务", "此任务的材料、过程和全部成果将一并删除，无法恢复。", async () => {
+          await api(`/tasks/${task.id}`, { method: "DELETE" });
+          if (task.id === state.task?.id) {
+            state.dirty = false;
+            await createTask();
+          } else {
+            await listTasks();
+          }
+        });
+      }
+    },
+  );
+}
+
+/* ---------------- 草稿与保存 ---------------- */
 function draftKey() {
   return state.task && state.catalog
     ? `nbx_agent_draft_${state.catalog.user.id}_${state.task.id}`
@@ -328,10 +533,10 @@ function draftKey() {
 }
 function localDraft() {
   try {
-    const k = draftKey();
-    if (k)
+    const key = draftKey();
+    if (key)
       localStorage.setItem(
-        k,
+        key,
         JSON.stringify({
           revision: state.task.revision,
           config: state.task.config,
@@ -345,6 +550,7 @@ function localDraft() {
 }
 function changed() {
   if (!state.task) return;
+  if (ACTIVE.has(state.task.status)) state.configChangedDuringRun = true;
   state.dirty = true;
   state.editSeq++;
   state.task.title = $("#task-title").value || "新任务";
@@ -402,17 +608,9 @@ async function save() {
 async function requireSaved() {
   if (!(await save())) throw Error("请先处理保存冲突或完成输入");
 }
-const fields = {
-  goal: "goal",
-  prompt: "prompt",
-  behavior: "behavior",
-  model: "model",
-  review: "review",
-  "review-prompt": "review_prompt",
-  "auto-improve": "auto_improve",
-  "review-rounds": "review_rounds",
-};
-for (const [id, key] of Object.entries(fields)) {
+
+/* ---------------- 输入与同步 ---------------- */
+for (const [id, key] of Object.entries(FIELDS)) {
   const el = $("#" + id);
   el.addEventListener("input", () => {
     if (!state.task) return;
@@ -423,25 +621,34 @@ for (const [id, key] of Object.entries(fields)) {
           ? Number(el.value)
           : el.value;
     changed();
+    if (id === "prompt" || id === "behavior") autoGrow(el);
   });
 }
 $("#task-title").oninput = changed;
-for (const [source, target] of [
-  ["mobile-goal", "goal"],
-  ["mobile-model", "model"],
-]) {
-  $("#" + source).oninput = (e) => {
-    $("#" + target).value = e.target.value;
-    $("#" + target).dispatchEvent(new Event("input"));
-  };
-  $("#" + target).addEventListener(
-    "input",
-    (e) => ($("#" + source).value = e.target.value),
-  );
-}
-action("#mobile-run", () =>
-  ACTIVE.has(state.task?.status) ? setView("chat") : start(),
-);
+$("#goal").addEventListener("input", () => {
+  if (!state.task) return;
+  state.task.config.goal = $("#goal").value;
+  if (!state.task.runs.length && $("#message").value !== $("#goal").value) {
+    $("#message").value = $("#goal").value;
+    autoGrow($("#message"));
+  }
+  changed();
+});
+$("#message").addEventListener("input", () => {
+  autoGrow($("#message"));
+  if (!state.task) return;
+  if (!state.task.runs.length && $("#goal").value !== $("#message").value) {
+    $("#goal").value = $("#message").value;
+    state.task.config.goal = $("#message").value;
+    changed();
+  }
+});
+$("#message").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey && !state.composing) {
+    event.preventDefault();
+    sendMessage();
+  }
+});
 document.addEventListener("compositionstart", () => {
   state.composing = true;
   clearTimeout(saveTimer);
@@ -453,67 +660,438 @@ document.addEventListener("compositionend", () => {
     saveTimer = setTimeout(() => save().catch(error), 800);
   }
 });
-window.addEventListener("beforeunload", (e) => {
+window.addEventListener("beforeunload", (event) => {
   if (state.dirty) {
     localDraft();
-    e.preventDefault();
-    e.returnValue = "";
+    event.preventDefault();
+    event.returnValue = "";
   }
 });
 window.addEventListener("online", () => {
   save().catch(error);
   poll();
 });
+window.addEventListener("resize", () => {
+  viewport();
+  if (isMobile() && shadeFor === "workspace") hideShade();
+  if (!isOverlayWorkspace()) {
+    if (shadeFor === "workspace") hideShade();
+    app.dataset.workspace =
+      localStorage.getItem("nbx_agent_workspace") === "closed"
+        ? "closed"
+        : "open";
+  }
+  if (isNarrow() && app.dataset.sidebar === "collapsed") hideShade();
+});
+matchMedia("(max-width: 1099px)").addEventListener("change", (event) => {
+  if (event.matches) {
+    app.dataset.sidebar = "collapsed";
+    hideShade();
+    setView("chat", false);
+  } else {
+    app.dataset.sidebar =
+      localStorage.getItem("nbx_agent_sidebar") === "collapsed"
+        ? "collapsed"
+        : "open";
+  }
+});
+matchMedia("(min-width: 1440px)").addEventListener("change", (event) => {
+  if (event.matches) setWorkspace(true, { persist: false });
+  else setWorkspace(false, { persist: false });
+});
 
-async function listTasks(reset = true) {
-  if (!state.catalog) return;
-  const q = $("#task-search").value;
-  if (reset) {
-    taskOffset = 0;
-    taskQuery = q;
+/* ---------------- 工作区：材料、工具、教学工具 ---------------- */
+function renderMaterials() {
+  const root = $("#materials-list");
+  root.replaceChildren();
+  for (const material of state.task.materials) {
+    const row = document.createElement("div");
+    row.className = "material-row";
+    const check = document.createElement("label");
+    check.className = "check";
+    check.innerHTML = `<input type="checkbox"><span class="material-main"><span class="material-name"></span><span class="material-meta"></span></span>`;
+    check.querySelector(".material-name").textContent = material.name;
+    check.querySelector(".material-meta").textContent = `${fmtChars(
+      material.chars,
+    )} · ${material.has_original ? "原文已保存" : "解析文本"}`;
+    const input = check.querySelector("input");
+    input.checked = state.task.config.materials.includes(material.id);
+    input.onchange = () => {
+      const ids = new Set(state.task.config.materials);
+      input.checked ? ids.add(material.id) : ids.delete(material.id);
+      state.task.config.materials = [...ids];
+      changed();
+      renderMaterials();
+      renderComposerContext();
+    };
+    const actions = document.createElement("div");
+    actions.className = "material-actions";
+    const read = document.createElement("button");
+    read.type = "button";
+    read.className = "icon-btn";
+    read.title = "阅读全文";
+    read.setAttribute("aria-label", `阅读 ${material.name}`);
+    read.innerHTML = icon("book-open");
+    read.onclick = async () => {
+      try {
+        const item = await api(path(`/materials/${material.id}`));
+        readText(material.name, item.content);
+      } catch (e) {
+        error(e);
+      }
+    };
+    const download = document.createElement("button");
+    download.type = "button";
+    download.className = "icon-btn";
+    download.title = "下载原文件";
+    download.setAttribute("aria-label", `下载 ${material.name}`);
+    download.innerHTML = icon("download");
+    download.onclick = async () => {
+      try {
+        saveBlob(
+          await api(path(`/materials/${material.id}?original=true`), {
+            blob: true,
+          }),
+          material.name,
+        );
+      } catch (e) {
+        error(e);
+      }
+    };
+    actions.append(read, download);
+    row.append(check, actions);
+    root.append(row);
   }
-  const data = await api(
-    `/tasks?q=${encodeURIComponent(q)}&offset=${taskOffset}`,
-  );
-  if (q !== $("#task-search").value) return;
-  if (reset) $("#task-list").replaceChildren();
-  for (const t of data.tasks) {
-    const b = document.createElement("button");
-    b.className = "aw-task" + (t.id === state.task?.id ? " on" : "");
-    b.dataset.id = t.id;
-    b.title = `${t.title} · ${STATUS[t.status] || t.status}`;
-    const top = document.createElement("span");
-    top.className = "aw-task-top";
-    const name = document.createElement("span");
-    name.className = "aw-task-name";
-    name.textContent = t.title;
-    const badge = document.createElement("span");
-    badge.className = "aw-state";
-    badge.dataset.state = t.status;
-    badge.textContent = STATUS[t.status] || t.status;
-    top.append(name, badge);
-    const meta = document.createElement("span");
-    meta.className = "aw-task-meta";
-    meta.textContent = shortTime(t.updated_at) || "尚无记录";
-    b.append(top, meta);
-    b.onclick = () => openTask(t.id).catch(error);
-    $("#task-list").append(b);
+  if (!state.task.materials.length) {
+    const hint = document.createElement("p");
+    hint.className = "empty-line";
+    hint.textContent = "还没有材料。上传文件，或直接粘贴原文。";
+    root.append(hint);
   }
-  if (reset && !data.tasks.length) {
-    const empty = document.createElement("p");
-    empty.className = "aw-task-empty";
-    empty.textContent = taskQuery ? "没有匹配的任务" : "还没有任务，先新建一个";
-    $("#task-list").append(empty);
-  }
-  taskOffset += data.tasks.length;
-  $("#more-tasks").hidden = !data.has_more;
+  renderComposerContext();
 }
-let searchTimer;
-$("#task-search").oninput = () => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => listTasks().catch(error), 250);
+async function receivedMaterial(material) {
+  upsert(state.task.materials, material);
+  if (!state.task.config.materials.includes(material.id))
+    state.task.config.materials.push(material.id);
+  renderMaterials();
+  changed();
+  await save();
+}
+$("#add-material").onclick = async () => {
+  try {
+    if (!$("#material-text").value.trim()) throw Error("请粘贴材料正文");
+    const material = await api(path("/materials"), {
+      method: "POST",
+      body: {
+        name: $("#material-name").value || "粘贴材料",
+        content: $("#material-text").value,
+      },
+    });
+    await receivedMaterial(material);
+    $("#material-text").value = "";
+    $("#material-name").value = "";
+    toast("材料已保存并选中");
+  } catch (e) {
+    error(e);
+  }
 };
-action("#more-tasks", () => listTasks(false));
+$("#upload").onchange = async (event) => {
+  const files = [...event.target.files];
+  event.target.disabled = true;
+  try {
+    for (const file of files) {
+      const form = new FormData();
+      form.append("file", file);
+      toast(`正在解析 ${file.name}`);
+      await receivedMaterial(
+        await api(path("/upload"), { method: "POST", body: form }),
+      );
+    }
+    toast("文件已保存，解析全文可在材料中查看");
+  } catch (e) {
+    error(e);
+  } finally {
+    event.target.disabled = false;
+    event.target.value = "";
+  }
+};
+
+function renderTools() {
+  const root = $("#tools-list");
+  root.replaceChildren();
+  for (const tool of state.catalog.tools) {
+    const row = document.createElement("div");
+    row.className = "tool-row";
+    row.innerHTML = `
+      <div class="tool-main">
+        <span class="tool-name"></span>
+        <span class="tool-desc"></span>
+      </div>
+      <span class="tag" hidden>未接入</span>
+      <label class="switch" title="启用或关闭">
+        <input type="checkbox">
+        <span class="track"></span>
+        <span class="thumb"></span>
+      </label>`;
+    row.querySelector(".tool-name").textContent = tool.name;
+    row.querySelector(".tool-desc").textContent = tool.description;
+    const input = row.querySelector("input");
+    input.checked = state.task.config.tools.includes(tool.id);
+    input.disabled = !tool.available;
+    row.querySelector(".tag").hidden = tool.available;
+    input.onchange = () => {
+      const tools = new Set(state.task.config.tools);
+      input.checked ? tools.add(tool.id) : tools.delete(tool.id);
+      state.task.config.tools = [...tools];
+      changed();
+      renderComposerContext();
+      renderComposerTools();
+    };
+    root.append(row);
+  }
+  renderComposerContext();
+  renderComposerTools();
+}
+
+function renderTeaching() {
+  const root = $("#teaching-list");
+  root.replaceChildren();
+  const ids = Object.keys(state.task.config.teaching_tools);
+  setText($("#teaching-count"), ids.length ? `${ids.length} 个` : "");
+  for (const id of ids) {
+    const prompt = state.task.config.teaching_tools[id];
+    const item = document.createElement("details");
+    item.className = "teaching-item";
+    const name =
+      state.catalog.official_templates.find((template) => template.id === id)
+        ?.name || id;
+    item.innerHTML = `
+      <summary><span data-icon="chevron-right" class="chev"></span><span class="teaching-name"></span></summary>
+      <textarea aria-label="教学工具提示词" spellcheck="false"></textarea>
+      <div class="teaching-actions">
+        <button type="button" data-test>${icon("play")}<span>单独试运行</span></button>
+        <button type="button" data-remove class="danger">${icon("trash")}<span>移除</span></button>
+      </div>`;
+    item.querySelector(".teaching-name").textContent = name;
+    const area = item.querySelector("textarea");
+    area.value = prompt;
+    area.oninput = () => {
+      state.task.config.teaching_tools[id] = area.value;
+      changed();
+    };
+    item.querySelector("[data-remove]").onclick = () => {
+      delete state.task.config.teaching_tools[id];
+      changed();
+      renderTeaching();
+    };
+    const test = item.querySelector("[data-test]");
+    test.title = "按本页计费规则开启一轮任务，结果保存为独立成果";
+    test.onclick = () => start("tool_test", "", "", id).catch(error);
+    root.append(item);
+  }
+}
+$("#add-teaching").onclick = () => {
+  const tool = state.catalog.official_templates.find(
+    (template) => template.id === $("#teaching-select").value,
+  );
+  if (tool) {
+    state.task.config.teaching_tools[tool.id] = tool.prompt;
+    renderTeaching();
+    changed();
+  }
+};
+
+/* 工具试运行 */
+$("#test-tool").onclick = async () => {
+  try {
+    await requireSaved();
+    const name = $("#test-name").value,
+      query = $("#test-query").value;
+    if (!query.trim()) throw Error("请输入测试内容");
+    const args =
+      name === "check_vocabulary"
+        ? { text: query }
+        : name === "search_material"
+          ? { query, regex: $("#test-regex").checked }
+          : { query };
+    const result = await api(path("/tool-test"), {
+      method: "POST",
+      body: { name, arguments: args },
+    });
+    readText("工具试运行结果", JSON.stringify(result, null, 2));
+  } catch (e) {
+    error(e);
+  }
+};
+
+/* ---------------- 输入卡片上的材料/工具浮层 ---------------- */
+function renderComposerContext() {
+  if (!state.task) return;
+  const host = $("#composer-context");
+  host.replaceChildren();
+  const selected = state.task.materials.filter((material) =>
+    state.task.config.materials.includes(material.id),
+  );
+  for (const material of selected.slice(0, 3)) {
+    const chip = document.createElement("span");
+    chip.className = "context-chip";
+    chip.innerHTML = `${icon("file-text")}<span></span><button type="button" aria-label="移除材料">${icon("x")}</button>`;
+    chip.querySelector("span").textContent = material.name;
+    chip.querySelector("button").onclick = () => {
+      state.task.config.materials = state.task.config.materials.filter(
+        (id) => id !== material.id,
+      );
+      changed();
+      renderMaterials();
+      renderComposerContext();
+    };
+    host.append(chip);
+  }
+  if (selected.length > 3) {
+    const more = document.createElement("span");
+    more.className = "context-chip more";
+    more.textContent = `+${selected.length - 3}`;
+    host.append(more);
+  }
+  const templateId = state.task.config.template_id;
+  const template = state.catalog?.official_templates
+    .concat(state.catalog?.templates || [])
+    .find((item) => item.id === templateId);
+  if (template) {
+    const chip = document.createElement("span");
+    chip.className = "context-chip";
+    chip.innerHTML = `${icon("book-open")}<span></span>`;
+    chip.querySelector("span").textContent = `模板 · ${template.name}`;
+    host.append(chip);
+  }
+  const count = state.task.config.materials.length;
+  const tools = state.task.config.tools.length;
+  setText($("#composer-material-count"), count ? String(count) : "");
+  setText($("#composer-tool-count"), tools ? String(tools) : "");
+  $("#composer-materials").dataset.active = String(count > 0);
+  $("#composer-tools").dataset.active = String(tools > 0);
+}
+function renderComposerMaterials() {
+  const pop = $("#materials-pop");
+  pop.replaceChildren();
+  const title = document.createElement("div");
+  title.className = "composer-pop-title";
+  title.textContent = "本轮材料";
+  pop.append(title);
+  if (!state.task.materials.length) {
+    const empty = document.createElement("div");
+    empty.className = "composer-pop-empty";
+    empty.textContent = "还没有材料。在「材料」页上传或粘贴。";
+    pop.append(empty);
+  }
+  for (const material of state.task.materials) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "composer-pop-row";
+    row.setAttribute(
+      "aria-checked",
+      String(state.task.config.materials.includes(material.id)),
+    );
+    row.innerHTML = `<span class="row-main"><span></span><small></small></span><span class="check">${icon("check")}</span>`;
+    row.querySelector(".row-main span").textContent = material.name;
+    row.querySelector("small").textContent = fmtChars(material.chars);
+    row.onclick = () => {
+      const ids = new Set(state.task.config.materials);
+      ids.has(material.id) ? ids.delete(material.id) : ids.add(material.id);
+      state.task.config.materials = [...ids];
+      changed();
+      renderMaterials();
+      renderComposerMaterials();
+      renderComposerContext();
+    };
+    pop.append(row);
+  }
+  const foot = document.createElement("div");
+  foot.className = "composer-pop-foot";
+  const manage = document.createElement("button");
+  manage.type = "button";
+  manage.textContent = "管理材料与上传…";
+  manage.onclick = () => {
+    closePops();
+    setTab("materials");
+  };
+  foot.append(manage);
+  pop.append(foot);
+}
+function renderComposerTools() {
+  const pop = $("#tools-pop");
+  pop.replaceChildren();
+  const title = document.createElement("div");
+  title.className = "composer-pop-title";
+  title.textContent = "本轮可用的工具";
+  pop.append(title);
+  for (const tool of state.catalog?.tools || []) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "composer-pop-row";
+    row.setAttribute(
+      "aria-checked",
+      String(state.task.config.tools.includes(tool.id)),
+    );
+    row.disabled = !tool.available;
+    row.innerHTML = `<span class="row-main"><span></span><small></small></span><span class="check">${icon("check")}</span>`;
+    row.querySelector(".row-main span").textContent = tool.name;
+    row.querySelector("small").textContent = tool.description;
+    row.onclick = () => {
+      const tools = new Set(state.task.config.tools);
+      tools.has(tool.id) ? tools.delete(tool.id) : tools.add(tool.id);
+      state.task.config.tools = [...tools];
+      changed();
+      renderTools();
+      renderComposerTools();
+    };
+    pop.append(row);
+  }
+  const foot = document.createElement("div");
+  foot.className = "composer-pop-foot";
+  const manage = document.createElement("button");
+  manage.type = "button";
+  manage.textContent = "更多工具设置…";
+  manage.onclick = () => {
+    closePops();
+    setTab("tools");
+  };
+  foot.append(manage);
+  pop.append(foot);
+}
+function closePops() {
+  for (const [button, pop] of [
+    [$("#composer-materials"), $("#materials-pop")],
+    [$("#composer-tools"), $("#tools-pop")],
+  ]) {
+    pop.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  }
+}
+function togglePop(button, pop) {
+  const open = pop.hidden;
+  closePops();
+  if (!open) return;
+  pop.hidden = false;
+  button.setAttribute("aria-expanded", "true");
+}
+$("#composer-materials").onclick = (event) => {
+  event.stopPropagation();
+  renderComposerMaterials();
+  togglePop($("#composer-materials"), $("#materials-pop"));
+};
+$("#composer-tools").onclick = (event) => {
+  event.stopPropagation();
+  renderComposerTools();
+  togglePop($("#composer-tools"), $("#tools-pop"));
+};
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".composer-pop") && !event.target.closest(".composer-btn"))
+    closePops();
+});
+
+/* ---------------- 任务打开与填充 ---------------- */
 async function createTask(config) {
   await requireSaved();
   const item = await api("/tasks", {
@@ -522,17 +1100,21 @@ async function createTask(config) {
       title: "新任务",
       config: config || {
         ...state.catalog.defaults,
-        model: state.catalog.default_model || state.catalog.models[0]?.id || "",
+        model:
+          state.catalog.default_model || state.catalog.models[0]?.id || "",
       },
     },
   });
+  // 新任务总从提示词页开始，不继承上一个任务的哈希标签。
+  history.replaceState({}, "", `/agent/tasks/${item.id}#prompt`);
   await openTask(item.id);
   await listTasks();
 }
-action("#new-task", () => (state.catalog ? createTask() : login()));
 async function openTask(id, push = true) {
   if (state.task?.id === id) {
-    setTab(location.hash.slice(1) || "prompt", false);
+    const hash = location.hash.slice(1);
+    setMode(hash === "trajectory" ? "trajectory" : "chat", false);
+    if (TAB_IDS.has(hash)) setTab(hash, false);
     return;
   }
   await requireSaved();
@@ -541,15 +1123,19 @@ async function openTask(id, push = true) {
   const task = await api(`/tasks/${id}`);
   if (generation !== state.generation) return;
   state.task = task;
+  state.configChangedDuringRun = false;
   state.templateUndo = null;
   $("#undo-template").hidden = true;
   state.dirty = false;
   state.conflict = false;
   state.cursor = 0;
   state.entries.clear();
-  state.runs = new Map(task.runs.map((r) => [r.id, r]));
+  state.runs = new Map(task.runs.map((run) => [run.id, run]));
   state.notes.clear();
   state.version = null;
+  state.selectedVersion = null;
+  state.pages = [];
+  state.page = 0;
   clearTimeline();
   $("#conflict").hidden = true;
   saveState("已保存", "saved");
@@ -564,34 +1150,72 @@ async function openTask(id, push = true) {
       saveState("本地草稿已恢复", "draft");
     }
   } catch {}
-  if (push)
-    history.pushState({ view: "work" }, "", `/agent/tasks/${id}#prompt`);
+  const hash = location.hash.slice(1);
+  const tab = TAB_IDS.has(hash) ? hash : "prompt";
+  if (push) history.pushState({ view: "work" }, "", `/agent/tasks/${id}#${tab}`);
   fill();
-  setTab(location.hash.slice(1) || "prompt", false);
-  drawer(false);
-  document.body.classList.remove("nav-open");
+  state.conversation?.destroy();
+  state.conversation = new Conversation({
+    api,
+    taskId: id,
+    getTask: () => state.task,
+    onOpenResult: (versionId) => {
+      setWorkspace(true);
+      setTab("results");
+      selectVersion(versionId).catch(error);
+    },
+    onOpenEntry: (entryId, kind) => openEntry(entryId, kind).catch(error),
+    onReview: (entryId) => openReview(entryId).catch(error),
+    onError: error,
+    onModeChange: (mode) => {
+      app.dataset.mode = mode;
+      for (const button of $$(".view-tabs [data-mode]"))
+        button.toggleAttribute("aria-current", button.dataset.mode === mode);
+      if (mode === "trajectory") $("#activity-dot").textContent = "";
+    },
+    onRequestStop: () => stopRun().catch(error),
+    toast,
+  });
+  await state.conversation.load(task);
+  setMode(hash === "trajectory" ? "trajectory" : "chat", false);
+  setTab(tab, false);
+  if (isMobile()) setView("chat", false);
+  if (isNarrow()) drawer(false, { focus: false });
   await listTasks();
+  updateStatus();
   poll();
   if (state.dirty && !state.conflict)
     saveTimer = setTimeout(() => save().catch(error), 800);
+  document.title = `${task.title} · NeoBangX Agent`;
 }
 function fill() {
-  const t = state.task;
-  $("#task-title").value = t.title;
-  for (const [id, key] of Object.entries(fields)) {
+  const task = state.task;
+  if (!task) return;
+  const template = state.catalog?.official_templates
+    .concat(state.catalog?.templates || [])
+    .find((item) => item.id === task.config.template_id);
+  setText($("#prompt-origin"), template ? `模板 · ${template.name}` : "任务副本");
+  $("#task-title").value = task.title;
+  for (const [id, key] of Object.entries(FIELDS)) {
     const el = $("#" + id);
-    if (el.type === "checkbox") el.checked = t.config[key];
-    else el.value = t.config[key] ?? "";
+    if (el.type === "checkbox") el.checked = Boolean(task.config[key]);
+    else el.value = task.config[key] ?? "";
   }
-  $("#mobile-goal").value = t.config.goal;
-  $("#mobile-model").value = t.config.model;
-  $("#template").value = t.config.template_id || "";
+  autoGrow($("#prompt"));
+  autoGrow($("#behavior"));
+  $("#template").value = task.config.template_id || "";
+  $("#message").value = task.runs.length ? "" : task.config.goal || "";
+  autoGrow($("#message"));
+  $("#message").placeholder = task.runs.length
+    ? "补充要求，或直接继续任务…"
+    : "这次想完成什么？";
+  $("#composer-seat").dataset.hero = String(!task.runs.length);
+  $("#composer-card").dataset.hero = String(!task.runs.length);
   renderMaterials();
   renderTools();
   renderTeaching();
   renderVersions();
   updateStatus();
-  refreshSelects();
 }
 function clearTimeline() {
   $("#timeline")
@@ -608,49 +1232,46 @@ function syncTimelineEmpty() {
   );
 }
 function updateStatus() {
-  const active = ACTIVE.has(state.task?.status);
-  const disabled = !state.task || !state.catalog?.enabled;
-  $("#run").hidden = active;
-  $("#stop").hidden = !active;
-  $("#run").disabled = disabled;
-  labelOf("#run", state.task?.runs.length ? "再执行一轮" : "开始任务");
-  const status = state.task?.status || "";
-  const chip = $("#task-status");
-  chip.textContent = STATUS[status] || "准备就绪";
-  chip.dataset.state = status;
-  $("#next-step").hidden = !active;
-  labelOf("#send", active ? "发送补充" : "继续任务");
-  labelOf(
-    "#mobile-run",
+  const task = state.task;
+  const active = ACTIVE.has(task?.status);
+  const status = task?.status || "";
+  setText($("#task-status"), STATUS[status] || "准备就绪");
+  $("#task-status-pill").dataset.state = status || "idle";
+  $("#task-status-pill").title = STATUS[status] || "准备就绪";
+  $("#next-step").hidden = !(active && state.configChangedDuringRun);
+  const runPolicy = $("#run-policy");
+  if (runPolicy && state.catalog?.billing) runPolicy.textContent = state.catalog.billing;
+  setText(
+    $("#composer-status"),
     active
-      ? "查看进度"
-      : state.task?.runs.length
-        ? "再执行一轮"
-        : "开始任务",
+      ? `${STATUS[status] || "执行中"} · 执行在后台继续`
+      : STATUS[status] || "准备就绪",
   );
-  $("#mobile-run").disabled = disabled;
+  $("#composer-status").dataset.state = status || "idle";
+  state.conversation?.updateComposerState();
+  state.conversation?.updateWaiting();
+  state.conversation?.refreshEmpty();
 }
-$$("[data-policy]").forEach(
-  (button) =>
-    (button.onclick = async () => {
-      try {
-        const c = await api("/catalog");
-        modal(
-          "本轮预算与任务保存",
-          `<p>${esc(c.billing)}</p><p>当前剩余额度：${c.user.is_unlimited ? "无限" : c.user.remaining} 次</p><p>单轮上限：${c.limits.steps} 步、${c.limits.tokens.toLocaleString()} tokens、${Math.round(c.limits.seconds / 60)} 分钟。到达上限会保存已有内容，可继续新一轮。</p><p>${esc(c.retention)}</p><p>免费模型仍遵守管理员设置的调用频率限制。</p>`,
-        );
-      } catch (e) {
-        error(e);
-      }
-    }),
-);
+
+/* ---------------- 轨迹卡片 ---------------- */
 function upsert(list, item) {
   const index = list.findIndex((x) => x.id === item.id);
   if (index < 0) list.push(item);
   else list[index] = item;
 }
+function stepIcon(item) {
+  const label = String(item.label || "");
+  if (item.kind === "review") return "list-checks";
+  if (/审阅/.test(label)) return "list-checks";
+  if (/搜索|检索/.test(label)) return "search";
+  if (/材料|读取/.test(label)) return "file-text";
+  if (/修订|改写/.test(label)) return "wand";
+  if (/试运行/.test(label)) return "play";
+  if (/成果|生成|输出/.test(label)) return "sparkle";
+  return "route";
+}
 function entryCard(item) {
-  let card = $(`[data-entry="${item.id}"]`);
+  let card = $(`#timeline [data-entry="${item.id}"]`);
   if (!card) {
     card = document.createElement("article");
     card.className = "entry";
@@ -665,17 +1286,16 @@ function entryCard(item) {
       ["prompt", "指令"],
       ["arguments", "工具调用"],
     ]) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.innerHTML = `${icon(KIND_ICON[kind])}<span>${label}</span>`;
-      b.dataset.kind = kind;
-      b.onclick = () => openEntry(item.id, kind).catch(error);
-      card.querySelector(".aw-step-actions").append(b);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.innerHTML = `${icon(KIND_ICON[kind])}<span>${label}</span>`;
+      button.dataset.kind = kind;
+      button.onclick = () => openEntry(item.id, kind).catch(error);
+      card.querySelector(".aw-step-actions").append(button);
     }
   }
   card.dataset.status = item.status;
   const title = card.querySelector(".entry-title");
-  // 轮询每秒一次、压力场景有 200 张卡：标题没变就别重建图标和文本。
   if (title.dataset.label !== item.label) {
     title.dataset.label = item.label;
     title.innerHTML = `${icon(stepIcon(item))}<span></span>`;
@@ -684,14 +1304,15 @@ function entryCard(item) {
   const stateEl = card.querySelector(".entry-state");
   setText(stateEl, STATUS[item.status] || item.status);
   if (stateEl.dataset.state !== item.status) stateEl.dataset.state = item.status;
-  const chars = item.details.chars || {};
-  const meta = Object.entries(chars)
-    .filter(([k]) => k !== "prompt")
-    .map(
-      ([k, n]) =>
-        `${{ reasoning: "思考", output: "输出", arguments: "调用", input: "参数" }[k] || k} ${n.toLocaleString()} 字符`,
-    )
-    .join(" · ") || "等待输出";
+  const counts = item.details.chars || {};
+  const meta =
+    Object.entries(counts)
+      .filter(([key]) => key !== "prompt")
+      .map(
+        ([key, n]) =>
+          `${{ reasoning: "思考", output: "输出", arguments: "调用", input: "参数" }[key] || key} ${Number(n).toLocaleString()} 字符`,
+      )
+      .join(" · ") || "等待输出";
   setText(card.querySelector(".entry-meta"), meta);
   setText(
     card.querySelector(".entry-note"),
@@ -706,107 +1327,114 @@ function entryCard(item) {
     item.status === "done" &&
     !actions.querySelector("[data-source]")
   ) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.dataset.source = item.id;
-    b.innerHTML = `${icon("target")}<span>定位材料</span>`;
-    b.onclick = () => sourceLinks(item.id).catch(error);
-    actions.append(b);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.source = item.id;
+    button.innerHTML = `${icon("target")}<span>定位材料</span>`;
+    button.onclick = () => sourceLinks(item.id).catch(error);
+    actions.append(button);
   }
-  if (item.kind === "review" && item.details.version_id && !actions.querySelector("[data-review]")) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.dataset.review = item.id;
-    b.innerHTML = `${icon("list-checks")}<span>处理审阅意见</span>`;
-    b.onclick = () => openReview(item.id).catch(error);
-    actions.append(b);
+  if (
+    item.kind === "review" &&
+    item.details.version_id &&
+    !actions.querySelector("[data-review]")
+  ) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.review = item.id;
+    button.innerHTML = `${icon("list-checks")}<span>处理审阅意见</span>`;
+    button.onclick = () => openReview(item.id).catch(error);
+    actions.append(button);
   }
-  card.querySelectorAll("[data-kind]").forEach((b) => {
-    b.hidden = !chars[b.dataset.kind];
+  card.querySelectorAll("[data-kind]").forEach((button) => {
+    button.hidden = !counts[button.dataset.kind];
   });
 }
 function runCard(run) {
-  let c = $(`[data-run="${run.id}"]`);
-  if (!c) {
-    c = document.createElement("article");
-    c.className = "entry";
-    c.dataset.run = run.id;
-    c.innerHTML =
+  let card = $(`#timeline [data-run="${run.id}"]`);
+  if (!card) {
+    card = document.createElement("article");
+    card.className = "entry";
+    card.dataset.run = run.id;
+    card.innerHTML =
       '<div class="entry-header"><strong></strong><button class="aw-steplink" type="button"><span></span></button></div><small></small>';
-    c.querySelector("button").onclick = async () => {
+    card.querySelector("button").onclick = async () => {
       try {
-        const r = await api(path(`/runs/${run.id}`));
-        readText("本轮配置快照", JSON.stringify(r.snapshot, null, 2));
+        const detail = await api(path(`/runs/${run.id}`));
+        readText("本轮配置快照", JSON.stringify(detail.snapshot, null, 2));
       } catch (e) {
         error(e);
       }
     };
-    $("#timeline").append(c);
+    $("#timeline").append(card);
   }
-  c.dataset.status = run.status;
+  card.dataset.status = run.status;
   const label = `${{ execute: "执行", continue: "继续", review: "审阅", revise: "修订", tool_test: "教学工具试运行" }[run.mode] || run.mode} · ${STATUS[run.status] || run.status}`;
-  const strong = c.querySelector("strong");
+  const strong = card.querySelector("strong");
   if (strong.dataset.label !== label) {
     strong.dataset.label = label;
     strong.innerHTML = `${icon("route")}<span></span>`;
     strong.querySelector("span").textContent = label;
   }
-  setText(c.querySelector(".aw-steplink span"), "本轮配置");
+  setText(card.querySelector(".aw-steplink span"), "本轮配置");
   setText(
-    c.querySelector("small"),
-    run.error || `步骤 ${run.step} · ${run.tokens.toLocaleString()} tokens`,
+    card.querySelector("small"),
+    run.error || `步骤 ${run.step} · ${Number(run.tokens).toLocaleString()} tokens`,
   );
+  syncTimelineEmpty();
 }
+
+/* ---------------- 轮询 ---------------- */
 async function poll() {
   clearTimeout(pollTimer);
   if (!state.task) return;
-  const gen = state.generation,
+  const generation = state.generation,
     id = state.task.id;
+  const conversation = state.conversation;
   try {
     const data = await api(`/tasks/${id}/events?after=${state.cursor}`);
-    if (gen !== state.generation) return;
-    const timeline = $("#timeline"),
-      near =
-        timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 90;
-    let changed = false;
-    for (const ev of data.events) {
-      const v = ev.data;
-      changed = true;
-      if (ev.kind === "entry") {
-        state.entries.set(v.id, v);
-        entryCard(v);
+    if (generation !== state.generation) return;
+    for (const event of data.events) {
+      const value = event.data;
+      if (event.kind === "entry") {
+        state.entries.set(value.id, value);
+        entryCard(value);
+        $("#activity-dot").textContent =
+          app.dataset.mode === "trajectory" ? "•" : "";
       }
-      if (ev.kind === "run") {
-        state.runs.set(v.id, v);
-        upsert(state.task.runs, v);
-        runCard(v);
+      if (event.kind === "run") {
+        state.runs.set(value.id, value);
+        upsert(state.task.runs, value);
+        runCard(value);
       }
-      if (ev.kind === "material") {
-        upsert(state.task.materials, v);
+      if (event.kind === "material") {
+        upsert(state.task.materials, value);
         renderMaterials();
       }
-      if (ev.kind === "version") {
-        upsert(state.task.versions, v);
+      if (event.kind === "version") {
+        upsert(state.task.versions, value);
         renderVersions();
         $("#result-dot").textContent = "•";
       }
-      if (ev.kind === "adopt") {
-        state.task.adopted_version = v.version_id;
+      if (event.kind === "adopt") {
+        state.task.adopted_version = value.version_id;
         renderVersions();
       }
-      if (ev.kind === "note") {
-        let c = $(`[data-note="${v.id}"]`);
-        if (!c) {
-          c = document.createElement("article");
-          c.className = "entry";
-          c.dataset.note = v.id;
-          c.innerHTML = `<div class="aw-note">${icon("chat")}<span></span></div>`;
-          timeline.append(c);
+      if (event.kind === "note") {
+        let card = $(`#timeline [data-note="${value.id}"]`);
+        if (!card) {
+          card = document.createElement("article");
+          card.className = "entry";
+          card.dataset.note = value.id;
+          card.innerHTML = `<div class="aw-note">${icon("chat")}<span></span></div>`;
+          $("#timeline").append(card);
         }
-        c.dataset.status = v.applied ? "done" : "queued";
-        c.querySelector(".aw-note span").textContent =
-          `${v.applied ? "已生效" : "已接收，等待下一步"}：${v.text}`;
+        card.dataset.status = value.applied ? "done" : "queued";
+        card.querySelector(".aw-note span").textContent =
+          `${value.applied ? "已生效" : "已接收，等待下一步"}：${value.text}`;
       }
+      if (state.conversation === conversation)
+        state.conversation.applyEvent(event);
     }
     state.cursor = data.cursor;
     state.task.status = data.task.status;
@@ -819,9 +1447,12 @@ async function poll() {
         saveState("需处理冲突", "conflict");
       } else {
         const latest = await api(`/tasks/${id}`);
-        if (gen !== state.generation) return;
+        if (generation !== state.generation) return;
+        const localMessage = $("#message").value;
         state.task = latest;
         fill();
+        if (latest.runs.length) $("#message").value = localMessage;
+        state.conversation?.setTask(latest);
       }
     }
     updateStatus();
@@ -831,40 +1462,36 @@ async function poll() {
       "live",
       ACTIVE.has(state.task.status) ? "已连接 · 任务在后台执行" : "已连接",
     );
-    if (changed && near) timeline.scrollTop = timeline.scrollHeight;
-    else if (changed) {
-      $("#latest").hidden = false;
-      $("#activity-dot").textContent = "•";
-    }
     pollTimer = setTimeout(
       poll,
       data.has_more ? 30 : ACTIVE.has(state.task.status) ? 1000 : 5000,
     );
   } catch (e) {
-    if (gen !== state.generation) return;
+    if (generation !== state.generation) return;
+    console.error("agent poll", e);
     connState(
       navigator.onLine ? "重连中" : "离线",
       "error",
-      navigator.onLine ? "连接中断，正在重试；任务状态待同步" : "离线 · 任务状态待同步",
+      navigator.onLine
+        ? "连接中断，正在重试；任务状态待同步"
+        : "离线 · 任务状态待同步",
     );
     pollTimer = setTimeout(poll, 5000);
   }
 }
-$("#timeline").onscroll = () => {
-  const e = $("#timeline");
-  if (e.scrollHeight - e.scrollTop - e.clientHeight < 90)
-    $("#latest").hidden = true;
-};
-$("#latest").onclick = () => {
-  $("#timeline").scrollTop = $("#timeline").scrollHeight;
-  $("#latest").hidden = true;
-};
+$("#latest").onclick = () => state.conversation?.scrollToLatest();
+
 async function openEntry(id, kind) {
-  const entry = state.entries.get(id),
-    taskId = state.task.id;
+  const entry =
+    state.entries.get(id) ||
+    state.conversation?.getEntry(id) ||
+    { label: "步骤" };
+  const taskId = state.task.id;
   modal(
     `${entry.label} · ${{ reasoning: "思考全文", prompt: "实际指令", input: "输入参数", output: "输出全文", arguments: "工具调用" }[kind]}`,
     '<div id="full-reader"></div>',
+    [],
+    { wide: true },
   );
   const r = new FullReader($("#full-reader"), {
     onError: error,
@@ -885,6 +1512,7 @@ async function openEntry(id, kind) {
       ),
   });
   reader = r;
+  r.root.querySelector(".reader-meta").textContent = "正在读取全文与分页…";
   r.root.querySelector("[data-a=find]").disabled = true;
   let after = 0;
   async function load() {
@@ -895,7 +1523,7 @@ async function openEntry(id, kind) {
       );
       if (r.closed) return;
       after = data.cursor;
-      r.append(data.chunks.map((c) => c.text));
+      r.append(data.chunks.map((chunk) => chunk.text));
       r.root.querySelector("[data-a=find]").disabled = data.has_more;
       if (!data.chunks.length && !r.length)
         r.root.querySelector(".reader-meta").textContent =
@@ -912,20 +1540,11 @@ async function openEntry(id, kind) {
   await load();
 }
 
-async function start(
-  mode = "execute",
-  instruction = "",
-  baseVersion = "",
-  teachingTool = "",
-) {
+/* ---------------- 执行 ---------------- */
+async function start(mode = "execute", instruction = "", baseVersion = "", teachingTool = "") {
   await requireSaved();
   const keyName = `nbx_agent_request_${state.task.id}`,
-    signature = JSON.stringify({
-      mode,
-      instruction,
-      baseVersion,
-      teachingTool,
-    });
+    signature = JSON.stringify({ mode, instruction, baseVersion, teachingTool });
   let old;
   try {
     old = JSON.parse(sessionStorage.getItem(keyName) || "null");
@@ -943,25 +1562,34 @@ async function start(
     },
   });
   sessionStorage.removeItem(keyName);
+  if (instruction) run.instruction = instruction;
   state.task.status = run.status;
   state.task.active_run = run.id;
+  state.configChangedDuringRun = false;
   upsert(state.task.runs, run);
   state.runs.set(run.id, run);
   runCard(run);
-  syncTimelineEmpty();
+  state.conversation?.setTask(state.task);
+  state.conversation?.applyEvent({ kind: "run", data: run });
+  $("#message").value = "";
+  autoGrow($("#message"));
+  setMode("chat", false);
+  setView("chat", false);
   updateStatus();
-  setView("chat");
+  state.conversation?.refreshEmpty();
+  state.conversation?.updateComposerState();
+  state.conversation?.scrollToLatest();
   poll();
   await listTasks();
 }
-action("#run", () => start());
-action("#stop", async () => {
+async function stopRun() {
   await api(path("/stop"), { method: "POST" });
   state.task.status = "stopping";
   toast("已请求停止，正在保存已收到的内容");
   poll();
-});
-action("#send", async () => {
+}
+async function sendMessage() {
+  if (!state.task) return;
   const text = $("#message").value.trim();
   if (ACTIVE.has(state.task?.status)) {
     if (!text) {
@@ -969,22 +1597,43 @@ action("#send", async () => {
       return;
     }
     await api(path("/notes"), { method: "POST", body: { text } });
-  } else await start("continue", text, state.task.adopted_version || "");
-  $("#message").value = "";
-  poll();
-});
-action("#apply-next", async () => {
-  await requireSaved();
-  await api(path("/notes"), { method: "POST", body: { apply_config: true } });
-  toast("已接收，新配置将在下一步生效；本轮模型保持不变");
-  poll();
-});
-action("#copy-task", async () => {
-  await requireSaved();
-  const t = await api(path("/copy"), { method: "POST" });
-  await openTask(t.id);
-});
-action("#delete-task", () =>
+    $("#message").value = "";
+    autoGrow($("#message"));
+    poll();
+    return;
+  }
+  if (!state.task.runs.length) {
+    await start("execute");
+    return;
+  }
+  await start("continue", text, state.task.adopted_version || "");
+}
+$("#send").onclick = () => sendMessage().catch(error);
+$("#stop").onclick = () => stopRun().catch(error);
+$("#apply-next").onclick = async () => {
+  try {
+    await requireSaved();
+    await api(path("/notes"), { method: "POST", body: { apply_config: true } });
+    state.configChangedDuringRun = false;
+    $("#next-step").hidden = true;
+    toast("已接收，新配置将在下一步生效；本轮模型保持不变");
+    poll();
+  } catch (e) {
+    error(e);
+  }
+};
+$("#copy-task").onclick = async () => {
+  closeMenus();
+  try {
+    await requireSaved();
+    const task = await api(path("/copy"), { method: "POST" });
+    await openTask(task.id);
+  } catch (e) {
+    error(e);
+  }
+};
+$("#delete-task").onclick = () => {
+  closeMenus();
   confirmAction(
     "删除任务",
     "此任务的材料、过程和全部成果将一并删除，无法恢复。",
@@ -995,192 +1644,44 @@ action("#delete-task", () =>
       state.task = null;
       await createTask();
     },
-  ),
-);
-
-function renderMaterials() {
-  const root = $("#materials-list");
-  root.replaceChildren();
-  for (const m of state.task.materials) {
-    const c = document.createElement("div");
-    c.className = "material";
-    c.innerHTML = `<label class="aw-check"><input type="checkbox" data-check><span>${esc(m.name)}<small>${m.chars.toLocaleString()} 字符 · 原文已保存</small></span></label><div class="aw-row"><button data-read type="button">${icon("book-open")}<span>阅读全文</span></button><button data-download type="button">${icon("download")}<span>下载原文件</span></button></div>`;
-    const check = c.querySelector("[data-check]");
-    check.checked = state.task.config.materials.includes(m.id);
-    check.onchange = () => {
-      const ids = new Set(state.task.config.materials);
-      check.checked ? ids.add(m.id) : ids.delete(m.id);
-      state.task.config.materials = [...ids];
-      changed();
-    };
-    c.querySelector("[data-read]").onclick = async () => {
-      try {
-        const item = await api(path(`/materials/${m.id}`));
-        readText(m.name, item.content);
-      } catch (e) {
-        error(e);
-      }
-    };
-    c.querySelector("[data-download]").onclick = async () => {
-      try {
-        saveBlob(
-          await api(path(`/materials/${m.id}?original=true`), { blob: true }),
-          m.name,
-        );
-      } catch (e) {
-        error(e);
-      }
-    };
-    root.append(c);
-  }
-  if (!state.task.materials.length) {
-    const hint = document.createElement("p");
-    hint.className = "aw-empty-line";
-    hint.textContent = "还没有材料。上传文件，或直接粘贴原文。";
-    root.append(hint);
-  }
-}
-async function receivedMaterial(m) {
-  upsert(state.task.materials, m);
-  if (!state.task.config.materials.includes(m.id))
-    state.task.config.materials.push(m.id);
-  renderMaterials();
-  changed();
-  await save();
-}
-action("#add-material", async () => {
-  if (!$("#material-text").value.trim()) throw Error("请粘贴材料正文");
-  const m = await api(path("/materials"), {
-    method: "POST",
-    body: {
-      name: $("#material-name").value || "粘贴材料",
-      content: $("#material-text").value,
-    },
-  });
-  await receivedMaterial(m);
-  $("#material-text").value = "";
-  $("#material-name").value = "";
-  toast("材料已保存并选中");
-});
-$("#upload").onchange = async (e) => {
-  const files = [...e.target.files];
-  e.target.disabled = true;
-  try {
-    for (const file of files) {
-      const form = new FormData();
-      form.append("file", file);
-      toast(`正在解析 ${file.name}`);
-      await receivedMaterial(
-        await api(path("/upload"), { method: "POST", body: form }),
-      );
-    }
-    toast("文件已保存，解析全文可在材料中查看");
-  } catch (err) {
-    error(err);
-  } finally {
-    e.target.disabled = false;
-    e.target.value = "";
-  }
-};
-function renderTools() {
-  const root = $("#tools-list");
-  root.replaceChildren();
-  for (const t of state.catalog.tools) {
-    const c = document.createElement("div");
-    c.className = "tool-card";
-    c.innerHTML = `<label class="aw-check"><input type="checkbox" data-check><span><span class="aw-tool-name">${esc(t.name)}</span>${t.available ? "" : '<span class="aw-tag">未接入</span>'}</span></label><p>${esc(t.description)}</p>`;
-    const b = c.querySelector("[data-check]");
-    b.disabled = !t.available;
-    b.checked = state.task.config.tools.includes(t.id);
-    b.onchange = () => {
-      const s = new Set(state.task.config.tools);
-      b.checked ? s.add(t.id) : s.delete(t.id);
-      state.task.config.tools = [...s];
-      changed();
-    };
-    root.append(c);
-  }
-}
-function renderTeaching() {
-  const root = $("#teaching-list");
-  root.replaceChildren();
-  for (const [id, prompt] of Object.entries(state.task.config.teaching_tools)) {
-    const d = document.createElement("details");
-    d.innerHTML = `<summary>${esc(state.catalog.official_templates.find((t) => t.id === id)?.name || id)}</summary><textarea class="editor" aria-label="教学工具提示词"></textarea><div class="aw-row"><button data-remove type="button">${icon("trash")}<span>移除此工具</span></button><button data-test type="button">${icon("play")}<span>单独试运行</span></button></div>`;
-    d.querySelector("textarea").value = prompt;
-    d.querySelector("textarea").oninput = (e) => {
-      state.task.config.teaching_tools[id] = e.target.value;
-      changed();
-    };
-    d.querySelector("[data-remove]").onclick = () => {
-      delete state.task.config.teaching_tools[id];
-      changed();
-      renderTeaching();
-    };
-    const test = d.querySelector("[data-test]");
-    test.title = "按本页计费规则开启一轮任务，结果保存为独立成果";
-    test.onclick = () => start("tool_test", "", "", id).catch(error);
-    root.append(d);
-  }
-}
-action("#add-teaching", () => {
-  const t = state.catalog.official_templates.find(
-    (t) => t.id === $("#teaching-select").value,
   );
-  if (t) {
-    state.task.config.teaching_tools[t.id] = t.prompt;
-    renderTeaching();
-    changed();
-  }
-});
-action("#test-tool", async () => {
-  await requireSaved();
-  const name = $("#test-name").value,
-    q = $("#test-query").value;
-  if (!q.trim()) throw Error("请输入测试内容");
-  const args =
-    name === "check_vocabulary"
-      ? { text: q }
-      : name === "search_material"
-        ? { query: q, regex: $("#test-regex").checked }
-        : { query: q };
-  const r = await api(path("/tool-test"), {
-    method: "POST",
-    body: { name, arguments: args },
-  });
-  readText("工具试运行结果", JSON.stringify(r, null, 2));
-});
+};
+
+/* ---------------- 模板 ---------------- */
 function getTemplate() {
   return (
     state.catalog.official_templates.find(
-      (t) => t.id === $("#template").value,
-    ) || state.catalog.templates.find((t) => t.id === $("#template").value)
+      (template) => template.id === $("#template").value,
+    ) ||
+    state.catalog.templates.find(
+      (template) => template.id === $("#template").value,
+    )
   );
 }
-function applyTemplate(t) {
-  if (!t) return;
+function applyTemplate(template) {
+  if (!template) return;
   state.templateUndo = structuredClone(state.task.config);
-  if (t.kind === "tool") {
-    state.task.config.tools = [...t.config.tools];
-    state.task.config.teaching_tools = { ...t.config.teaching_tools };
-  } else if (t.config) {
+  if (template.kind === "tool") {
+    state.task.config.tools = [...template.config.tools];
+    state.task.config.teaching_tools = { ...template.config.teaching_tools };
+  } else if (template.config) {
     const current = state.task.config;
     state.task.config = {
-      ...t.config,
+      ...template.config,
       materials: current.materials,
       goal: current.goal,
       model: current.model,
-      template_id: t.id,
+      template_id: template.id,
     };
   } else {
-    state.task.config.prompt = t.prompt;
-    state.task.config.template_id = t.id;
+    state.task.config.prompt = template.prompt;
+    state.task.config.template_id = template.id;
   }
   fill();
   $("#undo-template").hidden = false;
   changed();
 }
-action("#undo-template", () => {
+$("#undo-template").onclick = () => {
   if (!state.templateUndo) return;
   state.task.config = {
     ...state.templateUndo,
@@ -1192,10 +1693,10 @@ action("#undo-template", () => {
   fill();
   changed();
   $("#undo-template").hidden = true;
-});
+};
 $("#template").onchange = () => {
-  const t = getTemplate();
-  if (!t) {
+  const template = getTemplate();
+  if (!template) {
     state.task.config.template_id = "";
     changed();
     return;
@@ -1203,16 +1704,34 @@ $("#template").onchange = () => {
   confirmAction(
     "应用模板",
     "将替换任务提示词或工具配置；当前材料与目标保留。",
-    () => applyTemplate(t),
+    () => applyTemplate(template),
   );
 };
-action("#reset-prompt", () => {
-  const t = getTemplate();
-  if (!t) throw Error("请先选择模板");
+$("#reset-prompt").onclick = () => {
+  const template = getTemplate();
+  if (!template) return error(Error("请先选择模板"));
   confirmAction("恢复模板", "恢复模板会替换当前编辑内容。", () =>
-    applyTemplate(t),
+    applyTemplate(template),
   );
-});
+};
+function askText(title, label, initial, run) {
+  modal(
+    title,
+    `<label for="dialog-value">${esc(label)}</label><textarea id="dialog-value"></textarea>`,
+    [
+      { text: "取消", run: closeModal },
+      {
+        text: "保存",
+        primary: true,
+        run: async () => {
+          await run($("#dialog-value").value);
+          closeModal();
+        },
+      },
+    ],
+  );
+  $("#dialog-value").value = initial;
+}
 async function saveTemplate(kind) {
   askText(
     kind === "tool" ? "保存工具配置" : "另存为我的模板",
@@ -1220,86 +1739,94 @@ async function saveTemplate(kind) {
     state.task.title,
     async (name) => {
       await requireSaved();
-      const r = await api("/templates", {
+      const result = await api("/templates", {
         method: "POST",
         body: { name: name.trim(), kind, config: state.task.config },
       });
-      state.catalog.templates.push(r);
+      state.catalog.templates.push(result);
       renderTemplateOptions();
       toast("已保存到个人库");
     },
   );
 }
-action("#save-template", () => saveTemplate("prompt"));
-action("#save-tool-template", () => saveTemplate("tool"));
+$("#save-template").onclick = () => saveTemplate("prompt").catch(error);
+$("#save-tool-template").onclick = () => saveTemplate("tool").catch(error);
 function renderTemplateOptions() {
-  const opts =
+  const options =
     '<option value="">自定义提示词</option>' +
     state.catalog.official_templates
-      .map((t) => `<option value="${esc(t.id)}">官方 · ${esc(t.name)}</option>`)
+      .map((template) => `<option value="${esc(template.id)}">官方 · ${esc(template.name)}</option>`)
       .join("") +
     state.catalog.templates
-      .map((t) => `<option value="${esc(t.id)}">我的 · ${esc(t.name)}</option>`)
+      .map((template) => `<option value="${esc(template.id)}">我的 · ${esc(template.name)}</option>`)
       .join("");
-  $("#template").innerHTML = opts;
+  $("#template").innerHTML = options;
   $("#teaching-select").innerHTML = state.catalog.official_templates
-    .map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`)
+    .map((template) => `<option value="${esc(template.id)}">${esc(template.name)}</option>`)
     .join("");
   if (state.task) $("#template").value = state.task.config.template_id || "";
-  refreshSelects();
 }
-action("#my-library", () => {
-  if (!state.catalog) return login();
+function openLibrary() {
   modal("我的提示词与工具", '<div id="library"></div>');
-  for (const t of state.catalog.templates) {
-    const c = document.createElement("div");
-    c.className = "tool-card";
-    c.innerHTML = `<strong>${esc(t.name)}</strong><small>${t.kind === "tool" ? "工具配置" : "提示词模板"}</small><div class="aw-row"><button data-use type="button">用于当前任务</button><button data-new type="button">新建任务</button><button data-del type="button" class="danger">删除</button></div>`;
-    c.querySelector("[data-use]").onclick = () => {
-      applyTemplate(t);
+  const root = $("#library");
+  if (!state.catalog.templates.length) {
+    root.textContent = "还没有个人模板。在提示词或工具页另存即可。";
+    return;
+  }
+  for (const template of state.catalog.templates) {
+    const card = document.createElement("div");
+    card.className = "tool-card";
+    card.innerHTML = `<strong></strong><small>${template.kind === "tool" ? "工具配置" : "提示词模板"}</small><div class="row"><button data-use type="button">用于当前任务</button><button data-new type="button">新建任务</button><button data-del type="button" class="danger">删除</button></div>`;
+    card.querySelector("strong").textContent = template.name;
+    card.querySelector("[data-use]").onclick = () => {
+      applyTemplate(template);
       closeModal();
     };
-    c.querySelector("[data-new]").onclick = async () => {
+    card.querySelector("[data-new]").onclick = async () => {
       try {
-        await createTask({ ...t.config, materials: [], template_id: t.id });
+        await createTask({ ...template.config, materials: [], template_id: template.id });
         closeModal();
       } catch (e) {
         error(e);
       }
     };
-    c.querySelector("[data-del]").onclick = () => {
+    card.querySelector("[data-del]").onclick = () => {
       confirmAction(
         "删除个人模板",
         "只删除个人库中的模板；任务中已保存的副本和成果会保留。",
         async () => {
-          await api(`/templates/${t.id}`, { method: "DELETE" });
+          await api(`/templates/${template.id}`, { method: "DELETE" });
           state.catalog.templates = state.catalog.templates.filter(
-            (x) => x.id !== t.id,
+            (item) => item.id !== template.id,
           );
           renderTemplateOptions();
+          closeModal();
+          openLibrary();
         },
       );
     };
-    $("#library").append(c);
+    root.append(card);
   }
-  if (!state.catalog.templates.length)
-    $("#library").textContent = "还没有个人模板。在提示词或工具页另存即可。";
-});
+}
 
+/* ---------------- 成果 ---------------- */
 let worker,
   workerSeq = 0;
 const pendingWork = new Map();
 function work(data) {
   if (!worker) {
     worker = new Worker("/static/agent/document-worker.js");
-    worker.onmessage = ({ data }) => {
-      const p = pendingWork.get(data.id);
-      pendingWork.delete(data.id);
-      if (p) data.error ? p.reject(Error(data.error)) : p.resolve(data.result);
+    worker.onmessage = ({ data: message }) => {
+      const pending = pendingWork.get(message.id);
+      pendingWork.delete(message.id);
+      if (pending)
+        message.error
+          ? pending.reject(Error(message.error))
+          : pending.resolve(message.result);
     };
     worker.onerror = () => {
-      for (const p of pendingWork.values())
-        p.reject(Error("文档处理失败，请使用原文阅读"));
+      for (const pending of pendingWork.values())
+        pending.reject(Error("文档处理失败，请使用原文阅读"));
       pendingWork.clear();
       worker.terminate();
       worker = null;
@@ -1313,30 +1840,36 @@ function work(data) {
 }
 async function compare(title, before, after) {
   const blocks = await work({ type: "diff", before, after });
-  const text = blocks
-    .map(
-      (b) =>
-        `${{ same: "未修改", removed: "− 原版", added: "+ 修改版" }[b.kind]}\n${b.lines.join("\n")}`,
-    )
-    .join("\n\n");
-  readText(title + " · 共同首尾与完整变更段", text);
+  const body = document.createElement("div");
+  body.className = "diff-view";
+  for (const block of blocks) {
+    const section = document.createElement("section");
+    section.className = `diff-block ${block.kind}`;
+    const label = document.createElement("div");
+    label.className = "diff-label";
+    label.textContent =
+      { same: "未修改", removed: "− 原版", added: "+ 修改版" }[block.kind] +
+      ` · ${block.lines.length} 行`;
+    const pre = document.createElement("pre");
+    pre.textContent = block.lines.join("\n");
+    section.append(label, pre);
+    body.append(section);
+  }
+  modal(`${title} · 共同首尾与完整变更段`, body, [], { wide: true });
 }
-action("#compare-prompt", () =>
+$("#compare-prompt").onclick = () =>
   compare(
     "提示词比较",
     getTemplate()?.prompt ||
       getTemplate()?.config?.prompt ||
       state.catalog.defaults.prompt,
     $("#prompt").value,
-  ),
-);
-action("#compare-conflict", async () => {
-  const remote = await api(path());
-  const local = structuredClone(state.task);
-  modal(
-    "保存冲突 · 本地草稿仍保留",
-    "<p>先比较两份完整配置，再选择处理方式。</p>",
-    [
+  ).catch(error);
+$("#compare-conflict").onclick = async () => {
+  try {
+    const remote = await api(path());
+    const local = structuredClone(state.task);
+    modal("保存冲突 · 本地草稿仍保留", "<p>先比较两份完整配置，再选择处理方式。</p>", [
       {
         text: "比较完整配置",
         run: () =>
@@ -1351,7 +1884,7 @@ action("#compare-conflict", async () => {
         run: async () => {
           const copy = await api(path("/copy"), { method: "POST" });
           const mapped = new Map(Object.entries(copy.material_map));
-          const cfg = {
+          const config = {
             ...local.config,
             materials: local.config.materials
               .map((id) => mapped.get(id))
@@ -1362,7 +1895,7 @@ action("#compare-conflict", async () => {
             body: {
               title: local.title + " · 本地草稿",
               revision: copy.revision,
-              config: cfg,
+              config,
             },
           });
           state.dirty = false;
@@ -1398,195 +1931,312 @@ action("#compare-conflict", async () => {
           }
         },
       },
-    ],
-  );
-});
+    ]);
+  } catch (e) {
+    error(e);
+  }
+};
+
 function renderVersions() {
+  if (!state.task) return;
   const versions = state.task.versions;
-  $("#version-count").textContent = versions.length || "";
+  setText($("#version-count"), versions.length ? String(versions.length) : "");
   $("#result-empty").hidden = versions.length > 0;
   $("#versions-list").replaceChildren();
-  for (const v of versions) {
-    const adopted = v.id === state.task.adopted_version;
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "aw-version" + (adopted ? " on" : "");
-    b.innerHTML = `${icon(adopted ? "check" : "file-text")}<span></span>`;
-    b.querySelector("span").textContent =
-      `${adopted ? "已采用 · " : ""}${v.title} · ${v.complete ? "完整" : "待补全"} · ${v.chars.toLocaleString()} 字符`;
-    b.dataset.version = v.id;
-    b.onclick = () => selectVersion(v.id).catch(error);
-    $("#versions-list").append(b);
-  }
+  versions.forEach((version, index) => {
+    const adopted = version.id === state.task.adopted_version;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "version-row";
+    button.dataset.version = version.id;
+    button.dataset.current = String(version.id === state.version?.id);
+    button.innerHTML = `<span class="num">${index + 1}</span><span class="version-main"><strong></strong><small></small></span>${adopted ? '<span class="adopted">已采用</span>' : ""}`;
+    button.querySelector("strong").textContent = version.title;
+    button.querySelector("small").textContent = `${version.complete ? "完整" : "待补全"} · ${fmtChars(version.chars)}`;
+    button.onclick = () => selectVersion(version.id).catch(error);
+    $("#versions-list").append(button);
+  });
   $("#version-select").innerHTML = versions
     .map(
-      (v, i) =>
-        `<option value="${v.id}">版本 ${i + 1} · ${esc(v.title)}${v.id === state.task.adopted_version ? " · 已采用" : ""}</option>`,
+      (version, index) =>
+        `<option value="${version.id}">版本 ${index + 1} · ${esc(version.title)}${version.id === state.task.adopted_version ? " · 已采用" : ""}</option>`,
     )
     .join("");
   if (state.version) $("#version-select").value = state.version.id;
   $("#result-actions").hidden = !state.version;
-  refreshSelects();
 }
-$("#version-select").onchange = (e) =>
-  selectVersion(e.target.value).catch(error);
+$("#version-select").onchange = (event) =>
+  selectVersion(event.target.value).catch(error);
+async function ensureResultSelection() {
+  if (!state.task || state.version) return;
+  const versions = state.task.versions;
+  if (!versions.length) return;
+  await selectVersion(versions[versions.length - 1].id);
+}
 async function selectVersion(id) {
-  const gen = state.generation;
+  const generation = state.generation;
   state.selectedVersion = id;
-  const v = await api(path(`/versions/${id}`));
-  if (gen !== state.generation || state.selectedVersion !== id) return;
-  state.version = v;
+  const version = await api(path(`/versions/${id}`));
+  if (generation !== state.generation || state.selectedVersion !== id) return;
+  state.version = version;
   state.page = 0;
-  state.pages = pageText(v.content);
+  state.pages = pageText(version.content);
   $("#result-actions").hidden = false;
   $("#version-select").value = id;
+  renderVersions();
   renderDocument();
-  const pages = await work({ type: "pages", text: v.content });
-  if (state.version?.id !== id) return;
-  state.pages = pages;
-  renderDocument();
+  try {
+    const pages = await work({ type: "pages", text: version.content });
+    if (state.version?.id !== id) return;
+    state.pages = pages;
+    renderDocument();
+  } catch (e) {
+    console.warn(e);
+  }
+}
+function setDocumentHead(version) {
+  setText($("#document-title"), version.title);
+  const index = state.task.versions.findIndex((item) => item.id === version.id);
+  setText($("#document-version"), index >= 0 ? `v${index + 1}` : "");
+  $("#document-adopted").hidden = state.task.adopted_version !== version.id;
 }
 function renderDocument() {
   if (!state.version) return;
-  const p = state.pages[state.page];
-  const raw = $("#result-plain").checked || p.plain;
+  const page = state.pages[state.page];
+  if (!page) return;
+  const raw = $("#result-plain").checked || page.plain;
   const root = $("#result-body");
-  root.className = "document" + (raw ? " plain" : "");
-  if (raw) root.textContent = p.text;
-  else
-    root.innerHTML = DOMPurify.sanitize(marked.parse(p.text), {
-      FORBID_TAGS: ["img", "iframe", "style"],
+  root.className = "document" + (raw ? " plain" : " md");
+  setDocumentHead(state.version);
+  if (raw) {
+    root.textContent = page.text;
+  } else {
+    root.innerHTML = window.DOMPurify.sanitize(window.marked.parse(page.text), {
+      FORBID_TAGS: ["img", "iframe", "style", "link", "meta"],
       FORBID_ATTR: ["style"],
     });
-  root.querySelectorAll("a").forEach((a) => {
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-  });
-  root.querySelectorAll("table").forEach((table) => {
-    const headers = [...table.querySelectorAll("thead th")].map(
-      (h) => h.textContent,
-    );
-    if (table.querySelector("[colspan],[rowspan]")) return;
-    table
-      .querySelectorAll("tbody tr")
-      .forEach((tr) =>
-        [...tr.children].forEach(
-          (td, i) => (td.dataset.label = headers[i] || `第 ${i + 1} 列`),
-        ),
-      );
-    if ($("#table-cards").checked) table.classList.add("cards");
-  });
-  $("#result-page").textContent =
-    `${state.page + 1} / ${state.pages.length} 段${p.plain ? " · 长段落原文" : ""}`;
+    decorateDocument(root);
+  }
+  $("#result-page").textContent = `${state.page + 1} / ${state.pages.length} 段${
+    page.plain ? " · 长段落原文" : ""
+  }`;
   $("#result-prev").disabled = state.page === 0;
   $("#result-next").disabled = state.page === state.pages.length - 1;
   $("#adopt").disabled =
-    !state.version.complete || state.task.adopted_version === state.version.id;
+    !state.version.complete ||
+    state.task.adopted_version === state.version.id;
+}
+function decorateDocument(root) {
+  root.querySelectorAll("a").forEach((anchor) => {
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+  });
+  root.querySelectorAll("table").forEach((table) => {
+    const headers = [...table.querySelectorAll("thead th")].map(
+      (header) => header.textContent,
+    );
+    if (table.querySelector("[colspan],[rowspan]")) return;
+    table.querySelectorAll("tbody tr").forEach((row) =>
+      [...row.children].forEach(
+        (cell, index) =>
+          (cell.dataset.label = headers[index] || `第 ${index + 1} 列`),
+      ),
+    );
+    if ($("#table-cards").checked) table.classList.add("cards");
+  });
 }
 $("#result-prev").onclick = () => {
   state.page--;
   renderDocument();
+  $("#work-body").scrollTop = 0;
 };
 $("#result-next").onclick = () => {
   state.page++;
   renderDocument();
+  $("#work-body").scrollTop = 0;
 };
 $("#result-plain").onchange = renderDocument;
 $("#table-cards").onchange = renderDocument;
-action("#adopt", async () => {
-  await api(path(`/versions/${state.version.id}/adopt`), {
-    method: "POST",
-    body: { expected: state.task.adopted_version },
-  });
-  state.task.adopted_version = state.version.id;
-  renderVersions();
-  renderDocument();
-  toast("已采用，之前版本仍保留");
-});
-action("#compare-version", async () => {
-  if (!state.version.parent_id) throw Error("此版本没有基准版本");
-  const parent = await api(path(`/versions/${state.version.parent_id}`));
-  await compare("成果版本比较", parent.content, state.version.content);
-});
-action("#edit-version", () => {
+$("#adopt").onclick = async () => {
+  try {
+    await api(path(`/versions/${state.version.id}/adopt`), {
+      method: "POST",
+      body: { expected: state.task.adopted_version },
+    });
+    state.task.adopted_version = state.version.id;
+    renderVersions();
+    renderDocument();
+    toast("已采用，之前版本仍保留");
+  } catch (e) {
+    error(e);
+  }
+};
+$("#compare-version").onclick = async () => {
+  try {
+    if (!state.version.parent_id) throw Error("此版本没有基准版本");
+    const parent = await api(path(`/versions/${state.version.parent_id}`));
+    await compare("成果版本比较", parent.content, state.version.content);
+  } catch (e) {
+    error(e);
+  }
+};
+$("#edit-version").onclick = () => {
   const baseVersion = state.version;
-  askText(
-    "编辑成果 · 保存为新版本",
-    "完整正文",
-    baseVersion.content,
-    async (content) => {
-      const r = await api(path("/versions"), {
-        method: "POST",
-        body: {
-          request_key: newKey(),
-          title: baseVersion.title,
-          content,
-          parent_id: baseVersion.id,
-        },
-      });
-      upsert(state.task.versions, r);
-      renderVersions();
-      await selectVersion(r.id);
-    },
-  );
-});
-action("#review-version", () => start("review", "", state.version.id));
-action("#revise-version", () =>
+  askText("编辑成果 · 保存为新版本", "完整正文", baseVersion.content, async (content) => {
+    const result = await api(path("/versions"), {
+      method: "POST",
+      body: {
+        request_key: newKey(),
+        title: baseVersion.title,
+        content,
+        parent_id: baseVersion.id,
+      },
+    });
+    upsert(state.task.versions, result);
+    renderVersions();
+    await selectVersion(result.id);
+  });
+};
+$("#review-version").onclick = () => start("review", "", state.version.id).catch(error);
+$("#revise-version").onclick = () =>
   askText("修订此版本", "具体修改要求", "", async (instruction) => {
     await start("revise", instruction, state.version.id);
-  }),
-);
-action("#copy-result", async () => {
-  if (navigator.clipboard && window.isSecureContext)
-    await navigator.clipboard.writeText(state.version.content);
-  else {
-    const ta = document.createElement("textarea");
-    ta.value = state.version.content;
-    document.body.append(ta);
-    ta.select();
-    const ok = document.execCommand("copy");
-    ta.remove();
-    if (!ok) throw Error("浏览器禁止复制，请下载 Markdown");
+  });
+$("#copy-result").onclick = async () => {
+  try {
+    await copyText(state.version.content);
+    toast("已复制完整成果");
+  } catch (e) {
+    error(e);
   }
-  toast("已复制完整成果");
-});
-action("#export-md", () =>
-  saveBlob(
-    state.version.content,
-    state.version.title + ".md",
-    "text/markdown;charset=utf-8",
-  ),
-);
-action("#export-docx", async () => {
-  const version = state.version;
-  const pages = await work({ type: "pages", text: version.content });
-  const fragments = [];
-  for (const page of pages) {
-    fragments.push(
-      DOMPurify.sanitize(
-        page.plain ? `<pre>${esc(page.text)}</pre>` : marked.parse(page.text),
-        {
-          FORBID_TAGS: ["img", "iframe", "style"],
-          FORBID_ATTR: ["style"],
-        },
-      ),
+};
+$("#export-md").onclick = () =>
+  saveBlob(state.version.content, state.version.title + ".md", "text/markdown;charset=utf-8");
+$("#export-docx").onclick = async () => {
+  try {
+    const version = state.version;
+    const pages = await work({ type: "pages", text: version.content });
+    const fragments = [];
+    for (const page of pages) {
+      fragments.push(
+        window.DOMPurify.sanitize(
+          page.plain
+            ? `<pre>${esc(page.text)}</pre>`
+            : window.marked.parse(page.text),
+          {
+            FORBID_TAGS: ["img", "iframe", "style", "link", "meta"],
+            FORBID_ATTR: ["style"],
+          },
+        ),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    saveBlob(
+      await work({
+        type: "docx",
+        html: `<!doctype html><html><head><meta charset="utf-8"></head><body>${fragments.join("")}</body></html>`,
+      }),
+      version.title + ".docx",
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+  } catch (e) {
+    error(e);
   }
-  const html = fragments.join("");
-  saveBlob(
-    await work({
-      type: "docx",
-      html: `<!doctype html><html><head><meta charset="utf-8"></head><body>${html}</body></html>`,
-    }),
-    version.title + ".docx",
-  );
+};
+$("#view-instruction").onclick = () => {
+  const run = state.task?.runs?.[state.task.runs.length - 1];
+  if (!run) return error(Error("还没有执行记录"));
+  api(path(`/runs/${run.id}`))
+    .then((detail) => readText("最近一轮的完整指令", JSON.stringify(detail.snapshot, null, 2)))
+    .catch(error);
+};
+
+/* ---------------- 弹层 ---------------- */
+function modal(title, body, buttons = [], { wide = false } = {}) {
+  closeModal();
+  const dialog = $("#modal");
+  dialog.dataset.wide = String(wide);
+  $("#modal-title").textContent = title;
+  $("#modal-body").replaceChildren();
+  if (typeof body === "string") $("#modal-body").innerHTML = body;
+  else $("#modal-body").append(body);
+  $("#modal-actions").replaceChildren();
+  for (const item of buttons) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = item.text;
+    button.className = item.primary ? "btn btn-primary" : "btn btn-ghost";
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        await item.run();
+      } catch (e) {
+        error(e);
+      } finally {
+        button.disabled = false;
+      }
+    };
+    $("#modal-actions").append(button);
+  }
+  $("#modal-actions").hidden = !buttons.length;
+  dialog.showModal();
+}
+function closeModal() {
+  reader?.destroy();
+  reader = null;
+  modalCleanup?.();
+  modalCleanup = null;
+  if ($("#modal").open) $("#modal").close();
+}
+$("#modal-close").onclick = closeModal;
+$("#modal").addEventListener("cancel", closeModal);
+function readText(title, text) {
+  modal(title, '<div id="full-reader"></div>', [], { wide: true });
+  reader = new FullReader($("#full-reader"), {
+    text,
+    download: () => saveBlob(text, `${title}.txt`),
+    onError: error,
+  });
+}
+function confirmAction(title, text, run) {
+  modal(title, `<p>${esc(text)}</p>`, [
+    { text: "取消", run: closeModal },
+    {
+      text: "确认",
+      primary: true,
+      run: async () => {
+        await run();
+        closeModal();
+      },
+    },
+  ]);
+}
+
+/* 政策 */
+$$("[data-policy]").forEach((button) => {
+  button.onclick = async () => {
+    try {
+      const catalog = await api("/catalog");
+      modal(
+        "本轮预算与任务保存",
+        `<div class="policy">
+          <p>${esc(catalog.billing)}</p>
+          <p>当前剩余额度：${catalog.user.is_unlimited ? "无限" : catalog.user.remaining} 次</p>
+          <p>单轮上限：${catalog.limits.steps} 步、${catalog.limits.tokens.toLocaleString()} tokens、${Math.round(catalog.limits.seconds / 60)} 分钟。到达上限会保存已有内容，可继续新一轮。</p>
+          <p>${esc(catalog.retention)}</p>
+          <p>免费模型仍遵守管理员设置的调用频率限制。</p>
+        </div>`,
+      );
+    } catch (e) {
+      error(e);
+    }
+  };
 });
 
-async function login() {
+/* ---------------- 登录 ---------------- */
+function login() {
   modal(
     "登录工作台",
-    '<p>使用与普通工具相同的使用码，恢复自己的任务和成果。</p><label for="login-code">使用码</label><input id="login-code" type="password" autocomplete="off"><p id="login-error" role="alert"></p>',
+    '<p class="login-note">使用与普通工具相同的使用码，恢复自己的任务和成果。</p><label for="login-code">使用码</label><input id="login-code" type="password" autocomplete="off"><p id="login-error" class="login-error" role="alert"></p>',
     [
       {
         text: "登录",
@@ -1614,8 +2264,9 @@ async function login() {
       },
     ],
   );
+  setTimeout(() => $("#login-code")?.focus(), 30);
 }
-action("#account", () => {
+$("#account").onclick = () => {
   if (!state.catalog) return login();
   confirmAction("切换使用码", "当前已保存的任务仍属于原使用码。", async () => {
     await requireSaved();
@@ -1626,103 +2277,14 @@ action("#account", () => {
     localStorage.removeItem("nbx_auth");
     location.assign("/agent");
   });
-});
-let bgfx = null;
-function initBackground() {
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  if (matchMedia("(max-width: 767px)").matches) return;
-  const load = () => {
-    const script = document.createElement("script");
-    script.src = "/static/nbx-background.js";
-    script.async = true;
-    script.onload = () => {
-      if (typeof createBackground !== "function") return;
-      const canvas = $("#bgfx");
-      if (!canvas) return;
-      bgfx = createBackground(canvas);
-      canvas.classList.add("bgfx-ready");
-    };
-    document.head.append(script);
-  };
-  if ("requestIdleCallback" in window)
-    requestIdleCallback(load, { timeout: 2600 });
-  else setTimeout(load, 1200);
-}
-async function boot() {
-  fillIcons();
-  enhanceSelects();
-  applyTheme(readTheme(), { persist: false });
-  initThemeMenu(() => bgfx?.themeChanged());
-  watchStorage(() => bgfx?.themeChanged());
-  initBackground();
-  if (!token()) {
-    await login();
-    connState("尚未登录", "idle");
-    return;
-  }
-  try {
-    state.catalog = await api("/catalog");
-    labelOf("#account", "切换使用码");
-    $("#account").title = "切换使用码";
-    $("#account").setAttribute("aria-label", "切换使用码");
-    $("#model").innerHTML = state.catalog.models
-      .map(
-        (m) =>
-          `<option value="${esc(m.id)}">${esc(m.name || m.id)}${m.is_free ? " · 免费" : ""}</option>`,
-      )
-      .join("");
-    $("#mobile-model").innerHTML = $("#model").innerHTML;
-    refreshSelects();
-    $("#run-policy").textContent = state.catalog.billing;
-    renderTemplateOptions();
-    await listTasks();
-    const id = location.pathname.match(/\/agent\/tasks\/([a-f0-9]+)/)?.[1];
-    if (id) await openTask(id, false);
-    else await createTask();
-    const handoff = sessionStorage.getItem("nbx_agent_handoff");
-    if (handoff) {
-      sessionStorage.removeItem("nbx_agent_handoff");
-      const data = JSON.parse(handoff);
-      const t = state.catalog.official_templates.find(
-        (t) => t.id === String(data.toolId),
-      );
-      if (t) applyTemplate(t);
-      if (data.text)
-        await receivedMaterial(
-          await api(path("/materials"), {
-            method: "POST",
-            body: {
-              name: data.name || "来自普通工具的材料",
-              content: data.text,
-            },
-          }),
-        );
-      toast("已带入材料与提示词副本");
-    }
-  } catch (e) {
-    connState("连接失败", "error");
-    if (e.status === 401) await login();
-    else error(e);
-  }
-}
-window.addEventListener("popstate", () => {
-  const id = location.pathname.match(/\/agent\/tasks\/([a-f0-9]+)/)?.[1];
-  if (id && id !== state.task?.id) openTask(id, false).catch(error);
-  else {
-    setTab(location.hash.slice(1) || "prompt", false);
-    setView(history.state?.view || "work", false);
-  }
-});
-updateStatus();
-boot();
+};
 
+/* ---------------- 审阅 ---------------- */
 async function openReview(id) {
-  const entry = state.entries.get(id);
+  const entry = state.entries.get(id) || state.conversation?.getEntry(id);
   const blob = await api(
     path(`/entries/${id}/content?kind=review&download=true`),
-    {
-      blob: true,
-    },
+    { blob: true },
   );
   let data;
   try {
@@ -1733,7 +2295,7 @@ async function openReview(id) {
   }
   modal(
     "审阅意见 · 建议由你决定",
-    `<p>${esc(data.summary)}</p><div id="review-issues"></div>`,
+    `<div class="review-summary">${esc(data.summary)}</div><div id="review-issues"></div>`,
     [
       {
         text: "忽略选中意见",
@@ -1752,7 +2314,7 @@ async function openReview(id) {
       {
         text: "复核选中意见",
         run: async () => {
-          const issues = selected().map((i) => data.issues[i]);
+          const issues = selected().map((index) => data.issues[index]);
           if (!issues.length) throw Error("请先选择意见");
           await start(
             "review",
@@ -1766,7 +2328,7 @@ async function openReview(id) {
         text: "按选中意见生成候选稿",
         primary: true,
         run: async () => {
-          const issues = selected().map((i) => data.issues[i]);
+          const issues = selected().map((index) => data.issues[index]);
           if (!issues.length) throw Error("请先选择意见");
           await start(
             "revise",
@@ -1781,56 +2343,72 @@ async function openReview(id) {
   );
   function selected() {
     return [...document.querySelectorAll("#review-issues input:checked")].map(
-      (e) => Number(e.value),
+      (input) => Number(input.value),
     );
   }
-  data.issues.forEach((issue, i) => {
+  data.issues.forEach((issue, index) => {
     const el = document.createElement("div");
     el.className = "tool-card aw-issue";
-    el.innerHTML = `<label class="aw-check"><input type="checkbox" value="${i}"><span>${esc(issue.problem)}<small>${issue.certainty === "confirmed" ? "审阅判断：有依据" : "待核实"}${entry.details.ignored?.includes(i) ? " · 已忽略" : ""}</small></span></label><p><b>原文</b>${esc(issue.quote || "未定位")}</p><p><b>依据</b>${esc(issue.evidence)}</p><p><b>建议</b>${esc(issue.fix)}</p>`;
+    el.innerHTML = `<label class="check"><input type="checkbox" value="${index}"><span>${esc(
+      issue.problem,
+    )}<small>${
+      issue.certainty === "confirmed" ? "审阅判断：有依据" : "待核实"
+    }${entry.details.ignored?.includes(index) ? " · 已忽略" : ""}</small></span></label><p><b>原文</b>${esc(
+      issue.quote || "未定位",
+    )}</p><p><b>依据</b>${esc(issue.evidence)}</p><p><b>建议</b>${esc(
+      issue.fix,
+    )}</p>`;
     $("#review-issues").append(el);
   });
 }
-action("#legacy-tasks", async () => {
-  const d = await api("/legacy");
-  modal(
-    "旧版任务 · 只读归档",
-    '<p>旧执行不会在新版继续。材料、成果和已保存过程可以查看与下载。</p><div id="legacy-list"></div>',
-  );
-  if (!d.tasks.length)
-    $("#legacy-list").textContent = "当前使用码没有旧版任务。";
-  let offset = 0;
-  function append(data) {
-    for (const t of data.tasks) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "aw-version";
-      b.textContent = `${t.tool_name || "旧任务"} · ${t.created_at} · ${t.status}`;
-      b.onclick = async () => {
-        try {
-          const item = await api(`/legacy/${t.id}`);
-          readText("旧版任务完整归档", JSON.stringify(item, null, 2));
-        } catch (e) {
-          error(e);
-        }
-      };
-      $("#legacy-list").append(b);
-    }
-    offset += data.tasks.length;
-    if (data.has_more) {
-      const more = document.createElement("button");
-      more.textContent = "加载更多";
-      more.onclick = async () => {
-        const next = await api("/legacy?offset=" + offset);
-        more.remove();
-        append(next);
-      };
-      $("#legacy-list").append(more);
-    }
-  }
-  append(d);
-});
 
+/* ---------------- 旧版归档 ---------------- */
+$("#legacy-tasks").onclick = async () => {
+  try {
+    const data = await api("/legacy");
+    modal(
+      "旧版任务 · 只读归档",
+      '<p>旧执行不会在新版继续。材料、成果和已保存过程可以查看与下载。</p><div id="legacy-list"></div>',
+    );
+    if (!data.tasks.length)
+      $("#legacy-list").textContent = "当前使用码没有旧版任务。";
+    let offset = 0;
+    function append(page) {
+      for (const task of page.tasks) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "version-row";
+        button.textContent = `${task.tool_name || "旧任务"} · ${task.created_at} · ${task.status}`;
+        button.onclick = async () => {
+          try {
+            const item = await api(`/legacy/${task.id}`);
+            readText("旧版任务完整归档", JSON.stringify(item, null, 2));
+          } catch (e) {
+            error(e);
+          }
+        };
+        $("#legacy-list").append(button);
+      }
+      offset += page.tasks.length;
+      if (page.has_more) {
+        const more = document.createElement("button");
+        more.type = "button";
+        more.className = "btn btn-ghost btn-sm";
+        more.textContent = "加载更多";
+        more.onclick = async () => {
+          more.remove();
+          append(await api("/legacy?offset=" + offset));
+        };
+        $("#legacy-list").append(more);
+      }
+    }
+    append(data);
+  } catch (e) {
+    error(e);
+  }
+};
+
+/* ---------------- 材料来源 ---------------- */
 async function sourceLinks(id) {
   const blob = await api(path(`/entries/${id}/content?download=true`), {
     blob: true,
@@ -1841,11 +2419,11 @@ async function sourceLinks(id) {
     (result.material_id ? [{ ...result, start: result.offset }] : []);
   modal("材料来源与位置", '<div id="source-list"></div>');
   for (const match of matches) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "aw-version";
-    b.textContent = `${match.name || match.material_id} · 字符 ${match.start || 0}`;
-    b.onclick = async () => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "version-row";
+    button.textContent = `${match.name || match.material_id} · 字符 ${match.start || 0}`;
+    button.onclick = async () => {
       try {
         const data = await api(path(`/materials/${match.material_id}`));
         readText(data.name, data.content);
@@ -1854,7 +2432,107 @@ async function sourceLinks(id) {
         error(e);
       }
     };
-    $("#source-list").append(b);
+    $("#source-list").append(button);
   }
   if (!matches.length) $("#source-list").textContent = "没有匹配来源。";
 }
+
+/* ---------------- 启动 ---------------- */
+async function boot() {
+  fillIcons();
+  initTheme();
+  if (localStorage.getItem("nbx_agent_sidebar") === "collapsed" && !isNarrow())
+    app.dataset.sidebar = "collapsed";
+  if (isNarrow()) app.dataset.sidebar = "collapsed";
+  setWorkspace(
+    !isOverlayWorkspace()
+      ? localStorage.getItem("nbx_agent_workspace") !== "closed"
+      : false,
+    { persist: false },
+  );
+  setView("chat", false);
+  if (!token()) {
+    await login();
+    connState("尚未登录", "idle");
+    return;
+  }
+  try {
+    state.catalog = await api("/catalog");
+    $("#account-name").textContent = maskCode(state.catalog.user.code);
+    $("#account-note").textContent = state.catalog.user.is_unlimited
+      ? "无限额度"
+      : `剩余 ${state.catalog.user.remaining} 次`;
+    $("#account-avatar").textContent = state.catalog.user.code?.slice(-1) || "N";
+    $("#model").innerHTML = state.catalog.models
+      .map(
+        (model) =>
+          `<option value="${esc(model.id)}">${esc(model.name || model.id)}${model.is_free ? " · 免费" : ""}</option>`,
+      )
+      .join("");
+    $("#run-policy").textContent = state.catalog.billing;
+    renderTemplateOptions();
+    await listTasks();
+    const id = location.pathname.match(/\/agent\/tasks\/([a-f0-9]+)/)?.[1];
+    if (id) {
+      try {
+        await openTask(id, false);
+      } catch (e) {
+        if (e.status === 404) {
+          toast("任务不存在，已新建任务");
+          await createTask();
+        } else throw e;
+      }
+    } else await createTask();
+    const handoff = sessionStorage.getItem("nbx_agent_handoff");
+    if (handoff) {
+      sessionStorage.removeItem("nbx_agent_handoff");
+      const data = JSON.parse(handoff);
+      const template = state.catalog.official_templates.find(
+        (item) => item.id === String(data.toolId),
+      );
+      if (template) applyTemplate(template);
+      if (data.text)
+        await receivedMaterial(
+          await api(path("/materials"), {
+            method: "POST",
+            body: {
+              name: data.name || "来自普通工具的材料",
+              content: data.text,
+            },
+          }),
+        );
+      toast("已带入材料与提示词副本");
+    }
+  } catch (e) {
+    connState("连接失败", "error");
+    if (e.status === 401) await login();
+    else error(e);
+  }
+}
+function maskCode(code) {
+  const value = String(code || "");
+  if (!value) return "使用码";
+  return `使用码 ····${value.slice(-4)}`;
+}
+window.addEventListener("popstate", () => {
+  const id = location.pathname.match(/\/agent\/tasks\/([a-f0-9]+)/)?.[1];
+  if (id && id !== state.task?.id) openTask(id, false).catch(error);
+  else {
+    const hash = location.hash.slice(1);
+    setMode(hash === "trajectory" ? "trajectory" : "chat", false);
+    if (TAB_IDS.has(hash)) setTab(hash, false);
+    else setTab("prompt", false);
+  }
+});
+$$(".view-tabs [data-mode]").forEach((button) => {
+  button.onclick = () => setMode(button.dataset.mode);
+});
+$$("[data-tab]").forEach((button) => {
+  button.onclick = () => setTab(button.dataset.tab);
+});
+$$(".mobile-switch [data-view]").forEach((button) => {
+  button.onclick = () => setView(button.dataset.view);
+});
+$("#activity-dot").textContent = "";
+updateStatus();
+boot().catch(error);

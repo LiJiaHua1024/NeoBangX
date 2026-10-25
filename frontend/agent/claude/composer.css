@@ -1,0 +1,517 @@
+/* Claude 风格工作台 · 输入卡片
+   来源：dsh-claude-style@1e7acc5b 的 features/composer（card.css、inline.css、
+   bottom-gap.css）与 docs/screenshots/claude-conversation-*.png。 */
+
+.composer-seat {
+  position: relative;
+  flex: none;
+  z-index: var(--layer-control);
+  padding: 0 32px 14px;
+  background:
+    linear-gradient(to top, var(--canvas) 0%, var(--canvas) 72%, transparent 100%);
+  background-color: var(--canvas);
+}
+.composer-seat::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(-1 * var(--composer-fade-h));
+  height: var(--composer-fade-h);
+  background: linear-gradient(
+    to top,
+    var(--canvas) 0%,
+    color-mix(in srgb, var(--canvas) 82%, transparent) 32%,
+    color-mix(in srgb, var(--canvas) 40%, transparent) 68%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+.composer-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: var(--conversation-w);
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+/* 附件 chip 行：卡片上方 */
+.composer-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 0;
+  padding: 8px 12px 0;
+}
+.composer-context:empty {
+  display: none;
+}
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  max-width: 220px;
+  padding: 0 8px;
+  border: 0.5px solid var(--border-2);
+  border-radius: var(--radius-pill);
+  background: var(--canvas);
+  color: var(--ink-2);
+  font-size: 11px;
+}
+.context-chip .aw-svg {
+  width: 12px;
+  height: 12px;
+  color: var(--ink-3);
+}
+.context-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-chip button {
+  display: inline-flex;
+  color: var(--ink-4);
+}
+.context-chip button:hover {
+  color: var(--ink);
+}
+.context-chip .more {
+  color: var(--ink-3);
+  font-size: 10px;
+}
+
+/* 输入卡片本体 */
+.composer-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 48px;
+  padding: 2px 2px 2px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-composer);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--timing-feedback), box-shadow var(--timing-feedback);
+}
+.composer-card:focus-within {
+  border-color: var(--composer-focus-border);
+  box-shadow: var(--shadow-composer-focus);
+}
+.composer-input {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  max-height: 240px;
+  padding: 8px 14px 0;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+  overflow-y: auto;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+.composer-input::placeholder {
+  color: var(--ink-4);
+}
+.composer-card[data-hero="true"] .composer-input {
+  min-height: 84px;
+  padding-top: 14px;
+}
+.composer-card[data-drag="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* 卡片底部工具栏 */
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 30px;
+  padding: 0 4px 1px 6px;
+}
+.composer-bar .grow {
+  flex: 1;
+}
+.composer-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 7px;
+  border-radius: var(--radius-segment);
+  color: var(--ink-2);
+  font-size: 12px;
+  white-space: nowrap;
+  transition: background-color var(--timing-feedback), color var(--timing-feedback);
+}
+.composer-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.composer-btn[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+.composer-btn .aw-svg {
+  width: 15px;
+  height: 15px;
+}
+.composer-btn .count {
+  color: var(--ink-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.composer-btn[data-active="true"] {
+  color: var(--accent);
+}
+.composer-btn[data-active="true"] .count {
+  color: var(--accent);
+}
+
+/* 模型选择：文字 + 无箭头 */
+.model-trigger {
+  max-width: 190px;
+}
+.model-trigger .model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.model-trigger:hover .model-name {
+  color: var(--ink);
+}
+
+/* 发送 / 停止 */
+.send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: var(--radius-segment);
+  background: var(--ink);
+  color: var(--canvas);
+  transition: background-color var(--timing-feedback), opacity var(--timing-feedback),
+    transform var(--dur-instant) var(--ease-standard);
+}
+.send-btn:hover {
+  background: color-mix(in srgb, var(--ink) 84%, var(--canvas));
+}
+.send-btn:active {
+  transform: scale(0.94);
+}
+.send-btn:disabled {
+  opacity: 0.28;
+}
+.send-btn .aw-svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+}
+.send-btn[data-mode="send"] .btn-label {
+  display: none;
+}
+.send-btn[data-mode="start"] {
+  width: auto;
+  padding: 0 12px;
+  gap: 6px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+.send-btn[data-mode="start"]:hover {
+  background: var(--accent-hover);
+}
+.stop-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: var(--radius-segment);
+  border: 1px solid var(--border-2);
+  background: var(--canvas);
+  color: var(--ink);
+}
+.stop-btn:hover {
+  background: var(--hover);
+}
+.stop-btn .aw-svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
+/* 卡片下方状态行：状态 / 统计 / 连接 */
+.composer-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 22px;
+  padding: 0 3px;
+  color: var(--ink-4);
+  font-size: 11px;
+  user-select: none;
+}
+.composer-foot .foot-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.composer-foot .foot-left .aw-svg {
+  width: 12px;
+  height: 12px;
+}
+.composer-foot .foot-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-foot .foot-status[data-state="running"] {
+  color: var(--accent);
+}
+.composer-foot .foot-status[data-state="failed"] {
+  color: #b4453c;
+}
+.composer-foot .foot-status[data-state="waiting"] {
+  color: #a4621d;
+}
+.composer-foot .foot-spacer {
+  flex: 1;
+}
+.composer-foot .foot-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.conn-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-4);
+  font-size: 11px;
+}
+.conn-inline::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-4);
+}
+.conn-inline[data-state="live"]::before {
+  background: #3d8a5c;
+}
+.conn-inline[data-state="error"]::before {
+  background: #b4453c;
+}
+
+/* 输入卡片的浮层：材料、工具、模型 */
+.composer-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: var(--layer-picker);
+  width: 320px;
+  max-width: min(86vw, 360px);
+  max-height: 380px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-popover);
+  background: var(--overlay);
+  box-shadow: var(--shadow-popover);
+  animation: popover-in var(--dur-surface) var(--ease-settle);
+}
+.composer-pop[data-align="right"] {
+  left: auto;
+  right: 0;
+}
+.composer-pop-title {
+  padding: 6px 8px 4px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 500;
+}
+.composer-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: var(--radius-row);
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+}
+.composer-pop-row:hover {
+  background: var(--hover);
+}
+.composer-pop-row .row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.composer-pop-row .row-main small {
+  color: var(--ink-3);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-pop-row .check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 1px solid var(--border-3);
+  border-radius: 4px;
+  color: transparent;
+}
+.composer-pop-row[aria-checked="true"] .check {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.composer-pop-row .check .aw-svg {
+  width: 11px;
+  height: 11px;
+}
+.composer-pop-empty {
+  padding: 10px 8px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.composer-pop-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 2px;
+  border-top: 0.5px solid var(--divider);
+  margin-top: 4px;
+}
+.composer-pop-foot button {
+  color: var(--link);
+  font-size: 11px;
+}
+
+/* 首页/空态的大输入卡片 */
+.composer-seat[data-hero="true"] {
+  padding-bottom: 18px;
+}
+.composer-seat[data-hero="true"] .composer-stack {
+  gap: 10px;
+}
+.composer-seat[data-hero="true"] .composer-bar {
+  padding-bottom: 4px;
+}
+.composer-seat[data-hero="true"] .composer-foot {
+  justify-content: center;
+}
+
+/* 模型下拉：原生 select 只作为值容器，外观在这里绘制 */
+.aw-select {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+.aw-select select {
+  appearance: none;
+  width: 100%;
+  height: 28px;
+  padding: 0 24px 0 8px;
+  border: 0;
+  border-radius: var(--radius-segment);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.aw-select::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.3px solid var(--ink-3);
+  border-bottom: 1.3px solid var(--ink-3);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+.aw-select:hover select {
+  background: var(--hover);
+  color: var(--ink);
+}
+.aw-select select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.select-shell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--radius-segment);
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.select-shell:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.select-menu {
+  position: absolute;
+  z-index: var(--layer-picker);
+  min-width: 180px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-popover);
+  background: var(--overlay);
+  box-shadow: var(--shadow-popover);
+}
+.select-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: var(--radius-row);
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+}
+.select-menu button:hover {
+  background: var(--hover);
+}
+.select-menu button[aria-selected="true"] {
+  background: var(--hover);
+}
+
+/* 移动端底部安全区由 responsive.css 处理 */
