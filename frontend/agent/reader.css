@@ -1,57 +1,224 @@
-.reader-window {
-  height: 52dvh;
-  min-height: 200px;
-  overflow: auto;
-  border: 1px solid #e0e5df;
-  border-radius: 8px;
-  background: #fafcf8;
-  position: relative;
-  overflow-anchor: none;
-  overscroll-behavior: contain;
-}
-.reader-window pre {
-  margin: 0;
-  padding: 12px 16px;
-  white-space: pre-wrap;
+/* 全文阅读器（Agent 工作台弹窗内）
+   结构与 data-a 钩子由 reader.mjs 生成，这里只负责外观。
+   配色全部走主站主题变量，深浅主题与 sora 昼夜都自动适配。 */
+
+.reader-meta {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  margin: 0 0 10px;
   overflow-wrap: anywhere;
-  font:
-    14px/1.8 ui-monospace,
-    Consolas,
-    monospace;
-  tab-size: 4;
 }
+
 .reader-search {
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
-  margin: 12px 0;
+  margin: 0 0 10px;
 }
-.reader-search input {
+.aw-modal-body .reader-search input[type="search"] {
   flex: 1;
-  min-width: 120px;
+  min-width: 0;
+  padding: 8px 11px;
+  font-size: 12.5px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--glass-spec) 5%, transparent);
+  color: var(--text);
 }
-.reader-meta {
-  font-size: 12px;
-  color: #69786f;
+.aw-modal-body .reader-search input[type="search"]:focus {
+  outline: 0;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.reader-search button,
+.reader-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  min-height: 30px;
+  padding: 4px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.reader-search button:hover,
+.reader-toolbar button:hover {
+  background: var(--hover-bg);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.reader-search button:disabled,
+.reader-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.reader-window {
+  position: relative;
+  height: min(48dvh, 520px);
+  min-height: 220px;
+  overflow: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--glass-spec) 4%, transparent);
+}
+.reader-window:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+.reader-window pre {
+  margin: 0;
+  padding: 14px 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    12.5px/1.85 ui-monospace,
+    "SF Mono",
+    "Cascadia Code",
+    Consolas,
+    monospace;
+  tab-size: 4;
+  color: var(--text);
 }
 .reader-window mark {
-  background: #f4df80;
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  color: var(--text);
+  border-radius: 3px;
+  padding: 0 2px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
 }
-.reader-position {
-  width: 100%;
-}
-.reader-follow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.reader-follow input {
-  width: auto;
-}
+
 .reader-toolbar {
   display: flex;
-  gap: 8px;
   flex-wrap: wrap;
   align-items: center;
-  margin: 10px 0;
+  gap: 6px;
+  margin: 10px 0 8px;
+}
+.reader-page {
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 0 5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.reader-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  margin: 4px 0 10px;
+  user-select: none;
+}
+.reader-follow input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: none;
+  border-radius: 5px;
+  border: 1.5px solid var(--border-strong);
+  background: transparent;
+  display: grid;
+  place-content: center;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.reader-follow input::before {
+  content: "";
+  width: 8px;
+  height: 4.5px;
+  border-left: 1.8px solid var(--accent);
+  border-bottom: 1.8px solid var(--accent);
+  transform: rotate(-45deg) scale(0);
+  margin-top: -2px;
+  transition: transform 0.18s var(--ease-spring);
+}
+.reader-follow input:checked {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: var(--accent);
+}
+.reader-follow input:checked::before {
+  transform: rotate(-45deg) scale(1);
+}
+.reader-follow input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.reader-position {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  margin: 0;
+  cursor: pointer;
+}
+.reader-position::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--accent) 80%, transparent),
+    color-mix(in srgb, var(--accent) 22%, transparent)
+  );
+}
+.reader-position::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--panel-strong);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.28);
+}
+.reader-position::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.reader-position::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 80%, transparent);
+}
+.reader-position::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--panel-strong);
+}
+.reader-position:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+@media (max-width: 767px) {
+  .reader-window {
+    height: 52dvh;
+  }
+  .aw-modal-body .reader-search input[type="search"] {
+    font-size: 15px;
+  }
+  .reader-search button,
+  .reader-toolbar button {
+    min-height: 38px;
+    font-size: 12.5px;
+  }
 }

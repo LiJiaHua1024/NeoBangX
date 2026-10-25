@@ -192,12 +192,12 @@
   <link rel="preload" as="style" href="/static/tailwind.css?v=8e7f78ad1c" fetchpriority="high"
         onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:tailwind')"
         onerror="this.onerror=null;__nbxBootFail('css:tailwind','界面样式')">
-  <link rel="preload" as="style" href="/static/styles.min.css?v=dab6efe2a1" fetchpriority="high"
+  <link rel="preload" as="style" href="/static/styles.min.css?v=d9f7ea1748" fetchpriority="high"
         onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:styles')"
         onerror="this.onerror=null;__nbxBootFail('css:styles','主题样式')">
   <noscript>
     <link rel="stylesheet" href="/static/tailwind.css?v=8e7f78ad1c">
-    <link rel="stylesheet" href="/static/styles.min.css?v=dab6efe2a1">
+    <link rel="stylesheet" href="/static/styles.min.css?v=d9f7ea1748">
   </noscript>
   <!-- 本地静态资源带 ?v=<内容哈希> 版本串（npm run build:assets 按文件内容生成，勿手改）：
        带 query 的 /static/** 由后端中间件下发 immutable 长缓存，浏览器与 Cloudflare
@@ -452,9 +452,22 @@
                 x-html="icon('x','w-4 h-4')"></button></span>
       </div>
 
-      <div class="px-3 pb-2 shrink-0">
-        <a href="/agent" class="btn w-full" style="display:block;text-align:center">Agent 工作台 ↗</a>
-        <button x-show="currentTool" class="btn w-full" style="margin-top:6px" @click="sessionStorage.setItem('nbx_agent_handoff', JSON.stringify({toolId: currentTool.id, text: input || submittedInput || '', name: currentTool.name})); window.location.href='/agent'">带入材料与提示词</button>
+      <div class="px-3 pb-2 shrink-0 agent-entry-wrap">
+        <!-- Agent 工作台入口：位置仍在 Logo 下、工具搜索上。
+             它不是工具，而是另一种工作模式，所以用入口卡 + 渐变图标表达，
+             与工具列表的 .tool-item 拉开层级；有当前工具时再露出"带入"动作。 -->
+        <a href="/agent" class="agent-entry" title="进入 Agent 工作台">
+          <span class="agent-entry-ico" x-html="icon('sparkle','w-4 h-4')"></span>
+          <span class="agent-entry-main">
+            <span class="agent-entry-title">Agent 工作台</span>
+            <span class="agent-entry-sub">多步执行 · 材料与成果保留</span>
+          </span>
+          <span class="agent-entry-go" x-html="icon('chevron-right','w-4 h-4')"></span>
+        </a>
+        <button x-show="currentTool" x-cloak class="agent-entry-handoff"
+                @click="sessionStorage.setItem('nbx_agent_handoff', JSON.stringify({toolId: currentTool.id, text: input || submittedInput || '', name: currentTool.name})); window.location.href='/agent'">
+          <span x-html="icon('paperclip','w-3.5 h-3.5')"></span><span>带入当前材料与提示词</span>
+        </button>
       </div>
       <!-- 描述需求找工具：窄版常驻在工具列表上方。
            它不是「按工具名过滤」的搜索框，而是让用户用一句话说自己想做什么：

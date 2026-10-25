@@ -6,9 +6,72 @@ import {
   pageText,
 } from "./core.mjs";
 import { FullReader, saveBlob } from "./reader.mjs";
+import { fillIcons, icon } from "./icons.mjs";
+import { enhanceSelects, refreshSelects } from "./select.mjs";
+import {
+  applyTheme,
+  initThemeMenu,
+  readTheme,
+  watchStorage,
+} from "./theme.mjs";
 
 const $ = (s) => document.querySelector(s),
   $$ = (s) => [...document.querySelectorAll(s)];
+
+/* 图标只在这里集中映射，业务代码不写 SVG。 */
+const KIND_ICON = {
+  reasoning: "sparkle",
+  output: "file-text",
+  input: "sliders",
+  prompt: "list-checks",
+  arguments: "route",
+};
+function labelOf(selector, text) {
+  const host = $(selector);
+  if (!host) return;
+  const label = host.querySelector("[data-label]");
+  if (label) label.textContent = text;
+  else host.textContent = text;
+}
+function saveState(text, state) {
+  const el = $("#save-state");
+  if (!el) return;
+  el.textContent = text;
+  el.dataset.state = state;
+}
+function connState(text, state, detail = "") {
+  const el = $("#connection");
+  if (!el) return;
+  el.textContent = text;
+  el.dataset.state = state;
+  el.title = detail || text;
+}
+function setText(el, text) {
+  if (el && el.textContent !== text) el.textContent = text;
+}
+function stepIcon(item) {
+  const label = String(item.label || "");
+  if (item.kind === "review") return "list-checks";
+  if (/审阅/.test(label)) return "list-checks";
+  if (/搜索|检索/.test(label)) return "search";
+  if (/材料|读取/.test(label)) return "file-text";
+  if (/修订|改写/.test(label)) return "wand";
+  if (/试运行/.test(label)) return "play";
+  if (/成果|生成|输出/.test(label)) return "sparkle";
+  return "route";
+}
+function shortTime(iso) {
+  const value = Date.parse(iso || "");
+  if (!Number.isFinite(value)) return "";
+  const diff = Date.now() - value;
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  const d = new Date(value);
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+}
+
 const state = {
   catalog: null,
   task: null,
@@ -74,7 +137,10 @@ function toast(message) {
 function error(e) {
   console.error(e);
   toast(e.message || String(e));
-  if (e.status === 401) $("#account").textContent = "重新登录";
+  if (e.status === 401) {
+    labelOf("#account", "重新登录");
+    $("#account").title = "重新登录";
+  }
 }
 function action(id, fn) {
   $(id).addEventListener("click", async (e) => {
@@ -100,7 +166,7 @@ function modal(title, body, buttons = []) {
   for (const item of buttons) {
     const b = document.createElement("button");
     b.textContent = item.text;
-    b.className = item.primary ? "primary" : "";
+    b.className = item.primary ? "btn-primary" : "btn-ghost";
     b.onclick = async () => {
       b.disabled = true;
       try {
@@ -174,6 +240,10 @@ $("#menu").onclick = () =>
   drawer(!document.body.classList.contains("nav-open"));
 $("#close-nav").onclick = () => drawer(false);
 $("#shade").onclick = () => drawer(false);
+document.addEventListener("click", (e) => {
+  for (const d of $$("details.aw-theme, details.aw-taskmenu"))
+    if (d.open && !d.contains(e.target)) d.open = false;
+});
 function setView(view, push = true) {
   document.body.dataset.view = view;
   for (const b of $$("[data-view] button[data-view]")) {
@@ -220,30 +290,34 @@ matchMedia("(max-width: 1099px)").addEventListener("change", (e) => {
   if (e.matches) delete document.body.dataset.focus;
 });
 function width(value) {
-  const w = Math.min(55, Math.max(30, value));
-  document.documentElement.style.setProperty("--chat", w + "%");
-  $("#separator").setAttribute("aria-valuenow", String(Math.round(w)));
-  localStorage.setItem("nbx_agent_width", String(w));
+  const w = Math.round(Math.min(680, Math.max(380, value)));
+  document.body.style.setProperty("--aw-inspector", w + "px");
+  $("#separator").setAttribute("aria-valuenow", String(w));
+  try {
+    localStorage.setItem("nbx_agent_inspector", String(w));
+  } catch {}
 }
-width(Number(localStorage.getItem("nbx_agent_width")) || 40);
+width(Number(localStorage.getItem("nbx_agent_inspector")) || 480);
 $("#separator").onkeydown = (e) => {
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
     width(
       Number(e.currentTarget.getAttribute("aria-valuenow")) +
-        (e.key === "ArrowRight" ? 2 : -2),
+        (e.key === "ArrowRight" ? 24 : -24),
     );
   }
 };
 $("#separator").onpointerdown = (e) => {
   const b = e.currentTarget;
   b.setPointerCapture(e.pointerId);
+  b.classList.add("dragging");
   b.onpointermove = (ev) => {
     const r = $(".columns").getBoundingClientRect();
-    width(((ev.clientX - r.left) / r.width) * 100);
+    width(r.right - ev.clientX);
   };
   b.onpointerup = () => {
     b.onpointermove = null;
+    b.classList.remove("dragging");
   };
 };
 
@@ -275,7 +349,7 @@ function changed() {
   state.editSeq++;
   state.task.title = $("#task-title").value || "新任务";
   localDraft();
-  $("#save-state").textContent = "正在编辑";
+  saveState("正在编辑", "editing");
   clearTimeout(saveTimer);
   if (!state.composing) saveTimer = setTimeout(() => save().catch(error), 800);
 }
@@ -291,7 +365,7 @@ async function save() {
   if (state.composing) return false;
   const task = state.task,
     seq = state.editSeq;
-  $("#save-state").textContent = "正在保存…";
+  saveState("正在保存…", "saving");
   state.saving = (async () => {
     try {
       const saved = await api(`/tasks/${task.id}`, {
@@ -307,17 +381,17 @@ async function save() {
       if (seq === state.editSeq) {
         state.dirty = false;
         localStorage.removeItem(draftKey());
-        $("#save-state").textContent = "已保存";
+        saveState("已保存", "saved");
       } else localDraft();
       return true;
     } catch (e) {
       if (e.status === 409) {
         state.conflict = true;
         $("#conflict").hidden = false;
-        $("#save-state").textContent = "需处理冲突";
+        saveState("需处理冲突", "conflict");
         return false;
       }
-      $("#save-state").textContent = "未同步 · 草稿已保留";
+      saveState("未同步 · 草稿已保留", "conflict");
       throw e;
     } finally {
       state.saving = null;
@@ -405,11 +479,31 @@ async function listTasks(reset = true) {
   if (reset) $("#task-list").replaceChildren();
   for (const t of data.tasks) {
     const b = document.createElement("button");
-    b.textContent = t.title;
+    b.className = "aw-task" + (t.id === state.task?.id ? " on" : "");
+    b.dataset.id = t.id;
     b.title = `${t.title} · ${STATUS[t.status] || t.status}`;
-    b.className = t.id === state.task?.id ? "on" : "";
+    const top = document.createElement("span");
+    top.className = "aw-task-top";
+    const name = document.createElement("span");
+    name.className = "aw-task-name";
+    name.textContent = t.title;
+    const badge = document.createElement("span");
+    badge.className = "aw-state";
+    badge.dataset.state = t.status;
+    badge.textContent = STATUS[t.status] || t.status;
+    top.append(name, badge);
+    const meta = document.createElement("span");
+    meta.className = "aw-task-meta";
+    meta.textContent = shortTime(t.updated_at) || "尚无记录";
+    b.append(top, meta);
     b.onclick = () => openTask(t.id).catch(error);
     $("#task-list").append(b);
+  }
+  if (reset && !data.tasks.length) {
+    const empty = document.createElement("p");
+    empty.className = "aw-task-empty";
+    empty.textContent = taskQuery ? "没有匹配的任务" : "还没有任务，先新建一个";
+    $("#task-list").append(empty);
   }
   taskOffset += data.tasks.length;
   $("#more-tasks").hidden = !data.has_more;
@@ -456,9 +550,9 @@ async function openTask(id, push = true) {
   state.runs = new Map(task.runs.map((r) => [r.id, r]));
   state.notes.clear();
   state.version = null;
-  $("#timeline").replaceChildren();
+  clearTimeline();
   $("#conflict").hidden = true;
-  $("#save-state").textContent = "已保存";
+  saveState("已保存", "saved");
   try {
     const draft = JSON.parse(localStorage.getItem(draftKey()) || "null");
     if (draft) {
@@ -467,7 +561,7 @@ async function openTask(id, push = true) {
       state.dirty = true;
       state.conflict = draft.revision !== task.revision;
       $("#conflict").hidden = !state.conflict;
-      $("#save-state").textContent = "本地草稿已恢复";
+      saveState("本地草稿已恢复", "draft");
     }
   } catch {}
   if (push)
@@ -497,18 +591,44 @@ function fill() {
   renderTeaching();
   renderVersions();
   updateStatus();
+  refreshSelects();
+}
+function clearTimeline() {
+  $("#timeline")
+    .querySelectorAll("[data-entry],[data-run],[data-note]")
+    .forEach((el) => el.remove());
+  const empty = $("#timeline-empty");
+  if (empty) empty.hidden = false;
+}
+function syncTimelineEmpty() {
+  const empty = $("#timeline-empty");
+  if (!empty) return;
+  empty.hidden = Boolean(
+    $("#timeline").querySelector("[data-entry],[data-run],[data-note]"),
+  );
 }
 function updateStatus() {
   const active = ACTIVE.has(state.task?.status);
+  const disabled = !state.task || !state.catalog?.enabled;
   $("#run").hidden = active;
   $("#stop").hidden = !active;
-  $("#run").disabled = !state.task || !state.catalog?.enabled;
-  $("#run").textContent = state.task?.runs.length ? "再执行一轮" : "开始任务";
-  $("#task-status").textContent = STATUS[state.task?.status] || "准备就绪";
+  $("#run").disabled = disabled;
+  labelOf("#run", state.task?.runs.length ? "再执行一轮" : "开始任务");
+  const status = state.task?.status || "";
+  const chip = $("#task-status");
+  chip.textContent = STATUS[status] || "准备就绪";
+  chip.dataset.state = status;
   $("#next-step").hidden = !active;
-  $("#send").textContent = active ? "发送补充" : "继续任务";
-  $("#mobile-run").textContent = active ? "查看进度" : $("#run").textContent;
-  $("#mobile-run").disabled = !state.task || !state.catalog?.enabled;
+  labelOf("#send", active ? "发送补充" : "继续任务");
+  labelOf(
+    "#mobile-run",
+    active
+      ? "查看进度"
+      : state.task?.runs.length
+        ? "再执行一轮"
+        : "开始任务",
+  );
+  $("#mobile-run").disabled = disabled;
 }
 $$("[data-policy]").forEach(
   (button) =>
@@ -536,7 +656,7 @@ function entryCard(item) {
     card.className = "entry";
     card.dataset.entry = item.id;
     card.innerHTML =
-      '<div class="entry-header"><span class="entry-title"></span><small class="entry-state"></small></div><small class="entry-meta"></small><p class="entry-note"></p><div class="row wrap"></div>';
+      '<div class="entry-header"><span class="entry-title"></span><small class="entry-state"></small></div><small class="entry-meta"></small><p class="entry-note"></p><div class="aw-step-actions"></div>';
     $("#timeline").append(card);
     for (const [kind, label] of [
       ["reasoning", "思考"],
@@ -546,50 +666,60 @@ function entryCard(item) {
       ["arguments", "工具调用"],
     ]) {
       const b = document.createElement("button");
-      b.textContent = label;
+      b.type = "button";
+      b.innerHTML = `${icon(KIND_ICON[kind])}<span>${label}</span>`;
       b.dataset.kind = kind;
       b.onclick = () => openEntry(item.id, kind).catch(error);
-      card.querySelector(".row").append(b);
+      card.querySelector(".aw-step-actions").append(b);
     }
   }
-  card.querySelector(".entry-title").textContent = item.label;
-  card.querySelector(".entry-state").textContent =
-    STATUS[item.status] || item.status;
+  card.dataset.status = item.status;
+  const title = card.querySelector(".entry-title");
+  // 轮询每秒一次、压力场景有 200 张卡：标题没变就别重建图标和文本。
+  if (title.dataset.label !== item.label) {
+    title.dataset.label = item.label;
+    title.innerHTML = `${icon(stepIcon(item))}<span></span>`;
+    title.querySelector("span").textContent = item.label;
+  }
+  const stateEl = card.querySelector(".entry-state");
+  setText(stateEl, STATUS[item.status] || item.status);
+  if (stateEl.dataset.state !== item.status) stateEl.dataset.state = item.status;
   const chars = item.details.chars || {};
-  card.querySelector(".entry-meta").textContent =
-    Object.entries(chars)
-      .filter(([k]) => k !== "prompt")
-      .map(
-        ([k, n]) =>
-          `${{ reasoning: "思考", output: "输出", arguments: "调用", input: "参数" }[k] || k} ${n.toLocaleString()} 字符`,
-      )
-      .join(" · ") || "等待输出";
-  card.querySelector(".entry-note").textContent =
+  const meta = Object.entries(chars)
+    .filter(([k]) => k !== "prompt")
+    .map(
+      ([k, n]) =>
+        `${{ reasoning: "思考", output: "输出", arguments: "调用", input: "参数" }[k] || k} ${n.toLocaleString()} 字符`,
+    )
+    .join(" · ") || "等待输出";
+  setText(card.querySelector(".entry-meta"), meta);
+  setText(
+    card.querySelector(".entry-note"),
     item.details.error ||
-    item.details.question ||
-    item.details.review_summary ||
-    "";
+      item.details.question ||
+      item.details.review_summary ||
+      "",
+  );
+  const actions = card.querySelector(".aw-step-actions");
   if (
     ["read_material", "search_material"].includes(item.label) &&
     item.status === "done" &&
-    !card.querySelector("[data-source]")
+    !actions.querySelector("[data-source]")
   ) {
     const b = document.createElement("button");
+    b.type = "button";
     b.dataset.source = item.id;
-    b.textContent = "定位材料";
+    b.innerHTML = `${icon("target")}<span>定位材料</span>`;
     b.onclick = () => sourceLinks(item.id).catch(error);
-    card.querySelector(".row").append(b);
+    actions.append(b);
   }
-  if (
-    item.kind === "review" &&
-    item.details.version_id &&
-    !card.querySelector("[data-review]")
-  ) {
+  if (item.kind === "review" && item.details.version_id && !actions.querySelector("[data-review]")) {
     const b = document.createElement("button");
+    b.type = "button";
     b.dataset.review = item.id;
-    b.textContent = "处理审阅意见";
+    b.innerHTML = `${icon("list-checks")}<span>处理审阅意见</span>`;
     b.onclick = () => openReview(item.id).catch(error);
-    card.querySelector(".row").append(b);
+    actions.append(b);
   }
   card.querySelectorAll("[data-kind]").forEach((b) => {
     b.hidden = !chars[b.dataset.kind];
@@ -602,7 +732,7 @@ function runCard(run) {
     c.className = "entry";
     c.dataset.run = run.id;
     c.innerHTML =
-      '<div class="entry-header"><strong></strong><button>本轮配置</button></div><small></small>';
+      '<div class="entry-header"><strong></strong><button class="aw-steplink" type="button"><span></span></button></div><small></small>';
     c.querySelector("button").onclick = async () => {
       try {
         const r = await api(path(`/runs/${run.id}`));
@@ -613,10 +743,19 @@ function runCard(run) {
     };
     $("#timeline").append(c);
   }
-  c.querySelector("strong").textContent =
-    `${{ execute: "执行", continue: "继续", review: "审阅", revise: "修订", tool_test: "教学工具试运行" }[run.mode]} · ${STATUS[run.status] || run.status}`;
-  c.querySelector("small").textContent =
-    run.error || `步骤 ${run.step} · ${run.tokens.toLocaleString()} tokens`;
+  c.dataset.status = run.status;
+  const label = `${{ execute: "执行", continue: "继续", review: "审阅", revise: "修订", tool_test: "教学工具试运行" }[run.mode] || run.mode} · ${STATUS[run.status] || run.status}`;
+  const strong = c.querySelector("strong");
+  if (strong.dataset.label !== label) {
+    strong.dataset.label = label;
+    strong.innerHTML = `${icon("route")}<span></span>`;
+    strong.querySelector("span").textContent = label;
+  }
+  setText(c.querySelector(".aw-steplink span"), "本轮配置");
+  setText(
+    c.querySelector("small"),
+    run.error || `步骤 ${run.step} · ${run.tokens.toLocaleString()} tokens`,
+  );
 }
 async function poll() {
   clearTimeout(pollTimer);
@@ -661,9 +800,12 @@ async function poll() {
           c = document.createElement("article");
           c.className = "entry";
           c.dataset.note = v.id;
+          c.innerHTML = `<div class="aw-note">${icon("chat")}<span></span></div>`;
           timeline.append(c);
         }
-        c.textContent = `${v.applied ? "已生效" : "已接收，等待下一步"}：${v.text}`;
+        c.dataset.status = v.applied ? "done" : "queued";
+        c.querySelector(".aw-note span").textContent =
+          `${v.applied ? "已生效" : "已接收，等待下一步"}：${v.text}`;
       }
     }
     state.cursor = data.cursor;
@@ -674,6 +816,7 @@ async function poll() {
       if (state.dirty) {
         state.conflict = true;
         $("#conflict").hidden = false;
+        saveState("需处理冲突", "conflict");
       } else {
         const latest = await api(`/tasks/${id}`);
         if (gen !== state.generation) return;
@@ -682,9 +825,12 @@ async function poll() {
       }
     }
     updateStatus();
-    $("#connection").textContent = ACTIVE.has(state.task.status)
-      ? "已连接 · 后台执行"
-      : "已连接";
+    syncTimelineEmpty();
+    connState(
+      "已连接",
+      "live",
+      ACTIVE.has(state.task.status) ? "已连接 · 任务在后台执行" : "已连接",
+    );
     if (changed && near) timeline.scrollTop = timeline.scrollHeight;
     else if (changed) {
       $("#latest").hidden = false;
@@ -696,9 +842,11 @@ async function poll() {
     );
   } catch (e) {
     if (gen !== state.generation) return;
-    $("#connection").textContent = navigator.onLine
-      ? "连接中断 · 重试中"
-      : "离线 · 任务在后台";
+    connState(
+      navigator.onLine ? "重连中" : "离线",
+      "error",
+      navigator.onLine ? "连接中断，正在重试" : "离线 · 任务仍在后台执行",
+    );
     pollTimer = setTimeout(poll, 5000);
   }
 }
@@ -800,6 +948,7 @@ async function start(
   upsert(state.task.runs, run);
   state.runs.set(run.id, run);
   runCard(run);
+  syncTimelineEmpty();
   updateStatus();
   setView("chat");
   poll();
@@ -852,8 +1001,8 @@ function renderMaterials() {
   for (const m of state.task.materials) {
     const c = document.createElement("div");
     c.className = "material";
-    c.innerHTML = `<label class="check"><input type="checkbox"><span>${esc(m.name)}<small>${m.chars.toLocaleString()} 字符 · 原文已保存</small></span></label><div class="row"><button data-read>阅读全文</button><button data-download>下载原文件</button></div>`;
-    const check = c.querySelector("input");
+    c.innerHTML = `<label class="aw-check"><input type="checkbox" data-check><span>${esc(m.name)}<small>${m.chars.toLocaleString()} 字符 · 原文已保存</small></span></label><div class="aw-row"><button data-read type="button">${icon("book-open")}<span>阅读全文</span></button><button data-download type="button">${icon("download")}<span>下载原文件</span></button></div>`;
+    const check = c.querySelector("[data-check]");
     check.checked = state.task.config.materials.includes(m.id);
     check.onchange = () => {
       const ids = new Set(state.task.config.materials);
@@ -880,6 +1029,12 @@ function renderMaterials() {
       }
     };
     root.append(c);
+  }
+  if (!state.task.materials.length) {
+    const hint = document.createElement("p");
+    hint.className = "aw-empty-line";
+    hint.textContent = "还没有材料。上传文件，或直接粘贴原文。";
+    root.append(hint);
   }
 }
 async function receivedMaterial(m) {
@@ -930,8 +1085,8 @@ function renderTools() {
   for (const t of state.catalog.tools) {
     const c = document.createElement("div");
     c.className = "tool-card";
-    c.innerHTML = `<label class="check"><input type="checkbox"><span>${esc(t.name)} ${t.available ? "" : "· 未接入"}</span></label><p>${esc(t.description)}</p>`;
-    const b = c.querySelector("input");
+    c.innerHTML = `<label class="aw-check"><input type="checkbox" data-check><span><span class="aw-tool-name">${esc(t.name)}</span>${t.available ? "" : '<span class="aw-tag">未接入</span>'}</span></label><p>${esc(t.description)}</p>`;
+    const b = c.querySelector("[data-check]");
     b.disabled = !t.available;
     b.checked = state.task.config.tools.includes(t.id);
     b.onchange = () => {
@@ -948,22 +1103,20 @@ function renderTeaching() {
   root.replaceChildren();
   for (const [id, prompt] of Object.entries(state.task.config.teaching_tools)) {
     const d = document.createElement("details");
-    d.innerHTML = `<summary>${esc(state.catalog.official_templates.find((t) => t.id === id)?.name || id)}</summary><textarea class="editor" aria-label="教学工具提示词"></textarea><button>移除此工具</button>`;
+    d.innerHTML = `<summary>${esc(state.catalog.official_templates.find((t) => t.id === id)?.name || id)}</summary><textarea class="editor" aria-label="教学工具提示词"></textarea><div class="aw-row"><button data-remove type="button">${icon("trash")}<span>移除此工具</span></button><button data-test type="button">${icon("play")}<span>单独试运行</span></button></div>`;
     d.querySelector("textarea").value = prompt;
     d.querySelector("textarea").oninput = (e) => {
       state.task.config.teaching_tools[id] = e.target.value;
       changed();
     };
-    d.querySelector("button").onclick = () => {
+    d.querySelector("[data-remove]").onclick = () => {
       delete state.task.config.teaching_tools[id];
       changed();
       renderTeaching();
     };
-    const test = document.createElement("button");
-    test.textContent = "单独试运行";
+    const test = d.querySelector("[data-test]");
     test.title = "按本页计费规则开启一轮任务，结果保存为独立成果";
     test.onclick = () => start("tool_test", "", "", id).catch(error);
-    d.append(test);
     root.append(d);
   }
 }
@@ -1090,6 +1243,7 @@ function renderTemplateOptions() {
     .map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`)
     .join("");
   if (state.task) $("#template").value = state.task.config.template_id || "";
+  refreshSelects();
 }
 action("#my-library", () => {
   if (!state.catalog) return login();
@@ -1097,7 +1251,7 @@ action("#my-library", () => {
   for (const t of state.catalog.templates) {
     const c = document.createElement("div");
     c.className = "tool-card";
-    c.innerHTML = `<strong>${esc(t.name)}</strong><small>${t.kind === "tool" ? "工具配置" : "提示词模板"}</small><div class="row"><button data-use>用于当前任务</button><button data-new>新建任务</button><button data-del>删除</button></div>`;
+    c.innerHTML = `<strong>${esc(t.name)}</strong><small>${t.kind === "tool" ? "工具配置" : "提示词模板"}</small><div class="aw-row"><button data-use type="button">用于当前任务</button><button data-new type="button">新建任务</button><button data-del type="button" class="danger">删除</button></div>`;
     c.querySelector("[data-use]").onclick = () => {
       applyTemplate(t);
       closeModal();
@@ -1224,7 +1378,7 @@ action("#compare-conflict", async () => {
           localStorage.removeItem(draftKey());
           $("#conflict").hidden = true;
           fill();
-          $("#save-state").textContent = "已保存";
+          saveState("已保存", "saved");
           closeModal();
         },
       },
@@ -1250,10 +1404,14 @@ function renderVersions() {
   $("#result-empty").hidden = versions.length > 0;
   $("#versions-list").replaceChildren();
   for (const v of versions) {
+    const adopted = v.id === state.task.adopted_version;
     const b = document.createElement("button");
-    b.className =
-      "version" + (v.id === state.task.adopted_version ? " on" : "");
-    b.textContent = `${v.id === state.task.adopted_version ? "已采用 · " : ""}${v.title} · ${v.complete ? "完整" : "待补全"} · ${v.chars.toLocaleString()} 字符`;
+    b.type = "button";
+    b.className = "aw-version" + (adopted ? " on" : "");
+    b.innerHTML = `${icon(adopted ? "check" : "file-text")}<span></span>`;
+    b.querySelector("span").textContent =
+      `${adopted ? "已采用 · " : ""}${v.title} · ${v.complete ? "完整" : "待补全"} · ${v.chars.toLocaleString()} 字符`;
+    b.dataset.version = v.id;
     b.onclick = () => selectVersion(v.id).catch(error);
     $("#versions-list").append(b);
   }
@@ -1265,6 +1423,7 @@ function renderVersions() {
     .join("");
   if (state.version) $("#version-select").value = state.version.id;
   $("#result-actions").hidden = !state.version;
+  refreshSelects();
 }
 $("#version-select").onchange = (e) =>
   selectVersion(e.target.value).catch(error);
@@ -1465,15 +1624,44 @@ action("#account", () => {
     location.assign("/agent");
   });
 });
+let bgfx = null;
+function initBackground() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (matchMedia("(max-width: 767px)").matches) return;
+  const load = () => {
+    const script = document.createElement("script");
+    script.src = "/static/nbx-background.js";
+    script.async = true;
+    script.onload = () => {
+      if (typeof createBackground !== "function") return;
+      const canvas = $("#bgfx");
+      if (!canvas) return;
+      bgfx = createBackground(canvas);
+      canvas.classList.add("bgfx-ready");
+    };
+    document.head.append(script);
+  };
+  if ("requestIdleCallback" in window)
+    requestIdleCallback(load, { timeout: 2600 });
+  else setTimeout(load, 1200);
+}
 async function boot() {
+  fillIcons();
+  enhanceSelects();
+  applyTheme(readTheme(), { persist: false });
+  initThemeMenu(() => bgfx?.themeChanged());
+  watchStorage(() => bgfx?.themeChanged());
+  initBackground();
   if (!token()) {
     await login();
-    $("#connection").textContent = "尚未登录";
+    connState("尚未登录", "idle");
     return;
   }
   try {
     state.catalog = await api("/catalog");
-    $("#account").textContent = "切换使用码";
+    labelOf("#account", "切换使用码");
+    $("#account").title = "切换使用码";
+    $("#account").setAttribute("aria-label", "切换使用码");
     $("#model").innerHTML = state.catalog.models
       .map(
         (m) =>
@@ -1481,6 +1669,7 @@ async function boot() {
       )
       .join("");
     $("#mobile-model").innerHTML = $("#model").innerHTML;
+    refreshSelects();
     $("#run-policy").textContent = state.catalog.billing;
     renderTemplateOptions();
     await listTasks();
@@ -1508,7 +1697,7 @@ async function boot() {
       toast("已带入材料与提示词副本");
     }
   } catch (e) {
-    $("#connection").textContent = "连接失败";
+    connState("连接失败", "error");
     if (e.status === 401) await login();
     else error(e);
   }
@@ -1594,8 +1783,8 @@ async function openReview(id) {
   }
   data.issues.forEach((issue, i) => {
     const el = document.createElement("div");
-    el.className = "tool-card";
-    el.innerHTML = `<label class="check"><input type="checkbox" value="${i}"><span>${esc(issue.problem)}<small>${issue.certainty === "confirmed" ? "审阅判断：有依据" : "待核实"}${entry.details.ignored?.includes(i) ? " · 已忽略" : ""}</small></span></label><p>原文：${esc(issue.quote || "未定位")}</p><p>依据：${esc(issue.evidence)}</p><p>建议：${esc(issue.fix)}</p>`;
+    el.className = "tool-card aw-issue";
+    el.innerHTML = `<label class="aw-check"><input type="checkbox" value="${i}"><span>${esc(issue.problem)}<small>${issue.certainty === "confirmed" ? "审阅判断：有依据" : "待核实"}${entry.details.ignored?.includes(i) ? " · 已忽略" : ""}</small></span></label><p><b>原文</b>${esc(issue.quote || "未定位")}</p><p><b>依据</b>${esc(issue.evidence)}</p><p><b>建议</b>${esc(issue.fix)}</p>`;
     $("#review-issues").append(el);
   });
 }
@@ -1611,7 +1800,8 @@ action("#legacy-tasks", async () => {
   function append(data) {
     for (const t of data.tasks) {
       const b = document.createElement("button");
-      b.className = "version";
+      b.type = "button";
+      b.className = "aw-version";
       b.textContent = `${t.tool_name || "旧任务"} · ${t.created_at} · ${t.status}`;
       b.onclick = async () => {
         try {
@@ -1649,7 +1839,8 @@ async function sourceLinks(id) {
   modal("材料来源与位置", '<div id="source-list"></div>');
   for (const match of matches) {
     const b = document.createElement("button");
-    b.className = "version";
+    b.type = "button";
+    b.className = "aw-version";
     b.textContent = `${match.name || match.material_id} · 字符 ${match.start || 0}`;
     b.onclick = async () => {
       try {

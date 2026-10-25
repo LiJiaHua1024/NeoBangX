@@ -912,6 +912,113 @@ html[data-theme="sora"] .mascot-peeking {
   border-color: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
+/* ============================================================
+   Agent 工作台入口（侧栏 Logo 下、工具搜索上）
+   它不是一件工具，而是另一种工作模式：用"渐变图标块 + 两行文字 + 箭头"
+   做成入口卡，和工具的 .tool-item 拉开层级；有当前工具时再露出带入动作。
+   ============================================================ */
+.agent-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 0.85rem;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text);
+  text-decoration: none;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.35s var(--ease-spring);
+}
+.agent-entry:hover {
+  background: var(--hover-bg);
+  border-color: var(--border-strong);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+.agent-entry:active { transform: scale(0.985); transition-duration: 0.08s; }
+.agent-entry:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: 2px;
+}
+.agent-entry-ico {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.55rem;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 6px 16px -8px var(--glow), inset 0 1px 0 rgba(255, 255, 255, 0.32);
+  transition: transform 0.4s var(--ease-spring);
+}
+.agent-entry:hover .agent-entry-ico { transform: scale(1.06) rotate(-5deg); }
+.agent-entry-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+}
+.agent-entry-title {
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-entry-sub {
+  font-size: 0.64rem;
+  color: var(--text-faint);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-entry-go {
+  flex: none;
+  display: flex;
+  color: var(--text-faint);
+  transition: transform 0.25s var(--ease-spring), color 0.18s ease;
+}
+.agent-entry:hover .agent-entry-go {
+  color: var(--accent);
+  transform: translateX(2px);
+}
+.agent-entry-handoff {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+.agent-entry-handoff:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.agent-entry-handoff:active { transform: scale(0.98); transition-duration: 0.08s; }
+.agent-entry-handoff span { display: inline-flex; align-items: center; }
+@media (max-width: 767px) {
+  .agent-entry { padding: 0.5rem 0.55rem; }
+  .agent-entry-sub { font-size: 0.68rem; }
+  .agent-entry-handoff { min-height: 2.5rem; }
+}
+
 .group-head {
   display: flex;
   align-items: center;

@@ -4,367 +4,557 @@
     <meta charset="utf-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Agent 工作台 · NeoBangX</title>
+    <meta
+      name="description"
+      content="NeoBangX Agent 工作台：把目标交给 Agent，材料、执行过程与成果版本都留在同一条任务里。"
+    />
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23166b54'/%3E%3Ctext x='20' y='29' text-anchor='middle' font-size='27' fill='white'%3EN%3C/text%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23e9a15b'/%3E%3Cstop offset='1' stop-color='%23cf7038'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M34 10 18 36h10l-4 18 18-26H32l2-18z' fill='white'/%3E%3C/svg%3E"
     />
+    <!-- 主题必须早于样式表确定，否则会先按无主题渲染一帧。
+         键与主站一致（nbx_theme），进出两个页面看到的是同一套配色。 -->
+    <script>
+      (function () {
+        var ids = ["paper", "celadon", "obsidian", "jade", "sora"];
+        var bg = {
+          paper: "#f3f0e9",
+          celadon: "#ecf1ee",
+          obsidian: "#0c0b0e",
+          jade: "#0a0f0c",
+          sora: "#e9f0f7",
+        };
+        var theme = "paper";
+        try {
+          var saved = localStorage.getItem("nbx_theme");
+          if (ids.indexOf(saved) >= 0) theme = saved;
+        } catch (e) {}
+        var forced = (location.hash || "").match(/sky=(day|night)/);
+        var hour = new Date().getHours();
+        var sky = forced ? forced[1] : hour >= 6 && hour < 22 ? "day" : "night";
+        var root = document.documentElement;
+        root.dataset.theme = theme;
+        if (theme === "sora") root.dataset.sky = sky;
+        root.style.background = theme === "sora" && sky === "night" ? "#111c33" : bg[theme];
+      })();
+    </script>
+    <link rel="stylesheet" href="/static/styles.min.css" />
     <link rel="stylesheet" href="/static/agent/workspace.css" />
+    <link rel="stylesheet" href="/static/agent/reader.css" />
     <script defer src="/static/vendor/marked-15.0.12.min.js"></script>
     <script defer src="/static/vendor/dompurify-3.4.17.min.js"></script>
     <script type="module" src="/static/agent/workspace.js"></script>
   </head>
-  <body data-view="work">
+  <body class="aw" data-view="work">
+    <canvas id="bgfx" aria-hidden="true"></canvas>
     <a class="skip" href="#goal">跳到任务目标</a>
-    <header class="top">
-      <button id="menu" aria-label="打开任务列表" aria-expanded="false">
-        ☰</button
-      ><a href="/" class="brand">N<span>NeoBangX</span></a
-      ><span class="tag">Agent 工作台</span><span class="grow"></span
-      ><span id="connection" role="status">正在连接</span
-      ><button id="account">登录</button>
-    </header>
-    <div class="layout">
-      <aside id="nav" aria-label="任务导航">
-        <div class="nav-head">
-          <strong>我的工作台</strong
-          ><button id="close-nav" aria-label="关闭任务列表">×</button>
-        </div>
-        <button id="new-task" class="primary wide">＋ 新任务</button
-        ><label class="sr" for="task-search">搜索任务</label
-        ><input id="task-search" placeholder="搜索任务…" type="search" />
-        <div id="task-list" class="task-list"></div>
-        <button id="more-tasks" hidden>加载更多任务</button>
-        <div class="nav-bottom">
-          <button id="my-library">我的提示词与工具</button
-          ><button id="legacy-tasks">旧版任务归档</button
-          ><a href="/">← 返回普通工具</a
-          ><small>同一使用码，可在不同设备继续。</small>
-        </div>
-      </aside>
-      <div id="shade" hidden></div>
-      <main id="workspace">
-        <div class="taskbar">
-          <input
-            id="task-title"
-            aria-label="任务名称"
-            value="新任务"
-            maxlength="200"
-          /><span id="save-state" role="status">尚未登录</span>
-          <details class="task-menu">
-            <summary aria-label="任务操作">•••</summary>
-            <div>
-              <button id="copy-task">复制任务</button
-              ><button id="delete-task" class="danger">删除任务</button>
+
+    <div class="aw-shell">
+      <header class="aw-top">
+        <button
+          id="menu"
+          class="icon-btn"
+          aria-label="打开任务列表"
+          aria-expanded="false"
+          data-icon="menu"
+        ></button>
+        <a class="aw-brand" href="/" title="回到普通工具">
+          <span class="aw-logo" data-icon="logo"></span>
+          <span class="aw-brand-text">
+            <strong>NeoBangX</strong>
+            <small>Agent 工作台</small>
+          </span>
+        </a>
+        <span class="grow"></span>
+        <span id="connection" class="aw-conn" role="status" data-state="idle">正在连接</span>
+        <details class="aw-theme">
+          <summary class="icon-btn" aria-label="切换主题" title="主题" data-icon="contrast"></summary>
+          <div class="aw-pop aw-pop-themes">
+            <div class="aw-pop-title">主题</div>
+            <div class="aw-themes" data-themes></div>
+          </div>
+        </details>
+        <button id="account" class="btn-ghost aw-account" aria-label="登录或切换使用码" title="登录或切换使用码">
+          <span data-icon="key"></span><span data-label>登录</span>
+        </button>
+      </header>
+
+      <div class="aw-body">
+        <aside id="nav" class="aw-rail" aria-label="任务导航">
+          <div class="aw-rail-head">
+            <div class="aw-rail-title">
+              <strong>任务</strong>
+              <small>同一使用码，跨设备继续</small>
             </div>
-          </details>
-        </div>
-        <div id="conflict" class="notice" hidden>
-          其他窗口更新了任务，本地修改已保留。<button id="compare-conflict">
-            比较与处理
+            <button
+              id="close-nav"
+              class="icon-btn aw-rail-close"
+              aria-label="关闭任务列表"
+              data-icon="x"
+            ></button>
+          </div>
+
+          <button id="new-task" class="btn-primary aw-new">
+            <span data-icon="plus"></span><span>新任务</span>
           </button>
-        </div>
-        <nav class="view-switch" aria-label="主区域">
-          <button data-view="chat">
-            对话与进度 <span id="activity-dot"></span></button
-          ><button data-view="work" aria-current="page">
-            工作区 <span id="result-dot"></span>
-          </button>
-        </nav>
-        <div class="columns">
-          <section id="chat" class="pane">
-            <div class="pane-heading">
-              <strong>任务与进度</strong
-              ><button class="focus" data-focus="chat" aria-label="专注对话">
-                ⛶
-              </button>
-            </div>
-            <div class="goal-area">
-              <label for="goal">这次想完成什么？</label
-              ><textarea
-                id="goal"
-                rows="4"
-                placeholder="例如：分析这份试卷的易错点，保留全部题目，并注明材料依据。"
-              ></textarea>
-              <div class="row">
-                <select id="model" aria-label="执行模型"></select
-                ><button id="run" class="primary">开始任务</button
-                ><button id="stop" class="danger" hidden>停止</button>
-              </div>
-              <small id="run-policy"></small>
-              <button data-policy>查看额度、预算与保留规则</button>
-            </div>
-            <div
-              id="timeline"
-              class="timeline"
-              tabindex="0"
-              aria-label="执行步骤"
-            >
-              <div class="empty">
-                <div class="motif">✳</div>
-                <h2>把目标交给 Agent，<br />把决定留在手中。</h2>
-                <p>
-                  提示词就在右侧。先看看、改一改，<br />再开始你的第一轮任务。
-                </p>
-              </div>
-            </div>
-            <button id="latest" hidden>↓ 有新进展 · 回到最新</button>
-            <div class="composer">
-              <label for="message" class="sr">补充要求</label
-              ><textarea
-                id="message"
-                rows="2"
-                placeholder="补充要求、指出问题，或继续任务…"
-              ></textarea>
-              <div class="row">
-                <small id="task-status">准备就绪</small
-                ><span class="grow"></span><button id="send">发送补充</button>
-              </div>
-            </div>
-          </section>
-          <div
-            id="separator"
-            role="separator"
-            tabindex="0"
-            aria-label="调整对话区域宽度"
-            aria-orientation="vertical"
-            aria-valuemin="30"
-            aria-valuemax="55"
-            aria-valuenow="40"
-          ></div>
-          <section id="work" class="pane">
-            <div class="pane-heading">
-              <nav class="tabs" aria-label="工作区">
-                <button data-tab="prompt" aria-current="page">提示词</button
-                ><button data-tab="materials">材料</button
-                ><button data-tab="tools">工具</button
-                ><button data-tab="results">
-                  成果 <span id="version-count"></span>
+
+          <label class="sr" for="task-search">搜索任务</label>
+          <div class="aw-search">
+            <span class="aw-search-ico" data-icon="search"></span>
+            <input
+              id="task-search"
+              placeholder="搜索任务…"
+              type="search"
+              autocomplete="off"
+            />
+          </div>
+
+          <div id="task-list" class="aw-tasks scroll-thin"></div>
+          <button id="more-tasks" class="btn-ghost aw-more" hidden>加载更多任务</button>
+
+          <div class="aw-rail-foot">
+            <button id="my-library" class="aw-link">
+              <span data-icon="book-open"></span><span>我的提示词与工具</span>
+            </button>
+            <button id="legacy-tasks" class="aw-link">
+              <span data-icon="history"></span><span>旧版任务归档</span>
+            </button>
+            <a href="/" class="aw-link">
+              <span data-icon="chevron-left"></span><span>返回普通工具</span>
+            </a>
+            <small>执行在后台继续，刷新或换设备都能接上。</small>
+          </div>
+        </aside>
+        <div id="shade" hidden></div>
+
+        <main id="workspace">
+          <div class="aw-taskbar">
+            <span class="aw-title-ico" data-icon="target"></span>
+            <input
+              id="task-title"
+              aria-label="任务名称"
+              value="新任务"
+              maxlength="200"
+            />
+            <span id="save-state" class="aw-save" role="status">尚未登录</span>
+            <details class="aw-taskmenu">
+              <summary class="icon-btn" aria-label="任务操作" title="任务操作" data-icon="more"></summary>
+              <div class="aw-pop aw-pop-menu">
+                <button id="copy-task">
+                  <span data-icon="copy"></span><span>复制任务</span>
                 </button>
-              </nav>
-              <button class="focus" data-focus="work" aria-label="专注工作区">
-                ⛶
-              </button>
-            </div>
-            <div class="work-body">
-              <div class="mobile-start">
-                <label for="mobile-goal">这次想完成什么？</label
-                ><textarea
-                  id="mobile-goal"
-                  rows="3"
-                  placeholder="说明目标，再选择材料和提示词…"
-                ></textarea>
-                <div class="row">
-                  <select id="mobile-model" aria-label="执行模型"></select
-                  ><button id="mobile-run" class="primary">开始任务</button>
-                </div>
-                <button data-policy>查看额度、预算与保留规则</button>
+                <button id="delete-task" class="danger">
+                  <span data-icon="trash"></span><span>删除任务</span>
+                </button>
               </div>
-              <section data-panel="prompt">
-                <div class="section-heading">
-                  <div>
-                    <h1>让你的要求清晰可见</h1>
-                    <p>这里的提示词会原样用于本任务，可随时修改。</p>
-                  </div>
-                  <span class="pill" id="prompt-origin">任务副本</span>
+            </details>
+          </div>
+
+          <div id="conflict" class="aw-notice" hidden>
+            <span data-icon="alert"></span>
+            <span>其他窗口更新了任务，本地修改已保留。</span>
+            <button id="compare-conflict" class="btn-ghost">比较与处理</button>
+          </div>
+
+          <nav class="view-switch aw-switch" aria-label="主区域">
+            <button data-view="chat">对话与进度 <span id="activity-dot"></span></button>
+            <button data-view="work" aria-current="page">工作区 <span id="result-dot"></span></button>
+          </nav>
+
+          <div class="columns aw-columns">
+            <section id="chat" class="pane aw-flow">
+              <div class="aw-pane-head">
+                <div class="aw-pane-title">
+                  <strong>任务与进度</strong>
+                  <small>目标写清，过程可查</small>
                 </div>
-                <label for="template">从模板开始</label
-                ><select id="template">
-                  <option value="">自定义提示词</option>
-                </select>
-                <div class="row wrap">
-                  <button id="compare-prompt">比较原版</button
-                  ><button id="reset-prompt">恢复模板</button
-                  ><button id="undo-template" hidden>撤销模板替换</button
-                  ><button id="save-template">另存为我的模板</button>
-                </div>
-                <label for="prompt">任务提示词</label
-                ><textarea
-                  id="prompt"
-                  class="editor"
-                  spellcheck="false"
+                <button
+                  class="focus icon-btn"
+                  data-focus="chat"
+                  aria-label="专注对话"
+                  data-icon="expand"
+                ></button>
+              </div>
+
+              <div class="aw-goal">
+                <label for="goal">这次想完成什么？</label>
+                <textarea
+                  id="goal"
+                  rows="4"
+                  placeholder="例如：分析这份试卷的易错点，保留全部题目，并注明材料依据。"
                 ></textarea>
-                <details>
-                  <summary>Agent 行为说明 · 可编辑</summary>
-                  <textarea
-                    id="behavior"
-                    class="editor"
-                    aria-label="Agent 行为说明"
-                    spellcheck="false"
-                  ></textarea>
-                </details>
-                <div class="notice" id="next-step" hidden>
-                  本轮使用启动时的配置。<button id="apply-next">
-                    将已保存的提示词和工具用于下一步
+                <div class="aw-goal-row">
+                  <div class="aw-select aw-model-select">
+                    <select id="model" aria-label="执行模型"></select>
+                  </div>
+                  <button id="run" class="btn-primary aw-run">
+                    <span data-icon="play"></span><span data-label>开始任务</span>
+                  </button>
+                  <button id="stop" class="btn-ghost aw-stop" hidden>
+                    <span data-icon="stop"></span><span>停止</span>
                   </button>
                 </div>
-                <small>实际发送的完整指令可在每一步的「指令」中查看。</small>
-              </section>
-              <section data-panel="materials" hidden>
-                <div class="section-heading">
-                  <div>
-                    <h1>从原始材料出发</h1>
-                    <p>勾选本轮材料。原文件与解析文本分别保存。</p>
-                  </div>
+                <div class="aw-policy-row">
+                  <small id="run-policy"></small>
+                  <button data-policy class="aw-link">额度、预算与保留规则</button>
                 </div>
-                <label class="upload"
-                  >＋ 上传文件<input
-                    id="upload"
-                    type="file"
-                    accept=".txt,.md,.csv,.docx,.pdf"
-                    multiple
-                  /><small
-                    >TXT、Markdown、CSV、Word、文字 PDF · 单个 20 MB</small
-                  ></label
-                >
-                <p class="hint">
-                  扫描 PDF 请先在普通工具页完成 OCR，再粘贴识别文本。
-                </p>
-                <div id="materials-list"></div>
-                <details open>
-                  <summary>粘贴新材料</summary>
-                  <input
-                    id="material-name"
-                    aria-label="材料名称"
-                    placeholder="材料名称"
-                  /><textarea
-                    id="material-text"
-                    rows="7"
-                    aria-label="材料正文"
-                    placeholder="粘贴完整原文…"
-                  ></textarea
-                  ><button id="add-material">保存材料</button>
-                </details>
-              </section>
-              <section data-panel="tools" hidden>
-                <h1>让 Agent 使用合适的工具</h1>
-                <p>
-                  工具开关只影响本任务。材料与成果的读取、版本保存始终可用。
-                </p>
-                <div id="tools-list"></div>
-                <details open>
-                  <summary>教学工具 · 提示词可修改</summary>
-                  <p>选择官方教学工具，编辑本任务中的副本。</p>
-                  <select
-                    id="teaching-select"
-                    aria-label="添加教学工具"
-                  ></select
-                  ><button id="add-teaching">添加到本任务</button>
-                  <div id="teaching-list"></div>
-                </details>
-                <details>
-                  <summary>工具试运行</summary>
-                  <select id="test-name" aria-label="试运行工具">
-                    <option value="search_material">材料检索</option>
-                    <option value="web_search">网页搜索</option>
-                    <option value="check_vocabulary">词表检查</option></select
-                  ><textarea
-                    id="test-query"
+              </div>
+
+              <div id="timeline" class="aw-timeline scroll-thin" tabindex="0" aria-label="执行步骤">
+                <div class="aw-empty" id="timeline-empty">
+                  <div class="aw-empty-mark" data-icon="sparkle"></div>
+                  <h2>把目标交给 Agent，<br />把决定留在手中。</h2>
+                  <p>
+                    写下这次要完成什么。它会读取材料、按步执行，<br />每一步都可查看，成果自动保留版本。
+                  </p>
+                  <ol class="aw-guide">
+                    <li><b>1</b><span>写清目标</span></li>
+                    <li><b>2</b><span>补齐材料与提示词</span></li>
+                    <li><b>3</b><span>开始并随时补充</span></li>
+                  </ol>
+                </div>
+              </div>
+              <button id="latest" class="aw-latest" hidden>
+                <span data-icon="chevron-down"></span><span>有新进展 · 回到最新</span>
+              </button>
+
+              <div class="composer aw-composer">
+                <div class="aw-composer-main">
+                  <label for="message" class="sr">补充要求</label>
+                  <textarea
+                    id="message"
+                    rows="1"
+                    placeholder="补充要求，或继续任务…"
+                  ></textarea>
+                  <button id="send" class="btn-primary aw-send">
+                    <span data-label>发送补充</span><span data-icon="send"></span>
+                  </button>
+                </div>
+                <div class="aw-composer-foot">
+                  <small id="task-status">准备就绪</small>
+                  <small class="aw-composer-hint">执行在后台继续</small>
+                </div>
+              </div>
+            </section>
+
+            <div
+              id="separator"
+              role="separator"
+              tabindex="0"
+              aria-label="调整任务流与工作区的宽度"
+              aria-orientation="vertical"
+              aria-valuemin="380"
+              aria-valuemax="680"
+              aria-valuenow="480"
+            ></div>
+
+            <section id="work" class="pane aw-inspector">
+              <div class="aw-pane-head">
+                <nav class="tabs aw-tabs" aria-label="工作区">
+                  <button data-tab="prompt" aria-current="page">提示词</button>
+                  <button data-tab="materials">材料</button>
+                  <button data-tab="tools">工具</button>
+                  <button data-tab="results">成果 <span id="version-count" class="aw-count"></span></button>
+                </nav>
+                <button
+                  class="focus icon-btn"
+                  data-focus="work"
+                  aria-label="专注工作区"
+                  data-icon="expand"
+                ></button>
+              </div>
+
+              <div class="aw-work-body scroll-thin">
+                <div class="aw-mobile-start">
+                  <label for="mobile-goal">这次想完成什么？</label>
+                  <textarea
+                    id="mobile-goal"
                     rows="3"
-                    aria-label="测试内容"
-                    placeholder="输入查找词或需要检查的文本"
-                  ></textarea
-                  ><label class="check"
-                    ><input id="test-regex" type="checkbox" />使用正则</label
-                  ><button id="test-tool">试运行</button>
-                </details>
-                <details open>
-                  <summary>审阅与修订</summary>
-                  <label class="check"
-                    ><input
-                      id="review"
-                      type="checkbox"
-                    />生成后进行开放式审阅</label
-                  ><label class="check"
-                    ><input
-                      id="auto-improve"
-                      type="checkbox"
-                    />根据有依据的问题生成候选修订</label
-                  ><label for="review-prompt">开放式审阅提示词</label
-                  ><textarea
-                    id="review-prompt"
-                    rows="7"
-                    spellcheck="false"
-                  ></textarea
-                  ><small
-                    >审阅返回 summary 与 issues
-                    JSON；结果格式由系统校验，不会因解析失败标记通过。</small
-                  ><label for="review-rounds">最多修订轮数</label
-                  ><input
-                    id="review-rounds"
-                    type="number"
-                    min="1"
-                    max="3"
-                    value="1"
-                  /><small
-                    >不打分、不为通过检查删内容；候选稿需你主动采用。</small
-                  >
-                </details>
-                <button id="save-tool-template">保存这套工具配置</button>
-              </section>
-              <section data-panel="results" hidden>
-                <div class="section-heading">
-                  <div>
-                    <h1>成果与版本</h1>
-                    <p>每次修订都保留原稿；可以随时比较、采用或继续修改。</p>
+                    placeholder="说明目标，再选择材料和提示词…"
+                  ></textarea>
+                  <div class="aw-goal-row">
+                    <div class="aw-select aw-model-select">
+                      <select id="mobile-model" aria-label="执行模型"></select>
+                    </div>
+                    <button id="mobile-run" class="btn-primary aw-run">
+                      <span data-icon="play"></span><span data-label>开始任务</span>
+                    </button>
                   </div>
+                  <button data-policy class="aw-link">额度、预算与保留规则</button>
                 </div>
-                <div id="versions-list"></div>
-                <div id="result-actions" hidden>
-                  <div class="row wrap">
-                    <select
-                      id="version-select"
-                      aria-label="选择成果版本"
-                    ></select
-                    ><button id="adopt">采用此版本</button
-                    ><button id="compare-version">比较上个版本</button
-                    ><button id="edit-version">手动编辑</button
-                    ><button id="review-version">审阅此版本</button
-                    ><button id="revise-version">要求修订</button
-                    ><button id="copy-result">复制全文</button
-                    ><button id="export-md">Markdown</button
-                    ><button id="export-docx">Word</button>
+
+                <section data-panel="prompt" class="aw-panel">
+                  <header class="aw-panel-head">
+                    <div>
+                      <h1>让你的要求清晰可见</h1>
+                      <p>这里的提示词会原样用于本任务，可随时修改。</p>
+                    </div>
+                    <span class="aw-pill" id="prompt-origin">任务副本</span>
+                  </header>
+
+                  <div class="aw-field">
+                    <label for="template">从模板开始</label>
+                    <div class="aw-select">
+                      <select id="template">
+                        <option value="">自定义提示词</option>
+                      </select>
+                    </div>
                   </div>
-                  <div class="row wrap">
-                    <label class="check"
-                      ><input
-                        type="checkbox"
-                        id="result-plain"
-                      />原文阅读</label
-                    ><label class="check"
-                      ><input
-                        type="checkbox"
-                        id="table-cards"
-                      />表格逐条阅读</label
-                    >
+
+                  <div class="aw-row wrap aw-form-actions">
+                    <button id="compare-prompt" class="btn-ghost">
+                      <span data-icon="list-checks"></span><span>比较原版</span>
+                    </button>
+                    <button id="reset-prompt" class="btn-ghost">
+                      <span data-icon="refresh"></span><span>恢复模板</span>
+                    </button>
+                    <button id="undo-template" class="btn-ghost" hidden>撤销模板替换</button>
+                    <button id="save-template" class="btn-ghost">
+                      <span data-icon="book-open"></span><span>另存为我的模板</span>
+                    </button>
                   </div>
-                  <div id="result-body" class="document"></div>
-                  <div class="row pager">
-                    <button id="result-prev">上一段</button
-                    ><span id="result-page"></span
-                    ><button id="result-next">下一段</button>
+
+                  <div class="aw-field">
+                    <label for="prompt">任务提示词</label>
+                    <textarea id="prompt" class="editor" spellcheck="false"></textarea>
                   </div>
-                </div>
-                <div id="result-empty" class="empty">
-                  成果将在这里出现。<br />执行中也可以打开已经保存的版本。
-                </div>
-              </section>
-            </div>
-          </section>
-        </div>
-      </main>
-    </div>
-    <dialog id="modal">
-      <div class="modal-head">
-        <h2 id="modal-title"></h2>
-        <button id="modal-close" aria-label="关闭">×</button>
+
+                  <details class="aw-fold">
+                    <summary>
+                      <span class="aw-chev" data-icon="chevron-right"></span>
+                      <span>Agent 行为说明 · 可编辑</span>
+                    </summary>
+                    <textarea
+                      id="behavior"
+                      class="editor"
+                      aria-label="Agent 行为说明"
+                      spellcheck="false"
+                    ></textarea>
+                  </details>
+
+                  <div class="aw-notice" id="next-step" hidden>
+                    <span data-icon="refresh"></span>
+                    <span>本轮使用启动时的配置。</span>
+                    <button id="apply-next" class="btn-ghost">将已保存的提示词和工具用于下一步</button>
+                  </div>
+                  <p class="aw-foot">实际发送的完整指令可在每一步的「指令」中查看。</p>
+                </section>
+
+                <section data-panel="materials" class="aw-panel" hidden>
+                  <header class="aw-panel-head">
+                    <div>
+                      <h1>从原始材料出发</h1>
+                      <p>勾选本轮材料。原文件与解析文本分别保存。</p>
+                    </div>
+                  </header>
+
+                  <label class="aw-drop">
+                    <span class="aw-drop-ico" data-icon="upload"></span>
+                    <span class="aw-drop-main">上传文件</span>
+                    <span class="aw-drop-hint">TXT、Markdown、CSV、Word、文字 PDF · 单个 20 MB</span>
+                    <input
+                      id="upload"
+                      type="file"
+                      accept=".txt,.md,.csv,.docx,.pdf"
+                      multiple
+                    />
+                  </label>
+                  <p class="aw-hint">
+                    扫描 PDF 请先在普通工具页完成 OCR，再粘贴识别文本。
+                  </p>
+
+                  <div id="materials-list" class="aw-list"></div>
+
+                  <details class="aw-fold" open>
+                    <summary>
+                      <span class="aw-chev" data-icon="chevron-right"></span>
+                      <span>粘贴新材料</span>
+                    </summary>
+                    <div class="aw-field">
+                      <label for="material-name">材料名称</label>
+                      <input id="material-name" aria-label="材料名称" placeholder="材料名称" />
+                    </div>
+                    <div class="aw-field">
+                      <label for="material-text">材料正文</label>
+                      <textarea
+                        id="material-text"
+                        rows="7"
+                        aria-label="材料正文"
+                        placeholder="粘贴完整原文…"
+                      ></textarea>
+                    </div>
+                    <button id="add-material" class="btn-primary">
+                      <span data-icon="plus"></span><span>保存材料</span>
+                    </button>
+                  </details>
+                </section>
+
+                <section data-panel="tools" class="aw-panel" hidden>
+                  <header class="aw-panel-head">
+                    <div>
+                      <h1>让 Agent 使用合适的工具</h1>
+                      <p>工具开关只影响本任务。材料与成果的读取、版本保存始终可用。</p>
+                    </div>
+                  </header>
+
+                  <div id="tools-list" class="aw-list"></div>
+
+                  <details class="aw-fold" open>
+                    <summary>
+                      <span class="aw-chev" data-icon="chevron-right"></span>
+                      <span>教学工具 · 提示词可修改</span>
+                    </summary>
+                    <p class="aw-foot">选择官方教学工具，编辑本任务中的副本。</p>
+                    <div class="aw-inline">
+                      <div class="aw-select grow">
+                        <select id="teaching-select" aria-label="添加教学工具"></select>
+                      </div>
+                      <button id="add-teaching" class="btn-ghost">
+                        <span data-icon="plus"></span><span>添加到本任务</span>
+                      </button>
+                    </div>
+                    <div id="teaching-list" class="aw-list"></div>
+                  </details>
+
+                  <details class="aw-fold">
+                    <summary>
+                      <span class="aw-chev" data-icon="chevron-right"></span>
+                      <span>工具试运行</span>
+                    </summary>
+                    <div class="aw-field">
+                      <label for="test-name">试运行工具</label>
+                      <div class="aw-select">
+                        <select id="test-name" aria-label="试运行工具">
+                          <option value="search_material">材料检索</option>
+                          <option value="web_search">网页搜索</option>
+                          <option value="check_vocabulary">词表检查</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="aw-field">
+                      <label for="test-query">测试内容</label>
+                      <textarea
+                        id="test-query"
+                        rows="3"
+                        aria-label="测试内容"
+                        placeholder="输入查找词或需要检查的文本"
+                      ></textarea>
+                    </div>
+                    <label class="aw-check">
+                      <input id="test-regex" type="checkbox" /><span>使用正则</span>
+                    </label>
+                    <button id="test-tool" class="btn-ghost">
+                      <span data-icon="play"></span><span>试运行</span>
+                    </button>
+                  </details>
+
+                  <details class="aw-fold" open>
+                    <summary>
+                      <span class="aw-chev" data-icon="chevron-right"></span>
+                      <span>审阅与修订</span>
+                    </summary>
+                    <label class="aw-check">
+                      <input id="review" type="checkbox" /><span>生成后进行开放式审阅</span>
+                    </label>
+                    <label class="aw-check">
+                      <input id="auto-improve" type="checkbox" /><span>根据有依据的问题生成候选修订</span>
+                    </label>
+                    <div class="aw-field">
+                      <label for="review-prompt">开放式审阅提示词</label>
+                      <textarea id="review-prompt" rows="7" spellcheck="false"></textarea>
+                    </div>
+                    <p class="aw-foot">
+                      审阅返回 summary 与 issues JSON；结果格式由系统校验，不会因解析失败标记通过。
+                    </p>
+                    <div class="aw-field aw-field-narrow">
+                      <label for="review-rounds">最多修订轮数</label>
+                      <input id="review-rounds" type="number" min="1" max="3" value="1" />
+                    </div>
+                    <p class="aw-foot">不打分、不为通过检查删内容；候选稿需你主动采用。</p>
+                  </details>
+
+                  <button id="save-tool-template" class="btn-ghost">
+                    <span data-icon="book-open"></span><span>保存这套工具配置</span>
+                  </button>
+                </section>
+
+                <section data-panel="results" class="aw-panel" hidden>
+                  <header class="aw-panel-head">
+                    <div>
+                      <h1>成果与版本</h1>
+                      <p>每次修订都保留原稿；可以随时比较、采用或继续修改。</p>
+                    </div>
+                  </header>
+
+                  <div id="versions-list" class="aw-versions"></div>
+
+                  <div id="result-actions" hidden>
+                    <div class="aw-actions">
+                      <div class="aw-select aw-version-select">
+                        <select id="version-select" aria-label="选择成果版本"></select>
+                      </div>
+                      <button id="adopt" class="btn-primary">采用此版本</button>
+                      <button id="compare-version" class="btn-ghost">比较上个版本</button>
+                      <button id="edit-version" class="btn-ghost">手动编辑</button>
+                      <button id="review-version" class="btn-ghost">审阅此版本</button>
+                      <button id="revise-version" class="btn-ghost">要求修订</button>
+                      <button id="copy-result" class="btn-ghost">
+                        <span data-icon="copy"></span><span>复制全文</span>
+                      </button>
+                      <button id="export-md" class="btn-ghost">
+                        <span data-icon="download"></span><span>Markdown</span>
+                      </button>
+                      <button id="export-docx" class="btn-ghost">
+                        <span data-icon="download"></span><span>Word</span>
+                      </button>
+                    </div>
+                    <div class="aw-actions">
+                      <label class="aw-check">
+                        <input type="checkbox" id="result-plain" /><span>原文阅读</span>
+                      </label>
+                      <label class="aw-check">
+                        <input type="checkbox" id="table-cards" /><span>表格逐条阅读</span>
+                      </label>
+                    </div>
+
+                    <div id="result-body" class="document"></div>
+
+                    <div class="aw-pager">
+                      <button id="result-prev" class="btn-ghost">
+                        <span data-icon="chevron-left"></span><span>上一段</span>
+                      </button>
+                      <span id="result-page"></span>
+                      <button id="result-next" class="btn-ghost">
+                        <span>下一段</span><span data-icon="chevron-right"></span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div id="result-empty" class="aw-empty small">
+                    <div class="aw-empty-mark" data-icon="file-text"></div>
+                    <h2>成果将在这里出现</h2>
+                    <p>执行中也可以打开已经保存的版本。</p>
+                  </div>
+                </section>
+              </div>
+            </section>
+          </div>
+        </main>
       </div>
-      <div id="modal-body"></div>
-      <div id="modal-actions" class="row wrap"></div>
+    </div>
+
+    <dialog id="modal" class="aw-dialog">
+      <div class="aw-modal-head">
+        <h2 id="modal-title"></h2>
+        <button id="modal-close" class="icon-btn" aria-label="关闭" data-icon="x"></button>
+      </div>
+      <div id="modal-body" class="aw-modal-body scroll-thin"></div>
+      <div id="modal-actions" class="aw-modal-actions aw-row wrap"></div>
     </dialog>
-    <div id="toast" role="status" hidden></div>
+    <div id="toast" role="status" aria-live="polite" hidden></div>
     <noscript>请启用 JavaScript 使用 Agent 工作台。</noscript>
   </body>
 </html>
