@@ -1367,3 +1367,75 @@ openrouter/deepseek/deepseek-chat
 | 1.18.0 | 2026-10-15 | 描述需求找工具：新增 `POST /api/tools/search`（无需使用码，不扣额度不写日志，`tool_search` 桶 30 次/60 秒限速）；Jev choice 单题判定（~70-500ms）映射 32 个工具并允许「以上都不合适」，未配齐/超时（上限 5s）/报错立即回退本地关键词 bigram 匹配；进程内缓存（TTL 600s、键含工具目录指纹）；新增配置键 `jev_tool_search_enabled`（缺键按开，可单独关闭搜索的 Jev 判定）；前端在侧栏与移动顶部提供「描述需求找工具」入口（输入停顿 500ms 自动搜、内容变化中断重发、查找中可见进度环、空态/兜底/不确定状态文案）；假后端打桩同形响应（`#mock` 场景 fallback/slow/error/empty） |
 | 1.19.0 | 2026-10-19 | 前端行为变化（无接口变更）：生成中断（切工具 / 回首页 / 新建题目 / 查看历史 / 关页刷新）先落盘残文再作废在途流，关页走 `pagehide` 并把停止通知用 `keepalive` 送出，从 bfcache 回来不会卡在「生成中」；历史卡片键盘可达（`role="button"` + `tabindex` + 读屏名，Enter / 空格打开、↑↓ 移动焦点） |
 | 1.20.0 | 2026-10-19 | 撞输出上限改为**所有工具**都发 `truncated`（原先只对工具 32/33 发，其余工具把半份内容当完整结果交付且没有续写入口），载荷补 `completion_tokens` 与 `finish_reason`，前端据此在结果区给「继续生成」出口、把记录标成「待补全」；`error` 事件改为「Chores 模型转写的两句话 + 机器可读分类」：新增 `advice` 与 `code` 字段，`message` 不再是固定的「生成失败，请稍后重试」，失败时先发一条 `explaining` 非终态事件让前端立刻停止显示「生成中」（新增提示词 `prompts/报错解释.md`，注册为 Chores 工作 `error_explain` 以便按模型配推理等级；Chores 不可用时按「精确判定 → Jev → 机械兜底」决定要不要再试，总时长预算 3 秒，仍失败则用机械文案兜底，同类错误走进程内缓存）；失败分类 `error_code` 与上游结束原因 `finish_reason` 随使用日志落库，前端按 `code` 收起注定失败的重试、后台日志表据此显示「截断」与分类角标；Jev 的「精确 → Jev → 兜底」三层骨架抽成 `app/services/decision.py`，Provider 切换判定、标题任务重试判定与报错解读共用同一套编排 |
+
+---
+
+## 16 Agent 工作台（`/api/workspace`）
+
+工作台使用与主站相同的使用码 JWT，请求头 `Authorization: Bearer <token>`。除登录外均需要有效使用码。
+
+### 16.1 页面与登录
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/agent`、`/agent/tasks/{id}` | 工作台页面（服务端返回同一单页，路由由前端解析） |
+| POST | `/api/workspace/login` | 使用码换 JWT |
+| GET | `/api/workspace/catalog` | 模型、官方模板、个人模板、工具、默认配置、额度与上限 |
+
+### 16.2 任务
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/workspace/tasks?q=&offset=&limit=` | 任务列表；`q` 只匹配标题 |
+| POST | `/api/workspace/tasks` | 新建任务；`config` 必须符合 `TaskConfig`，新任务不能预选材料 |
+| GET | `/api/workspace/tasks/{id}` | 任务详情：配置、材料元数据、成果版本、执行轮次、补充要求 |
+| PUT | `/api/workspace/tasks/{id}` | 以 `revision` 乐观锁保存配置与标题；冲突返回 409 |
+| DELETE | `/api/workspace/tasks/{id}` | 删除任务（执行中返回 409） |
+| POST | `/api/workspace/tasks/{id}/copy` | 复制任务与材料，返回 `material_map` |
+
+任务详情的 `notes` 为补充要求与配置应用记录（`id`、`run_id`、`text`、`applied`、`config`），用于刷新后恢复对话中的用户消息；过程正文不进入任务详情。
+
+### 16.3 材料
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/workspace/tasks/{id}/materials` | 粘贴材料正文 |
+| POST | `/api/workspace/tasks/{id}/upload` | 上传并解析文件（20 MB 上限） |
+| GET | `/api/workspace/tasks/{id}/materials/{material_id}` | 读取解析文本；`?original=true` 下载原文件 |
+
+### 16.4 执行与过程
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/workspace/tasks/{id}/runs` | 创建执行轮次；`request_key` 幂等 |
+| POST | `/api/workspace/tasks/{id}/stop` | 请求停止当前轮次 |
+| POST | `/api/workspace/tasks/{id}/notes` | 补充要求，或 `apply_config=true` 在下一步应用新配置 |
+| GET | `/api/workspace/tasks/{id}/events?after=` | 增量事件（`run` / `entry` / `note` / `version` / `adopt` / `material` / `config`）；**不含大段正文** |
+| GET | `/api/workspace/tasks/{id}/entries` | 步骤元数据列表（按创建时间），用于恢复对话与轨迹；不含正文 |
+| GET | `/api/workspace/tasks/{id}/entries/{entry_id}/content?kind=&after=&download=` | 按游标读取某一步的正文块；块大小 4096 字符，单次最多 24 块；`kind` 为 `reasoning` / `output` / `input` / `arguments` / `prompt` / `review` |
+| GET | `/api/workspace/tasks/{id}/runs/{run_id}` | 单轮配置快照 |
+
+轮询事件只携带步骤元数据与字符计数，正文通过 `entries/{entry_id}/content` 按游标读取；这样 20 万字符思考与 30 万字符成果不会挤进事件响应。
+
+### 16.5 成果
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/workspace/tasks/{id}/versions/{version_id}` | 读取完整成果正文 |
+| POST | `/api/workspace/tasks/{id}/versions` | 手动编辑，保存为新版本 |
+| POST | `/api/workspace/tasks/{id}/versions/{version_id}/adopt` | 采用版本；`expected` 乐观锁 |
+
+### 16.6 审阅、工具与模板
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/workspace/tasks/{id}/reviews/{entry_id}` | 记录被忽略的审阅意见 |
+| POST | `/api/workspace/tasks/{id}/tool-test` | 只读工具试运行 |
+| POST | `/api/workspace/templates` | 保存个人提示词/工具模板 |
+| DELETE | `/api/workspace/templates/{template_id}` | 删除个人模板 |
+| GET | `/api/workspace/legacy?offset=` | 旧版任务只读归档 |
+| GET | `/api/workspace/legacy/{run_id}` | 导出旧版任务完整记录 |
+
+### 16.7 错误
+
+沿用主站的 `{"detail": "..."}`；常见状态码：401 登录失效、404 任务/材料/步骤不存在、409 配置冲突或执行中删除、422 参数校验失败、429 并发/免费额度限制。

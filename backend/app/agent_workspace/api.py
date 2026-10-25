@@ -340,6 +340,16 @@ def events(task_id: str, owner: Owner, after: int = Query(0, ge=0)):
                 "task": store.task_dict(task)}
 
 
+@router.get("/tasks/{task_id}/entries")
+def list_entries(task_id: str, owner: Owner):
+    """步骤元数据，供对话恢复；正文仍按游标单独读取，避免把大段内容塞进列表。"""
+    with SessionLocal() as db:
+        store.owned(db, task_id, owner)
+        rows = db.scalars(select(Entry).where(Entry.task_id == task_id)
+                          .order_by(Entry.created_at, Entry.id).limit(2000)).all()
+        return {"entries": [store.entry_dict(r) for r in rows]}
+
+
 @router.get("/tasks/{task_id}/entries/{entry_id}/content")
 def entry_content(task_id: str, entry_id: str, owner: Owner, kind: str = "output", after: int = Query(0, ge=0), download: bool = False):
     with SessionLocal() as db:

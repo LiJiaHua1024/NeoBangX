@@ -248,6 +248,10 @@ class Runner:
             await asyncio.to_thread(store.finish_tool, entry["id"], result)
             # 完整结果另存，模型收到有明确范围说明的结果视图。
             return self.result_view(full, entry["id"])
+        except asyncio.CancelledError:
+            await asyncio.to_thread(store.finish_entry, entry["id"], "interrupted",
+                                    {"error": "本轮已停止，工具调用未完成"})
+            raise
         except WaitingForUser:
             raise
         except BudgetReached as exc:

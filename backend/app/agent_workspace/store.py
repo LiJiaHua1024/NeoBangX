@@ -70,12 +70,17 @@ def material_dict(row, full=False):
     return value
 
 
-def run_dict(row, full=False):
+def run_dict(row, full=False, with_instruction=False):
     value = {"id": row.id, "status": row.status, "mode": row.mode, "step": row.step,
              "tokens": row.tokens, "error": row.error, "created_at": row.created_at.isoformat(),
              "finished_at": row.finished_at.isoformat() if row.finished_at else None}
     if full:
         value["snapshot"] = decode(row.snapshot)
+    elif with_instruction:
+        # 只给需要展示的少数轮次解码快照；普通轮次的事件不读大配置。
+        snapshot = decode(row.snapshot)
+        value["instruction"] = snapshot.get("instruction", "")
+        value["base_version"] = snapshot.get("base_version", "")
     return value
 
 
@@ -90,9 +95,13 @@ def task_detail(owner, task_id):
             Version.id, Version.run_id, Version.parent_id, Version.title, Version.origin, Version.complete,
             func.length(Version.content).label("chars"), Version.created_at)
             .where(Version.task_id == task_id).order_by(Version.created_at)).mappings()]
-        value["runs"] = [run_dict(r) for r in db.scalars(select(Run).options(load_only(
+        value["runs"] = [run_dict(r, with_instruction=r.mode in {"continue", "review", "revise", "tool_test"}) for r in db.scalars(select(Run).options(load_only(
             Run.id, Run.status, Run.mode, Run.step, Run.tokens, Run.error, Run.created_at, Run.finished_at))
             .where(Run.task_id == task_id).order_by(Run.created_at))]
+        # 对话恢复需要补充要求；过程正文仍不进入任务详情。
+        value["notes"] = [{"id": r.id, "run_id": r.run_id, "text": r.text,
+                           "applied": bool(r.applied), "config": bool(r.config)}
+                          for r in db.scalars(select(Note).where(Note.task_id == task_id).order_by(Note.id))]
         return value
 
 
@@ -373,6 +382,18 @@ def finish_run(run_id, status, error=""):
             db.execute(update(UsageCode).where(UsageCode.id == task.owner, UsageCode.used_count > 0)
                        .values(used_count=UsageCode.used_count - 1))
             row.charged = False
+        # 取消可能落在步骤创建与步骤 try 之间，留下 status=running 的步骤。
+        # 终态时统一收尾，并把更新推给正在轮询的页面。
+        for entry in db.scalars(select(Entry).where(Entry.run_id == run_id, Entry.status == "running")):
+            details = decode(entry.details)
+            details["error"] = details.get("error") or (
+                "本轮已停止，步骤未完成" if status in {"stopped", "interrupted"}
+                else "执行失败，步骤未完成" if status == "failed"
+                else "执行结束，步骤未完成"
+            )
+            entry.status = "interrupted"
+            entry.details = encode(details)
+            event(db, task.id, "entry", entry_dict(entry))
         log = db.scalar(select(UsageLog).where(UsageLog.request_id == run_id, UsageLog.tool_id == "agent"))
         if log:
             log.status = "error" if status == "failed" else "cancelled" if status == "stopped" else "success"
