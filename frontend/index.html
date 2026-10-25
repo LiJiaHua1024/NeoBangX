@@ -452,6 +452,10 @@
                 x-html="icon('x','w-4 h-4')"></button></span>
       </div>
 
+      <div class="px-3 pb-2 shrink-0">
+        <a href="/agent" class="btn w-full" style="display:block;text-align:center">Agent 工作台 ↗</a>
+        <button x-show="currentTool" class="btn w-full" style="margin-top:6px" @click="sessionStorage.setItem('nbx_agent_handoff', JSON.stringify({toolId: currentTool.id, text: input || submittedInput || '', name: currentTool.name})); window.location.href='/agent'">带入材料与提示词</button>
+      </div>
       <!-- 描述需求找工具：窄版常驻在工具列表上方。
            它不是「按工具名过滤」的搜索框，而是让用户用一句话说自己想做什么：
            文案与示例都把话往「说人话」上引，停顿即自动搜（停顿判定见 script.js

@@ -1,0 +1,43 @@
+Generation tool: built-in image_gen
+Purpose: PRD layout concept previews, not production UI screenshots.
+
+DESKTOP CONCEPT
+
+Use case: ui-mockup.
+Create one high fidelity desktop web application UX concept board for NeoBangX Agent, a Chinese-language AI teaching workspace at website.com/agent. The board contains TWO LARGE desktop screenshots stacked vertically, the same application in two states. Landscape canvas around 2560 x 2048, sharp legible Simplified Chinese interface text. Small heading above each screenshot: "01 准备任务" and "02 执行与审阅". Screens are straight-on flat UI, no devices or perspective, no stock illustration, no dramatic glow. Clean thoughtful productive editorial design, warm white main surfaces, very light slate sidebar, charcoal text, restrained indigo accents, thin dividers, comfortable typography. Avoid dashboard statistic tiles and decorative filler. Use most space for actual work.
+Both screenshots share a thin topbar with "NeoBangX / Agent", task title "高三阅读课备课", and top-right "模型" selector and "分享" subdued button. Three resizable columns: narrow left 16% width navigation, middle 36% dialogue/goal and activity, right 48% work surface. Sidebar: prominent "+ 新任务", small "最近任务", selected "高三阅读课备课", two other task names "完形填空讲评" and "作文反馈", bottom links "我的提示词" and "工具库" and "返回普通工具".
+FIRST screenshot: center shows heading "这次想完成什么？", an editable spacious task composer containing "分析这份试卷的阅读部分，找出学生容易误判的地方，整理成课堂讲义。", attached file chip "2025 模拟卷.docx", compact selected tool chips "材料检索" "正则查找" "词表检查", a subdued link "添加工具", and a substantial bottom aligned indigo "开始任务" button. Do not clutter this with progress. Right surface has tabs "提示词" (ACTIVE), "材料", "工具", "成果". Prominent title "本次任务提示词", subtitle "基于「语篇深度分析」 · 可直接修改", real visible EDITABLE plain-language multiline text editor (not a code terminal), toolbar "与原版比较" and "另存为我的模板". The editor clearly displays short real readable Chinese instruction lines with generous spacing:
+"任务目标"
+"逐篇分析阅读语篇，输出适合课堂使用的讲义。"
+"材料范围"
+"只处理阅读理解、七选五和完形填空，跳过听力。"
+"输出要求"
+"引用原文，解释推理依据，保留所有相关语篇。"
+"材料不足时"
+"指出缺少的内容，不补造原文。"
+Bottom of editor subtle "已自动保存" and small text link "查看本次完整指令". The prompt is a first class visible editing area, never buried in settings.
+SECOND screenshot: same sidebar, center is a calm conversation/activity lane, user request at top then compact progress records "已读取材料 · 6 篇语篇", "正在核对 Passage C 的论据", tool activity "材料检索 · 找到 3 处依据". One small collapsed row "思考过程 · 48,216 字 · 查看全文", not a wall of reasoning. A short assistant progress note "已完成前两篇，正在核对第三篇的推理依据。". Bottom composer "补充要求，或调整接下来的任务…" with small visible "停止" action. Right tabs now "成果" ACTIVE, plus "提示词", "材料", "工具". A wide uncluttered document preview header "阅读课堂讲义" with version selector "v2 候选稿" and actions "对比版本" "导出". A slim information line "原稿 v1 已保留". Actual document typography, heading "Passage A · 城市与自然", small "主题概览" paragraph in Chinese and a clean 3-column small table headed "原文线索", "推理依据", "易错点", with two readable sample rows. Lower area titled "审阅意见" showing one concise evidence-grounded comment "第 3 段的结论缺少原文依据" and citation chip "材料 · 第 3 段", action "查看差异". Small bottom actions "采用此版本" and "保留原稿". Show spacious full document width and realistic content rather than cramped cards.
+These are layout concept previews, not a marketing landing page. Preserve consistent column alignment and overall shell between states. All important labels in Simplified Chinese exactly as specified. No extra feature panels, no fake performance charts, no invented logos.
+
+RESPONSIVE CONCEPT
+
+Use case: ui-mockup.
+Create one high-fidelity RESPONSIVE UI concept board for the Chinese educational agent workspace "NeoBangX / Agent". Match a clean light workspace aesthetic: warm white panels, pale slate navigation, fine gray borders, charcoal text, restrained blue/indigo accent and readable modern Simplified Chinese fonts. Flat front-facing interface screenshots with no photographic devices, no perspective, no decorative illustrations. Canvas landscape around 2560 x 1800. Arrange ONE larger small-laptop screenshot across the upper-left 62% of board and TWO tall smartphone UI screenshots on the right; lower-left space contains just three short explanatory lines about responsive behavior. All screenshots must be readable and carefully aligned, no microscopic labels.
+Laptop screenshot labeled above "小屏笔记本 · 1280 × 800". This must show a COMPACT two-pane adaptive app, NOT a shrunk desktop three-column dashboard. Thin topbar: "NeoBangX / Agent", task title "高三阅读课备课", status "执行中". A 48px icon-only left navigation rail with hamburger and new task icons; NO permanently open history list. Dialogue pane about 38% remaining width, artifact workspace 62%. Pane divider visible, workspace top-right small "专注阅读" control. Dialogue contains user bubble "只分析阅读部分，整理成课堂讲义。", attached "模拟卷.docx", tool row "材料检索 · 找到 3 处依据", brief status "正在核对第三篇的推理依据", collapsed "思考过程 · 查看全文". Bottom small multiline composer "补充要求…" and "停止". Workspace tab row "提示词  材料  工具  成果" with 成果 active. Document header "阅读课堂讲义", small version chip "v1", "导出". Show heading "Passage A · 城市与自然", readable Chinese theme paragraph, a tidy 3-column table "原文线索 | 推理依据 | 易错点", plenty of actual document space, no chart cards. Reasonable compact paddings suitable for limited height.
+First phone labeled above "手机 · 编辑提示词". Approximate 390px width app viewport. NO desktop sidebars or squeezed parallel panes. Top app bar hamburger icon, "高三阅读课备课", more icon. Below it a two-choice segmented switch "对话 | 工作区" with 工作区 selected. Then a compact goal card label "本次目标" with two-line editable text "分析阅读部分，整理成课堂讲义。" and single file chip "模拟卷.docx". Then four tabs "提示词 材料 工具 成果" with 提示词 selected. Full-width editor heading "本次任务提示词", subtitle "可直接修改 · 已保存", small unobtrusive "与原版比较" link. Plain Chinese editable multiline text body:
+"任务目标"
+"逐篇分析阅读语篇，整理课堂讲义。"
+"材料范围"
+"只处理阅读、七选五和完形，跳过听力。"
+"输出要求"
+"引用原文并解释依据，保留相关语篇。"
+"材料不足时"
+"指出缺失，不补造原文。"
+At screen bottom, single full-width sticky indigo action "开始任务", with generous bottom safe-area padding. No extra persistent input box blocking prompt editor. Show a subtle vertical scroll indicator, not horizontal overflow.
+Second phone labeled above "手机 · 查看成果". Same topbar and "对话 | 工作区" switch with 工作区 active. Tabs "提示词 材料 工具 成果" with 成果 selected. Compact document header "阅读课堂讲义", version "v2 候选稿", text link "对比". Notice "原稿 v1 已保留". Full-width readable document, heading "Passage A", subheading "主题概览", a short natural Chinese paragraph. Replace desktop table with vertically stacked readable evidence rows using labels "原文线索", "推理依据", "易错点", not tiny squeezed columns. Short review block "审阅意见" with line "第 3 段的结论缺少原文依据" and "查看原文". Fixed bottom two actions "保留原稿" secondary and "采用此版本" primary. No chat pane next to document, no phone desktop sidebar.
+Below laptop screenshot put ONLY these three concise lines in clean typography:
+"按窗口宽度重排，不按设备名称缩放"
+"对话与工作区可切换，也可独占窗口"
+"手机保留完整编辑、工具配置和成果审阅能力"
+These are product layout proposals, not a marketing landing page. No invented model names, no performance claims, no decorative gradients or nonfunctional stat tiles.
+

@@ -880,6 +880,7 @@ function adminApp() {
       return (
         {
           dashboard: "概览",
+          agent: "Agent 工作台",
           analytics: "用量分析",
           codes: "使用码管理",
           logs: "使用日志",
@@ -895,6 +896,7 @@ function adminApp() {
       return (
         {
           dashboard: "查看整体使用情况与快捷入口",
+          agent: "管理执行预算与网页搜索 MCP，用户端只需开启搜索开关",
           analytics: "像顶级 LLM API 后台一样看开销大头、趋势与性能瓶颈",
           codes: "生成、启用/禁用/删除使用码，查看额度",
           logs: "查看每次工具调用的详细记录",

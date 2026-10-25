@@ -12,6 +12,7 @@ from app.config import settings
 from app.database import SessionLocal, bootstrap_lock, init_db
 from app.middleware import StaticCacheMiddleware
 from app.routers import admin
+from app.agent_workspace.admin import router as agent_admin_router
 from app.services.runtime_config import seed_config_from_env
 from app.services.usage_code import apply_jwt_secret_override, ensure_bootstrap_code
 
@@ -65,6 +66,7 @@ app = FastAPI(
 # 的任意网页跨域读写零鉴权的管理 API，必须移除。
 
 app.include_router(admin.router)
+app.include_router(agent_admin_router)
 
 
 @app.get("/api/health")

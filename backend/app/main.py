@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import mimetypes
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,6 +13,8 @@ from app.config import settings
 from app.database import SessionLocal, bootstrap_lock, init_db
 from app.middleware import StaticCacheMiddleware, index_preload_links
 from app.routers import auth, chat, ocr, parse, tools
+from app.agent_workspace.api import router as workspace_router
+from app.agent_workspace.runner import worker as workspace_worker
 from app.services.request_log import (
     STATUS_ERROR,
     current_retention_days,
@@ -58,6 +61,17 @@ async def _title_worker_supervisor() -> None:
             await asyncio.sleep(1)
 
 
+async def _workspace_supervisor():
+    while True:
+        try:
+            await workspace_worker()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Agent worker 意外退出，稍后恢复")
+            await asyncio.sleep(2)
+
+
 def _current_retention_days() -> int:
     db = SessionLocal()
     try:
@@ -100,6 +114,7 @@ async def lifespan(app: FastAPI):
         logger.exception("启动时执行日志保留清理失败")
     retention_task = asyncio.create_task(_log_retention_loop())
     title_worker_task = asyncio.create_task(_title_worker_supervisor())
+    agent_worker_task = asyncio.create_task(_workspace_supervisor())
 
     logger.info(f"Prompts dir: {settings.prompts_dir.resolve()}")
     logger.info(f"Static dir: {settings.static_dir.resolve()}")
@@ -120,7 +135,8 @@ async def lifespan(app: FastAPI):
     yield
     retention_task.cancel()
     title_worker_task.cancel()
-    await asyncio.gather(retention_task, title_worker_task, return_exceptions=True)
+    agent_worker_task.cancel()
+    await asyncio.gather(retention_task, title_worker_task, agent_worker_task, return_exceptions=True)
     logger.info("NeoBangX backend shutting down...")
 
 
@@ -138,6 +154,7 @@ app.include_router(chat.router)
 app.include_router(auth.router)
 app.include_router(parse.router)
 app.include_router(ocr.router)
+app.include_router(workspace_router)
 
 
 def _unhandled_usage_log_kwargs(request: Request, exc: Exception) -> dict | None:
@@ -238,6 +255,8 @@ async def get_config():
 
 
 static_path = Path(settings.static_dir)
+# Windows 注册表可能将 .mjs 识别为 text/plain；浏览器模块要求正确 MIME。
+mimetypes.add_type("text/javascript", ".mjs")
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=static_path), name="static")
 
@@ -266,6 +285,12 @@ async def root():
         "message": "NeoBangX backend is running. Visit /docs for API documentation.",
         "version": "1.2.0",
     }
+
+
+@app.get("/agent")
+@app.get("/agent/tasks/{task_id}")
+async def agent_page(task_id: str = ""):
+    return FileResponse(static_path / "agent" / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get(ocr.MOBILE_PAGE_PATH)

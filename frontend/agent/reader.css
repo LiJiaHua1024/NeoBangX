@@ -1,0 +1,57 @@
+.reader-window {
+  height: 52dvh;
+  min-height: 200px;
+  overflow: auto;
+  border: 1px solid #e0e5df;
+  border-radius: 8px;
+  background: #fafcf8;
+  position: relative;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+}
+.reader-window pre {
+  margin: 0;
+  padding: 12px 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    14px/1.8 ui-monospace,
+    Consolas,
+    monospace;
+  tab-size: 4;
+}
+.reader-search {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.reader-search input {
+  flex: 1;
+  min-width: 120px;
+}
+.reader-meta {
+  font-size: 12px;
+  color: #69786f;
+}
+.reader-window mark {
+  background: #f4df80;
+}
+.reader-position {
+  width: 100%;
+}
+.reader-follow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.reader-follow input {
+  width: auto;
+}
+.reader-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 10px 0;
+}

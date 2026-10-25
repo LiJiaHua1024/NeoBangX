@@ -1,0 +1,395 @@
+"""短事务存储。过程正文只追加；轮询事件不包含大段正文。"""
+import json
+import uuid
+from datetime import timedelta
+
+from fastapi import HTTPException
+from sqlalchemy import select, update, func
+from sqlalchemy.orm import load_only
+
+from app.database import SessionLocal
+from app.models import UsageCode, UsageLog, utcnow
+from .models import (WorkspaceTask as Task, WorkspaceRun as Run, WorkspaceEntry as Entry,
+                     WorkspaceChunk as Chunk, WorkspaceEvent as Event, WorkspaceMaterial as Material,
+                     WorkspaceVersion as Version, WorkspaceNote as Note)
+
+ACTIVE = {"queued", "running", "stopping"}
+
+
+def uid():
+    return uuid.uuid4().hex
+
+
+def encode(value):
+    return json.dumps(value, ensure_ascii=False)
+
+
+def decode(value):
+    return json.loads(value)
+
+
+def owned(db, task_id, owner):
+    row = db.get(Task, task_id)
+    if not row or row.owner != owner:
+        raise HTTPException(404, "任务不存在")
+    return row
+
+
+def event(db, task_id, kind, data):
+    db.add(Event(task_id=task_id, kind=kind, data=encode(data)))
+
+
+def task_dict(row, full=False):
+    value = {"id": row.id, "title": row.title, "revision": row.revision, "status": row.status,
+             "active_run": row.active_run, "adopted_version": row.adopted_version,
+             "created_at": row.created_at.isoformat(), "updated_at": row.updated_at.isoformat()}
+    if full:
+        value["config"] = decode(row.config)
+    return value
+
+
+def entry_dict(row):
+    return {"id": row.id, "run_id": row.run_id, "kind": row.kind, "label": row.label,
+            "status": row.status, "details": decode(row.details), "created_at": row.created_at.isoformat()}
+
+
+def version_dict(row, full=False):
+    value = {"id": row.id, "run_id": row.run_id, "parent_id": row.parent_id, "title": row.title,
+             "origin": row.origin, "complete": row.complete, "chars": len(row.content),
+             "created_at": row.created_at.isoformat()}
+    if full:
+        value["content"] = row.content
+        value["provenance"] = decode(row.provenance or "{}")
+    return value
+
+
+def material_dict(row, full=False):
+    value = {"id": row.id, "name": row.name, "chars": len(row.content), "has_original": bool(row.original)}
+    if full:
+        value["content"] = row.content
+    return value
+
+
+def run_dict(row, full=False):
+    value = {"id": row.id, "status": row.status, "mode": row.mode, "step": row.step,
+             "tokens": row.tokens, "error": row.error, "created_at": row.created_at.isoformat(),
+             "finished_at": row.finished_at.isoformat() if row.finished_at else None}
+    if full:
+        value["snapshot"] = decode(row.snapshot)
+    return value
+
+
+def task_detail(owner, task_id):
+    with SessionLocal() as db:
+        row = owned(db, task_id, owner)
+        value = task_dict(row, True)
+        value["materials"] = [dict(m) for m in db.execute(select(Material.id, Material.name,
+            func.length(Material.content).label("chars"), Material.original.is_not(None).label("has_original"))
+            .where(Material.task_id == task_id)).mappings()]
+        value["versions"] = [{**dict(v), "created_at": v["created_at"].isoformat()} for v in db.execute(select(
+            Version.id, Version.run_id, Version.parent_id, Version.title, Version.origin, Version.complete,
+            func.length(Version.content).label("chars"), Version.created_at)
+            .where(Version.task_id == task_id).order_by(Version.created_at)).mappings()]
+        value["runs"] = [run_dict(r) for r in db.scalars(select(Run).options(load_only(
+            Run.id, Run.status, Run.mode, Run.step, Run.tokens, Run.error, Run.created_at, Run.finished_at))
+            .where(Run.task_id == task_id).order_by(Run.created_at))]
+        return value
+
+
+def update_task(owner, task_id, revision, config, title=None):
+    with SessionLocal() as db:
+        row = owned(db, task_id, owner)
+        ids = config.get("materials", [])
+        valid = set(db.scalars(select(Material.id).where(Material.task_id == task_id)))
+        if not set(ids) <= valid:
+            raise HTTPException(400, "材料不属于此任务")
+        values = {"config": encode(config), "revision": revision + 1, "updated_at": utcnow()}
+        if title is not None:
+            values["title"] = title
+        result = db.execute(update(Task).where(Task.id == task_id, Task.revision == revision).values(**values))
+        if result.rowcount != 1:
+            raise HTTPException(409, "任务已在其他窗口更新，你的修改仍保留，请比较后保存")
+        event(db, task_id, "config", {"revision": revision + 1})
+        db.commit()
+    return task_detail(owner, task_id)
+
+
+def create_run(owner, task_id, key, mode, instruction, base_version, snapshot, paid, model_entry=None):
+    with SessionLocal() as db:
+        # SQLite 写锁串行化同任务创建与扣费；幂等请求在扣费之前返回。
+        db.execute(update(Task).where(Task.id == task_id, Task.owner == owner).values(updated_at=Task.updated_at))
+        task = owned(db, task_id, owner)
+        old = db.scalar(select(Run).where(Run.task_id == task_id, Run.request_key == key))
+        if old:
+            old_snapshot = decode(old.snapshot)
+            if old.mode != mode or old_snapshot.get("instruction") != instruction or old_snapshot.get("base_version") != base_version or old_snapshot.get("teaching_tool", "") != snapshot.get("teaching_tool", ""):
+                raise HTTPException(409, "请求编号已用于其他执行")
+            return run_dict(old)
+        if snapshot.get("expected_revision", task.revision) != task.revision:
+            raise HTTPException(409, "任务配置刚刚变更，请重新确认后开始")
+        if task.status in ACTIVE:
+            raise HTTPException(409, "此任务已有执行中的步骤，请补充要求或先停止")
+        active_count = db.scalar(select(func.count()).select_from(Run).join(Task, Run.task_id == Task.id).where(Task.owner == owner, Run.status.in_(ACTIVE)))
+        if active_count >= 2:
+            raise HTTPException(429, "同时最多执行两个任务")
+        if not paid:
+            from app.services.free_access import FREE_LIMIT_WINDOWS, free_limits_of, _counted_status_clause
+            for window, limit in free_limits_of(model_entry).items():
+                if not limit:
+                    continue
+                label, seconds = FREE_LIMIT_WINDOWS[window]
+                used = db.scalar(select(func.count()).select_from(UsageLog).where(
+                    UsageLog.code_id == owner, UsageLog.model == snapshot["model"],
+                    UsageLog.created_at >= utcnow()-timedelta(seconds=seconds), _counted_status_clause()))
+                if used >= limit:
+                    raise HTTPException(429, f"免费模型{label}最多调用 {limit} 次，请稍后再试")
+        snapshot = {**snapshot, "config": decode(task.config), "revision": task.revision,
+                    "instruction": instruction, "base_version": base_version}
+        if base_version:
+            version = db.get(Version, base_version)
+            if not version or version.task_id != task_id:
+                raise HTTPException(404, "成果版本不存在")
+        if paid:
+            result = db.execute(update(UsageCode).where(UsageCode.id == owner, UsageCode.is_enabled.is_(True),
+                (UsageCode.quota < 0) | (UsageCode.used_count < UsageCode.quota))
+                .values(used_count=UsageCode.used_count + 1))
+            if result.rowcount != 1:
+                raise HTTPException(403, "额度不足，无法开始新一轮；已有成果仍可查看")
+        run = Run(id=uid(), task_id=task_id, request_key=key, mode=mode, snapshot=encode(snapshot), charged=paid)
+        db.add(run)
+        code = db.get(UsageCode, owner)
+        # 预留限额与入队在同一事务中，跨进程/重启均不能绕过。
+        db.add(UsageLog(code_id=owner, code=code.code, tool_id="agent", tool_name="Agent 工作台",
+                        model=snapshot["model"], request_id=run.id, status="running", units=1 if paid else 0,
+                        counts_for_free_limit=not paid))
+        task.active_run, task.status, task.updated_at = run.id, "queued", utcnow()
+        db.flush()
+        event(db, task_id, "run", run_dict(run))
+        db.commit()
+        return run_dict(run)
+
+
+def start_entry(task_id, run_id, key, kind, label, details=None):
+    with SessionLocal() as db:
+        row = db.scalar(select(Entry).where(Entry.run_id == run_id, Entry.key == key))
+        if row:
+            return entry_dict(row)
+        row = Entry(id=uid(), task_id=task_id, run_id=run_id, key=key, kind=kind,
+                    label=label[:300], details=encode(details or {}))
+        db.add(row)
+        db.flush()
+        event(db, task_id, "entry", entry_dict(row))
+        db.commit()
+        return entry_dict(row)
+
+
+def append_chunks(entry_id, parts):
+    with SessionLocal() as db:
+        row = db.get(Entry, entry_id)
+        details = decode(row.details)
+        counts = details.setdefault("chars", {})
+        for kind, content in parts.items():
+            if not content:
+                continue
+            # 单行也要分块，避免单条无限长的 SSE/JSON/DOM 文本节点。
+            for offset in range(0, len(content), 4096):
+                db.add(Chunk(entry_id=entry_id, kind=kind, content=content[offset:offset + 4096]))
+            counts[kind] = counts.get(kind, 0) + len(content)
+        row.details = encode(details)
+        event(db, row.task_id, "entry", entry_dict(row))
+        db.commit()
+
+
+def finish_entry(entry_id, status="done", details=None):
+    with SessionLocal() as db:
+        row = db.get(Entry, entry_id)
+        row.status = status
+        row.details = encode({**decode(row.details), **(details or {})})
+        event(db, row.task_id, "entry", entry_dict(row))
+        db.commit()
+
+
+def finish_tool(entry_id, result):
+    # 返回内容与 done 状态一次提交，避免崩溃重放时拼接两个 JSON 文档。
+    with SessionLocal() as db:
+        row = db.get(Entry, entry_id)
+        if row.status == "done":
+            return
+        full = encode(result)
+        for offset in range(0, len(full), 4096):
+            db.add(Chunk(entry_id=entry_id, kind="output", content=full[offset:offset+4096]))
+        details = decode(row.details)
+        details.setdefault("chars", {})["output"] = len(full)
+        row.details, row.status = encode(details), "done"
+        event(db, row.task_id, "entry", entry_dict(row))
+        db.commit()
+
+
+def conversation_history(task_id, current_run):
+    with SessionLocal() as db:
+        runs = db.scalars(select(Run).where(Run.task_id == task_id, Run.id != current_run).order_by(Run.created_at)).all()
+        history = []
+        for run in runs:
+            snapshot = decode(run.snapshot)
+            if snapshot.get("instruction"):
+                history.append({"role": "user", "content": snapshot["instruction"]})
+            for note in db.scalars(select(Note).where(Note.run_id == run.id).order_by(Note.id)):
+                if note.text:
+                    history.append({"role": "user", "content": note.text})
+            # 恢复上一轮最后的说明/询问。旧工具上下文按材料、成果、步骤记录读取。
+            messages = decode(run.messages)
+            final = next((m.get("content") for m in reversed(messages) if m["role"] == "assistant" and m.get("content")), "")
+            if final:
+                history.append({"role": "assistant", "content": final})
+            for entry in db.scalars(select(Entry).where(Entry.run_id == run.id, Entry.status == "waiting")):
+                question = decode(entry.details).get("question")
+                if question:
+                    history.append({"role": "assistant", "content": question})
+        return history
+
+
+def entry_text(entry_id, kind):
+    with SessionLocal() as db:
+        return "".join(db.scalars(select(Chunk.content).where(Chunk.entry_id == entry_id, Chunk.kind == kind).order_by(Chunk.id)))
+
+
+def save_version(task_id, run_id, key, title, content, parent_id="", origin="agent", complete=True, provenance=None):
+    with SessionLocal() as db:
+        # 幂等工具写入；重复执行不产生多个相同版本。
+        db.execute(update(Task).where(Task.id == task_id).values(updated_at=Task.updated_at))
+        old = db.scalar(select(Version).where(Version.task_id == task_id, Version.key == key))
+        if old:
+            return version_dict(old)
+        if parent_id:
+            parent = db.get(Version, parent_id)
+            if not parent or parent.task_id != task_id:
+                raise ValueError("基准版本不属于此任务")
+            if provenance is None:
+                provenance = decode(parent.provenance or "{}")
+        row = Version(id=uid(), task_id=task_id, run_id=run_id, key=key, title=title[:200],
+                      content=content, parent_id=parent_id, origin=origin, complete=complete, provenance=encode(provenance or {}))
+        db.add(row)
+        db.flush()
+        task = db.get(Task, task_id)
+        if not task.adopted_version and complete:
+            task.adopted_version = row.id
+        task.updated_at = utcnow()
+        event(db, task_id, "version", version_dict(row))
+        db.commit()
+        return version_dict(row)
+
+
+def checkpoint(run_id, messages, step, tokens, snapshot=None):
+    with SessionLocal() as db:
+        row = db.get(Run, run_id)
+        row.messages, row.step, row.tokens = encode(messages), step, tokens
+        if snapshot is not None:
+            row.snapshot = encode(snapshot)
+        row.lease = utcnow() + timedelta(seconds=90)
+        event(db, row.task_id, "run", run_dict(row))
+        db.commit()
+
+
+def take_notes(run_id):
+    with SessionLocal() as db:
+        rows = db.scalars(select(Note).where(Note.run_id == run_id, Note.applied.is_(False)).order_by(Note.id)).all()
+        return [{"id": r.id, "text": r.text, "config": decode(r.config) if r.config else None} for r in rows]
+
+
+def apply_notes(run_id, notes, snapshot, messages):
+    with SessionLocal() as db:
+        run = db.get(Run, run_id)
+        run.snapshot, run.messages = encode(snapshot), encode(messages)
+        for note in notes:
+            row = db.get(Note, note["id"])
+            row.applied = True
+            event(db, run.task_id, "note", {"id": row.id, "text": row.text, "applied": True})
+        db.commit()
+
+
+def load_run(run_id):
+    with SessionLocal() as db:
+        row = db.get(Run, run_id)
+        task = db.get(Task, row.task_id)
+        return {**run_dict(row, True), "task_id": row.task_id, "owner": task.owner,
+                "started_at": row.started_at,
+                "messages": decode(row.messages), "stop": row.stop,
+                "versions": list(db.scalars(select(Version.id).where(Version.run_id == run_id).order_by(Version.created_at)))}
+
+
+def heartbeat(run_id):
+    with SessionLocal() as db:
+        row = db.get(Run, run_id)
+        if not row:
+            return True
+        row.lease = utcnow() + timedelta(seconds=90)
+        stop = row.stop
+        db.commit()
+        return stop
+
+
+def claim_run():
+    with SessionLocal() as db:
+        row = db.scalar(select(Run).where(Run.status == "queued").order_by(Run.created_at).limit(1))
+        if not row:
+            return None
+        result = db.execute(update(Run).where(Run.id == row.id, Run.status == "queued")
+                            .values(status="running", started_at=func.coalesce(Run.started_at, utcnow()), lease=utcnow() + timedelta(seconds=90)))
+        if result.rowcount != 1:
+            db.rollback()
+            return None
+        task = db.get(Task, row.task_id)
+        task.status = "running"
+        db.refresh(row)
+        event(db, task.id, "run", run_dict(row))
+        db.commit()
+        return row.id
+
+
+def recover_runs():
+    with SessionLocal() as db:
+        rows = db.scalars(select(Run).where(Run.status.in_({"running", "stopping"}), Run.lease < utcnow())).all()
+        for row in rows:
+            row.status = "queued"
+            task = db.get(Task, row.task_id)
+            task.status = "queued"
+            event(db, task.id, "run", run_dict(row))
+        db.commit()
+
+
+def finish_run(run_id, status, error=""):
+    with SessionLocal() as db:
+        # 状态、退款与终态事件同一事务，重启后可重复调用。
+        db.execute(update(Run).where(Run.id == run_id).values(step=Run.step))
+        row = db.get(Run, run_id)
+        if row.status not in ACTIVE:
+            return
+        if status == "completed" and db.scalar(select(Note.id).where(Note.run_id == run_id, Note.applied.is_(False)).limit(1)):
+            status, error = "waiting", "本轮结束时收到新的补充要求，内容已保存，请继续执行"
+        row.status, row.error, row.finished_at, row.lease = status, error[:1000], utcnow(), None
+        task = db.get(Task, row.task_id)
+        task.status, task.active_run, task.updated_at = status, "", utcnow()
+        if row.charged and status in {"failed", "stopped"}:
+            db.execute(update(UsageCode).where(UsageCode.id == task.owner, UsageCode.used_count > 0)
+                       .values(used_count=UsageCode.used_count - 1))
+            row.charged = False
+        log = db.scalar(select(UsageLog).where(UsageLog.request_id == run_id, UsageLog.tool_id == "agent"))
+        if log:
+            log.status = "error" if status == "failed" else "cancelled" if status == "stopped" else "success"
+            log.error_message = error[:500]
+            log.total_tokens = row.tokens
+            log.units = 1 if row.charged else 0
+            if status == "failed":
+                log.counts_for_free_limit = False
+            log.duration_ms = int((utcnow()-row.created_at).total_seconds()*1000)
+        event(db, task.id, "run", run_dict(row))
+        db.commit()
+
+
+def requeue_run(run_id):
+    with SessionLocal() as db:
+        row = db.get(Run, run_id)
+        if row and row.status in ACTIVE:
+            row.status, row.lease = "queued", None
+            db.get(Task, row.task_id).status = "queued"
+            db.commit()

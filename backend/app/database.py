@@ -57,12 +57,15 @@ def init_db() -> None:
     """创建表结构、补齐新增列、补建索引并迁移历史数据（轻量 schema 演进）。"""
     # 延迟导入，避免循环导入
     from app import models  # noqa: F401
+    from app.agent_workspace import models as workspace_models  # noqa: F401
 
-    Base.metadata.create_all(bind=engine)
-    _add_missing_columns()
-    _ensure_indexes()
-    _drop_legacy_usage_code_type()
-    _link_visual_call_logs()
+    # 主站与管理端同时启动时，新工作台表与增量列也必须串行创建。
+    with bootstrap_lock():
+        Base.metadata.create_all(bind=engine)
+        _add_missing_columns()
+        _ensure_indexes()
+        _drop_legacy_usage_code_type()
+        _link_visual_call_logs()
 
 
 def _link_visual_call_logs() -> None:

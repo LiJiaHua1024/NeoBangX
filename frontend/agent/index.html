@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Agent 工作台 · NeoBangX</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23166b54'/%3E%3Ctext x='20' y='29' text-anchor='middle' font-size='27' fill='white'%3EN%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/static/agent/workspace.css" />
+    <script defer src="/static/vendor/marked-15.0.12.min.js"></script>
+    <script defer src="/static/vendor/dompurify-3.4.17.min.js"></script>
+    <script type="module" src="/static/agent/workspace.js"></script>
+  </head>
+  <body data-view="work">
+    <a class="skip" href="#goal">跳到任务目标</a>
+    <header class="top">
+      <button id="menu" aria-label="打开任务列表" aria-expanded="false">
+        ☰</button
+      ><a href="/" class="brand">N<span>NeoBangX</span></a
+      ><span class="tag">Agent 工作台</span><span class="grow"></span
+      ><span id="connection" role="status">正在连接</span
+      ><button id="account">登录</button>
+    </header>
+    <div class="layout">
+      <aside id="nav" aria-label="任务导航">
+        <div class="nav-head">
+          <strong>我的工作台</strong
+          ><button id="close-nav" aria-label="关闭任务列表">×</button>
+        </div>
+        <button id="new-task" class="primary wide">＋ 新任务</button
+        ><label class="sr" for="task-search">搜索任务</label
+        ><input id="task-search" placeholder="搜索任务…" type="search" />
+        <div id="task-list" class="task-list"></div>
+        <button id="more-tasks" hidden>加载更多任务</button>
+        <div class="nav-bottom">
+          <button id="my-library">我的提示词与工具</button
+          ><button id="legacy-tasks">旧版任务归档</button
+          ><a href="/">← 返回普通工具</a
+          ><small>同一使用码，可在不同设备继续。</small>
+        </div>
+      </aside>
+      <div id="shade" hidden></div>
+      <main id="workspace">
+        <div class="taskbar">
+          <input
+            id="task-title"
+            aria-label="任务名称"
+            value="新任务"
+            maxlength="200"
+          /><span id="save-state" role="status">尚未登录</span>
+          <details class="task-menu">
+            <summary aria-label="任务操作">•••</summary>
+            <div>
+              <button id="copy-task">复制任务</button
+              ><button id="delete-task" class="danger">删除任务</button>
+            </div>
+          </details>
+        </div>
+        <div id="conflict" class="notice" hidden>
+          其他窗口更新了任务，本地修改已保留。<button id="compare-conflict">
+            比较与处理
+          </button>
+        </div>
+        <nav class="view-switch" aria-label="主区域">
+          <button data-view="chat">
+            对话与进度 <span id="activity-dot"></span></button
+          ><button data-view="work" aria-current="page">
+            工作区 <span id="result-dot"></span>
+          </button>
+        </nav>
+        <div class="columns">
+          <section id="chat" class="pane">
+            <div class="pane-heading">
+              <strong>任务与进度</strong
+              ><button class="focus" data-focus="chat" aria-label="专注对话">
+                ⛶
+              </button>
+            </div>
+            <div class="goal-area">
+              <label for="goal">这次想完成什么？</label
+              ><textarea
+                id="goal"
+                rows="4"
+                placeholder="例如：分析这份试卷的易错点，保留全部题目，并注明材料依据。"
+              ></textarea>
+              <div class="row">
+                <select id="model" aria-label="执行模型"></select
+                ><button id="run" class="primary">开始任务</button
+                ><button id="stop" class="danger" hidden>停止</button>
+              </div>
+              <small id="run-policy"></small>
+              <button data-policy>查看额度、预算与保留规则</button>
+            </div>
+            <div
+              id="timeline"
+              class="timeline"
+              tabindex="0"
+              aria-label="执行步骤"
+            >
+              <div class="empty">
+                <div class="motif">✳</div>
+                <h2>把目标交给 Agent，<br />把决定留在手中。</h2>
+                <p>
+                  提示词就在右侧。先看看、改一改，<br />再开始你的第一轮任务。
+                </p>
+              </div>
+            </div>
+            <button id="latest" hidden>↓ 有新进展 · 回到最新</button>
+            <div class="composer">
+              <label for="message" class="sr">补充要求</label
+              ><textarea
+                id="message"
+                rows="2"
+                placeholder="补充要求、指出问题，或继续任务…"
+              ></textarea>
+              <div class="row">
+                <small id="task-status">准备就绪</small
+                ><span class="grow"></span><button id="send">发送补充</button>
+              </div>
+            </div>
+          </section>
+          <div
+            id="separator"
+            role="separator"
+            tabindex="0"
+            aria-label="调整对话区域宽度"
+            aria-orientation="vertical"
+            aria-valuemin="30"
+            aria-valuemax="55"
+            aria-valuenow="40"
+          ></div>
+          <section id="work" class="pane">
+            <div class="pane-heading">
+              <nav class="tabs" aria-label="工作区">
+                <button data-tab="prompt" aria-current="page">提示词</button
+                ><button data-tab="materials">材料</button
+                ><button data-tab="tools">工具</button
+                ><button data-tab="results">
+                  成果 <span id="version-count"></span>
+                </button>
+              </nav>
+              <button class="focus" data-focus="work" aria-label="专注工作区">
+                ⛶
+              </button>
+            </div>
+            <div class="work-body">
+              <div class="mobile-start">
+                <label for="mobile-goal">这次想完成什么？</label
+                ><textarea
+                  id="mobile-goal"
+                  rows="3"
+                  placeholder="说明目标，再选择材料和提示词…"
+                ></textarea>
+                <div class="row">
+                  <select id="mobile-model" aria-label="执行模型"></select
+                  ><button id="mobile-run" class="primary">开始任务</button>
+                </div>
+                <button data-policy>查看额度、预算与保留规则</button>
+              </div>
+              <section data-panel="prompt">
+                <div class="section-heading">
+                  <div>
+                    <h1>让你的要求清晰可见</h1>
+                    <p>这里的提示词会原样用于本任务，可随时修改。</p>
+                  </div>
+                  <span class="pill" id="prompt-origin">任务副本</span>
+                </div>
+                <label for="template">从模板开始</label
+                ><select id="template">
+                  <option value="">自定义提示词</option>
+                </select>
+                <div class="row wrap">
+                  <button id="compare-prompt">比较原版</button
+                  ><button id="reset-prompt">恢复模板</button
+                  ><button id="undo-template" hidden>撤销模板替换</button
+                  ><button id="save-template">另存为我的模板</button>
+                </div>
+                <label for="prompt">任务提示词</label
+                ><textarea
+                  id="prompt"
+                  class="editor"
+                  spellcheck="false"
+                ></textarea>
+                <details>
+                  <summary>Agent 行为说明 · 可编辑</summary>
+                  <textarea
+                    id="behavior"
+                    class="editor"
+                    aria-label="Agent 行为说明"
+                    spellcheck="false"
+                  ></textarea>
+                </details>
+                <div class="notice" id="next-step" hidden>
+                  本轮使用启动时的配置。<button id="apply-next">
+                    将已保存的提示词和工具用于下一步
+                  </button>
+                </div>
+                <small>实际发送的完整指令可在每一步的「指令」中查看。</small>
+              </section>
+              <section data-panel="materials" hidden>
+                <div class="section-heading">
+                  <div>
+                    <h1>从原始材料出发</h1>
+                    <p>勾选本轮材料。原文件与解析文本分别保存。</p>
+                  </div>
+                </div>
+                <label class="upload"
+                  >＋ 上传文件<input
+                    id="upload"
+                    type="file"
+                    accept=".txt,.md,.csv,.docx,.pdf"
+                    multiple
+                  /><small
+                    >TXT、Markdown、CSV、Word、文字 PDF · 单个 20 MB</small
+                  ></label
+                >
+                <p class="hint">
+                  扫描 PDF 请先在普通工具页完成 OCR，再粘贴识别文本。
+                </p>
+                <div id="materials-list"></div>
+                <details open>
+                  <summary>粘贴新材料</summary>
+                  <input
+                    id="material-name"
+                    aria-label="材料名称"
+                    placeholder="材料名称"
+                  /><textarea
+                    id="material-text"
+                    rows="7"
+                    aria-label="材料正文"
+                    placeholder="粘贴完整原文…"
+                  ></textarea
+                  ><button id="add-material">保存材料</button>
+                </details>
+              </section>
+              <section data-panel="tools" hidden>
+                <h1>让 Agent 使用合适的工具</h1>
+                <p>
+                  工具开关只影响本任务。材料与成果的读取、版本保存始终可用。
+                </p>
+                <div id="tools-list"></div>
+                <details open>
+                  <summary>教学工具 · 提示词可修改</summary>
+                  <p>选择官方教学工具，编辑本任务中的副本。</p>
+                  <select
+                    id="teaching-select"
+                    aria-label="添加教学工具"
+                  ></select
+                  ><button id="add-teaching">添加到本任务</button>
+                  <div id="teaching-list"></div>
+                </details>
+                <details>
+                  <summary>工具试运行</summary>
+                  <select id="test-name" aria-label="试运行工具">
+                    <option value="search_material">材料检索</option>
+                    <option value="web_search">网页搜索</option>
+                    <option value="check_vocabulary">词表检查</option></select
+                  ><textarea
+                    id="test-query"
+                    rows="3"
+                    aria-label="测试内容"
+                    placeholder="输入查找词或需要检查的文本"
+                  ></textarea
+                  ><label class="check"
+                    ><input id="test-regex" type="checkbox" />使用正则</label
+                  ><button id="test-tool">试运行</button>
+                </details>
+                <details open>
+                  <summary>审阅与修订</summary>
+                  <label class="check"
+                    ><input
+                      id="review"
+                      type="checkbox"
+                    />生成后进行开放式审阅</label
+                  ><label class="check"
+                    ><input
+                      id="auto-improve"
+                      type="checkbox"
+                    />根据有依据的问题生成候选修订</label
+                  ><label for="review-prompt">开放式审阅提示词</label
+                  ><textarea
+                    id="review-prompt"
+                    rows="7"
+                    spellcheck="false"
+                  ></textarea
+                  ><small
+                    >审阅返回 summary 与 issues
+                    JSON；结果格式由系统校验，不会因解析失败标记通过。</small
+                  ><label for="review-rounds">最多修订轮数</label
+                  ><input
+                    id="review-rounds"
+                    type="number"
+                    min="1"
+                    max="3"
+                    value="1"
+                  /><small
+                    >不打分、不为通过检查删内容；候选稿需你主动采用。</small
+                  >
+                </details>
+                <button id="save-tool-template">保存这套工具配置</button>
+              </section>
+              <section data-panel="results" hidden>
+                <div class="section-heading">
+                  <div>
+                    <h1>成果与版本</h1>
+                    <p>每次修订都保留原稿；可以随时比较、采用或继续修改。</p>
+                  </div>
+                </div>
+                <div id="versions-list"></div>
+                <div id="result-actions" hidden>
+                  <div class="row wrap">
+                    <select
+                      id="version-select"
+                      aria-label="选择成果版本"
+                    ></select
+                    ><button id="adopt">采用此版本</button
+                    ><button id="compare-version">比较上个版本</button
+                    ><button id="edit-version">手动编辑</button
+                    ><button id="review-version">审阅此版本</button
+                    ><button id="revise-version">要求修订</button
+                    ><button id="copy-result">复制全文</button
+                    ><button id="export-md">Markdown</button
+                    ><button id="export-docx">Word</button>
+                  </div>
+                  <div class="row wrap">
+                    <label class="check"
+                      ><input
+                        type="checkbox"
+                        id="result-plain"
+                      />原文阅读</label
+                    ><label class="check"
+                      ><input
+                        type="checkbox"
+                        id="table-cards"
+                      />表格逐条阅读</label
+                    >
+                  </div>
+                  <div id="result-body" class="document"></div>
+                  <div class="row pager">
+                    <button id="result-prev">上一段</button
+                    ><span id="result-page"></span
+                    ><button id="result-next">下一段</button>
+                  </div>
+                </div>
+                <div id="result-empty" class="empty">
+                  成果将在这里出现。<br />执行中也可以打开已经保存的版本。
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+    <dialog id="modal">
+      <div class="modal-head">
+        <h2 id="modal-title"></h2>
+        <button id="modal-close" aria-label="关闭">×</button>
+      </div>
+      <div id="modal-body"></div>
+      <div id="modal-actions" class="row wrap"></div>
+    </dialog>
+    <div id="toast" role="status" hidden></div>
+    <noscript>请启用 JavaScript 使用 Agent 工作台。</noscript>
+  </body>
+</html>
