@@ -287,6 +287,8 @@ def test_stop_during_generation_persists_received_content(identity,monkeypatch):
     assert store.load_run(r['id'])['status']=='stopped'
     with SessionLocal() as db:e=db.scalar(select(WorkspaceEntry).where(WorkspaceEntry.run_id==r['id']))
     assert store.entry_text(e.id,'reasoning')=='停止前的完整内容'
+    assert e.status == 'stopped'
+    assert json.loads(e.details)['error_code'] == 'user_stop'
 
 
 def test_tool_result_replay_does_not_duplicate_json(identity):
@@ -303,3 +305,239 @@ def test_continuation_preserves_question_and_user_requirements(identity):
     history=store.conversation_history(t['id'],next_run['id'])
     assert history[-1]['content']=='请提供第二篇原文'
     store.finish_run(next_run['id'],'completed')
+
+
+@pytest.mark.parametrize('finish,status,code', [
+    ('length', 'incomplete', 'output_limit'),
+    ('max_tokens', 'incomplete', 'output_limit'),
+    ('stop', 'failed', 'empty_response'),
+    (None, 'failed', 'missing_finish_reason'),
+    ('content_filter', 'failed', 'model_finish_error'),
+])
+def test_reasoning_only_response_preserves_real_end_reason(identity, monkeypatch, finish, status, code):
+    from app.services.llm import LLMService
+    t = task(identity)
+    r = run(identity, t)
+    reasoning = '思' * 47980
+    monkeypatch.setattr(runner, '_load_cfg', lambda: {})
+    monkeypatch.setattr(llm, '_build_llm', lambda *_: LLMService(api_key='test', default_model='test'))
+    requests = []
+
+    async def stream(**kwargs):
+        requests.append(kwargs)
+        async def chunks():
+            yield {'choices': [{'delta': {'reasoning_content': reasoning}}]}
+            if finish:
+                yield {'choices': [{'delta': {}, 'finish_reason': finish}],
+                       'usage': {'prompt_tokens': 100, 'completion_tokens': 16000, 'total_tokens': 16100}}
+        return chunks()
+
+    monkeypatch.setattr(llm, 'acompletion', stream)
+    asyncio.run(runner.execute_run(r['id']))
+    saved = store.load_run(r['id'])
+    assert saved['status'] == status
+    assert len(requests) == 1
+    assert not saved['versions']
+    with SessionLocal() as db:
+        entry = db.scalar(select(WorkspaceEntry).where(WorkspaceEntry.run_id == r['id']))
+        details = json.loads(entry.details)
+    assert details['finish_reason'] == finish
+    assert details['error_code'] == code
+    assert details['output_tokens'] == 16000
+    assert store.entry_text(entry.id, 'reasoning') == reasoning
+    assert store.entry_text(entry.id, 'output') == ''
+    if finish:
+        assert saved['tokens'] == 16100
+        assert details['usage']['completion_tokens'] == 16000
+    if status == 'incomplete':
+        assert entry.status == 'incomplete'
+        assert '单次输出上限' in saved['error']
+    elif code == 'empty_response':
+        assert entry.status == 'failed'
+        assert '没有返回正文或工具调用' in saved['error']
+
+
+def test_timeout_reason_does_not_hide_or_discard_partial_content(identity, monkeypatch):
+    from app.services.llm import LLMService
+    t = task(identity)
+    r = run(identity, t)
+    monkeypatch.setattr(runner, '_load_cfg', lambda: {})
+    monkeypatch.setattr(llm, '_build_llm', lambda *_: LLMService(api_key='test', default_model='test'))
+
+    async def stream(**kwargs):
+        async def chunks():
+            yield {'choices': [{'delta': {'content': '完整保留这段已生成内容'}}]}
+            raise TimeoutError('https://private.example/?token=secret-value')
+        return chunks()
+
+    monkeypatch.setattr(llm, 'acompletion', stream)
+    asyncio.run(runner.execute_run(r['id']))
+    with SessionLocal() as db:
+        entry = db.scalar(select(WorkspaceEntry).where(WorkspaceEntry.run_id == r['id']))
+        details = json.loads(entry.details)
+    assert details['error_code'] == 'model_timeout'
+    assert details['finish_reason'] is None
+    assert '超时' in store.load_run(r['id'])['error']
+    assert 'secret-value' not in json.dumps(details)
+    assert store.entry_text(entry.id, 'output') == '完整保留这段已生成内容'
+
+
+@pytest.mark.parametrize('prefix', ['', '已生成的正文'])
+def test_generation_does_not_retry_reasoning_only_limit(identity, monkeypatch, prefix):
+    t = task(identity)
+    r = run(identity, t)
+    monkeypatch.setattr(runner, '_load_cfg', lambda: {})
+    calls = []
+
+    async def model(cfg, model, messages, schemas, budget, emit, **kwargs):
+        calls.append(messages)
+        text = prefix if len(calls) == 1 else ''
+        await emit('reasoning', '完整思考')
+        if text:
+            await emit('output', text)
+        return llm.ModelResult(content=text, finish_reason='length')
+
+    async def execute():
+        obj = runner.Runner(r['id'], model)
+        await obj.load()
+        return await obj.create_document({'title': '测试成果', 'instruction': '', 'material_ids': []}, 'limit')
+
+    if prefix:
+        version = asyncio.run(execute())
+        assert not version['complete']
+        assert tools.document(t['id'], version['id'])['content'] == prefix
+        assert len(calls) == 2
+    else:
+        with pytest.raises(runner.BudgetReached, match='没有生成正文'):
+            asyncio.run(execute())
+        assert len(calls) == 1
+        assert not store.task_detail(identity[0], t['id'])['versions']
+    store.finish_run(r['id'], 'incomplete')
+
+
+def test_backend_worker_finishes_after_request_client_closes(identity, monkeypatch):
+    t = task(identity)
+    cfg = {'models': [{'id': 'test', 'enabled': True, 'user_usable': True}], 'default_model': 'test'}
+    monkeypatch.setattr(api, '_load_cfg', lambda: cfg)
+    monkeypatch.setattr(api, '_validate_model', lambda *_: None)
+    monkeypatch.setattr(api, 'official_templates', lambda: [])
+    monkeypatch.setattr(runner, '_load_cfg', lambda: cfg)
+    app = FastAPI()
+    app.include_router(api.router)
+
+    async def execute():
+        started, release = asyncio.Event(), asyncio.Event()
+        async def model(*args, **kwargs):
+            started.set()
+            await release.wait()
+            await args[5]('output', '后台任务已完成')
+            return llm.ModelResult(content='后台任务已完成')
+        monkeypatch.setattr(llm, 'complete', model)
+        worker = asyncio.create_task(runner.worker())
+        try:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test',
+                                        headers={'Authorization': 'Bearer ' + identity[1]}) as client:
+                response = await client.post(f"/api/workspace/tasks/{t['id']}/runs", json={'request_key': store.uid()})
+                assert response.status_code == 202, response.text
+                run_id = response.json()['id']
+                await asyncio.wait_for(started.wait(), 5)
+            assert client.is_closed
+            assert store.load_run(run_id)['status'] == 'running'
+            release.set()
+            async def finished():
+                while store.load_run(run_id)['status'] in store.ACTIVE:
+                    await asyncio.sleep(.05)
+            await asyncio.wait_for(finished(), 5)
+            saved = store.load_run(run_id)
+            assert saved['status'] == 'completed'
+            assert tools.document(t['id'], saved['versions'][0])['content'] == '后台任务已完成'
+        finally:
+            release.set()
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+    asyncio.run(execute())
+
+
+def test_worker_shutdown_requeues_with_explicit_reason(identity, monkeypatch):
+    t = task(identity)
+    r = run(identity, t)
+    monkeypatch.setattr(runner, '_load_cfg', lambda: {})
+
+    async def execute():
+        started = asyncio.Event()
+        async def model(*args, **kwargs):
+            await args[5]('reasoning', '重启前的记录')
+            started.set()
+            await asyncio.Event().wait()
+        job = asyncio.create_task(runner.execute_run(r['id'], model))
+        await asyncio.wait_for(started.wait(), 5)
+        job.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await job
+
+    asyncio.run(execute())
+    assert store.load_run(r['id'])['status'] == 'queued'
+    with SessionLocal() as db:
+        entry = db.scalar(select(WorkspaceEntry).where(WorkspaceEntry.run_id == r['id']))
+    assert json.loads(entry.details)['error_code'] == 'worker_shutdown'
+    assert store.entry_text(entry.id, 'reasoning') == '重启前的记录'
+    store.finish_run(r['id'], 'stopped')
+
+
+def test_review_limit_preserves_version_without_claiming_complete(identity, monkeypatch):
+    t = task(identity)
+    v = store.save_version(t['id'], '', 'review-base', '原稿', '保留的完整正文')
+    r = run(identity, t, mode='review', base=v['id'])
+    monkeypatch.setattr(runner, '_load_cfg', lambda: {})
+
+    async def model(*args, **kwargs):
+        await args[5]('reasoning', '未完成的审阅思考')
+        return llm.ModelResult(finish_reason='length')
+
+    asyncio.run(runner.execute_run(r['id'], model))
+    assert store.load_run(r['id'])['status'] == 'incomplete'
+    assert tools.document(t['id'], v['id'])['content'] == '保留的完整正文'
+    with SessionLocal() as db:
+        entry = db.scalar(select(WorkspaceEntry).where(WorkspaceEntry.run_id == r['id']))
+    assert entry.status == 'incomplete'
+    assert 'review_summary' not in json.loads(entry.details)
+
+
+@pytest.mark.parametrize('mode', ['execute', 'continue'])
+@pytest.mark.parametrize('goal,instruction', [('', ''), (' \n ', ' \t '), ('本轮额外目标', ''), ('', '本轮额外要求')])
+def test_optional_goal_runs_task_prompt_and_keeps_budget_snapshot(client, identity, monkeypatch, mode, goal, instruction):
+    from app.agent_workspace.instructions import DEFAULT_EXECUTION_REQUEST
+    t = task(identity)
+    prompt = '分析所选材料的语篇结构。'
+    t = store.update_task(identity[0], t['id'], 1, {**t['config'], 'goal': goal, 'prompt': prompt})
+    cfg = {'models': [{'id': 'test', 'enabled': True, 'user_usable': True}], 'default_model': 'test'}
+    monkeypatch.setattr(api, '_load_cfg', lambda: cfg)
+    monkeypatch.setattr(api, '_validate_model', lambda *_: None)
+    monkeypatch.setattr(api, 'official_templates', lambda: [])
+    monkeypatch.setattr(api, 'load_settings', lambda: WorkspaceSettings(output_tokens=65536))
+    monkeypatch.setattr(runner, '_load_cfg', lambda: cfg)
+    body = {'request_key': store.uid(), 'mode': mode, 'instruction': instruction}
+    response = client.post(f"/api/workspace/tasks/{t['id']}/runs", json=body)
+    assert response.status_code == 202, response.text
+    run_id = response.json()['id']
+    # 管理预算调整不改写已创建的执行快照，也不影响重复提交的幂等性。
+    monkeypatch.setattr(api, 'load_settings', lambda: WorkspaceSettings(output_tokens=32768))
+    assert client.post(f"/api/workspace/tasks/{t['id']}/runs", json=body).json()['id'] == run_id
+    observed = []
+
+    async def model(cfg, model, messages, schemas, budget, emit, **kwargs):
+        context = json.loads(messages[1]['content'])
+        observed.append(context)
+        assert context['task_prompt'] == prompt
+        assert context['goal'] == goal
+        expected = DEFAULT_EXECUTION_REQUEST if not goal.strip() and not instruction.strip() else instruction
+        assert context['instruction'] == expected
+        assert budget == 65536
+        await emit('output', '任务已按提示词执行')
+        return llm.ModelResult(content='任务已按提示词执行')
+
+    asyncio.run(runner.execute_run(run_id, model))
+    saved = store.load_run(run_id)
+    assert observed and saved['status'] == 'completed'
+    assert saved['snapshot']['instruction'] == instruction
+    assert store.task_detail(identity[0], t['id'])['config']['goal'] == goal

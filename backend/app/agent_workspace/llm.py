@@ -19,15 +19,38 @@ def get(value, key, default=None):
 class ModelResult:
     content: str = ""
     calls: list = field(default_factory=list)
-    finish_reason: str = "stop"
+    finish_reason: str | None = "stop"
     tokens: int = 0
     usage: dict = field(default_factory=dict)
 
 
+class ResponseError(ValueError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def error_details(exc):
+    cause = exc.cause if isinstance(exc, PartialResponseError) else exc
+    if isinstance(cause, ResponseError):
+        code, message = cause.code, str(cause)
+    elif isinstance(cause, (TimeoutError, asyncio.TimeoutError)):
+        code, message = "model_timeout", "等待模型响应超时"
+    elif isinstance(cause, ConnectionError):
+        code, message = "model_connection", "与模型服务的连接中断"
+    else:
+        code, message = "model_error", "模型服务调用失败"
+    details = {"error_code": code, "error": message, "error_type": type(cause).__name__}
+    if isinstance(exc, PartialResponseError):
+        details.update(finish_reason=exc.result.finish_reason, usage=exc.result.usage)
+        details["error"] += "；已收到的内容已保存"
+    return details
+
+
 class PartialResponseError(RuntimeError):
     def __init__(self, result, cause):
-        super().__init__("模型流中断，已保存收到的内容；可继续执行")
         self.result, self.cause = result, cause
+        super().__init__(error_details(self)["error"])
 
 
 async def complete(cfg, model, messages, tools, max_tokens, emit, response_format=None):
@@ -48,7 +71,7 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
                                        **options)
         if tools:
             kwargs.update(tools=tools, tool_choice="auto")
-        result, calls, received, ended = ModelResult(), {}, False, False
+        result, calls, received, ended = ModelResult(finish_reason=None), {}, False, False
         stream = None
         try:
             try:
@@ -100,11 +123,12 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
                     ended = True
             result.calls = [calls[i] for i in sorted(calls)]
             if not ended:
-                raise ValueError("模型连接结束但没有结束标记，不能当作完整结果")
+                raise ResponseError("missing_finish_reason", "模型连接结束但没有返回结束标记，无法确认输出完整")
             if result.finish_reason not in {"stop", "tool_calls", "length", "max_tokens", "end_turn"}:
-                raise ValueError("模型未正常完成输出：" + result.finish_reason)
-            if not result.content and not result.calls:
-                raise ValueError("模型没有返回正文或工具调用")
+                raise ResponseError("model_finish_error", "模型未正常完成输出：" + result.finish_reason)
+            # 思考可能耗尽全部输出额度。把真实结束原因交给执行器处理，不能误报断流。
+            if not result.content and not result.calls and result.finish_reason not in {"length", "max_tokens"}:
+                raise ResponseError("empty_response", "模型已结束响应，但没有返回正文或工具调用")
             if provider is not None:
                 llm._settle_success(provider)
             return result
@@ -114,7 +138,7 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
             last_error = exc
             if provider is not None:
                 llm._settle_failure(provider, exc)
-            if received:
+            if received or ended:
                 result.calls = [calls[i] for i in sorted(calls)]
                 raise PartialResponseError(result, exc) from exc
             if not is_retryable(exc):

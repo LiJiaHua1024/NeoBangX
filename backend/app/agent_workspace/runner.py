@@ -13,7 +13,7 @@ from app.services.prompt_loader import DEFAULT_VARIABLES
 from app.services.error_explain import sanitize_error_text
 from app.models import utcnow
 from . import store, tools, llm
-from .instructions import REVIEW_POLICY, REVIEW_SCHEMA
+from .instructions import DEFAULT_EXECUTION_REQUEST, REVIEW_POLICY, REVIEW_SCHEMA
 from .settings import load_settings
 
 log = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ class Runner:
         self.step = 0
         self.created_versions = []
         self.current_entry = None
+        self.cancel_reason = ("interrupted", "execution_cancelled", "后台执行被取消，已收到的内容已保存")
 
     async def load(self):
         self.run = await asyncio.to_thread(store.load_run, self.id)
@@ -60,6 +61,8 @@ class Runner:
                            {"id": key, "name": self.snapshot.get("templates", {}).get(key, {}).get("name", key), "prompt": prompt}
                            for key, prompt in self.config.get("teaching_tools", {}).items()],
                        "previous_conversation": history}
+            if not self.config["goal"].strip() and not context["instruction"].strip():
+                context["instruction"] = DEFAULT_EXECUTION_REQUEST
             self.messages = [{"role": "system", "content": self.config["behavior"]},
                              {"role": "user", "content": store.encode(context)}]
             await self.checkpoint()
@@ -90,27 +93,44 @@ class Runner:
         if context_tokens > 90000:
             raise BudgetReached("本次上下文过长，请分篇选材后继续；材料与成果没有删减")
         self.step += 1
+        output_limit = min(self.limits["output_tokens"], remaining)
         entry = await asyncio.to_thread(store.start_entry, self.task_id, self.id, store.uid(),
                                         "review" if review else "model", label,
-                                        {"model": self.snapshot["model"], "config_revision": self.snapshot["revision"]})
+                                        {"model": self.snapshot["model"], "config_revision": self.snapshot["revision"],
+                                         "output_tokens": output_limit})
         self.current_entry = entry["id"]
         self.last_call_entry = entry["id"]
         await asyncio.to_thread(store.append_chunks, entry["id"], {"prompt": store.encode({"messages": messages, "tools": schemas or []})})
         self.tokens += context_tokens
         try:
             result = await self.model_call(self.cfg, self.snapshot["model"], messages, schemas,
-                                           min(self.limits["output_tokens"], remaining),
+                                           output_limit,
                                            self.emit, response_format=REVIEW_SCHEMA if review else None)
             await self.flush()
             thinking = await asyncio.to_thread(store.entry_text, entry["id"], "reasoning") if not result.tokens else ""
             self.tokens += (result.tokens - context_tokens) if result.tokens else await asyncio.to_thread(count_text_tokens, result.content + store.encode(result.calls) + thinking, self.snapshot["model"])
-            await asyncio.to_thread(store.finish_entry, entry["id"], "done", {"usage": result.usage, "finish_reason": result.finish_reason})
+            details = {"usage": result.usage, "finish_reason": result.finish_reason}
+            limited = result.finish_reason in {"length", "max_tokens"}
+            if limited:
+                details.update(error_code="output_limit", error=f"模型达到本次输出上限（请求额度 {output_limit:,} tokens），已收到的内容已保存")
+                if not result.content and not result.calls:
+                    details["error"] += "；本次没有生成正文或工具调用"
+            await asyncio.to_thread(store.finish_entry, entry["id"], "incomplete" if limited else "done", details)
             return result, entry["id"]
-        except BaseException:
+        except BaseException as exc:
             await self.flush()
             partial = "".join([await asyncio.to_thread(store.entry_text, entry["id"], kind) for kind in ("output", "reasoning", "arguments")])
-            self.tokens += await asyncio.to_thread(count_text_tokens, partial, self.snapshot["model"])
-            await asyncio.to_thread(store.finish_entry, entry["id"], "interrupted")
+            if isinstance(exc, llm.PartialResponseError) and exc.result.tokens:
+                self.tokens += exc.result.tokens - context_tokens
+            else:
+                self.tokens += await asyncio.to_thread(count_text_tokens, partial, self.snapshot["model"])
+            if isinstance(exc, asyncio.CancelledError):
+                status, code, message = self.cancel_reason
+                details = {"error_code": code, "error": message}
+            else:
+                details = llm.error_details(exc)
+                status = "failed" if details["error_code"] in {"empty_response", "model_finish_error"} else "interrupted"
+            await asyncio.to_thread(store.finish_entry, entry["id"], status, details)
             raise
         finally:
             self.current_entry = None
@@ -159,6 +179,8 @@ class Runner:
                 result, last_entry = await self.call(args["title"] + (f" · 续写 {part}" if part else ""), messages)
             except llm.PartialResponseError as exc:
                 content += exc.result.content
+                if not content.strip():
+                    raise
                 break
             except (asyncio.CancelledError, BudgetReached):
                 partial = await asyncio.to_thread(store.entry_text, self.last_call_entry, "output") if getattr(self, "last_call_entry", None) else ""
@@ -169,9 +191,14 @@ class Runner:
             complete = result.finish_reason not in {"length", "max_tokens"}
             if complete:
                 break
+            # 没有正文可接续时，不发送空 assistant 消息反复消耗同一额度。
+            if not result.content:
+                break
             messages.extend([{"role": "assistant", "content": result.content},
                              {"role": "user", "content": "接着刚才未完成的位置继续，只输出后续内容，保留原定范围和结构。"}])
         if not content.strip():
+            if result.finish_reason in {"length", "max_tokens"}:
+                raise BudgetReached("模型达到单次输出上限，但没有生成正文；思考记录已保存。请调整管理后台 Agent 的单次输出额度或更换模型后重试")
             raise ValueError("模型未返回可用文档")
         provenance = {"requirements": template, "instruction": args["instruction"], "goal": self.config["goal"],
                       "materials": selected, "teaching_tool": args.get("teaching_tool", ""), "config_revision": self.snapshot["revision"]}
@@ -221,7 +248,10 @@ class Runner:
             await asyncio.to_thread(store.finish_tool, entry["id"], result)
             # 完整结果另存，模型收到有明确范围说明的结果视图。
             return self.result_view(full, entry["id"])
-        except (WaitingForUser, BudgetReached):
+        except WaitingForUser:
+            raise
+        except BudgetReached as exc:
+            await asyncio.to_thread(store.finish_entry, entry["id"], "incomplete", {"error": str(exc)})
             raise
         except Exception as exc:
             error = sanitize_error_text(str(exc))[:500]
@@ -247,12 +277,14 @@ class Runner:
                                                            {"role": "user", "content": store.encode(payload)}], review=True)
         except (BudgetReached, asyncio.CancelledError):
             raise
-        except Exception:
+        except Exception as exc:
             if self.last_call_entry:
-                await asyncio.to_thread(store.finish_entry, self.last_call_entry, "failed", {"error": "审阅调用失败；已有成果保留，可重新发起审阅", "version_id": version_id})
+                await asyncio.to_thread(store.finish_entry, self.last_call_entry, "failed", {**llm.error_details(exc), "version_id": version_id})
             if self.run["mode"] == "review":
                 raise
             return None
+        if result.finish_reason in {"length", "max_tokens"}:
+            raise BudgetReached("审阅达到单次输出上限，未得出完整结论；已有成果和审阅记录已保存")
         try:
             data = json.loads(result.content)
             validate(data, REVIEW_SCHEMA["json_schema"]["schema"])
@@ -323,6 +355,8 @@ class Runner:
                 if result.content:
                     await asyncio.to_thread(store.save_version, self.task_id, self.id, "partial:"+entry_id,
                                              "待补全的结果", result.content, self.snapshot.get("base_version", ""), "agent", False)
+                if not result.content and not result.calls:
+                    raise BudgetReached("模型达到单次输出上限，但没有生成正文或工具调用；思考记录已保存。请调整管理后台 Agent 的单次输出额度或更换模型后重试")
                 raise BudgetReached("模型输出达到上限，已保存待补全内容，请继续执行")
             assistant = {"role": "assistant", "content": result.content or None}
             if result.calls:
@@ -372,12 +406,14 @@ async def execute_run(run_id, model_call=None):
         deadline = time.monotonic() + run["snapshot"]["limits"]["max_seconds"] - elapsed
         while not job.done():
             if await asyncio.to_thread(store.heartbeat, run_id):
+                runner.cancel_reason = ("stopped", "user_stop", "用户已停止本轮执行，已收到的内容已保存")
                 job.cancel()
                 with suppress(asyncio.CancelledError):
                     await job
                 await asyncio.to_thread(store.finish_run, run_id, "stopped")
                 return
             if time.monotonic() >= deadline:
+                runner.cancel_reason = ("incomplete", "time_limit", "达到本轮时长上限，已收到的内容已保存")
                 job.cancel()
                 with suppress(asyncio.CancelledError):
                     await job
@@ -390,6 +426,7 @@ async def execute_run(run_id, model_call=None):
     except BudgetReached as exc:
         await asyncio.to_thread(store.finish_run, run_id, "incomplete", str(exc))
     except asyncio.CancelledError:
+        runner.cancel_reason = ("interrupted", "worker_shutdown", "后台工作进程停止，本轮将重新排队；当前步骤可能需要重新执行")
         job.cancel()
         with suppress(asyncio.CancelledError):
             await job

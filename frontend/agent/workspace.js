@@ -845,7 +845,7 @@ async function poll() {
     connState(
       navigator.onLine ? "重连中" : "离线",
       "error",
-      navigator.onLine ? "连接中断，正在重试" : "离线 · 任务仍在后台执行",
+      navigator.onLine ? "连接中断，正在重试；任务状态待同步" : "离线 · 任务状态待同步",
     );
     pollTimer = setTimeout(poll, 5000);
   }
@@ -963,10 +963,13 @@ action("#stop", async () => {
 });
 action("#send", async () => {
   const text = $("#message").value.trim();
-  if (!text) throw Error("请先填写补充要求");
-  if (ACTIVE.has(state.task?.status))
+  if (ACTIVE.has(state.task?.status)) {
+    if (!text) {
+      toast("任务正在执行，可直接等待结果；有补充要求时再发送");
+      return;
+    }
     await api(path("/notes"), { method: "POST", body: { text } });
-  else await start("continue", text, state.task.adopted_version || "");
+  } else await start("continue", text, state.task.adopted_version || "");
   $("#message").value = "";
   poll();
 });

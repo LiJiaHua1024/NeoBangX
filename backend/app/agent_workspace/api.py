@@ -281,8 +281,6 @@ def start_run(task_id: str, body: RunWrite, owner: Owner):
         raise HTTPException(400, "请先在本任务启用要试运行的教学工具")
     if body.mode in {"review", "revise"} and not body.base_version:
         raise HTTPException(400, "请先选择要审阅或修订的成果版本")
-    if not config.get("goal", "").strip() and not body.instruction and body.mode != "review":
-        raise HTTPException(400, "请先填写本次目标")
     model = config.get("model") or cfg.get("default_model")
     _validate_model(cfg, model)
     entry = find_model_entry(cfg["models"], model)

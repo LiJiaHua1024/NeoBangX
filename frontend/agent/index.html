@@ -180,11 +180,11 @@
               </div>
 
               <div class="aw-goal">
-                <label for="goal">这次想完成什么？</label>
+                <label for="goal">本轮目标与要求（选填）</label>
                 <textarea
                   id="goal"
                   rows="4"
-                  placeholder="例如：分析这份试卷的易错点，保留全部题目，并注明材料依据。"
+                  placeholder="留空则按当前任务提示词执行；有额外目标或要求时再填写。"
                 ></textarea>
                 <div class="aw-goal-row">
                   <div class="aw-select aw-model-select">
@@ -208,11 +208,11 @@
                   <div class="aw-empty-mark" data-icon="sparkle"></div>
                   <h2>把目标交给 Agent，<br />把决定留在手中。</h2>
                   <p>
-                    写下这次要完成什么。它会读取材料、按步执行，<br />每一步都可查看，成果自动保留版本。
+                    选好提示词和材料即可开始，额外要求可选填。<br />每一步都可查看，成果自动保留版本。
                   </p>
                   <ol class="aw-guide">
-                    <li><b>1</b><span>写清目标</span></li>
-                    <li><b>2</b><span>补齐材料与提示词</span></li>
+                    <li><b>1</b><span>选择提示词和材料</span></li>
+                    <li><b>2</b><span>按需补充本轮要求</span></li>
                     <li><b>3</b><span>开始并随时补充</span></li>
                   </ol>
                 </div>
@@ -227,7 +227,7 @@
                   <textarea
                     id="message"
                     rows="1"
-                    placeholder="补充要求，或继续任务…"
+                    placeholder="补充要求（选填），也可直接继续任务…"
                   ></textarea>
                   <button id="send" class="btn-primary aw-send">
                     <span data-label>发送补充</span><span data-icon="send"></span>
@@ -269,11 +269,11 @@
 
               <div class="aw-work-body scroll-thin">
                 <div class="aw-mobile-start">
-                  <label for="mobile-goal">这次想完成什么？</label>
+                  <label for="mobile-goal">本轮目标与要求（选填）</label>
                   <textarea
                     id="mobile-goal"
                     rows="3"
-                    placeholder="说明目标，再选择材料和提示词…"
+                    placeholder="留空则按当前任务提示词执行；有额外目标或要求时再填写。"
                   ></textarea>
                   <div class="aw-goal-row">
                     <div class="aw-select aw-model-select">
