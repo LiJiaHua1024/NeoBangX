@@ -1881,6 +1881,12 @@ $("#template").onchange = () => {
     "将替换任务提示词或工具配置；当前材料与目标保留。",
     () => applyTemplate(template),
   );
+  // 取消、Esc 和关闭按钮都会经过 closeModal：把下拉框对齐回任务实际使用的模板。
+  modalCleanup = () => {
+    if (!state.task) return;
+    $("#template").value = state.task.config.template_id || "";
+    refreshSelects();
+  };
 };
 $("#reset-prompt").onclick = () => {
   const template = getTemplate();
