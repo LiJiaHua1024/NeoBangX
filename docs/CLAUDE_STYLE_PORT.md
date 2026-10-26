@@ -45,6 +45,7 @@
 | `shared/motion.css`、`tokens.json` motion | 120/150/250/320ms、ease、距离、缩放、减少动效 | port：同名时长/曲线写入变量；所有动效在 `prefers-reduced-motion` 下关闭 |
 | `sodium`（D78） | 运行时重写宿主里昂贵的 `:has()` 间隔选择器，减少样式重算 | adapt：NeoBangX 自己拥有样式表，不需要运行时改写；直接写成有界的子选择器，并对长列表/长文启用 `content-visibility`、`contain` 和分帧渲染，达到同一目的（见 5.6） |
 | `shared/popover.css`、`segment-control.css`、`sliding-pill.css` | 弹层、分段控件、滑动高亮 | port：菜单/弹层 12px、行 6px、100ms 停留；分段控件滑动高亮 |
+| 既有 `frontend/agent/select.mjs` + `shared/popover.css` | 模板、教学工具、试运行、成果版本选择 | restore/adapt：桌面端恢复自绘下拉——32px 触发器、12px 弹层、30px 行、橙色选中勾、方向键/Home/End/Escape、空间不足时向上翻转；原生 `<select>` 只做值容器，触屏仍用系统选择器 |
 | `theme/third-party.css` | 第三方插件适配 | n/a：NeoBangX 不加载 DSH 插件 |
 
 ### 3.2 会话与消息
@@ -61,7 +62,7 @@
 | `features/chat-files` | 文件行、附件、差异 | adapt：材料行与版本差异；差异用现有 worker 的逐行比较，样式按 Claude 的删除/新增色 |
 | `features/context-stats` | 上下文计量、token、缓存 | adapt：保留本轮 tokens、步骤、状态；不伪造缓存/费用数据 |
 | `features/model`、`features/effort` | 模型/推理档选择器 | port/adapt：模型选择器按上游改为平铺弹层（卡片壳、行节奏、选中勾、250ms 生长、键盘与 Escape）；行内数据全部来自 NeoBangX 自己的模型配置：`description`、`aa_index` 评级、`is_free` / `free_no_code` 标签，不复制上游厂商 logo 与描述表。上游第一级 +「更多模型」第二级/搜索在扁平小目录里合并为一张可滚动平铺卡，不做提供方分组；不显示不存在的推理档 |
-| `features/caret` | 输入光标接管：原生光标透明、绘制 2px 竖线、80ms 位移、1000ms 闪烁 | port：`frontend/agent/caret.mjs` 用隐藏镜像测量 textarea 光标，位移/闪烁/减少动效按上游；测量失败立即交还原生光标 |
+| `features/caret` | 输入光标接管：原生光标透明、绘制 2px 橙色竖线、80ms 位移、1000ms 闪烁 | port：`frontend/agent/caret.mjs` 用隐藏镜像测量 textarea 光标，位移/闪烁/减少动效按上游；竖线取 `--accent`（`#D97757`）；测量失败立即交还原生光标 |
 | `features/turn-nav`、`features/sidebar-peek` | 回合导航、侧栏预览 | n/a：工作台有独立「轨迹」页与常驻侧栏；不引入第二个导航层 |
 | `features/search` | 全局搜索面板 | adapt：保留任务搜索输入；不伪造跨会话全文搜索 |
 
@@ -163,6 +164,14 @@
 - 不使用 Deepy：NeoBangX 不是 DeepSeek 品牌，搬入小鲸鱼会制造错误的品牌关系。
 - Clawd 是 Anthropic 的角色，帧图不适用 MIT；许可与替换要求见第 8 节。
 
+### 5.9 输入、菜单与选择器的细节
+
+- 光标：绘制竖线取 `--accent`（浅色与深色都是 `#D97757`），原生光标只在 2px 竖线测量成功后隐藏；失败立即交还，不会出现没有光标的输入框。
+- 模型行：单行 42px，名称的 19px 行高在 42px 内上下各 11.5px；有描述时整行 52px，名称与描述作为整体垂直居中。选中勾随行居中，不按第一行顶对齐。
+- 任务行菜单：宽度由内容决定（190px），不再继承顶栏菜单的 `right: 0` 被拉成整行；Escape 关闭并把焦点还给「…」按钮。
+- 下拉：模板、教学工具、试运行、成果版本回到自绘面板；原生 `<select>` 只保留值与表单语义，桌面端不再弹浏览器默认列表。触屏仍用系统选择器，只补一枚 chevron。
+- 减少动效：下拉的展开动画、chevron 翻转、光标位移与闪烁一起停。
+
 ## 6 设计令牌（Claude 卡）
 
 浅色：画布 `#FFFFFF`，侧栏 `#FAFAFA`，正文 `#161616`，次要 `#70686A`，三级 `#91888A`，边框 `#E9E9E9` / `#DEDEDE` / `#CFCFCF`，分隔 `rgba(22,22,22,.05)`，强调 `#D97757`，用户气泡 `#F4F2F3`，表格头 `#F4F4F4`，行内代码 `#943333`，链接 `#184F95`。
@@ -185,6 +194,8 @@
 - [x] 输入卡片（单行卡片、`↵` 发送、工具行、模型入口）
 - [x] 输入光标平滑位移与闪烁
 - [x] 模型选择器（平铺、自有描述、AA 评级、免费/免码标签、选中勾、生长动效）
+- [x] 模板/教学/试运行/版本的自绘下拉
+- [x] 任务行菜单宽度、Escape 与焦点回归
 - [x] Clawd 角色与真实任务状态
 - [x] 工作区四页
 - [x] 弹层与内部页面
@@ -204,12 +215,12 @@
 
 ## 9 验收证据
 
-最近一次完整验收：`node tools/test-claude-agent-browser.mjs`，16 组场景全部通过，0 个浏览器错误（`.debug/claude-port/2026-10-26T04-12-58-008Z/`）。提交到仓库的证据在 `docs/evidence/claude-port/`：
+最近一次完整验收：`node tools/test-claude-agent-browser.mjs`，18 组场景全部通过，0 个浏览器错误（`.debug/claude-port/2026-10-26T05-09-37-283Z/`）。提交到仓库的证据在 `docs/evidence/claude-port/`：
 
-- 16 组场景：登录、双主题持久化、输入卡片/平滑光标/模型选择器/Clawd、空目标执行与刷新恢复、20 万字符以上思考、长成果折叠、审阅忽略、版本编辑/比较/采用/导出、工作区配置、补充要求刷新恢复、失败/停止、跨窗口冲突、10 种视口、1440×1240 双主题、200 步 + 30 万字符、减少动效。
-- 200 条轨迹 + 30 万字符成果、12,439 个 DOM 节点时，40 次页签切换 p95 111.7 ms、最大 139.3 ms（软件渲染，无 GPU）。
+- 18 组场景：登录、双主题持久化、任务行菜单收窄、模板自绘下拉、输入卡片/橙色平滑光标/模型选择器/Clawd、空目标执行与刷新恢复、20 万字符以上思考、长成果折叠、审阅忽略、版本编辑/比较/采用/导出、工作区配置、补充要求刷新恢复、失败/停止、跨窗口冲突、10 种视口、1440×1240 双主题、200 步 + 30 万字符、减少动效。
+- 200 条轨迹 + 30 万字符成果、12,460 个 DOM 节点时，40 次页签切换 p95 110.8 ms、最大 111.8 ms（软件渲染且并行录屏）。
 - 30 万字符导出 SHA-256 与测试种子一致；20 万字符以上思考展开 715 ms 内完成，阅读器搜索与下载全文正常。
-- 录屏与 trace 在 `.debug/claude-port/<run>/video/` 与 `trace.zip`（未提交）。最近一次 trace 含 2,004 个 screencast 帧、743 个 DOM 快照、333 组动作，0 个 console error；已抽取录屏帧与 trace 快照检查等待行动画、输入卡片、模型选择器、Clawd、阅读器、冲突态与长文滚动。
+- 录屏与 trace 在 `.debug/claude-port/<run>/video/` 与 `trace.zip`（未提交）。最近一次 trace 含 2,015 个 screencast 帧、802 个 DOM 快照、361 组动作，0 个 console error；已抽取录屏帧与 trace 快照检查等待行动画、输入卡片、模型选择器、Clawd、阅读器、冲突态与长文滚动。
 - 对照图：`docs/evidence/claude-port/compare-{light,dark}.png`，上游固定提交与本次 1440×1240 对话并排。
 - 逐项截图与说明：`docs/evidence/claude-port/README.md`。
 

@@ -6,6 +6,7 @@ import { Conversation } from "./conversation.mjs";
 import { createModelPicker } from "./model-picker.mjs";
 import { installCaret } from "./caret.mjs";
 import { createClawd } from "./mascot.mjs";
+import { enhanceSelects, refreshSelects } from "./select.mjs";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -300,9 +301,13 @@ function menuAt(anchor, html, onClick) {
   closeMenus();
   const menu = document.createElement("div");
   menu.className = "popover";
-  menu.dataset.side = "left";
   menu.style.position = "fixed";
-  menu.style.minWidth = "160px";
+  // A body-level menu sets left itself; `right: 0` from the header menu's
+  // .popover[data-side="left"] would stretch it across the viewport instead
+  // of letting it shrink to its own rows.
+  menu.style.right = "auto";
+  menu.style.minWidth = "190px";
+  menu.style.transformOrigin = "top left";
   menu.innerHTML = html;
   document.body.append(menu);
   const box = anchor.getBoundingClientRect();
@@ -317,12 +322,20 @@ function menuAt(anchor, html, onClick) {
   const close = () => {
     menu.remove();
     document.removeEventListener("click", outside, true);
+    document.removeEventListener("keydown", onKey, true);
     state.menuClose = null;
   };
   const outside = (event) => {
     if (!menu.contains(event.target) && event.target !== anchor) close();
   };
+  const onKey = (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    close();
+    anchor.focus({ preventScroll: true });
+  };
   setTimeout(() => document.addEventListener("click", outside, true), 0);
+  document.addEventListener("keydown", onKey, true);
   state.menuClose = close;
   return menu;
 }
@@ -1260,6 +1273,7 @@ function fill() {
   autoGrow($("#prompt"));
   autoGrow($("#behavior"));
   $("#template").value = task.config.template_id || "";
+  refreshSelects();
   $("#message").value = task.runs.length ? "" : task.config.goal || "";
   autoGrow($("#message"));
   updateDraftEmpty();
@@ -1825,6 +1839,7 @@ function renderTemplateOptions() {
     .map((template) => `<option value="${esc(template.id)}">${esc(template.name)}</option>`)
     .join("");
   if (state.task) $("#template").value = state.task.config.template_id || "";
+  refreshSelects();
 }
 function openLibrary() {
   modal("我的提示词与工具", '<div id="library"></div>');
@@ -2023,6 +2038,7 @@ function renderVersions() {
     )
     .join("");
   if (state.version) $("#version-select").value = state.version.id;
+  refreshSelects();
   $("#result-actions").hidden = !state.version;
 }
 $("#version-select").onchange = (event) =>
@@ -2043,6 +2059,7 @@ async function selectVersion(id) {
   state.pages = pageText(version.content);
   $("#result-actions").hidden = false;
   $("#version-select").value = id;
+  refreshSelects();
   renderVersions();
   renderDocument();
   try {
@@ -2597,5 +2614,6 @@ $$(".mobile-switch [data-view]").forEach((button) => {
 });
 $("#activity-dot").textContent = "";
 initComposerSurfaces();
+enhanceSelects();
 updateStatus();
 boot().catch(error);

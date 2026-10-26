@@ -1,0 +1,182 @@
+/* Claude 风格工作台 · 自绘下拉
+   来源：dsh-claude-style@1e7acc5b 的 shared/popover.css 与工作台既有
+   select.mjs。原生 <select> 只做值容器，桌面端的弹层由 select.mjs 绘制；
+   移动端保留系统选择器，只补一枚 chevron。 */
+
+.aw-select {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+/* 未增强（触屏）时给原生 select 一枚与按钮同色的 chevron。 */
+.aw-select:not(.aw-select-enhanced)::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--ink-3);
+  border-bottom: 1.5px solid var(--ink-3);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+  transition: border-color var(--timing-feedback);
+}
+.aw-select:not(.aw-select-enhanced):hover::after {
+  border-color: var(--ink-2);
+}
+.aw-select:not(.aw-select-enhanced) select {
+  padding-right: 30px;
+  text-overflow: ellipsis;
+}
+
+/* 增强后：原生 select 留在 DOM 里参与表单语义，但不再露脸。 */
+.aw-select-enhanced select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  pointer-events: none;
+}
+.aw-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 32px;
+  padding: 0 28px 0 9px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-2);
+  background: var(--inset);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--timing-feedback),
+    box-shadow var(--timing-feedback);
+}
+.aw-select-trigger:hover {
+  border-color: var(--border-2);
+}
+.aw-select-trigger:focus-visible {
+  border-color: var(--border-3);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 6%, transparent);
+  outline: none;
+}
+.aw-select-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.aw-select-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aw-select-chevron {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  display: inline-flex;
+  color: var(--ink-3);
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition:
+    transform var(--dur-surface) var(--ease-settle),
+    color var(--timing-feedback);
+}
+.aw-select-chevron .aw-svg {
+  width: 14px;
+  height: 14px;
+}
+.aw-select-enhanced:hover .aw-select-chevron {
+  color: var(--ink-2);
+}
+.aw-select-enhanced[data-open="true"] .aw-select-chevron {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+/* 弹层：与顶栏 popover 同一张卡，只是从触发器往下长。 */
+.aw-listbox {
+  position: fixed;
+  z-index: var(--layer-takeover);
+  max-height: min(320px, 46dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-popover);
+  background: var(--overlay);
+  box-shadow: var(--shadow-popover);
+  outline: none;
+  scrollbar-width: thin;
+  animation: popover-in var(--dur-surface) var(--ease-settle);
+}
+.aw-listbox::-webkit-scrollbar {
+  width: 7px;
+}
+.aw-listbox::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--border-2);
+}
+.aw-listbox::-webkit-scrollbar-track {
+  background: transparent;
+}
+.aw-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: var(--radius-row);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 30px;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+}
+.aw-option.active {
+  background: var(--hover);
+}
+.aw-option[aria-selected="true"] {
+  font-weight: 500;
+}
+.aw-option.disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.aw-option-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--accent);
+}
+.aw-option-check .aw-svg {
+  width: 15px;
+  height: 15px;
+}
+.aw-option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-listbox,
+  .aw-select-chevron {
+    animation: none;
+    transition: none;
+  }
+}

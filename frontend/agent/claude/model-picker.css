@@ -64,7 +64,7 @@ html[data-agent-theme="dark"] .model-popover {
 }
 .model-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   width: 100%;
   min-height: 42px;
@@ -165,7 +165,6 @@ html[data-agent-theme="dark"] .model-row-rating {
   width: 16px;
   height: 16px;
   flex: none;
-  margin-top: 1px;
   color: var(--accent);
   opacity: 0;
 }

@@ -37,8 +37,9 @@ cfg={'models':[
         {'id':'test-model','name':'浏览器验收模型','description':'界面验收用的本地假模型。','aa_index':45,'is_free':True,'free_no_code':True,'enabled':True,'user_usable':True},
         {'id':'deepseek/deepseek-v4.1-flash-1017','name':'DeepSeek V4.1 Flash','description':'非对称模型结构，小成本大智能。','aa_index':52,'is_free':False,'free_no_code':False,'enabled':True,'user_usable':True},
         {'id':'minimax/minimax-m3.1-flash','name':'MiniMax M3.1 Flash','description':'兼具前沿编程能力与原生多模态的开放权重模型。','aa_index':43,'is_free':True,'free_no_code':False,'enabled':True,'user_usable':True},
-        {'id':'openrouter/anthropic/claude-sonnet-4.5','name':'Claude Sonnet 4.5','description':'长上下文与复杂代码任务的均衡选择。','aa_index':59,'is_free':False,'free_no_code':False,'enabled':True,'user_usable':True}],
-     'available_model_ids':['test-model','deepseek/deepseek-v4.1-flash-1017','minimax/minimax-m3.1-flash','openrouter/anthropic/claude-sonnet-4.5'],'default_model':'test-model','providers':[]}
+        {'id':'openrouter/anthropic/claude-sonnet-4.5','name':'Claude Sonnet 4.5','description':'长上下文与复杂代码任务的均衡选择。','aa_index':59,'is_free':False,'free_no_code':False,'enabled':True,'user_usable':True},
+        {'id':'test-model-plain','name':'无描述模型','description':'','aa_index':48,'is_free':False,'free_no_code':False,'enabled':True,'user_usable':True}],
+     'available_model_ids':['test-model','deepseek/deepseek-v4.1-flash-1017','minimax/minimax-m3.1-flash','openrouter/anthropic/claude-sonnet-4.5','test-model-plain'],'default_model':'test-model','providers':[]}
 api._load_cfg=lambda:cfg
 api._validate_model=lambda *_:None
 runner._load_cfg=lambda:cfg

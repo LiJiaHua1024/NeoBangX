@@ -182,6 +182,71 @@ try {
     );
   });
 
+  await checked("任务行菜单按内容收窄", async () => {
+    const row = page.locator(".task-row").first();
+    await row.hover();
+    await page.waitForTimeout(160);
+    await row.locator(".task-menu-btn").click();
+    const menu = page.locator("body > .popover").first();
+    await menu.waitFor({ state: "visible" });
+    const box = await menu.boundingBox();
+    const buttonBox = await row.locator(".task-menu-btn").boundingBox();
+    assert(box.width >= 180 && box.width <= 240, `菜单宽度异常：${box.width}`);
+    assert(Math.abs(box.x - buttonBox.x) <= 1, "菜单没有贴着按钮");
+    assert.equal(await menu.locator("button").count(), 2, "菜单项数量不对");
+    assert(
+      (await menu.innerText()).includes("复制任务") &&
+        (await menu.innerText()).includes("删除任务"),
+      "菜单项文案不对",
+    );
+    await page.screenshot({ path: shots("02a-task-row-menu-light.png") });
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "hidden" });
+    assert(
+      await row.locator(".task-menu-btn").evaluate(
+        (el) => el === document.activeElement,
+      ),
+      "Escape 后焦点没有回到菜单按钮",
+    );
+  });
+
+  await checked("下拉菜单仍是自绘面板", async () => {
+    assert.equal(await page.locator("select#template").count(), 1);
+    assert.equal(
+      await page
+        .locator("#template")
+        .evaluate((el) => getComputedStyle(el).opacity),
+      "0",
+      "原生 select 仍然露在外面",
+    );
+    const trigger = page
+      .locator("#template")
+      .locator("xpath=..")
+      .locator(".aw-select-trigger");
+    assert.equal(await trigger.count(), 1, "没有自绘下拉触发器");
+    assert.equal(await trigger.getAttribute("role"), "combobox");
+    await trigger.click();
+    const panel = page.locator(".aw-listbox");
+    await panel.waitFor({ state: "visible" });
+    assert.equal(await trigger.getAttribute("aria-expanded"), "true");
+    assert(
+      (await panel.locator(".aw-option").count()) >= 5,
+      "下拉选项没有渲染",
+    );
+    const first = panel.locator(".aw-option").first();
+    const firstBox = await first.boundingBox();
+    assert.equal(Math.round(firstBox.height), 30, "下拉行高不是 30px");
+    assert.equal(
+      await first.locator(".aw-option-check .aw-svg").count(),
+      1,
+      "当前项缺少橙色勾",
+    );
+    await page.screenshot({ path: shots("02b-template-select-light.png") });
+    await page.keyboard.press("Escape");
+    await panel.waitFor({ state: "hidden" });
+    assert.equal(await trigger.getAttribute("aria-expanded"), "false");
+  });
+
   await checked("Claude 输入框、平滑光标、模型选择器与 Clawd", async () => {
     assert.equal(await page.locator("#model").getAttribute("type"), "hidden");
     assert.equal(await page.locator("select#model").count(), 0, "仍在用原生 select");
@@ -219,6 +284,11 @@ try {
     await page.waitForTimeout(35);
     const after = await caret.evaluate((el) => getComputedStyle(el).transform);
     assert.notEqual(before, after, "光标没有随输入移动");
+    assert.equal(
+      await caret.evaluate((el) => getComputedStyle(el).backgroundColor),
+      "rgb(217, 119, 87)",
+      "光标不是 Claude 的橙色",
+    );
     await page.keyboard.press("Shift+Enter");
     assert(
       (await page.locator("#message").inputValue()).includes("\n"),
@@ -234,7 +304,7 @@ try {
     );
     assert.equal(
       await page.locator(".model-row").count(),
-      4,
+      5,
       "模型行数量不对",
     );
     assert.equal(
@@ -266,6 +336,23 @@ try {
         "AA 智能指数 45",
       ),
       "评级悬停文案不对",
+    );
+    const plainRow = page.locator(
+      '.model-row[data-model-id="test-model-plain"]',
+    );
+    assert.equal(
+      await plainRow.locator(".model-row-desc").count(),
+      0,
+      "无描述模型不应生成空描述行",
+    );
+    const plainGaps = await plainRow.evaluate((el) => {
+      const row = el.getBoundingClientRect();
+      const name = el.querySelector(".model-row-name").getBoundingClientRect();
+      return { top: name.top - row.top, bottom: row.bottom - name.bottom };
+    });
+    assert(
+      Math.abs(plainGaps.top - plainGaps.bottom) <= 1,
+      `无描述行没有垂直居中：${plainGaps.top} / ${plainGaps.bottom}`,
     );
     await page.screenshot({ path: shots("05-model-picker-light.png") });
     // Escape closes and returns focus; ArrowDown walks the list.
@@ -323,8 +410,11 @@ try {
     await page.locator("#message").fill("");
     await page.waitForTimeout(900);
     await page.locator("#send").click();
-    await page.waitForTimeout(1800);
-    assert.equal(await page.locator("#task-status").textContent(), "执行中");
+    await page.waitForFunction(
+      () => document.querySelector("#task-status")?.textContent === "执行中",
+      {},
+      { timeout: 20000 },
+    );
     assert(await page.locator(".waiting").count(), "缺少等待行");
     await page.screenshot({ path: shots("03-streaming-light.png") });
     await page.waitForFunction(
@@ -446,9 +536,14 @@ try {
     const diffText = await page.locator(".diff-view").textContent();
     assert(diffText.includes("原版") && diffText.includes("修改版"), "差异块缺失");
     await page.locator("#modal-close").click();
-    if (await page.locator("#adopt").isEnabled()) await page.locator("#adopt").click();
-    await page.waitForTimeout(500);
-    assert(await page.locator("#document-adopted").isVisible());
+    assert(
+      await page.locator("#adopt").isEnabled(),
+      "采用按钮不可用，无法验证采用状态",
+    );
+    await page.locator("#adopt").click();
+    await page
+      .locator("#document-adopted")
+      .waitFor({ state: "visible", timeout: 8000 });
     const download = page.waitForEvent("download");
     await page.locator("#export-md").click();
     const file = await download;

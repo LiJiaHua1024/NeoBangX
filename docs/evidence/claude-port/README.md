@@ -14,8 +14,10 @@
 | `conversation-light-1920x1080.png` | 1920×1080 | 浅色 | 大屏 |
 | `conversation-light-1024x768.png` | 1024×768 | 浅色 | 单主区 + 抽屉入口 |
 | `tablet-light-768x1024.png` | 768×1024 | 浅色 | 平板单主区 |
-| `model-picker-light-1440x1000.png` / `model-picker-dark-1440x1000.png` | 1440×1000 | 浅色 / 深色 | 模型选择器：平铺列表、自有描述、AA 评级、免费/免码标签、选中勾；无原生 select、无厂商 logo、无分组 |
-| `composer-caret-light-1440x1000.png` | 1440×1000（裁 820×260） | 浅色 | 输入卡片、2px 绘制光标、`↵`、工具行、Clawd |
+| `model-picker-light-1440x1000.png` / `model-picker-dark-1440x1000.png` | 1440×1000 | 浅色 / 深色 | 模型选择器：平铺列表、自有描述、AA 评级、免费/免码标签、选中勾；最后一行是无描述测试模型，单行内容在 42px 行内上下居中；无厂商 logo、无分组 |
+| `task-row-menu-light-1440x1000.png` | 1440×1000 | 浅色 | 任务行「…」菜单：190px 宽、两项、红色删除；不再被拉成整行 |
+| `template-select-light-1440x1000.png` | 1440×1000 | 浅色 | 模板自绘下拉：30px 行、橙色选中勾、可滚动；不弹浏览器原生列表 |
+| `composer-caret-light-1440x1000.png` | 1440×1000（裁 820×236） | 浅色 | 输入卡片、2px 橙色绘制光标（`#D97757`）、`↵`、工具行、Clawd |
 | `clawd-thinking-light-1440x1000.png` | 1440×1000（裁 820×260） | 浅色 | Clawd 思考帧（气泡） |
 | `workspace-overlay-light-1280x800.png` | 1280×800 | 浅色 | 工作区浮层与遮罩 |
 | `workspace-prompt-light-1440x1000.png` / `workspace-prompt-dark-1440x1000.png` | 1440×1000 | 浅色 / 深色 | 提示词编辑、模板、自动保存 |
@@ -36,11 +38,11 @@
 
 ## 自动化与性能
 
-- `browser-report.json`：最近一次 `node tools/test-claude-agent-browser.mjs` 的 **16 组场景全部通过，0 个浏览器错误**。新增的一组直接操作：`↵` 按钮、Shift+Enter 换行、绘制光标（80ms 位移、1000ms 闪烁）、模型平铺列表/自有描述/评级/标签/键盘/选中、Clawd 帧变化。
-- `performance.json`：200 条轨迹 + 30 万字符成果、12,439 个 DOM 节点下，40 次工作区页签切换 p95 为 111.7 ms、最大 139.3 ms（Ubuntu 22.04，Chromium 141 无头软件渲染，无 GPU）。
+- `browser-report.json`：最近一次 `node tools/test-claude-agent-browser.mjs` 的 **18 组场景全部通过，0 个浏览器错误**。直接操作包括：`↵` 按钮、Shift+Enter 换行、橙色绘制光标（80ms 位移、1000ms 闪烁）、模型平铺列表/自有描述/评级/标签/键盘/选中/单行垂直居中、Clawd 帧变化、190px 任务菜单、模板自绘下拉。
+- `performance.json`：200 条轨迹 + 30 万字符成果、12,460 个 DOM 节点下，40 次工作区页签切换 p95 为 110.8 ms、最大 111.8 ms（Ubuntu 22.04，Chromium 141 无头软件渲染且并行录屏）。
 - 同一场景下 200 条步骤完整保留，30 万字符成果导出 SHA-256 与种子值一致，分页单页正文 ≤ 13,000 字符。
 - 20 万字符以上思考：折叠计数、展开全文、阅读器搜索、下载完整文本；30 万字符成果：分页、导出、原文末行保留。
-- 交互视频与 trace 由验收脚本写在 `.debug/claude-port/<run>/video/` 与 `trace.zip`，不提交到仓库。最近一次 trace 已抽取帧与快照检查等待行动画、输入卡片、模型选择器、阅读器、冲突态与长文滚动。
+- 交互视频与 trace 由验收脚本写在 `.debug/claude-port/<run>/video/` 与 `trace.zip`，不提交到仓库。最近一次 trace 含 2,015 个 screencast 帧、802 个 DOM 快照、361 组动作；已抽取帧与快照检查等待行动画、输入卡片、模型选择器、自绘下拉与任务菜单、阅读器、冲突态与长文滚动。
 
 ## 启动项目
 

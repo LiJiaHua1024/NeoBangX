@@ -97,7 +97,7 @@
 
 /* 输入卡片本体：上游 inline 输入框的 14px 圆角、7px 内边距与 24px 行高。 */
 .composer-card {
-  --caret-color: var(--ink);
+  --caret-color: var(--accent);
   position: relative;
   z-index: 2;
   display: flex;
@@ -143,7 +143,7 @@ html[data-agent-theme="dark"] .composer-card {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
-  caret-color: auto;
+  caret-color: var(--accent);
 }
 .composer-input::placeholder {
   color: var(--ink-4);
