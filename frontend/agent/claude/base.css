@@ -241,3 +241,40 @@ html[data-motion="reduced"] *::after {
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
 }
+
+/* ---------- 滑动高亮 ----------
+   上游 shared/sliding-pill.css：motion.mjs 量出选中项的盒子写进 --pill-*，
+   这里在控件上画一块底并在之后每次切换时滑过去（240ms glide）。
+   外观（底色、圆角、阴影）由各控件自己的样式表给；控件本身需要 position: relative，
+   子项需要 position: relative + z-index 压在这块底之上。 */
+[data-pill]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--pill-w, 0px);
+  height: var(--pill-h, 0px);
+  transform: translate(var(--pill-x, 0px), var(--pill-y, 0px));
+  pointer-events: none;
+  transition: transform var(--dur-slide) var(--ease-glide),
+    width var(--dur-slide) var(--ease-glide), height var(--dur-slide) var(--ease-glide),
+    background-color var(--timing-feedback);
+}
+
+/* ---------- 视图进场 ----------
+   上游 shared/motion.css 的 surface-in：新出现的页从下方 4px 淡入。
+   motion.mjs 的 playEnter 只在真正切换时打上 data-enter，动画结束即撤掉，
+   静止时不留 transform（不给长列表多一层合成）。 */
+[data-enter] {
+  animation: view-enter var(--dur-move) var(--ease-settle) backwards;
+}
+@keyframes view-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

@@ -7,11 +7,18 @@ import { createModelPicker } from "./model-picker.mjs";
 import { installCaret } from "./caret.mjs";
 import { createClawd } from "./mascot.mjs";
 import { enhanceSelects, refreshSelects } from "./select.mjs";
+import { markCurrent, playEnter, slidingPill } from "./motion.mjs";
 import { matches as vpMatches, onBreakpoint, toCss, viewportCss } from "./zoom.mjs";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const app = $("#app");
+/* 三组切换的选中高亮都是同一块滑动的底：对话/轨迹、工作区四页、手机底部分段。 */
+const pills = {
+  mode: slidingPill($(".view-tabs"), '[aria-current="page"]'),
+  tab: slidingPill($(".workspace-tabs"), '[aria-current="page"]'),
+  view: slidingPill($(".mobile-switch"), '[aria-current="page"]'),
+};
 const base = "/api/workspace";
 const FIELDS = {
   goal: "goal",
@@ -245,9 +252,8 @@ function setWorkspace(open, { persist = true } = {}) {
 function setView(view, push = true) {
   if (view !== "work") view = "chat";
   app.dataset.view = view;
-  for (const button of $$(".mobile-switch [data-view]")) {
-    button.toggleAttribute("aria-current", button.dataset.view === view);
-  }
+  markCurrent($$(".mobile-switch [data-view]"), (button) => button.dataset.view === view);
+  pills.view.sync();
   if (view === "chat") $("#activity-dot").textContent = "";
   syncClawd();
   if (push && state.task) {
@@ -258,9 +264,8 @@ function setMode(mode, push = true) {
   if (mode !== "trajectory") mode = "chat";
   if (mode === "trajectory") modelPicker?.close();
   app.dataset.mode = mode;
-  for (const button of $$(".view-tabs [data-mode]")) {
-    button.toggleAttribute("aria-current", button.dataset.mode === mode);
-  }
+  markCurrent($$(".view-tabs [data-mode]"), (button) => button.dataset.mode === mode);
+  pills.mode.sync();
   state.conversation?.setMode(mode, { push });
   if (mode === "trajectory") $("#activity-dot").textContent = "";
   syncClawd();
@@ -273,12 +278,16 @@ function setMode(mode, push = true) {
 }
 function setTab(tab, push = true) {
   if (!TAB_IDS.has(tab)) tab = "prompt";
+  let entering = null;
   $$("[data-panel]").forEach((panel) => {
-    panel.hidden = panel.dataset.panel !== tab;
+    const show = panel.dataset.panel === tab;
+    if (show && panel.hidden) entering = panel;
+    panel.hidden = !show;
   });
-  $$("[data-tab]").forEach((button) => {
-    button.toggleAttribute("aria-current", button.dataset.tab === tab);
-  });
+  const switched = markCurrent($$("[data-tab]"), (button) => button.dataset.tab === tab);
+  pills.tab.sync();
+  // 只在真的换页时播放进场；首载与同页重复点击不动。
+  if (switched && entering) playEnter(entering);
   if (tab === "results") {
     $("#result-dot").textContent = "";
     ensureResultSelection().catch(error);
@@ -1292,8 +1301,8 @@ async function openTask(id, push = true) {
     onError: error,
     onModeChange: (mode) => {
       app.dataset.mode = mode;
-      for (const button of $$(".view-tabs [data-mode]"))
-        button.toggleAttribute("aria-current", button.dataset.mode === mode);
+      markCurrent($$(".view-tabs [data-mode]"), (button) => button.dataset.mode === mode);
+      pills.mode.sync();
       if (mode === "trajectory") $("#activity-dot").textContent = "";
     },
     onRequestStop: () => stopRun().catch(error),

@@ -592,6 +592,7 @@ html[data-agent-theme="dark"] .new-task .plus-chip {
 }
 
 .view-tabs {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -601,26 +602,47 @@ html[data-agent-theme="dark"] .new-task .plus-chip {
   border-radius: var(--radius-segment);
   background: var(--hover);
 }
+html[data-agent-theme="dark"] .view-tabs {
+  /* 上游：浅色底板令牌在暖黑画布上太淡 */
+  background: rgba(255, 255, 255, 0.08);
+}
 .view-tabs button {
+  position: relative;
+  z-index: 1;
   height: 26px;
   padding: 0 12px;
-  border-radius: var(--radius-segment);
+  border-radius: 5px;
   color: var(--ink-3);
   font-size: 12px;
   font-weight: 500;
+  user-select: none;
   transition: background-color var(--timing-feedback), color var(--timing-feedback),
     box-shadow var(--timing-feedback);
 }
 .view-tabs button:hover {
   color: var(--ink);
 }
-.view-tabs button[aria-current="page"] {
+/* 选中项抬起成一块白底（上游 segment-control.css 的 small variant）。
+   滑动高亮就位后，选中项把底让给它，由那一块滑过去。 */
+.view-tabs button[aria-current="page"],
+.view-tabs[data-pill]::before {
   background: var(--canvas);
-  color: var(--ink);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 2px rgba(20, 20, 19, 0.1);
 }
-html[data-agent-theme="dark"] .view-tabs button[aria-current="page"] {
-  background: var(--surface-3);
+.view-tabs button[aria-current="page"] {
+  color: var(--ink);
+}
+html[data-agent-theme="dark"] .view-tabs button[aria-current="page"],
+html[data-agent-theme="dark"] .view-tabs[data-pill]::before {
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: none;
+}
+.view-tabs[data-pill]::before {
+  border-radius: 5px;
+}
+.view-tabs[data-pill] button[aria-current="page"] {
+  background: transparent;
+  box-shadow: none;
 }
 .view-tabs .dot {
   display: inline-block;

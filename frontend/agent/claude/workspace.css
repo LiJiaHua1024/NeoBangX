@@ -39,9 +39,10 @@
   user-select: none;
 }
 .workspace-tabs {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -51,31 +52,37 @@
 }
 .workspace-tabs button {
   position: relative;
-  height: 30px;
-  padding: 0 8px;
+  z-index: 1;
+  height: 28px;
+  padding: 0 10px;
   border-radius: var(--radius-row);
   color: var(--ink-3);
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
+  user-select: none;
   transition: background-color var(--timing-feedback), color var(--timing-feedback);
 }
+/* Claude 侧栏/设置页的选中行：选中项是一块实底，其余只是字。
+   悬停只提亮文字，不再铺同色底，免得悬停项和选中项分不清。 */
 .workspace-tabs button:hover {
-  background: var(--hover);
   color: var(--ink);
+}
+.workspace-tabs button[aria-current="page"],
+.workspace-tabs[data-pill]::before {
+  background: var(--hover);
 }
 .workspace-tabs button[aria-current="page"] {
   color: var(--ink);
 }
-.workspace-tabs button[aria-current="page"]::after {
-  content: "";
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: -8px;
-  height: 1.5px;
-  border-radius: 2px;
-  background: var(--ink);
+.workspace-tabs[data-pill]::before {
+  border-radius: var(--radius-row);
+}
+.workspace-tabs[data-pill] button[aria-current="page"] {
+  background: transparent;
+}
+.workspace-tabs button[aria-current="page"] .count {
+  color: var(--ink-3);
 }
 .workspace-tabs .count {
   margin-left: 4px;

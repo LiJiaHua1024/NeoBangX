@@ -6,6 +6,7 @@
 import { escapeHTML as esc } from "./core.mjs";
 import { pickGreeting } from "./greetings.mjs";
 import { icon } from "./icons.mjs";
+import { markCurrent, playEnter } from "./motion.mjs";
 import { copyText } from "./reader.mjs";
 import { startWaitLoader, releaseWaitLoader } from "./wait-loader.mjs";
 
@@ -278,7 +279,8 @@ export class Conversation {
     this.loading = new Set();
     this.observers = new Map();
     this.held = false;
-    this.mode = "chat";
+    // 跟随页面当前视图起步：切任务时若停在轨迹页，载入期间就不会先把对话空态画出来。
+    this.mode = this.app?.dataset.mode === "trajectory" ? "trajectory" : "chat";
     this.scrollMemo = { chat: 0, trajectory: 0 };
     this.waitingTimer = null;
     this.lastHeight = 0;
@@ -1353,8 +1355,11 @@ export class Conversation {
     if (this.emptyVisible && this.greeting && this.greeting.textContent !== PAGE_GREETING) {
       this.greeting.textContent = PAGE_GREETING;
     }
-    this.empty.hidden = !this.emptyVisible;
-    this.transcript.hidden = this.emptyVisible;
+    // 空态问候只属于对话视图。轮询里的 updateStatus 也会走到这里，若不看视图，
+    // 停在轨迹页时问候会在下一次轮询（几秒后）被插到轨迹上方。
+    const inChat = this.mode !== "trajectory";
+    this.empty.hidden = !inChat || !this.emptyVisible;
+    this.transcript.hidden = !inChat || this.emptyVisible;
     this.composerSeat.dataset.hero = String(this.emptyVisible);
     this.composerCard.dataset.hero = String(this.emptyVisible);
     this.message.placeholder = this.emptyVisible
@@ -1421,15 +1426,17 @@ export class Conversation {
 
   setMode(mode, { push = false } = {}) {
     if (mode !== "trajectory") mode = "chat";
+    const changed = mode !== this.mode;
     this.scrollMemo[this.mode] =
       this.mode === "trajectory"
         ? this.trajectory.scrollTop
         : this.transcript.scrollTop;
     this.mode = mode;
     this.app.dataset.mode = mode;
-    for (const button of document.querySelectorAll("[data-mode]")) {
-      button.toggleAttribute("aria-current", button.dataset.mode === mode);
-    }
+    markCurrent(
+      document.querySelectorAll(".view-tabs [data-mode]"),
+      (button) => button.dataset.mode === mode,
+    );
     const showTrajectory = mode === "trajectory";
     this.trajectory.hidden = !showTrajectory;
     this.transcript.hidden = showTrajectory || this.emptyVisible;
@@ -1441,6 +1448,13 @@ export class Conversation {
       this.transcript.scrollTop = this.held
         ? this.scrollMemo.chat
         : this.transcript.scrollHeight;
+    }
+    // 切换时新视图的正文淡入升起；滚动容器本身不动，滚动条和固定元素不跟着位移。
+    // 空态不用另加：问候自带的升起动画会在重新显示时重放。
+    if (changed && (showTrajectory || !this.emptyVisible)) {
+      playEnter(
+        showTrajectory ? this.trajectory.querySelector(".transcript-inner") : this.root,
+      );
     }
     if (push && this.task) {
       const url = new URL(location.href);

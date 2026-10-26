@@ -429,9 +429,22 @@
   font-size: 12px;
   font-weight: 500;
 }
-:where(html[data-vp~="w767"]) .mobile-switch button[aria-current="page"] {
+:where(html[data-vp~="w767"]) .mobile-switch button[aria-current="page"],
+:where(html[data-vp~="w767"]) .mobile-switch[data-pill]::before {
   background: var(--hover);
+}
+:where(html[data-vp~="w767"]) .mobile-switch button[aria-current="page"] {
   color: var(--ink);
+}
+:where(html[data-vp~="w767"]) .mobile-switch button {
+  position: relative;
+  z-index: 1;
+}
+:where(html[data-vp~="w767"]) .mobile-switch[data-pill]::before {
+  border-radius: var(--radius-pill);
+}
+:where(html[data-vp~="w767"]) .mobile-switch[data-pill] button[aria-current="page"] {
+  background: transparent;
 }
 :where(html[data-vp~="w767"]) .mobile-switch .dot {
   display: inline-block;
