@@ -2440,52 +2440,6 @@ async function openReview(id) {
   });
 }
 
-/* ---------------- 旧版归档 ---------------- */
-$("#legacy-tasks").onclick = async () => {
-  try {
-    const data = await api("/legacy");
-    modal(
-      "旧版任务 · 只读归档",
-      '<p>旧执行不会在新版继续。材料、成果和已保存过程可以查看与下载。</p><div id="legacy-list"></div>',
-    );
-    if (!data.tasks.length)
-      $("#legacy-list").textContent = "当前使用码没有旧版任务。";
-    let offset = 0;
-    function append(page) {
-      for (const task of page.tasks) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "version-row";
-        button.textContent = `${task.tool_name || "旧任务"} · ${task.created_at} · ${task.status}`;
-        button.onclick = async () => {
-          try {
-            const item = await api(`/legacy/${task.id}`);
-            readText("旧版任务完整归档", JSON.stringify(item, null, 2));
-          } catch (e) {
-            error(e);
-          }
-        };
-        $("#legacy-list").append(button);
-      }
-      offset += page.tasks.length;
-      if (page.has_more) {
-        const more = document.createElement("button");
-        more.type = "button";
-        more.className = "btn btn-ghost btn-sm";
-        more.textContent = "加载更多";
-        more.onclick = async () => {
-          more.remove();
-          append(await api("/legacy?offset=" + offset));
-        };
-        $("#legacy-list").append(more);
-      }
-    }
-    append(data);
-  } catch (e) {
-    error(e);
-  }
-};
-
 /* ---------------- 材料来源 ---------------- */
 async function sourceLinks(id) {
   const blob = await api(path(`/entries/${id}/content?download=true`), {

@@ -456,34 +456,6 @@ def review_decision(task_id: str, entry_id: str, body: ReviewDecision, owner: Ow
     return {"ignored": details["ignored"]}
 
 
-@router.get("/legacy")
-def legacy_tasks(owner: Owner, offset: int = Query(0, ge=0)):
-    from sqlalchemy import inspect, text
-    from app.database import engine
-    if not inspect(engine).has_table("agent_runs"):
-        return {"tasks": [], "has_more": False}
-    with SessionLocal() as db:
-        rows = db.execute(text("SELECT id, tool_name, status, created_at FROM agent_runs WHERE code_id=:owner ORDER BY id DESC LIMIT 51 OFFSET :offset"), {"owner": owner, "offset": offset}).mappings().all()
-        return {"tasks": [dict(r) for r in rows[:50]], "has_more": len(rows)>50}
-
-
-@router.get("/legacy/{run_id}")
-def legacy_export(run_id: int, owner: Owner):
-    from sqlalchemy import inspect, text
-    from app.database import engine
-    if not inspect(engine).has_table("agent_runs"):
-        raise HTTPException(404, "旧任务不存在")
-    with SessionLocal() as db:
-        row = db.execute(text("SELECT id, tool_name, status, model, input_text, draft_text, output_text, timeline_json, state_json, created_at FROM agent_runs WHERE id=:id AND code_id=:owner"), {"id": run_id, "owner": owner}).mappings().first()
-        if not row:
-            raise HTTPException(404, "旧任务不存在")
-        data = dict(row)
-        if inspect(engine).has_table("agent_artifacts"):
-            data["artifacts"] = [dict(r) for r in db.execute(text("SELECT alias, kind, label, content, truncated FROM agent_artifacts WHERE run_id=:id ORDER BY id"), {"id": run_id}).mappings()]
-    data["notice"] = "旧版只读归档；旧执行不会在新版继续。可下载原始材料、成果和已有过程。"
-    return data
-
-
 @router.post("/tasks/{task_id}/tool-test")
 async def test_tool(task_id: str, body: ToolTest, owner: Owner):
     from jsonschema import validate, ValidationError

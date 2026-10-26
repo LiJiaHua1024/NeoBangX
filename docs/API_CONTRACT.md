@@ -1433,8 +1433,6 @@ openrouter/deepseek/deepseek-chat
 | POST | `/api/workspace/tasks/{id}/tool-test` | 只读工具试运行 |
 | POST | `/api/workspace/templates` | 保存个人提示词/工具模板 |
 | DELETE | `/api/workspace/templates/{template_id}` | 删除个人模板 |
-| GET | `/api/workspace/legacy?offset=` | 旧版任务只读归档 |
-| GET | `/api/workspace/legacy/{run_id}` | 导出旧版任务完整记录 |
 
 ### 16.7 错误
 
