@@ -6,6 +6,7 @@
 import { escapeHTML as esc } from "./core.mjs";
 import { icon } from "./icons.mjs";
 import { copyText } from "./reader.mjs";
+import { startWaitLoader, releaseWaitLoader } from "./wait-loader.mjs";
 
 const TOOL_NAMES = {
   create_document: "生成成果",
@@ -16,6 +17,16 @@ const TOOL_NAMES = {
   check_vocabulary: "词表检查",
   ask_user: "等待补充",
 };
+const TOOL_ICONS = {
+  create_document: "file-text",
+  patch_document: "edit",
+  read_material: "book-open",
+  search_material: "search",
+  web_search: "search",
+  check_vocabulary: "list-checks",
+  ask_user: "message-square",
+};
+
 const MODE_NAMES = {
   execute: "执行",
   continue: "继续",
@@ -40,6 +51,11 @@ const FOLD_AT = 8000;
 const FOLD_HEAD = 1200;
 
 const nf = new Intl.NumberFormat("zh-CN");
+const boxAttr = (el, name, on) => {
+  if (!el) return;
+  if (on) el.setAttribute(name, "true");
+  else el.removeAttribute(name);
+};
 const chars = (n) => `${nf.format(Math.max(0, Number(n) || 0))} 字`;
 
 function timeOf(iso) {
@@ -250,6 +266,8 @@ export class Conversation {
     this.turns = new Map();
     this.streams = new Map();
     this.caches = new Map();
+    this.previews = new Map();
+    this.previewLoading = new Set();
     this.loading = new Set();
     this.observers = new Map();
     this.held = false;
@@ -307,6 +325,8 @@ export class Conversation {
     this.streams.forEach((timer) => clearInterval(timer));
     this.streams.clear();
     this.caches.clear();
+    this.previews.clear();
+    this.previewLoading.clear();
     this.loading.clear();
     this.entryViews = new Map();
     this.observers.forEach((observer) => observer.disconnect());
@@ -478,16 +498,28 @@ export class Conversation {
 
   updateEntry(turn, state, entry) {
     const details = entry.details || {};
+    const previousStatus = state.entry?.status;
     state.entry = entry;
     if (state.kind === "model") {
       const counts = details.chars || {};
       if ((counts.reasoning || 0) > 0) {
         this.ensureReasoning(state, entry);
-        if (state.reasoningCount)
-          state.reasoningCount.textContent = chars(counts.reasoning);
-        if (entry.status === "running")
-          state.reasoning?.setAttribute("data-running", "true");
-        else state.reasoning?.removeAttribute("data-running");
+        const running = entry.status === "running";
+        if (running) {
+          if (
+            state.reasoningTouched !== "running" &&
+            state.reasoning?.dataset.open !== "true"
+          )
+            this.setReasoningOpen(state, entry, true);
+        } else {
+          if (
+            previousStatus === "running" &&
+            state.reasoningTouched !== entry.status &&
+            state.reasoning?.dataset.open === "true"
+          )
+            this.setReasoningOpen(state, entry, false);
+          this.ensurePreview(entry);
+        }
       }
       if ((counts.output || 0) > 0) {
         this.ensureOutput(state, entry);
@@ -517,50 +549,130 @@ export class Conversation {
       box.dataset.entry = entry.id;
       box.innerHTML = `
         <button class="reasoning-head" type="button" aria-expanded="false">
-          <span class="spark">${icon("sparkle")}</span>
-          <span class="reasoning-title">思考过程</span>
-          <span class="reasoning-count">0 字</span>
-          <span class="chev">${icon("chevron-right")}</span>
+          <span class="reasoning-glyph"><span class="reasoning-spark">${icon("sparkle")}</span><span class="reasoning-chev">${icon("chevron-right")}</span></span>
+          <span class="reasoning-title">思考</span>
+          <span class="reasoning-preview" hidden></span>
         </button>
         <div class="reasoning-body" hidden>
-          <div class="reasoning-actions"><button type="button" class="linkish" data-full>查看全文与搜索</button></div>
-          <span class="reasoning-text"></span>
+          <div class="reasoning-text"></div>
         </div>`;
       state.reasoning = box;
       state.reasoningBody = box.querySelector(".reasoning-body");
       state.reasoningText = box.querySelector(".reasoning-text");
-      state.reasoningCount = box.querySelector(".reasoning-count");
+      state.reasoningPreview = box.querySelector(".reasoning-preview");
       state.reasoningHead = box.querySelector(".reasoning-head");
+      state.reasoningPreviewText = "";
+      state.reasoningTouched = "";
       state.el.prepend(box);
       state.reasoningHead.addEventListener("click", () => {
-        const open = box.dataset.open === "true";
-        box.dataset.open = String(!open);
-        box.querySelector(".reasoning-head").setAttribute("aria-expanded", String(!open));
-        state.reasoningBody.hidden = open;
-        if (!open) {
-          this.ensureContent(entry, "reasoning").then((text) => {
-            if (state.reasoningText.textContent !== text)
-              state.reasoningText.textContent = text;
-          });
-        }
-      });
-      box.querySelector("[data-full]").addEventListener("click", () =>
-        this.onOpenEntry(entry.id, "reasoning"),
-      );
-      state.reasoningCount.textContent = chars(
-        (entry.details?.chars || {}).reasoning || 0,
-      );
-      if (entry.status === "running") box.dataset.running = "true";
-    }
-    // 折叠时不加载全文；运行中若用户展开，则持续读取。
-    if (state.reasoning.dataset.open === "true") {
-      this.ensureContent(entry, "reasoning").then((text) => {
-        if (state.reasoningText && state.reasoningText.textContent.length < text.length) {
-          state.reasoningText.textContent = text;
-        }
+        const current = this.entries.get(entry.id) || entry;
+        const open = box.dataset.open !== "true";
+        state.reasoningTouched = current.status || "";
+        this.setReasoningOpen(state, current, open);
       });
     }
-    // 观察折叠行，滚入视口时只显示字数，不加载正文；这保留长思考的 DOM 成本。
+    if (entry.status === "running") boxAttr(state.reasoning, "data-running", true);
+    else boxAttr(state.reasoning, "data-running", false);
+    if (entry.status !== "running") this.updateReasoningPreview(state);
+  }
+
+  /** 展开/收起一条思考；展开时按运行中或已完成决定读窗口还是读全文。 */
+  setReasoningOpen(state, entry, open) {
+    const box = state.reasoning;
+    if (!box) return;
+    box.dataset.open = String(open);
+    state.reasoningHead?.setAttribute("aria-expanded", String(open));
+    if (state.reasoningBody) state.reasoningBody.hidden = !open;
+    this.updateReasoningPreview(state);
+    if (!open) return;
+    if (entry.status !== "running" && state.reasoningBody) {
+      state.reasoningBody.scrollTop = 0;
+    }
+    const cached = this.caches.get(`${entry.id}:reasoning`);
+    if (cached?.text) this.paintReasoning(state, entry, cached.text);
+    this.ensureContent(entry, "reasoning")
+      .then((text) => this.paintReasoning(state, entry, text))
+      .catch((error) => this.onError(error));
+  }
+
+  /** 运行中只把末尾几行放进窗口；完成后展开的是全文。 */
+  paintReasoning(state, entry, text) {
+    if (!state.reasoningText) return;
+    const running = entry.status === "running";
+    let shown = text || "";
+    if (running && shown.length > 1800) {
+      shown = shown.slice(-1800);
+      const line = shown.indexOf("\n");
+      if (line >= 0) shown = shown.slice(line + 1);
+    }
+    if (state.reasoningText.textContent !== shown)
+      state.reasoningText.textContent = shown;
+    if (state.reasoningBody) {
+      if (!running && state.reasoningBody.dataset.streaming === "true") {
+        state.reasoningBody.scrollTop = 0;
+      }
+      state.reasoningBody.dataset.streaming = String(running);
+      if (running) {
+        // 先同步跟到底，下一帧再补一次：文本刚换完时布局可能还没落定。
+        state.reasoningBody.scrollTop = state.reasoningBody.scrollHeight;
+        requestAnimationFrame(() => {
+          if (state.reasoningBody)
+            state.reasoningBody.scrollTop = state.reasoningBody.scrollHeight;
+        });
+      }
+    }
+  }
+
+  updateReasoningPreview(state) {
+    if (!state.reasoningPreview) return;
+    const text = state.reasoningPreviewText || "";
+    const open = state.reasoning?.dataset.open === "true";
+    state.reasoningPreview.hidden = !text || open;
+    if (state.reasoningPreview.textContent !== text)
+      state.reasoningPreview.textContent = text;
+  }
+
+  /** 折叠行只读第一页，取模型写下的第一句；不读全文。 */
+  ensurePreview(entry) {
+    const key = `${entry.id}:reasoning`;
+    if (this.previews.has(key)) return;
+    if (this.previewLoading.has(key)) return;
+    const state = this.entryViews?.get(entry.id);
+    if (!state || state.kind !== "model") return;
+    const cached = this.caches.get(key);
+    if (cached?.text) {
+      this.previews.set(key, this.reasoningPreviewOf(cached.text));
+      state.reasoningPreviewText = this.previews.get(key);
+      this.updateReasoningPreview(state);
+      return;
+    }
+    this.previewLoading.add(key);
+    this.api(`/tasks/${this.taskId}/entries/${entry.id}/content?kind=reasoning&after=0`)
+      .then((data) => {
+        const text = (data.chunks || []).map((chunk) => chunk.text).join("");
+        const preview = this.reasoningPreviewOf(text);
+        this.previews.set(key, preview);
+        const current = this.entryViews?.get(entry.id);
+        if (current && current.kind === "model") {
+          current.reasoningPreviewText = preview;
+          this.updateReasoningPreview(current);
+        }
+      })
+      .catch(() => this.previews.set(key, ""))
+      .finally(() => this.previewLoading.delete(key));
+  }
+
+  reasoningPreviewOf(text) {
+    const plain = String(text || "")
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/[#>*_`~]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!plain) return "";
+    const sentence = plain.match(/^.*?[。！？.!?]/)?.[0] || plain;
+    return sentence.length > 90
+      ? `${sentence.slice(0, 90).replace(/[，,、；;：:\s]+$/, "")}…`
+      : sentence;
   }
 
   ensureOutput(state, entry) {
@@ -610,7 +722,7 @@ export class Conversation {
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "message-fold-toggle";
-        toggle.innerHTML = `${icon("chevron-down")}<span>展开全文 · ${chars(text.length)}</span>`;
+        toggle.innerHTML = `${icon("chevron-down")}<span>展开全文</span>`;
         holder.append(toggle);
         state.output.replaceChildren(holder);
         state.fold = { holder, preview, full, toggle, open: false };
@@ -625,7 +737,7 @@ export class Conversation {
           state.fold.holder.classList.toggle("open", open);
           state.fold.toggle.innerHTML = open
             ? `${icon("chevron-up")}<span>收起</span>`
-            : `${icon("chevron-down")}<span>展开全文 · ${chars(state.outputText.length)}</span>`;
+            : `${icon("chevron-down")}<span>展开全文</span>`;
           if (open) {
             // 展开后完整渲染，不省略任何内容。
             state.fullView.setText(state.outputText);
@@ -644,7 +756,7 @@ export class Conversation {
       }
       state.fold.toggle.innerHTML = state.fold.open
         ? `${icon("chevron-up")}<span>收起</span>`
-        : `${icon("chevron-down")}<span>展开全文 · ${chars(text.length)}</span>`;
+        : `${icon("chevron-down")}<span>展开全文</span>`;
       state.output.dataset.folded = "true";
     } else {
       state.markdown.setText(text);
@@ -658,11 +770,10 @@ export class Conversation {
     el.dataset.entry = entry.id;
     el.innerHTML = `
       <button class="tool-call-head" type="button" aria-expanded="false">
-        <span class="tool-glyph">${icon("wrench")}</span>
+        <span class="tool-glyph"><span class="tool-icon">${icon(TOOL_ICONS[entry.label] || "wrench")}</span><span class="tool-chev">${icon("chevron-right")}</span></span>
         <span class="tool-call-name"></span>
         <span class="tool-call-brief"></span>
         <span class="tool-call-state"></span>
-        <span class="chev">${icon("chevron-right")}</span>
       </button>
       <div class="tool-call-body" hidden></div>`;
     el.querySelector(".tool-call-name").textContent = label;
@@ -688,7 +799,38 @@ export class Conversation {
       }
     });
     this.updateTool(state, entry);
+    this.observeToolBrief(state, entry);
     return state;
+  }
+
+  /** 工具行只读一次参数，把检索词、文件名或成果标题补在标题后面。 */
+  observeToolBrief(state, entry) {
+    const load = () => {
+      if (state.briefLoaded) return;
+      state.briefLoaded = true;
+      this.ensureContent(entry, "input")
+        .then((input) => {
+          if (!state.brief.textContent)
+            this.fillToolBrief(state, entry, input, "");
+        })
+        .catch(() => {});
+    };
+    if (!("IntersectionObserver" in window) || entry.status === "running") {
+      load();
+      return;
+    }
+    const key = `${entry.id}:brief`;
+    const observer = new IntersectionObserver(
+      (records) => {
+        if (!records.some((record) => record.isIntersecting)) return;
+        observer.disconnect();
+        this.observers.delete(key);
+        load();
+      },
+      { root: this.transcript, rootMargin: "240px 0px" },
+    );
+    observer.observe(state.el);
+    this.observers.set(key, observer);
   }
 
   async loadToolBody(state, entry) {
@@ -717,7 +859,9 @@ export class Conversation {
     state.entry = entry;
     const status = entry.status || "running";
     state.status.dataset.state = status;
-    state.status.textContent = STATUS_NAMES[status] || status;
+    state.status.textContent = ["failed", "interrupted", "waiting", "incomplete"].includes(status)
+      ? STATUS_NAMES[status] || status
+      : "";
     state.el.dataset.status = status;
     if (entry.details?.question) {
       state.brief.textContent = entry.details.question;
@@ -736,11 +880,10 @@ export class Conversation {
     el.dataset.entry = entry.id;
     el.innerHTML = `
       <button class="tool-call-head" type="button" aria-expanded="false">
-        <span class="tool-glyph">${icon("list-checks")}</span>
+        <span class="tool-glyph"><span class="tool-icon">${icon("list-checks")}</span><span class="tool-chev">${icon("chevron-right")}</span></span>
         <span class="tool-call-name">审阅</span>
         <span class="tool-call-brief"></span>
         <span class="tool-call-state"></span>
-        <span class="chev">${icon("chevron-right")}</span>
       </button>
       <div class="tool-call-body" hidden></div>`;
     const state = {
@@ -764,7 +907,9 @@ export class Conversation {
     state.entry = entry;
     const status = entry.status || "running";
     state.status.dataset.state = status;
-    state.status.textContent = STATUS_NAMES[status] || status;
+    state.status.textContent = ["failed", "interrupted", "waiting", "incomplete"].includes(status)
+      ? STATUS_NAMES[status] || status
+      : "";
     state.brief.textContent =
       entry.details?.review_summary ||
       entry.details?.error ||
@@ -938,10 +1083,43 @@ export class Conversation {
     if (turn.waiting) return turn.waiting;
     const box = document.createElement("div");
     box.className = "waiting";
-    box.innerHTML = `<span class="waiting-dots"><i></i><i></i><i></i></span><span class="waiting-text">正在执行</span><span class="waiting-clock"></span>`;
+    const loader = document.createElement("span");
+    loader.className = "waiting-loader";
+    loader.setAttribute("aria-hidden", "true");
+    for (const [laneName, count] of [
+      ["is-bounce", 3],
+      ["is-line", 3],
+      ["is-orbit", 4],
+    ]) {
+      const lane = document.createElement("span");
+      lane.className = `waiting-lane ${laneName}`;
+      for (let dot = 0; dot < count; dot += 1) {
+        const point = document.createElement("span");
+        point.className = "waiting-dot";
+        lane.append(point);
+      }
+      loader.append(lane);
+    }
+    const text = document.createElement("span");
+    text.className = "waiting-text";
+    const word = document.createElement("span");
+    word.className = "waiting-word";
+    word.textContent = "正在执行";
+    const sweep = document.createElement("span");
+    sweep.className = "waiting-sweep";
+    sweep.setAttribute("aria-hidden", "true");
+    const glyphs = document.createElement("span");
+    glyphs.className = "waiting-sweep-glyphs";
+    glyphs.dataset.text = "正在执行";
+    sweep.append(glyphs);
+    text.append(word, sweep);
+    const clock = document.createElement("span");
+    clock.className = "waiting-clock";
+    box.append(loader, text, clock);
     box.hidden = true;
     turn.waiting = box;
     turn.flow.after(box);
+    startWaitLoader(loader);
     return box;
   }
 
@@ -961,13 +1139,19 @@ export class Conversation {
   updateWaiting() {
     const turn = this.activeTurn();
     for (const item of this.turns.values()) {
-      if (item !== turn && item.waiting) item.waiting.hidden = true;
+      if (item !== turn && item.waiting) {
+        item.waiting.hidden = true;
+        releaseWaitLoader(item.waiting.querySelector(".waiting-loader"));
+      }
     }
     const status = this.task?.status || "";
     const active = ["running", "queued", "stopping", "waiting"].includes(status);
     const box = turn ? this.renderWaiting(turn) : null;
     if (!active || !turn || !box) {
-      if (box) box.hidden = true;
+      if (box) {
+        box.hidden = true;
+        releaseWaitLoader(box.querySelector(".waiting-loader"));
+      }
       this.stopClock();
       this.updateComposerState();
       if (!this.held) this.pin();
@@ -975,7 +1159,12 @@ export class Conversation {
     }
     box.hidden = false;
     const text = this.waitingText(turn);
-    box.querySelector(".waiting-text").textContent = text;
+    const word = box.querySelector(".waiting-word");
+    if (word.textContent !== text) {
+      word.textContent = text;
+      box.querySelector(".waiting-sweep-glyphs").dataset.text = text;
+    }
+    startWaitLoader(box.querySelector(".waiting-loader"));
     const started = turn.run.created_at;
     const tick = () => {
       if (box.hidden) return;
@@ -1315,7 +1504,7 @@ export class Conversation {
     if (state.kind === "model") {
       if (kind === "reasoning" && state.reasoningText) {
         if (state.reasoning.dataset.open === "true")
-          state.reasoningText.textContent = text;
+          this.paintReasoning(state, entry, text);
       }
       if (kind === "output") {
         state.outputText = text;

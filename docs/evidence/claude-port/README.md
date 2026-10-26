@@ -9,8 +9,12 @@
 | 文件 | 视口 | 主题 | 状态 |
 | --- | --- | --- | --- |
 | `home-light-1440x900.png` / `home-dark-1440x900.png` | 1440×900 | 浅色 / 深色 | 新任务空态、单行输入卡片、`↵` 发送键、工具行右端的模型入口、Clawd |
-| `conversation-light-1440x1240.png` / `conversation-dark-1440x1240.png` | 1440×1240 | 浅色 / 深色 | 与上游截图同视口：隐藏工作区，用户目标、334,665 字符思考折叠、工具行、长成果折叠、审阅行、成果卡片、Clawd 完成态 |
-| `conversation-light-1440x1000.png` | 1440×1000 | 浅色 | 对话 + 两栏工作区 |
+| `conversation-light-1440x1240.png` / `conversation-dark-1440x1240.png` | 1440×1240 | 浅色 / 深色 | 与上游截图同视口：隐藏工作区，用户目标、思考折叠预览、平面工具行、长成果折叠、审阅行、成果卡片、Clawd 完成态 |
+| `conversation-light-1440x1000.png` | 1440×1000 | 浅色 | 对话：平面思考/工具行、长思考折叠预览、长成果折叠、成果卡片 |
+| `steps-flat-light-1440x1000.png` / `steps-flat-dark-1440x1000.png` | 1440×1000 | 浅色 / 深色 | 完成态：24px 平面步骤行，无边框、无卡片底色、无尾部状态字；思考折成一句预览 |
+| `waiting-window-light-1440x1000.png` / `waiting-window-dark-1440x1000.png` | 1440×1000 | 浅色 / 深色 | 运行中：三套加载动作之一、橙色 4px 点、1500ms 遮罩高光带；思考只占 4 行窗口 |
+| `wait-loader-rotated-light-1440x1000.png` | 1440×1000 | 浅色 | 等待行 10s 换班后：动作已从上一套换到另一套，点逐个交接 |
+| `reasoning-expanded-light-1440x1000.png` | 1440×1000 | 浅色 | 完成态展开思考：正文从第一行开始，24px 行距，最多 400px 内滚动，不再有「查看全文与搜索」 |
 | `conversation-light-1920x1080.png` | 1920×1080 | 浅色 | 大屏 |
 | `conversation-light-1024x768.png` | 1024×768 | 浅色 | 单主区 + 抽屉入口 |
 | `tablet-light-768x1024.png` | 768×1024 | 浅色 | 平板单主区 |
@@ -32,17 +36,17 @@
 
 ## 对照
 
-`compare-light.png`、`compare-dark.png` 把上游 `docs/screenshots/claude-conversation-{light,dark}.png`（固定提交 `1e7acc5b`）与本次 `/agent` 的 1440×1240 截图并排。两边都隐藏工作区，保留同一条完成态对话内容。上游没有右侧工作区，NeoBangX 的三栏形态放在工作区截图里。
+`compare-light.png`、`compare-dark.png` 把上游 `docs/screenshots/claude-conversation-{light,dark}.png`（固定提交 `1e7acc5b`）与本次 `/agent` 的 1440×1240 完成态截图并排。两边都隐藏工作区；上游是 Markdown 渲染示例，NeoBangX 是假模型的完成态任务，业务内容不同，只对照版式、字体、颜色、步骤行与折叠。上游没有右侧工作区，NeoBangX 的三栏形态放在工作区截图里。
 
 差异属于宿主业务适配：侧栏任务按更新时间分组、保留材料/成果/工具工作区、空目标直接执行、真实执行记录与审阅。输入卡片、`↵`、工具行高度、模型入口位置、字体、颜色、圆角、层级、正文宽度、表格、代码、折叠、等待行、滚动跟随与动效参数按上游。
 
 ## 自动化与性能
 
-- `browser-report.json`：最近一次 `node tools/test-claude-agent-browser.mjs` 的 **18 组场景全部通过，0 个浏览器错误**。直接操作包括：`↵` 按钮、Shift+Enter 换行、橙色绘制光标（80ms 位移、1000ms 闪烁）、模型平铺列表/自有描述/评级/标签/键盘/选中/单行垂直居中、Clawd 帧变化、190px 任务菜单、模板自绘下拉。
-- `performance.json`：200 条轨迹 + 30 万字符成果、12,460 个 DOM 节点下，40 次工作区页签切换 p95 为 110.8 ms、最大 111.8 ms（Ubuntu 22.04，Chromium 141 无头软件渲染且并行录屏）。
+- `browser-report.json`：最近一次 `node tools/test-claude-agent-browser.mjs` 的 **20 组场景全部通过，0 个浏览器错误**。直接操作包括：`↵` 按钮、Shift+Enter 换行、橙色绘制光标（80ms 位移、1000ms 闪烁）、等待行三套动作与 10s 换班、平面思考/工具行与 4 行思考窗口、模型平铺列表/自有描述/评级/标签/键盘/选中/单行垂直居中、Clawd 帧变化、190px 任务菜单、模板自绘下拉。
+- `performance.json`：200 条轨迹 + 30 万字符成果、12,683 个 DOM 节点下，40 次工作区页签切换 p95 为 124.7 ms、最大 270.9 ms（Ubuntu 22.04，Chromium 141 无头软件渲染且并行录屏）。
 - 同一场景下 200 条步骤完整保留，30 万字符成果导出 SHA-256 与种子值一致，分页单页正文 ≤ 13,000 字符。
-- 20 万字符以上思考：折叠计数、展开全文、阅读器搜索、下载完整文本；30 万字符成果：分页、导出、原文末行保留。
-- 交互视频与 trace 由验收脚本写在 `.debug/claude-port/<run>/video/` 与 `trace.zip`，不提交到仓库。最近一次 trace 含 2,015 个 screencast 帧、802 个 DOM 快照、361 组动作；已抽取帧与快照检查等待行动画、输入卡片、模型选择器、自绘下拉与任务菜单、阅读器、冲突态与长文滚动。
+- 20 万字符以上思考：运行中只以末尾约 1,800 字符的 4 行窗口出现；展开后全文进入 DOM、从第一行开始、阅读器搜索与下载完整；30 万字符成果：分页、导出、原文末行保留。
+- 交互视频与 trace 由验收脚本写在 `.debug/claude-port/<run>/video/` 与 `trace.zip`，不提交到仓库。最近一次 trace 含 2,192 个 screencast 帧、930 个 DOM 快照、423 组动作；已抽取帧与快照检查等待行动画、平面步骤行、输入卡片、模型选择器、自绘下拉与任务菜单、阅读器、冲突态与长文滚动。
 
 ## 启动项目
 

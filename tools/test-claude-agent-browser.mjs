@@ -425,6 +425,36 @@ try {
     await page.waitForTimeout(900);
     const height = await page.locator("#transcript").evaluate((el) => el.scrollHeight);
     assert(height > 500, "对话没有形成可滚动内容");
+    const windowHandle = await page.waitForFunction(
+      () => {
+        const body = [...document.querySelectorAll(".reasoning-body")].find(
+          (candidate) =>
+            candidate.dataset.streaming === "true" &&
+            candidate.scrollTop > 0 &&
+            (candidate.querySelector(".reasoning-text")?.textContent.length || 0) >
+              1200,
+        );
+        if (!body) return false;
+        const text = body.querySelector(".reasoning-text");
+        return {
+          streaming: body.dataset.streaming,
+          length: text.textContent.length,
+          scrollTop: body.scrollTop,
+          bodyBottom: Math.round(body.getBoundingClientRect().bottom),
+          textBottom: Math.round(text.getBoundingClientRect().bottom),
+        };
+      },
+      {},
+      { timeout: 15000 },
+    );
+    const windowBox = await windowHandle.jsonValue();
+    assert.equal(windowBox.streaming, "true", "运行中的思考没有展开窗口");
+    assert(windowBox.length <= 2200, `运行中思考不是窗口：${windowBox.length} 字`);
+    assert(windowBox.scrollTop > 0, "思考窗口没有跟到最新一行");
+    assert(
+      Math.abs(windowBox.bodyBottom - windowBox.textBottom) <= 1,
+      `思考窗口底部留白：body ${windowBox.bodyBottom} / text ${windowBox.textBottom}`,
+    );
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForFunction(
       () => document.querySelector("#task-status")?.textContent === "已完成",
@@ -449,22 +479,188 @@ try {
     await page.screenshot({ path: shots("04-conversation-light.png") });
   });
 
-  await checked("二十万字符思考：展开、全文搜索、下载", async () => {
-    const countText = await page.locator(".reasoning-count").first().textContent();
-    const count = Number(countText.replace(/[^\d]/g, ""));
-    assert(count >= 200000, `长思考不足：${countText}`);
+  await checked("等待行三套动作与平面步骤行", async () => {
+    await page.waitForFunction(
+      () => {
+        const preview = document.querySelector(".reasoning-preview");
+        return preview && !preview.hidden && preview.textContent.length > 0;
+      },
+      {},
+      { timeout: 20000 },
+    );
+    const motion = await page.locator(".waiting-lane").evaluateAll((lanes) =>
+      lanes.map((lane) => ({
+        name: lane.className,
+        dots: lane.children.length,
+        active: lane.classList.contains("is-active"),
+      })),
+    );
+    assert.equal(motion.length, 3, "加载动作不是三套");
+    assert.deepEqual(
+      motion.map((lane) => lane.dots).sort((a, b) => a - b),
+      [3, 3, 4],
+      "三套动作的点数不对",
+    );
+    const active = motion.find((lane) => lane.active);
+    assert(active, "没有一套加载动作在播");
+    const dot = page.locator(`.${active.name.split(" ").join(".")} .waiting-dot`).first();
+    assert.equal(
+      await dot.evaluate((el) => getComputedStyle(el).backgroundColor),
+      "rgb(217, 119, 87)",
+      "加载点不是 Claude 橙",
+    );
+    assert.equal(
+      await dot.evaluate((el) => getComputedStyle(el).boxShadow),
+      "none",
+      "加载点带了阴影",
+    );
+    const sweep = page.locator(".waiting-sweep").first();
+    assert(
+      (await sweep.evaluate((el) => getComputedStyle(el).maskImage)).includes(
+        "linear-gradient",
+      ),
+      "扫光不是遮罩窗口",
+    );
+    assert.equal(
+      await sweep.evaluate((el) => getComputedStyle(el).animationDuration),
+      "1.5s",
+      "扫光节拍不是 1.5s",
+    );
+    const tint = await sweep.evaluate((el) => getComputedStyle(el).color);
+    const alpha = Number(/rgba?\([^)]*,\s*([\d.]+)\)/.exec(tint)?.[1] ?? "1");
+    assert(alpha > 0 && alpha <= 0.5, `扫光颜色过重：${tint}`);
+    assert.equal(
+      await page
+        .locator(".waiting-text")
+        .evaluate((el) => getComputedStyle(el).backgroundImage),
+      "none",
+      "等待文字仍在用渐变裁字",
+    );
+    const rows = await page.locator(".reasoning, .tool-call").evaluateAll((els) =>
+      els.slice(0, 5).map((el) => ({
+        cls: el.className,
+        height: Math.round(el.getBoundingClientRect().height),
+        border: getComputedStyle(el).borderTopWidth,
+        status: el.querySelector(".tool-call-state")?.textContent ?? null,
+      })),
+    );
+    assert(rows.length >= 2, "缺少步骤行");
+    for (const row of rows) {
+      assert.equal(row.border, "0px", `${row.cls} 仍有边框`);
+      assert(row.height <= 25, `${row.cls} 行高 ${row.height}，不是平面行`);
+    }
+    assert(
+      rows.some((row) => row.cls.includes("reasoning")),
+      "没有思考行",
+    );
+    assert(
+      rows.filter((row) => row.cls.includes("tool-call")).length >= 1,
+      "没有工具行",
+    );
+    assert(
+      rows.every((row) => !row.status),
+      "完成后的工具行仍挂着状态字",
+    );
+    await page.screenshot({ path: shots("04a-flat-steps-light.png") });
+  });
+
+  await checked("等待行动作十秒换班", async () => {
+    await newTask();
+    await page.locator("#goal").fill("慢速执行");
+    await page.locator("#send").click();
+    await page.waitForFunction(
+      () => document.querySelector("#task-status")?.textContent === "执行中",
+      {},
+      { timeout: 20000 },
+    );
+    await page.locator(".waiting:not([hidden]) .waiting-lane.is-active").waitFor({
+      state: "attached",
+    });
+    const laneName = () =>
+      page.evaluate(() => {
+        const waiting = [...document.querySelectorAll(".waiting")].find(
+          (box) => !box.hidden,
+        );
+        return (
+          waiting
+            ?.querySelector(".waiting-lane.is-active")
+            ?.className ?? ""
+        );
+      });
+    const firstLane = await laneName();
+    assert(/is-(bounce|line|orbit)/.test(firstLane), `没有动作在播：${firstLane}`);
+    await page.waitForTimeout(5000);
+    assert.equal(
+      await laneName(),
+      firstLane,
+      `十秒未到就换班：${firstLane}`,
+    );
+    let secondLane = firstLane;
+    const deadline = Date.now() + 7000;
+    while (secondLane === firstLane && Date.now() < deadline) {
+      await page.waitForTimeout(250);
+      secondLane = await laneName();
+    }
+    assert(secondLane && secondLane !== firstLane, `十秒后没有换班：${firstLane}`);
+    assert(/is-(bounce|line|orbit)/.test(secondLane), `换班后动作异常：${secondLane}`);
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll(
+          ".waiting:not([hidden]) .waiting-lane.is-leaving",
+        ).length === 0,
+      {},
+      { timeout: 5000 },
+    );
+    await page.screenshot({ path: shots("04b-wait-loader-rotated.png") });
+    await page.locator("#stop").click().catch(() => {});
+    await page.waitForTimeout(1200);
+    await page.goto(firstTaskUrl, { waitUntil: "networkidle" });
+    await page.waitForFunction(
+      () => document.querySelector("#task-status")?.textContent === "已完成",
+      {},
+      { timeout: 60000 },
+    );
+  });
+
+  await checked("思考行平面展开、全文搜索、下载", async () => {
+    const reasoning = page.locator(".reasoning").first();
+    assert.equal(
+      await reasoning.evaluate((el) => getComputedStyle(el).borderTopWidth),
+      "0px",
+      "思考行仍有边框",
+    );
+    assert.equal(await page.locator(".reasoning-count").count(), 0, "思考行仍有字数卡片");
+    assert.equal(await page.locator("[data-full]").count(), 0, "思考行仍有全文链接");
+    assert(
+      (await reasoning.locator(".reasoning-title").textContent()) === "思考",
+      "思考行标题不对",
+    );
     await page.locator(".reasoning-head").first().click();
     await page.waitForFunction(
       () => (document.querySelector(".reasoning-text")?.textContent.length || 0) > 200000,
       {},
       { timeout: 30000 },
     );
-    const loaded = await page.locator(".reasoning-text").first().evaluate(
+    const count = await page.locator(".reasoning-text").first().evaluate(
       (el) => el.textContent.length,
     );
-    assert(loaded >= count, "思考正文读取不完整");
+    assert(count >= 200000, `长思考不足：${count}`);
+    const body = page.locator(".reasoning-body").first();
+    assert.equal(
+      await body.evaluate((el) => getComputedStyle(el).lineHeight),
+      "24px",
+      "思考正文行距不是 24px",
+    );
+    assert.equal(
+      await body.evaluate((el) => el.scrollTop),
+      0,
+      "展开思考没有回到第一行",
+    );
     await page.screenshot({ path: shots("05-reasoning-expanded.png") });
-    await page.locator("[data-full]").first().click();
+    // 全文阅读器仍从轨迹里每一步的「思考」进入，不再占思考行里的一行链接。
+    await page.locator('.view-tabs [data-mode="trajectory"]').click();
+    await page.waitForTimeout(350);
+    await page.locator('#timeline [data-kind="reasoning"]').first().click();
     await page.waitForFunction(
       (n) => document.querySelector(".reader-meta")?.textContent.includes(n),
       count.toLocaleString("zh-CN"),
@@ -482,6 +678,7 @@ try {
     const downloaded = await readFile(path.join(OUT, "reasoning.txt"), "utf8");
     assert.equal(downloaded.length, count, "思考下载不完整");
     await page.locator("#modal-close").click();
+    await page.locator('.view-tabs [data-mode="chat"]').click();
   });
 
   await checked("长成果折叠、展开保留全文", async () => {
