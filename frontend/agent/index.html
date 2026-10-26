@@ -71,6 +71,36 @@
       data-view="chat"
       data-mode="chat"
     >
+      <!-- 侧栏/工作区的初始开合必须在首帧前按视口算好；workspace.js 是延迟加载的模块，
+           等它的 boot() 再改会先画出展开态、再带着过渡收回去。
+           断点与 workspace.js 的 isNarrow / isMobile / isOverlayWorkspace 保持一致。 -->
+      <script>
+        (function () {
+          var app = document.getElementById("app");
+          var mq = function (q) {
+            return window.matchMedia(q).matches;
+          };
+          var get = function (key) {
+            try {
+              return localStorage.getItem(key);
+            } catch (e) {
+              return null;
+            }
+          };
+          app.dataset.sidebar =
+            mq("(max-width: 1099px)") || get("nbx_agent_sidebar") === "collapsed"
+              ? "collapsed"
+              : "open";
+          // 手机端靠 data-view 切换工作区，data-workspace 保持 open（与 setWorkspace 一致）。
+          if (!mq("(max-width: 767px)")) {
+            app.dataset.workspace = mq("(max-width: 1439px)")
+              ? "closed"
+              : get("nbx_agent_workspace") === "closed"
+                ? "closed"
+                : "open";
+          }
+        })();
+      </script>
       <aside class="sidebar" id="nav" aria-label="任务导航">
         <div class="sidebar-top">
           <div class="brand">
