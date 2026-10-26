@@ -1158,8 +1158,53 @@ document.addEventListener("click", (event) => {
 });
 
 /* ---------------- 任务打开与填充 ---------------- */
+/* 从未编辑、从未执行的任务：revision 仍是创建时的 1，且标题未改。 */
+function isBlankTask(task) {
+  return (
+    task.revision === 1 &&
+    task.status === "draft" &&
+    !task.active_run &&
+    task.title === "新任务"
+  );
+}
+/* 切走时可以丢弃的空白任务：没有运行、没有材料、输入框里也没写东西。 */
+function isDiscardable(task) {
+  return (
+    !!task &&
+    isBlankTask(task) &&
+    !state.dirty &&
+    !task.runs?.length &&
+    !task.materials?.length &&
+    !task.config?.materials?.length &&
+    !$("#message").value.trim()
+  );
+}
+async function discardBlank(id) {
+  try {
+    await api(`/tasks/${id}`, { method: "DELETE" });
+    localStorage.removeItem(`nbx_agent_draft_${state.catalog.user.id}_${id}`);
+  } catch {
+    // 丢弃失败不影响切换；下次新建时会复用这条空白任务。
+  }
+}
 async function createTask(config) {
   await requireSaved();
+  // 进入页面、删除当前任务、Ctrl+N 都会走到这里；已有空白任务时直接复用，
+  // 避免每次都在侧栏堆出一条新的“新任务”。带模板配置的创建仍新建。
+  if (!config) {
+    const { tasks } = await api("/tasks?limit=100");
+    const blank = tasks.find(isBlankTask);
+    if (blank) {
+      if (blank.id === state.task?.id) {
+        toast("当前已是空白任务");
+        return;
+      }
+      history.replaceState({}, "", `/agent/tasks/${blank.id}#prompt`);
+      await openTask(blank.id);
+      await listTasks();
+      return;
+    }
+  }
   const item = await api("/tasks", {
     method: "POST",
     body: {
@@ -1185,10 +1230,18 @@ async function openTask(id, push = true) {
     return;
   }
   await requireSaved();
+  // 新建后什么都没做就切到别的任务：这条空白任务随之消失。
+  const discard = isDiscardable(state.task) ? state.task.id : "";
   clearTimeout(pollTimer);
   const generation = ++state.generation;
   const task = await api(`/tasks/${id}`);
   if (generation !== state.generation) return;
+  if (discard) {
+    // 先等删除落地再刷新侧栏，避免并发的列表请求把它又画回来。
+    await discardBlank(discard);
+    listTasks().catch(error);
+    if (generation !== state.generation) return;
+  }
   state.task = task;
   app.dataset.task = task.id;
   state.configChangedDuringRun = false;
