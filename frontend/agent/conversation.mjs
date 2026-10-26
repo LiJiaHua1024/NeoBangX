@@ -4,9 +4,13 @@
    这里不伪造任何内容：正文、思考、工具输入输出都来自后端已保存的块。 */
 
 import { escapeHTML as esc } from "./core.mjs";
+import { pickGreeting } from "./greetings.mjs";
 import { icon } from "./icons.mjs";
 import { copyText } from "./reader.mjs";
 import { startWaitLoader, releaseWaitLoader } from "./wait-loader.mjs";
+
+/** 本次页面访问的空态问候：载入时抽一次，之后切任务、重绘都沿用这一句。 */
+const PAGE_GREETING = pickGreeting();
 
 const TOOL_NAMES = {
   create_document: "生成成果",
@@ -251,6 +255,7 @@ export class Conversation {
     this.root = document.getElementById("transcript-inner");
     this.transcript = document.getElementById("transcript");
     this.empty = document.getElementById("empty");
+    this.greeting = document.getElementById("empty-greeting-text");
     this.app = document.getElementById("app");
     this.latest = document.getElementById("latest");
     this.trajectory = document.getElementById("trajectory");
@@ -1344,12 +1349,16 @@ export class Conversation {
   refreshEmpty() {
     const hasRuns = (this.task?.runs?.length || 0) > 0 || this.runs.size > 0;
     this.emptyVisible = !hasRuns && !this.entries.size;
+    // 问候每次进入页面抽一句；切任务会重建 Conversation，所以抽签放在模块级，不随实例重抽。
+    if (this.emptyVisible && this.greeting && this.greeting.textContent !== PAGE_GREETING) {
+      this.greeting.textContent = PAGE_GREETING;
+    }
     this.empty.hidden = !this.emptyVisible;
     this.transcript.hidden = this.emptyVisible;
     this.composerSeat.dataset.hero = String(this.emptyVisible);
     this.composerCard.dataset.hero = String(this.emptyVisible);
     this.message.placeholder = this.emptyVisible
-      ? "这次想完成什么？"
+      ? "今天我能帮你做些什么？"
       : this.task?.active_run
         ? "补充要求…"
         : "补充要求，或直接继续任务…";

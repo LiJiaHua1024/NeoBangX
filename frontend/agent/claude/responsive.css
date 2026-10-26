@@ -134,6 +134,10 @@
     padding-left: 24px;
     padding-right: 24px;
   }
+  .empty {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
   .workspace-panel {
     top: 8px;
     left: 8px;
@@ -348,21 +352,16 @@
   }
 
   .empty {
-    padding-bottom: 80px;
+    padding: 20px 12px 80px;
   }
-  .empty h1 {
-    font-size: 23px;
+  .empty-greeting {
+    font-size: 18px;
+    line-height: 24px;
   }
-  .empty p {
-    font-size: 12.5px;
-  }
-  .empty-mark {
-    width: 38px;
-    height: 38px;
-    margin-bottom: 14px;
-  }
-  .empty-guide {
-    display: none;
+  .empty-mark,
+  .empty-mark .aw-svg {
+    width: 19px;
+    height: 19px;
   }
 
   .latest {

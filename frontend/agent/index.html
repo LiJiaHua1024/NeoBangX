@@ -265,17 +265,13 @@
               <div id="transcript-inner" class="transcript-inner"></div>
             </div>
 
-            <div id="empty" class="empty">
-              <div class="empty-mark" data-icon="sparkle"></div>
-              <h1>这次想完成什么？</h1>
-              <p>
-                写清目标，选好提示词和材料。目标留空也可以直接执行；每一步和完整成果都会保留。
-              </p>
-              <ul class="empty-guide" aria-label="使用步骤">
-                <li><b>1</b><span>选择提示词和材料</span></li>
-                <li><b>2</b><span>补充本轮要求（可选）</span></li>
-                <li><b>3</b><span>开始并随时补充</span></li>
-              </ul>
+            <!-- 先隐藏、问候留空：由 Conversation.refreshEmpty 在任务载入后一次性填好并显示，
+                 避免首屏先按默认版式与默认文案闪一下再跳位。 -->
+            <div id="empty" class="empty" hidden>
+              <h1 class="empty-greeting">
+                <span class="empty-mark" data-icon="logo" aria-hidden="true"></span>
+                <span id="empty-greeting-text" class="empty-greeting-text"></span>
+              </h1>
             </div>
 
             <div
@@ -321,7 +317,7 @@
                     id="message"
                     class="composer-input scroll-thin"
                     rows="1"
-                    placeholder="这次想完成什么？"
+                    placeholder="今天我能帮你做些什么？"
                   ></textarea>
                   <div class="composer-actions">
                     <button

@@ -45,7 +45,11 @@
   pointer-events: none;
 }
 
-/* ---------- 空态 ---------- */
+/* ---------- 空态 ----------
+   复刻 dsh-claude-style 的 features/home（home-panel.css + theme/hero.css）：
+   Claude Code 首页只有「品牌标 + 一句问候」，20px 无衬线、500 字重，
+   左缘与输入卡片对齐；没有副标题、没有步骤提示。
+   品牌标沿用上游「非 Claude 品牌保留自家标、填强调色」的做法：NeoBangX 闪电 + 陶土色。 */
 .empty {
   display: flex;
   flex-direction: column;
@@ -54,68 +58,59 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: clamp(32px, 9vh, 96px) 24px calc(var(--composer-fade-h) + 20px);
-  text-align: center;
+  padding: 28px 32px calc(var(--composer-fade-h) + 20px);
+}
+.empty-greeting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(var(--conversation-w), 100%);
+  max-width: 100%;
+  font-family: var(--font-sans);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 26px;
+  letter-spacing: 0;
+  color: var(--ink);
+  text-align: left;
 }
 .empty-mark {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  margin-bottom: 20px;
-  border-radius: 50%;
-  background: var(--accent-tint);
+  flex: none;
+  width: 21px;
+  height: 21px;
   color: var(--accent);
 }
 .empty-mark .aw-svg {
-  width: 22px;
-  height: 22px;
+  width: 21px;
+  height: 21px;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1;
 }
-.empty h1 {
-  font-family: var(--font-serif);
-  font-size: var(--text-title);
-  font-weight: 500;
-  letter-spacing: -0.02em;
-  color: var(--ink);
+.empty-greeting-text {
+  min-width: 0;
 }
-.empty p {
-  max-width: 440px;
-  margin-top: 10px;
-  color: var(--ink-3);
-  font-size: 13px;
-  line-height: 1.7;
+/* 问候随空态出现而升起：品牌标先到，问候晚一拍（上游 hero-rise：500ms / 12px / 3px 模糊 / 70ms 错拍）。
+   减少动效由 base.css 的全局规则收掉。 */
+.empty:not([hidden]) .empty-mark,
+.empty:not([hidden]) .empty-greeting-text {
+  animation: empty-rise 500ms var(--ease-settle) both;
 }
-.empty-guide {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 6px;
-  margin-top: 20px;
+.empty:not([hidden]) .empty-greeting-text {
+  animation-delay: 70ms;
 }
-.empty-guide li {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 10px;
-  border: 0.5px solid var(--border-1);
-  border-radius: var(--radius-pill);
-  color: var(--ink-3);
-  font-size: 11px;
-  list-style: none;
-}
-.empty-guide b {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: var(--hover);
-  color: var(--ink-2);
-  font-size: 9px;
-  font-weight: 600;
+@keyframes empty-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
 }
 
 /* ---------- 回合 ---------- */

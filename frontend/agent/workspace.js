@@ -1332,7 +1332,7 @@ function fill() {
   updateDraftEmpty();
   $("#message").placeholder = task.runs.length
     ? "补充要求，或直接继续任务…"
-    : "这次想完成什么？";
+    : "今天我能帮你做些什么？";
   $("#composer-seat").dataset.hero = String(!task.runs.length);
   $("#composer-card").dataset.hero = String(!task.runs.length);
   renderMaterials();
