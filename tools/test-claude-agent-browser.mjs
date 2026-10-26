@@ -237,9 +237,35 @@ try {
       4,
       "模型行数量不对",
     );
+    assert.equal(
+      await page.locator(".model-brand-lockup").count(),
+      0,
+      "模型选择器不应再拼厂商 logo",
+    );
+    const defaultRow = page.locator(
+      '.model-row[data-model-id="test-model"]',
+    );
     assert(
-      (await page.locator(".model-brand-lockup").count()) >= 3,
-      "缺少厂商字标",
+      (await defaultRow.innerText()).includes("免费"),
+      "缺少免费标签",
+    );
+    assert(
+      (await defaultRow.innerText()).includes("免码"),
+      "缺少免码标签",
+    );
+    assert(
+      (await defaultRow.innerText()).includes("原子弹级"),
+      "缺少 AA 打击级别",
+    );
+    assert(
+      (await defaultRow.innerText()).includes("界面验收用的本地假模型。"),
+      "没有使用模型自己的描述",
+    );
+    assert(
+      (await defaultRow.locator(".model-row-rating").getAttribute("title")).includes(
+        "AA 智能指数 45",
+      ),
+      "评级悬停文案不对",
     );
     await page.screenshot({ path: shots("05-model-picker-light.png") });
     // Escape closes and returns focus; ArrowDown walks the list.

@@ -6,6 +6,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const vm = require("node:vm");
 const { test } = require("node:test");
 
@@ -140,4 +141,20 @@ test("两端对照表逐字段一致", () => {
   // 归零者级已废止：59 分及以上为「未知」，对照表里不许再出现它
   assert.ok(!JSON.stringify(user.AA_STRIKE_LEVELS).includes("归零者"));
   assert.equal(user.AA_STRIKE_LEVELS.length, 7);
+});
+
+test("Agent 模型选择器沿用同一份打击级别表", async () => {
+  const agent = await import(
+    pathToFileURL(path.resolve(__dirname, "..", "agent", "rating.mjs")).href
+  );
+  const user = loadUserSide();
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(agent.AA_STRIKE_LEVELS)),
+    JSON.parse(JSON.stringify(user.AA_STRIKE_LEVELS)),
+  );
+  for (const aa of [null, "", 16, 35, 36, 45, 52, 58, 59]) {
+    const left = agent.aaLevelOf(aa);
+    const right = user.aaLevelOf(aa);
+    assert.equal(left && left.name, right && right.name, `AA ${String(aa)} 不一致`);
+  }
 });

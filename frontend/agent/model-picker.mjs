@@ -1,209 +1,43 @@
 /**
- * Claude's model picker — grouped rows with vendor lockups, one description
- * line and the accent check, ported from dsh-claude-style@1e7acc5b
- * (features/model/{model-picker.ts,rows.ts,brand.ts,sub-menu.ts} and
- * shared/popover.css), adapted to NeoBangX's configured model catalog.
+ * Claude's model picker — flat rows with the workspace's own model copy,
+ * its AA strike rating and its free / no-code tags. The card shell, row
+ * rhythm, hover, accent check, keyboard and 250ms growth are ported from
+ * dsh-claude-style@1e7acc5b (features/model/model-picker.ts, rows.ts,
+ * shared/popover.css); the vendor logos and upstream description table are
+ * deliberately not used — NeoBangX already owns model descriptions and
+ * ratings, and the catalog supplies both.
  *
- * The host catalog is flat. Rows are grouped the way the upstream picker
- * groups its routes: by the first path segment of a model id when it has one
- * (`openrouter/...` is OpenRouter), otherwise by the vendor the name names.
- * The mark is the vendor's, never the route's. The list opens as one card
- * above the trigger and grows out of it over 250ms; choosing a row writes the
- * hidden field the rest of the workspace already saves.
+ * The catalog is shown as one flat list, in catalog order: no provider
+ * headings, no vendor art. Choosing a row writes the hidden field the
+ * workspace saves.
  */
 
-
-/** The upstream family table, fetched once: a configured description wins,
- *  otherwise the model line's own sentence (the same copy the reference
- *  picker shows). Failure is silent — a name-only row is still a row. */
-let rulesPromise = null;
-let descriptionRules = [];
-
-function ensureDescriptionRules() {
-  if (rulesPromise !== null) return rulesPromise;
-  rulesPromise = fetch("/static/agent/model-descriptions.json")
-    .then((response) => (response.ok ? response.json() : null))
-    .then((document) => {
-      if (!document || !Array.isArray(document.families)) return;
-      descriptionRules = document.families
-        .filter((rule) => typeof rule.match === "string" && rule.text)
-        .map((rule) => {
-          try {
-            return { pattern: new RegExp(rule.match, "i"), text: rule.text };
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean);
-    })
-    .catch(() => {});
-  return rulesPromise;
-}
-
-function descriptionFor(model) {
-  if (model.description) return model.description;
-  if (descriptionRules.length === 0) return "";
-  const text = `${model.id || ""} ${model.name || ""}`;
-  for (const rule of descriptionRules) {
-    if (!rule.pattern.test(text)) continue;
-    return rule.text.zh || rule.text.en || "";
-  }
-  return "";
-}
+import { aaLevelOf, strikeTip } from "./rating.mjs";
 
 const CHECK_SVG =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 5"/></svg>';
 
-/** The vendor rules, ordered the way the upstream copy document orders them. */
-const VENDOR_RULES = [
-  ["deepseek", /\bdeepseek\b|(^|[/:])deepseek/i],
-  ["claude", /claude|anthropic/i],
-  ["openai", /gpt|(^|[^a-z0-9])o[1-9](-|$)/i],
-  ["gemini", /gemini/i],
-  ["gemma", /gemma/i],
-  ["qwen", /qwen|tongyi/i],
-  ["zai", /\bglm\b|zhipu/i],
-  ["kimi", /kimi|moonshot|(^|[^a-z0-9])k3([._-]?\d)?($|-)/i],
-  ["minimax", /minimax|(^|[^a-z0-9])m[23]($|-)/i],
-  ["grok", /grok|xai/i],
-  ["mistral", /mistral|magistral|codestral/i],
-  ["meta", /llama|meta/i],
-  ["stepfun", /\bstep\b|stepfun/i],
-  ["bytedance", /doubao|seed|volc/i],
-  ["baidu", /ernie/i],
-  ["tencent", /hunyuan|(^|[^a-z0-9])hy(\d|-?mt)/i],
-  ["nova", /(^|[^a-z0-9])nova(-|$)/i],
-  ["perplexity", /sonar|perplexity/i],
-  ["xiaomimimo", /mimo/i],
-  ["longcat", /longcat/i],
-  ["microsoft", /phi-?\d/i],
-  ["cohere", /north|command-?[ar]|cohere/i],
-  ["inception", /mercury|inception/i],
-  ["celestoai", /celeris/i],
-  ["nanobanana", /nano-?banana/i],
-  ["reflection", /\bbeam\b/i],
-];
-
-const PROVIDER_NAMES = {
-  openrouter: "OpenRouter",
-  deepseek: "DeepSeek",
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  google: "Google",
-  gemini: "Google",
-  qwen: "Qwen",
-  dashscope: "DashScope",
-  siliconflow: "SiliconFlow",
-  moonshot: "Moonshot",
-  zhipu: "Zhipu",
-  minimax: "MiniMax",
-  xai: "xAI",
-  mistral: "Mistral",
-  meta: "Meta",
-  groq: "Groq",
-  together: "Together",
-  fireworks: "Fireworks",
-  ollama: "Ollama",
-  azure: "Azure",
-  bedrock: "Bedrock",
-  vertex: "Vertex",
-  cloudflare: "Cloudflare",
-};
-
-const brandCache = new Map();
-
-function brandOf(id, name) {
-  const text = `${id} ${name}`;
-  for (const [brand, rule] of VENDOR_RULES) {
-    if (rule.test(text)) return brand;
-  }
-  return null;
+/** The catalog's own description, at most two manual lines (the same rule as
+ *  the main site's model menu). No invented fallback copy. */
+function descriptionLines(model) {
+  return String(model.description || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 2);
 }
 
-function providerKey(model) {
-  const id = String(model.id || "");
-  const known = Object.keys(PROVIDER_NAMES).find(
-    (key) => id === key || id.startsWith(`${key}/`) || id.startsWith(`${key}:`),
-  );
-  if (known) return known;
-  const slash = id.indexOf("/");
-  if (slash > 0) return id.slice(0, slash);
-  return brandOf(id, String(model.name || "")) || "other";
+function ratingFor(model) {
+  const level = aaLevelOf(model.aa_index);
+  if (level === null) return null;
+  return { level, tip: strikeTip(model.aa_index) };
 }
 
-function providerName(key) {
-  if (PROVIDER_NAMES[key]) return PROVIDER_NAMES[key];
-  if (key === "other") return "其他";
-  return key
-    .replace(/^cn[:-]/, "")
-    .replace(/[-_]+/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function groupModels(models) {
-  const groups = new Map();
-  for (const model of models) {
-    const key = providerKey(model);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(model);
-  }
-  return [...groups].map(([key, list]) => ({
-    key,
-    name: groups.size === 1 && key === "other" ? "可用模型" : providerName(key),
-    models: list,
-  }));
-}
-
-function svgWord(svg) {
-  const match = /data-combine-word="([^"]+)"/.exec(svg);
-  return match === null ? "" : match[1];
-}
-
-async function brandSvg(brand) {
-  if (brand === null) return null;
-  if (!brandCache.has(brand)) {
-    brandCache.set(
-      brand,
-      fetch(`/static/agent/brands/${brand}.svg`)
-        .then((response) => (response.ok ? response.text() : null))
-        .catch(() => null),
-    );
-  }
-  return brandCache.get(brand);
-}
-
-/** The vendor lockup that replaces, or leads, the vendor's word in the name. */
-function buildName(text, brand, svg) {
-  const label = document.createElement("span");
-  label.className = "model-row-name";
-  if (!brand || !svg) {
-    label.textContent = text;
-    return label;
-  }
-  const word = svgWord(svg);
-  const at =
-    word === "" ? -1 : text.toLowerCase().indexOf(word.toLowerCase());
-  const lockup = document.createElement("span");
-  lockup.className = "model-brand-lockup";
-  lockup.setAttribute("aria-hidden", "true");
-  lockup.innerHTML = svg;
-  const head = at < 0 ? "" : text.slice(0, at);
-  const tail =
-    at < 0
-      ? text
-      : text
-          .slice(at + word.length)
-          .replace(/^[\s/\\\-–—:]+/, "");
-  if (head) label.appendChild(document.createTextNode(head));
-  label.appendChild(lockup);
-  if (word) {
-    const spoken = document.createElement("span");
-    spoken.className = "sr";
-    spoken.textContent = `${word} `;
-    label.appendChild(spoken);
-  }
-  if (tail) label.appendChild(document.createTextNode(tail));
-  return label;
+function tag(label, kind) {
+  const chip = document.createElement("span");
+  chip.className = `model-row-tag model-row-tag-${kind}`;
+  chip.textContent = label;
+  return chip;
 }
 
 function checkFor(selected) {
@@ -227,7 +61,6 @@ export function createModelPicker({ trigger, popover, label, onSelect }) {
   let active = -1;
   let closeTimer = 0;
   let rows = [];
-  let brandGeneration = 0;
 
   // The card is fixed and lives outside the composer's stacking context, so
   // the sidebar / mobile switch can never paint over it.
@@ -236,13 +69,6 @@ export function createModelPicker({ trigger, popover, label, onSelect }) {
   popover.setAttribute("aria-label", "选择执行模型");
   popover.tabIndex = -1;
   popover.hidden = true;
-
-  ensureDescriptionRules().then(() => {
-    if (open) {
-      render();
-      position();
-    }
-  });
 
   const modelName = () => {
     const model = models.find((entry) => String(entry.id) === String(value));
@@ -262,8 +88,8 @@ export function createModelPicker({ trigger, popover, label, onSelect }) {
     popover.style.width = `${width}px`;
     const rect = trigger.getBoundingClientRect();
     // A short viewport gets a shorter card that scrolls, not a card whose
-    // bottom is off screen. This is the open's own measurement; a lockup
-    // arriving afterwards calls position again.
+    // bottom is off screen. This is the open's own measurement; the row's
+    // own copy is already in place before the card is shown.
     popover.style.maxHeight = `${Math.max(140, Math.min(560, rect.top - 16))}px`;
     const height = popover.offsetHeight;
     let left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
@@ -279,13 +105,11 @@ export function createModelPicker({ trigger, popover, label, onSelect }) {
   }
 
   function render() {
-    const generation = ++brandGeneration;
     active = -1;
     popover.removeAttribute("aria-activedescendant");
     popover.replaceChildren();
-    const groups = groupModels(models);
     rows = [];
-    if (groups.length === 0) {
+    if (models.length === 0) {
       const empty = document.createElement("div");
       empty.className = "model-empty";
       empty.textContent = "暂无可用模型";
@@ -294,73 +118,53 @@ export function createModelPicker({ trigger, popover, label, onSelect }) {
     }
     const scroll = document.createElement("div");
     scroll.className = "model-scroll scroll-thin";
-    for (const group of groups) {
-      const section = document.createElement("section");
-      section.className = "model-group";
-      const heading = document.createElement("div");
-      heading.className = "model-group-label";
-      heading.textContent = group.name;
-      section.appendChild(heading);
-      for (const model of group.models) {
-        const selected = String(model.id) === String(value);
-        const row = document.createElement("button");
-        row.type = "button";
-        row.className = "model-row";
-        row.dataset.modelId = String(model.id);
-        row.id = `model-option-${rows.length}`;
-        row.setAttribute("role", "option");
-        row.setAttribute("aria-selected", String(selected));
-        if (selected) row.dataset.selected = "true";
-        const copy = document.createElement("span");
-        copy.className = "model-row-copy";
-        const line = document.createElement("span");
-        line.className = "model-row-line";
-        const brand = brandOf(model.id, model.name || "");
-        line.appendChild(
-          buildName(String(model.name || model.id), brand, null),
-        );
-        if (model.is_free) {
-          const free = document.createElement("span");
-          free.className = "model-row-tag";
-          free.textContent = "免费";
-          line.appendChild(free);
-        }
-        copy.appendChild(line);
-        const description = descriptionFor(model);
-        if (description) {
-          const desc = document.createElement("span");
-          desc.className = "model-row-desc";
-          desc.textContent = description;
-          copy.appendChild(desc);
-        }
-        row.appendChild(copy);
-        row.appendChild(checkFor(selected));
-        row.addEventListener("click", (event) => {
-          event.stopPropagation();
-          pick(model);
-        });
-        row.addEventListener("mouseenter", () => setActive(rows.indexOf(row)));
-        section.appendChild(row);
-        rows.push(row);
-
-        // The lockup arrives from the static asset tree: draw the name now,
-        // swap in the vendor's mark when it lands. A row rebuilt by a later
-        // selection keeps the mark because the fetch is cached.
-        if (brand !== null) {
-          brandSvg(brand).then((svg) => {
-            if (generation !== brandGeneration || !row.isConnected || !svg)
-              return;
-            const replacement = buildName(
-              String(model.name || model.id),
-              brand,
-              svg,
-            );
-            line.replaceChild(replacement, line.firstChild);
-            if (open) position();
-          });
-        }
+    for (const model of models) {
+      const selected = String(model.id) === String(value);
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "model-row";
+      row.dataset.modelId = String(model.id);
+      row.id = `model-option-${rows.length}`;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(selected));
+      if (selected) row.dataset.selected = "true";
+      const copy = document.createElement("span");
+      copy.className = "model-row-copy";
+      const line = document.createElement("span");
+      line.className = "model-row-line";
+      const name = document.createElement("span");
+      name.className = "model-row-name";
+      name.textContent = String(model.name || model.id);
+      line.appendChild(name);
+      if (model.is_free) line.appendChild(tag("免费", "free"));
+      if (model.is_free && model.free_no_code) {
+        line.appendChild(tag("免码", "nocode"));
       }
-      scroll.appendChild(section);
+      const rating = ratingFor(model);
+      if (rating !== null) {
+        const badge = document.createElement("span");
+        badge.className = "model-row-rating";
+        badge.textContent = rating.level.name;
+        badge.style.setProperty("--rating-color", rating.level.color);
+        badge.title = rating.tip;
+        line.appendChild(badge);
+      }
+      copy.appendChild(line);
+      for (const text of descriptionLines(model)) {
+        const desc = document.createElement("span");
+        desc.className = "model-row-desc";
+        desc.textContent = text;
+        copy.appendChild(desc);
+      }
+      row.appendChild(copy);
+      row.appendChild(checkFor(selected));
+      row.addEventListener("click", (event) => {
+        event.stopPropagation();
+        pick(model);
+      });
+      row.addEventListener("mouseenter", () => setActive(rows.indexOf(row)));
+      scroll.appendChild(row);
+      rows.push(row);
     }
     popover.appendChild(scroll);
   }

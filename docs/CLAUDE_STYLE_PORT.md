@@ -60,7 +60,7 @@
 | `features/chat-send` | 发送动画（消息飞入） | adapt：保留消息进入的 320ms 过冲与发送后的落位；不做跨层飞行动画（会增加长会话的合成层） |
 | `features/chat-files` | 文件行、附件、差异 | adapt：材料行与版本差异；差异用现有 worker 的逐行比较，样式按 Claude 的删除/新增色 |
 | `features/context-stats` | 上下文计量、token、缓存 | adapt：保留本轮 tokens、步骤、状态；不伪造缓存/费用数据 |
-| `features/model`、`features/effort` | 模型/推理档选择器 | port/adapt：模型选择器按上游改为分组弹层（厂商字标、描述行、选中勾、250ms 生长、键盘与 Escape）；数据仍读真实模型目录。上游第一级 +「更多模型」第二级/搜索在 NeoBangX 的扁平小目录里合并为一张可滚动分组卡，避免把少量模型藏进第二层；不显示不存在的推理档 |
+| `features/model`、`features/effort` | 模型/推理档选择器 | port/adapt：模型选择器按上游改为平铺弹层（卡片壳、行节奏、选中勾、250ms 生长、键盘与 Escape）；行内数据全部来自 NeoBangX 自己的模型配置：`description`、`aa_index` 评级、`is_free` / `free_no_code` 标签，不复制上游厂商 logo 与描述表。上游第一级 +「更多模型」第二级/搜索在扁平小目录里合并为一张可滚动平铺卡，不做提供方分组；不显示不存在的推理档 |
 | `features/caret` | 输入光标接管：原生光标透明、绘制 2px 竖线、80ms 位移、1000ms 闪烁 | port：`frontend/agent/caret.mjs` 用隐藏镜像测量 textarea 光标，位移/闪烁/减少动效按上游；测量失败立即交还原生光标 |
 | `features/turn-nav`、`features/sidebar-peek` | 回合导航、侧栏预览 | n/a：工作台有独立「轨迹」页与常驻侧栏；不引入第二个导航层 |
 | `features/search` | 全局搜索面板 | adapt：保留任务搜索输入；不伪造跨会话全文搜索 |
@@ -184,7 +184,7 @@
 - [x] 对话、流式、折叠、跟随
 - [x] 输入卡片（单行卡片、`↵` 发送、工具行、模型入口）
 - [x] 输入光标平滑位移与闪烁
-- [x] 模型选择器（分组、厂商字标、描述、选中勾、生长动效）
+- [x] 模型选择器（平铺、自有描述、AA 评级、免费/免码标签、选中勾、生长动效）
 - [x] Clawd 角色与真实任务状态
 - [x] 工作区四页
 - [x] 弹层与内部页面
@@ -199,18 +199,17 @@
 - 钠（Sodium）：PolyForm Shield 1.0.0。本次未复制其运行时代码，只复现其性能目标；此说明保留上游许可归属。
 - 字体：Inter、Noto Serif、JetBrains Mono 为 SIL OFL 1.1，许可证见 `frontend/agent/fonts/OFL.txt`。Anthropic Sans/Serif/Mono 是 Anthropic 的字体，上游明确说明“仅供个人使用、不随 MIT 发布”；本仓库复制自上游的仓库副本，仅用于个人项目的界面复刻，不随包再分发。若用于商业分发，需替换为 OFL 字体。
 - 角色：Clawd 是 Anthropic 的角色。本次按用户要求复制了上游 `packages/assets/src/mascot/crab/` 的帧图与 `sheets.ts` 的帧表；这些帧图不在上游 MIT 覆盖范围内，上游明确标注为 Anthropic 角色形象。它们只用于个人界面复刻，商业分发前必须替换或取得授权。说明见 `frontend/agent/mascot/NOTICE.md`。Deepy 由 calmly-eating-bugs 绘制，本次未复制。
-- 厂商字标：`frontend/agent/brands/*.svg` 复制自上游由 Lobe Icons 组合的字标；Lobe Icons 为 MIT（Copyright (c) 2023 LobeHub），厂商名称与标志是各自权利人的商标。说明见 `frontend/agent/brands/NOTICE.md`。
-- 模型描述：`frontend/agent/model-descriptions.json` 复制自上游 `packages/client/data/model-descriptions.json`（MIT），仅在模型自身没有配置描述时作为回退；配置里的描述优先。
+- 模型 logo 与描述：本次不复制上游的厂商字标或 `model-descriptions.json`。选择器只读 NeoBangX 自己的 `description`、`aa_index`、`is_free` / `free_no_code`；评级表与主站 `frontend/script.js` 共用同一套 AA 打击级别（Agent 侧副本在 `frontend/agent/rating.mjs`，由一致性测试守护）。
 - 图标：界面其余图标沿用 NeoBangX 原有 Lucide 风格图标集。
 
 ## 9 验收证据
 
-最近一次完整验收：`node tools/test-claude-agent-browser.mjs`，16 组场景全部通过，0 个浏览器错误（`.debug/claude-port/2026-10-26T02-51-11-288Z/`）。提交到仓库的证据在 `docs/evidence/claude-port/`：
+最近一次完整验收：`node tools/test-claude-agent-browser.mjs`，16 组场景全部通过，0 个浏览器错误（`.debug/claude-port/2026-10-26T04-12-58-008Z/`）。提交到仓库的证据在 `docs/evidence/claude-port/`：
 
 - 16 组场景：登录、双主题持久化、输入卡片/平滑光标/模型选择器/Clawd、空目标执行与刷新恢复、20 万字符以上思考、长成果折叠、审阅忽略、版本编辑/比较/采用/导出、工作区配置、补充要求刷新恢复、失败/停止、跨窗口冲突、10 种视口、1440×1240 双主题、200 步 + 30 万字符、减少动效。
-- 200 条轨迹 + 30 万字符成果、12,439 个 DOM 节点时，40 次页签切换 p95 112.9 ms、最大 116.8 ms（软件渲染，无 GPU）。
+- 200 条轨迹 + 30 万字符成果、12,439 个 DOM 节点时，40 次页签切换 p95 111.7 ms、最大 139.3 ms（软件渲染，无 GPU）。
 - 30 万字符导出 SHA-256 与测试种子一致；20 万字符以上思考展开 715 ms 内完成，阅读器搜索与下载全文正常。
-- 录屏与 trace 在 `.debug/claude-port/<run>/video/` 与 `trace.zip`（未提交）。最近一次 trace 含 2,042 个 screencast 帧、739 个 DOM 快照、328 组动作，0 个 console error；已抽取录屏帧与 trace 快照检查等待行动画、输入卡片、模型选择器、Clawd、阅读器、冲突态与长文滚动。
+- 录屏与 trace 在 `.debug/claude-port/<run>/video/` 与 `trace.zip`（未提交）。最近一次 trace 含 2,004 个 screencast 帧、743 个 DOM 快照、333 组动作，0 个 console error；已抽取录屏帧与 trace 快照检查等待行动画、输入卡片、模型选择器、Clawd、阅读器、冲突态与长文滚动。
 - 对照图：`docs/evidence/claude-port/compare-{light,dark}.png`，上游固定提交与本次 1440×1240 对话并排。
 - 逐项截图与说明：`docs/evidence/claude-port/README.md`。
 
@@ -245,7 +244,7 @@ Playwright 浏览器：`~/.cache/ms-playwright/chromium-1194`。系统缺少的 
 
 ## 12 待联调与限制
 
-- 软件渲染环境（SwiftShader，无独立显卡；Chromium 141 headless）：滚动帧率、长列表合成层数量与真实硬件不同；不冒充硬件加速结果。验收 p95 112.9 ms、最大 116.8 ms 是该环境下的数字。
+- 软件渲染环境（SwiftShader，无独立显卡；Chromium 141 headless）：滚动帧率、长列表合成层数量与真实硬件不同；不冒充硬件加速结果。验收 p95 111.7 ms、最大 139.3 ms 是该环境下的数字。
 - 真实模型 API、真实文件解析、真机触控和 iOS 软键盘未在本服务器验证；假模型只覆盖接口契约、流式分块与错误/停止路径，不评估真实模型质量或真实文档解析。IE/旧版 Safari 未验证。
 - 上游 `smoke` 的两个失败项已记录，不作为本移植的通过依据。
 - Anthropic 字体只作个人使用；商业分发前需替换。

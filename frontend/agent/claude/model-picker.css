@@ -1,8 +1,9 @@
 /* Claude 风格工作台 · 模型选择器
    来源：dsh-claude-style@1e7acc5b 的 features/model/model-picker.css、
-   shared/popover.css 与 docs/screenshots（模型弹层）。行结构、商户字标、
-   描述行、右侧选中勾、菜单生长动效均按上游；分组标题改为截图里的
-   轻量文字标题，而不是上游第二级的反色 chip。 */
+   shared/popover.css 与 docs/screenshots（模型弹层）。卡片壳、行节奏、
+   右侧选中勾、菜单生长动效按上游；厂商 logo 与上游描述表未使用，
+   行内是 NeoBangX 自己的描述、AA 评级和免费/免码标签。
+   列表按真实目录顺序平铺，不做提供方分组。 */
 
 .model-popover {
   --menu-surface: color-mix(in srgb, var(--ink) 3.5%, var(--card));
@@ -53,37 +54,13 @@ html[data-agent-theme="dark"] .model-popover {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0 6px;
   scrollbar-gutter: stable;
-}
-.model-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.model-group + .model-group {
-  margin-top: 2px;
-}
-.model-group-label {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding: 9px 10px 3px;
-  background: var(--menu-surface);
-  color: var(--ink-3);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 18px;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.model-group:first-child .model-group-label {
-  padding-top: 5px;
 }
 .model-row {
   display: flex;
@@ -127,34 +104,15 @@ html[data-agent-theme="dark"] .model-popover {
   min-width: 0;
 }
 .model-row-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
+  flex: 0 1 auto;
   min-width: 0;
+  overflow: hidden;
   font-size: 14px;
   font-weight: 600;
   line-height: 19px;
   letter-spacing: -0.005em;
-}
-.model-brand-lockup {
-  display: inline-block;
-  flex: none;
-  height: 16px;
-  margin-right: 3px;
-  vertical-align: baseline;
-}
-.model-brand-lockup svg {
-  display: block;
-  height: 100%;
-  width: auto;
-  overflow: visible;
-}
-/* 上游的两层字标：浅色画彩色层，深色画单色层；只带一层的商户两层都显示。 */
-html[data-agent-theme="dark"] .model-brand-lockup .dsh-combine-mark-color:not(.dsh-combine-mark-mono) {
-  display: none;
-}
-html[data-agent-theme="light"] .model-brand-lockup .dsh-combine-mark-mono:not(.dsh-combine-mark-color) {
-  display: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .model-row-desc {
   overflow: hidden;
@@ -173,6 +131,32 @@ html[data-agent-theme="light"] .model-brand-lockup .dsh-combine-mark-mono:not(.d
   font-size: 10px;
   font-weight: 500;
   line-height: 16px;
+}
+/* 免码沿用同一枚标签的尺寸，只换一层蓝色，和主站「免码」语义一致。 */
+.model-row-tag-nocode {
+  background: color-mix(in srgb, #3b82f6 12%, transparent);
+  color: color-mix(in srgb, #3b82f6 68%, var(--ink));
+}
+/* 打击级别：颜色来自 rating.mjs 的 AA_STRIKE_LEVELS，几何尺寸与免费标签
+   同一行居中；浅色下压暗、深色下提亮，保证 10px 字仍可读。 */
+.model-row-rating {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--rating-color) 32%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--rating-color) 12%, transparent);
+  color: color-mix(in srgb, var(--rating-color) 76%, var(--ink));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+html[data-agent-theme="dark"] .model-row-rating {
+  color: color-mix(in srgb, var(--rating-color) 58%, var(--ink));
 }
 .model-row-check {
   display: inline-flex;
