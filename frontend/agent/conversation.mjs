@@ -268,6 +268,8 @@ export class Conversation {
     this.caches = new Map();
     this.previews = new Map();
     this.previewLoading = new Set();
+    this.briefObserver = null;
+    this.briefWaits = new Map();
     this.loading = new Set();
     this.observers = new Map();
     this.held = false;
@@ -327,6 +329,9 @@ export class Conversation {
     this.caches.clear();
     this.previews.clear();
     this.previewLoading.clear();
+    this.briefObserver?.disconnect();
+    this.briefObserver = null;
+    this.briefWaits.clear();
     this.loading.clear();
     this.entryViews = new Map();
     this.observers.forEach((observer) => observer.disconnect());
@@ -819,18 +824,23 @@ export class Conversation {
       load();
       return;
     }
-    const key = `${entry.id}:brief`;
-    const observer = new IntersectionObserver(
-      (records) => {
-        if (!records.some((record) => record.isIntersecting)) return;
-        observer.disconnect();
-        this.observers.delete(key);
-        load();
-      },
-      { root: this.transcript, rootMargin: "240px 0px" },
-    );
-    observer.observe(state.el);
-    this.observers.set(key, observer);
+    if (!this.briefObserver) {
+      this.briefObserver = new IntersectionObserver(
+        (records) => {
+          for (const record of records) {
+            if (!record.isIntersecting) continue;
+            const wait = this.briefWaits.get(record.target);
+            if (!wait) continue;
+            this.briefObserver.unobserve(record.target);
+            this.briefWaits.delete(record.target);
+            wait.load();
+          }
+        },
+        { root: this.transcript, rootMargin: "240px 0px" },
+      );
+    }
+    this.briefWaits.set(state.el, { load });
+    this.briefObserver.observe(state.el);
   }
 
   async loadToolBody(state, entry) {

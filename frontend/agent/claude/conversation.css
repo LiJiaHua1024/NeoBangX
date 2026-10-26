@@ -287,14 +287,15 @@
   display: none;
 }
 .assistant-block:not(:empty) {
-  margin-top: 8px;
+  margin-top: 6px;
 }
 .turn-flow > .assistant + .tool-call,
-.turn-flow > .tool-call + .assistant {
-  margin-top: 8px;
+.turn-flow > .tool-call + .assistant,
+.turn-flow > .tool-call + .tool-call {
+  margin-top: 6px;
 }
 .assistant + .assistant {
-  margin-top: 12px;
+  margin-top: 6px;
 }
 .assistant-text {
   font-family: var(--font-prose);
@@ -624,6 +625,11 @@
 }
 
 /* 成果卡片 */
+.turn-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .result-card {
   display: flex;
   align-items: center;

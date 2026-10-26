@@ -425,36 +425,6 @@ try {
     await page.waitForTimeout(900);
     const height = await page.locator("#transcript").evaluate((el) => el.scrollHeight);
     assert(height > 500, "对话没有形成可滚动内容");
-    const windowHandle = await page.waitForFunction(
-      () => {
-        const body = [...document.querySelectorAll(".reasoning-body")].find(
-          (candidate) =>
-            candidate.dataset.streaming === "true" &&
-            candidate.scrollTop > 0 &&
-            (candidate.querySelector(".reasoning-text")?.textContent.length || 0) >
-              1200,
-        );
-        if (!body) return false;
-        const text = body.querySelector(".reasoning-text");
-        return {
-          streaming: body.dataset.streaming,
-          length: text.textContent.length,
-          scrollTop: body.scrollTop,
-          bodyBottom: Math.round(body.getBoundingClientRect().bottom),
-          textBottom: Math.round(text.getBoundingClientRect().bottom),
-        };
-      },
-      {},
-      { timeout: 15000 },
-    );
-    const windowBox = await windowHandle.jsonValue();
-    assert.equal(windowBox.streaming, "true", "运行中的思考没有展开窗口");
-    assert(windowBox.length <= 2200, `运行中思考不是窗口：${windowBox.length} 字`);
-    assert(windowBox.scrollTop > 0, "思考窗口没有跟到最新一行");
-    assert(
-      Math.abs(windowBox.bodyBottom - windowBox.textBottom) <= 1,
-      `思考窗口底部留白：body ${windowBox.bodyBottom} / text ${windowBox.textBottom}`,
-    );
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForFunction(
       () => document.querySelector("#task-status")?.textContent === "已完成",
@@ -561,6 +531,34 @@ try {
       rows.every((row) => !row.status),
       "完成后的工具行仍挂着状态字",
     );
+    const gaps = await page.locator(".turn-flow").first().evaluate((flow) => {
+      const steps = [...flow.children].filter(
+        (el) =>
+          el.matches(".assistant, .tool-call") &&
+          el.getBoundingClientRect().height > 0,
+      );
+      return steps
+        .slice(1)
+        .map((step, at) =>
+          Math.round(
+            step.getBoundingClientRect().top -
+              steps[at].getBoundingClientRect().bottom,
+          ),
+        );
+    });
+    assert(gaps.length > 0, "没有可测量的步骤间距");
+    assert(
+      gaps.every((gap) => Math.abs(gap - 6) <= 1),
+      `步骤行间距不一致：${JSON.stringify(gaps)}`,
+    );
+    assert.equal(
+      await page
+        .locator(".turn-results")
+        .first()
+        .evaluate((el) => getComputedStyle(el).rowGap),
+      "8px",
+      "成果卡片之间没有间距",
+    );
     await page.screenshot({ path: shots("04a-flat-steps-light.png") });
   });
 
@@ -576,6 +574,37 @@ try {
     await page.locator(".waiting:not([hidden]) .waiting-lane.is-active").waitFor({
       state: "attached",
     });
+    await page.waitForTimeout(1400);
+    const windowHandle = await page.waitForFunction(
+      () => {
+        const body = [...document.querySelectorAll(".reasoning-body")].find(
+          (candidate) =>
+            candidate.dataset.streaming === "true" &&
+            candidate.scrollTop > 0 &&
+            (candidate.querySelector(".reasoning-text")?.textContent.length || 0) >
+              1200,
+        );
+        if (!body) return false;
+        const text = body.querySelector(".reasoning-text");
+        return {
+          streaming: body.dataset.streaming,
+          length: text.textContent.length,
+          scrollTop: body.scrollTop,
+          bodyBottom: Math.round(body.getBoundingClientRect().bottom),
+          textBottom: Math.round(text.getBoundingClientRect().bottom),
+        };
+      },
+      {},
+      { timeout: 15000 },
+    );
+    const windowBox = await windowHandle.jsonValue();
+    assert.equal(windowBox.streaming, "true", "运行中的思考没有展开窗口");
+    assert(windowBox.length <= 2200, `运行中思考不是窗口：${windowBox.length} 字`);
+    assert(windowBox.scrollTop > 0, "思考窗口没有跟到最新一行");
+    assert(
+      Math.abs(windowBox.bodyBottom - windowBox.textBottom) <= 1,
+      `思考窗口底部留白：body ${windowBox.bodyBottom} / text ${windowBox.textBottom}`,
+    );
     const laneName = () =>
       page.evaluate(() => {
         const waiting = [...document.querySelectorAll(".waiting")].find(
