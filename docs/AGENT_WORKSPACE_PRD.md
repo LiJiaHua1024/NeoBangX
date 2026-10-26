@@ -356,6 +356,33 @@ Agent 根据目标决定何时查材料、调用教学工具、搜索、检查�
 
 ### 17.3 有意不做
 
-- 未改管理后台的 Agent 配置页（`admin-frontend/agent.html`，由后台以 iframe 嵌入，使用独立主题键 `nbx_admin_theme`）。
+- 未改管理后台的 Agent 配置页（`admin-frontend/agent.html`，由后台以 iframe 嵌入，使用独立主题键 `nbx_admin_theme`）。这一条已在第 18 节推翻：该页已并入后台本体并删除。
 - 未引入前端框架或第三方 UI 库；工作台仍是静态页 + 原生 ESM。
 - 未给工作台资源加内容哈希版本串：这些资源不带 query，走 `no-cache` + ETag 304，改完刷新即生效；共享的 `styles.min.css` 由主站构建流程统一维护。
+
+## 18 管理后台的 Agent 配置并入后台本体（2026-10-26）
+
+本次只改管理后台的导航顺序与 Agent 配置页的呈现层。后端 `/api/admin/agent` 契约、计费与调度逻辑未改，用户端工作台也没动。
+
+### 18.1 改了什么
+
+- 侧栏导航把「Agent」从第一位移到第二位（概览之后）。打开后台仍落在概览，Agent 配置又不用翻到后面的配置组里找。
+- 删除 `admin-frontend/agent.html` 与 `agent.js`，Agent 配置变成 `index.html` 里的普通页签：顶栏标题、描述、草稿提示、「重置 / 保存设置」与「API 配置」「文档解析」完全同一套，不再用 iframe 嵌一张独立页面。
+- 控件全部换成后台已有组件：开关（`.switch`）、字段与提示（`.field` / `.field-hint`）、自绘下拉（`.custom-select`，替换原生 `<select>`）、折叠块与预排版（`.payload-block` / `.payload-pre`）、toast 与确认弹窗（替代原生 `alert` / `confirm`）。没有现成组件的部分只补布局类（`.agent-budget-grid`、`.agent-mcp-conn`、`.agent-inline-fields`、`.agent-result`），全部走主题变量，不新增配色与字号。
+- 配置项排版：工作台开关 + 五个预算项在宽屏一行铺开（窄屏按 150px 自动落列）；MCP 地址 / 令牌 / 超时按 1.6 : 1 : 190px 分列；工具与查询字段用短控件左对齐；固定参数是等宽 JSON 输入框（限宽 760px）；参数定义与试搜结果沿用日志详情的折叠块与 `<pre>` 排版。
+- 顶栏草稿提示与保存条改为三组共用（config/logsettings/mirror、parse、agent）：`isDraftTab` / `pageDraftDirty` / `pageDraftSaving` 统一驱动，不再逐个页签写条件。
+- 顺手修掉窄屏保存条的老问题：`position: fixed` 放在 `.topbar` 里会被 `.glass` 的 `backdrop-filter` 当成包含块，条其实钉在顶栏内部而不是屏幕底部。固定条现在挂在顶栏之外（`.config-bar-fixed`），三个草稿页签窄屏共用一份，按当前页签分发保存/重置；宽屏仍是顶栏那一份，没有重复入口。
+- 交互与原页面一致：切页签丢草稿先确认、顶栏「重置」回滚到已保存状态、令牌只写不读（保存后输入框清空）、测试连接与试运行搜索用当前表单即时验证且不落盘。此外补了前端校验（整数区间、固定参数必须是 JSON 对象、开启搜索前必须有工具与 schema），错误统一走后台 toast。
+
+### 18.2 验收状态
+
+- `npm test` 272 项通过（新增「Agent 配置是后台的第二个页签，控件与其它配置页签同一套」与窄屏固定条的结构断言）；`node --check admin-frontend/script.js`、`node --check tools/test-agent-browser.mjs` 通过；`backend/tests/test_static_cache.py` 32 项通过。
+- 用隔离服务（`backend/tests/workspace_browser_server.py`）跑通管理端这一段：导航顺序为「概览 → Agent」、页签加载、测试连接并读取工具、勾选网页搜索、试运行搜索、顶栏保存后令牌输入框清空且 `GET /api/admin/agent` 的 `mcp_enabled` / `mcp_tool` / `has_token` 正确；未保存切页签弹确认、取消后草稿保留、重置回滚、非法 JSON 只给 toast 不发请求；390px 下固定条贴屏幕底部、顶栏那份隐藏。
+- 视觉检查覆盖 1600 / 1366 / 1024 / 768 / 390 / 320 与暗色主题（obsidian）：无横向溢出，卡片、开关、下拉菜单与后台其它页签一致。
+- `tools/test-agent-browser.mjs` 里管理端这一段已改成按后台页签驱动；该脚本在前面的「responsive 1920×1080」一步仍会停住（工作区面板默认收起，`[data-tab=prompt]` 不可见），这是本次改动之前就有的状态，没有顺手改工作区。
+
+### 18.3 有意不做
+
+- 没有把 Agent 配置拆成独立路由或弹窗：它就是要和其它配置页签长得一样。
+- 没有给 MCP 工具描述加持久化：重新打开后台只还原选中的工具与 schema，描述要再「测试连接」一次才有。
+- 没有动 `frontend/agent/` 下的任何工作台样式。

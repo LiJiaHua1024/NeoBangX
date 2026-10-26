@@ -78,9 +78,40 @@ test("三个列表都有加载中 / 失败重试 / 真空态", () => {
 
 test("窄屏保存条钉在底部，并给内容留出让位空间", () => {
   const mobile = CSS.slice(CSS.indexOf("@media (max-width: 640px)"));
-  assert.match(mobile, /\.config-bar\s*\{[^}]*position:\s*fixed/, "窄屏保存条要固定");
-  assert.match(mobile, /\.config-bar\s*\{[^}]*bottom:\s*calc\(10px \+ env\(safe-area-inset-bottom\)\)/);
+  // 固定条必须挂在顶栏之外：.glass 的 backdrop-filter 会成为 fixed 后代的包含块，
+  // 放在 .topbar 里的 position: fixed 会被钉在顶栏内部，钉不到屏幕底部
+  assert.match(mobile, /\.topbar \.config-bar\s*\{[^}]*display:\s*none/, "窄屏只留一份保存条");
+  assert.match(mobile, /\.config-bar-fixed\s*\{[^}]*position:\s*fixed/, "窄屏保存条要固定");
+  assert.match(mobile, /\.config-bar-fixed\s*\{[^}]*bottom:\s*calc\(10px \+ env\(safe-area-inset-bottom\)\)/);
   assert.match(mobile, /\.main\s*\{[^}]*padding-bottom/, "别压住最后一行");
+  assert.ok(
+    HTML.indexOf('class="config-bar-fixed"') > HTML.indexOf("</main>"),
+    "固定条要放在顶栏（.glass 层叠上下文）之外"
+  );
+  assert.match(HTML, /class="config-bar-fixed"[^>]*x-show="isDraftTab"[\s\S]{0,200}?resetDraft\(\)/);
+});
+
+test("Agent 配置是后台的第二个页签，控件与其它配置页签同一套", () => {
+  const nav = HTML.slice(HTML.indexOf('<nav class="nav">'), HTML.indexOf("</nav>"));
+  const labels = [...nav.matchAll(/<span>([^<]+)<\/span>/g)].map((m) => m[1]);
+  assert.deepEqual(labels.slice(0, 2), ["概览", "Agent"], "Agent 排在概览之后，不在第一位");
+
+  assert.ok(!HTML.includes("agent.html"), "不再用 iframe 嵌独立页面");
+  assert.ok(HTML.includes(`x-if="tab === 'agent'"`), "Agent 配置要是后台自己的页签");
+
+  const section = HTML.slice(
+    HTML.indexOf("<!-- Agent 工作台配置"),
+    HTML.indexOf("<!-- 概览 -->")
+  );
+  assert.ok(section.length > 0, "没找到 Agent 页签的模板");
+  for (const cls of ["glass card", "switch-slider", "field", "custom-select-trigger", "payload-block"]) {
+    assert.ok(section.includes(`class="${cls}`) || section.includes(` ${cls}`), `缺统一控件 ${cls}`);
+  }
+  assert.ok(!/<select\b/.test(section), "下拉要用自绘的 .custom-select，不用原生 select");
+  assert.ok(!/style="/.test(section), "排版走样式表里的布局类，不写行内样式");
+  for (const id of ["agent-mcp-url", "agent-mcp-token", "agent-tool-trigger", "agent-search"]) {
+    assert.ok(section.includes(`id="${id}"`), `缺可操作锚点 #${id}`);
+  }
 });
 
 test("配置校验失败会把视线带到出问题的那张卡片", () => {

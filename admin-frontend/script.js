@@ -747,6 +747,94 @@ function adminApp() {
     get mineruModelLabel() {
       return this.parseConfig.model === "vlm" ? "vlm" : "pipeline（推荐）";
     },
+    // Agent 工作台配置
+    agentForm: {
+      enabled: true,
+      max_steps: 24,
+      max_tokens: 250000,
+      output_tokens: 16384,
+      max_seconds: 1800,
+      concurrency: 2,
+      mcp_enabled: false,
+      mcp_url: "",
+      mcp_token: "",
+      clear_token: false,
+      mcp_tool: "",
+      mcp_query_field: "query",
+      // 固定参数以 JSON 文本编辑，提交时才解析：边打字边报错没法用
+      mcp_arguments: "{}",
+      mcp_timeout: 45,
+    },
+    // agent 页同样走草稿：快照对比算脏，顶栏保存/重置统一落盘
+    agentSnapshot: "",
+    get isAgentTab() {
+      return this.tab === "agent";
+    },
+    /* 草稿类页签（config/logsettings/mirror、parse、agent）共用的顶栏提示与保存条。
+       三组互斥，同一时刻至多一个页签在编辑草稿 */
+    get isDraftTab() {
+      return this.isConfigTab || this.isParseTab || this.isAgentTab;
+    },
+    get pageDraftDirty() {
+      return (this.isConfigTab && this.configDirty) || (this.isParseTab && this.parseDirty) || (this.isAgentTab && this.agentDirty);
+    },
+    get pageDraftSaving() {
+      return !!(this.configSaving || this.savingMineru || this.agentSaving);
+    },
+    /* 窄屏底部保存条只有一份，按当前草稿页签分发到对应的保存/重置 */
+    resetDraft() {
+      if (this.isConfigTab) return this.resetConfigDraft();
+      if (this.isParseTab) return this.resetParseDraft();
+      if (this.isAgentTab) return this.resetAgentDraft();
+    },
+    saveDraft() {
+      if (this.isConfigTab) return this.saveConfig();
+      if (this.isParseTab) return this.saveMineru();
+      if (this.isAgentTab) return this.saveAgent();
+    },
+    get agentDirty() {
+      try {
+        return JSON.stringify(this.agentForm || {}) !== (this.agentSnapshot || "");
+      } catch {
+        return true;
+      }
+    },
+    // 连接后发现的工具列表；加载已保存配置时只还原选中的那一个（带 schema，没有描述）
+    agentTools: [],
+    agentSavedSchema: {},
+    agentHasToken: false,
+    agentSaving: false,
+    agentConnecting: false,
+    agentSearching: false,
+    agentToolMenuOpen: false,
+    agentTestQuery: "高考英语 阅读理解",
+    agentSearchOutput: "",
+    get agentToolLabel() {
+      if (this.agentForm.mcp_tool) return this.agentForm.mcp_tool;
+      return this.agentTools.length ? "请选择工具" : "先测试连接";
+    },
+    get agentToolHint() {
+      const tool = (this.agentTools || []).find((t) => t.name === this.agentForm.mcp_tool);
+      if (tool && tool.description) return tool.description;
+      if (this.agentForm.mcp_tool) return "已保存的工具；重新测试连接可读取最新描述与参数定义";
+      return this.agentTools.length ? "从连接结果里选一个用于网页搜索" : "先「测试连接并读取工具」，成功后才能选择";
+    },
+    get agentTokenHint() {
+      if (this.agentForm.mcp_token) return "保存后替换为这里填写的令牌";
+      return this.agentHasToken
+        ? "已保存令牌 · 留空保留，填新值替换"
+        : "尚未设置 · 无鉴权服务可留空";
+    },
+    get agentSchemaText() {
+      const tool = (this.agentTools || []).find((t) => t.name === this.agentForm.mcp_tool);
+      const schema = (tool && tool.inputSchema) || this.agentSavedSchema || {};
+      if (!schema || !Object.keys(schema).length) return "";
+      try {
+        return JSON.stringify(schema, null, 2);
+      } catch {
+        return "";
+      }
+    },
     // 多 Provider 聚合
     providers: [],
     modelProviderMap: {},
@@ -1305,8 +1393,10 @@ function adminApp() {
         if (this.tab === "logs") await this.loadLogs();
         if (this.isConfigTab && this.configDirty) return;
         if (this.tab === "parse" && this.parseDirty) return;
+        if (this.isAgentTab && this.agentDirty) return;
         if (this.tab === "config" || this.tab === "logsettings" || this.tab === "mirror") await this.loadConfig();
         if (this.tab === "parse") await this.loadMineru();
+        if (this.tab === "agent") await this.loadAgent();
         if (this.tab === "analytics") await this.loadAnalytics();
       } finally {
         if (minDelay) await minDelay;
@@ -1344,6 +1434,8 @@ function adminApp() {
       const entersConfig = tab === "config" || tab === "logsettings" || tab === "mirror";
       const leavesParse = this.tab === "parse";
       const entersParse = tab === "parse";
+      const leavesAgent = this.isAgentTab;
+      const entersAgent = tab === "agent";
       // config/logsettings/mirror 共用同一份 configForm 草稿：组内切换不重载、不丢草稿。
       // 只有离开整组去别的页签、且有未保存修改时，才确认是否丢弃。
       if (leavesConfig && !entersConfig && this.configDirty) {
@@ -1366,6 +1458,16 @@ function adminApp() {
         });
         if (!ok) return;
       }
+      if (leavesAgent && !entersAgent && this.agentDirty) {
+        const ok = await this.askConfirm({
+          title: "放弃未保存的修改？",
+          message: "Agent 工作台配置有未保存的修改，切换页签会重新加载并丢弃这些修改。确定放弃吗？",
+          confirmText: "放弃修改",
+          cancelText: "继续编辑",
+          danger: true,
+        });
+        if (!ok) return;
+      }
       this.tab = tab;
       // 组内切换（config/logsettings/mirror）共用同一份草稿，不重载；
       // 首次进入（无快照）才拉一次。离开整组后回来同样不重载，草稿还在。
@@ -1375,6 +1477,9 @@ function adminApp() {
       }
       else if (entersParse) {
         if (!this.parseSnapshot) await this.loadMineru();
+      }
+      else if (entersAgent) {
+        if (!this.agentSnapshot) await this.loadAgent();
       }
       else if (tab === "analytics") await this.loadAnalytics();
       else if (tab === "codes") await this.loadCodes();
@@ -3573,6 +3678,203 @@ function adminApp() {
         this.toast(e.message || "保存失败", "error");
       } finally {
         this.savingMineru = false;
+      }
+    },
+
+    /* ============ Agent 工作台 ============ */
+    snapshotAgent() {
+      try {
+        this.agentSnapshot = JSON.stringify(this.agentForm || {});
+      } catch {
+        this.agentSnapshot = "";
+      }
+    },
+    /* 表单 → 提交体。固定参数在这里解析并校验；工具 schema 取当前选中工具的定义，
+       避免保存一份和工具对不上的旧 schema（后端开启网页搜索时要校验两者相容） */
+    agentPayload() {
+      let args;
+      try {
+        args = JSON.parse(this.agentForm.mcp_arguments || "{}");
+      } catch {
+        throw new Error('固定参数必须是合法 JSON，例如 {"max_results": 5}');
+      }
+      if (!args || typeof args !== "object" || Array.isArray(args)) {
+        throw new Error("固定参数必须是 JSON 对象，不能是数组或 null");
+      }
+      const ranges = {
+        max_steps: [2, 100, "每轮最多步骤"],
+        max_tokens: [4096, 1500000, "每轮 token 预算"],
+        output_tokens: [2048, 131072, "单次输出 token 上限"],
+        max_seconds: [60, 7200, "每轮最长秒数"],
+        concurrency: [1, 8, "执行并发数"],
+        mcp_timeout: [5, 180, "单次请求超时"],
+      };
+      const numbers = {};
+      for (const [key, [min, max, label]] of Object.entries(ranges)) {
+        const value = Number(this.agentForm[key]);
+        if (!Number.isInteger(value) || value < min || value > max) {
+          throw new Error(`${label}必须是 ${min}–${max} 之间的整数`);
+        }
+        numbers[key] = value;
+      }
+      const tool = (this.agentTools || []).find((t) => t.name === this.agentForm.mcp_tool);
+      return {
+        ...numbers,
+        enabled: !!this.agentForm.enabled,
+        mcp_enabled: !!this.agentForm.mcp_enabled,
+        mcp_url: String(this.agentForm.mcp_url || "").trim(),
+        mcp_token: String(this.agentForm.mcp_token || ""),
+        clear_token: !!this.agentForm.clear_token,
+        mcp_tool: this.agentForm.mcp_tool || "",
+        mcp_query_field: String(this.agentForm.mcp_query_field || "").trim() || "query",
+        mcp_arguments: args,
+        mcp_schema: (tool && tool.inputSchema) || this.agentSavedSchema || {},
+      };
+    },
+    async loadAgent() {
+      try {
+        const data = await this.api("/api/admin/agent");
+        this.agentHasToken = !!data.has_token;
+        const args = data.mcp_arguments;
+        this.agentForm = {
+          enabled: data.enabled !== false,
+          max_steps: data.max_steps ?? 24,
+          max_tokens: data.max_tokens ?? 250000,
+          output_tokens: data.output_tokens ?? 16384,
+          max_seconds: data.max_seconds ?? 1800,
+          concurrency: data.concurrency ?? 2,
+          mcp_enabled: !!data.mcp_enabled,
+          mcp_url: data.mcp_url || "",
+          // 令牌只写不读：接口不回传明文，输入框永远从空开始
+          mcp_token: "",
+          clear_token: false,
+          mcp_tool: data.mcp_tool || "",
+          mcp_query_field: data.mcp_query_field || "query",
+          mcp_arguments: JSON.stringify(args && typeof args === "object" && !Array.isArray(args) ? args : {}, null, 2),
+          mcp_timeout: data.mcp_timeout ?? 45,
+        };
+        this.agentSavedSchema = data.mcp_schema && typeof data.mcp_schema === "object" ? data.mcp_schema : {};
+        // 已保存的配置只还原选中工具（带 schema，没有描述）；要读描述就再测一次连接
+        this.agentTools = data.mcp_tool
+          ? [{ name: data.mcp_tool, description: "", inputSchema: this.agentSavedSchema }]
+          : [];
+        this.snapshotAgent();
+      } catch (e) {
+        this.toast(e.message || "加载 Agent 配置失败", "error");
+      }
+    },
+    /* agent 页顶栏「重置」：回到已保存状态。有草稿时先确认。 */
+    async resetAgentDraft() {
+      if (!this.agentDirty || this.agentSaving) return;
+      const ok = await this.askConfirm({
+        title: "放弃未保存的修改？",
+        message: "将丢弃 Agent 工作台配置里所有未保存的修改，恢复为最近一次已保存的配置。确定继续吗？",
+        confirmText: "放弃修改",
+        cancelText: "继续编辑",
+        danger: true,
+      });
+      if (!ok) return;
+      await this.loadAgent();
+    },
+    async saveAgent() {
+      if (this.agentSaving) return;
+      let body;
+      try {
+        body = this.agentPayload();
+      } catch (e) {
+        this.toast(e.message, "error");
+        return;
+      }
+      // 后端同样会拦，这里先给一句人话：开启搜索前必须有一条能用的工具配置
+      if (body.mcp_enabled && (!body.mcp_url || !body.mcp_tool || !Object.keys(body.mcp_schema || {}).length)) {
+        this.toast("请先测试连接、选择搜索工具，再开启网页搜索", "error");
+        return;
+      }
+      this.agentSaving = true;
+      try {
+        await this.api("/api/admin/agent", { method: "PUT", body: JSON.stringify(body) });
+        await this.loadAgent();
+        this.toast("Agent 配置已保存");
+      } catch (e) {
+        this.toast(e.message || "保存失败", "error");
+      } finally {
+        this.agentSaving = false;
+      }
+    },
+    async connectAgentMcp() {
+      if (this.agentConnecting) return;
+      let body;
+      try {
+        body = this.agentPayload();
+      } catch (e) {
+        this.toast(e.message, "error");
+        return;
+      }
+      if (!body.mcp_url) {
+        this.toast("请先填写 MCP 地址", "error");
+        return;
+      }
+      this.agentConnecting = true;
+      try {
+        const data = await this.api("/api/admin/agent/connect", { method: "POST", body: JSON.stringify(body) });
+        this.agentTools = Array.isArray(data.tools) ? data.tools : [];
+        // 换了服务后原来的工具可能不存在：选中项不在新列表里就落到第一个
+        if (!this.agentTools.some((t) => t.name === this.agentForm.mcp_tool)) {
+          this.agentForm.mcp_tool = this.agentTools[0] ? this.agentTools[0].name : "";
+        }
+        this.toast(`连接成功，发现 ${this.agentTools.length} 个工具；选定后点顶栏“保存设置”生效`);
+      } catch (e) {
+        this.toast(e.message || "MCP 连接失败", "error");
+      } finally {
+        this.agentConnecting = false;
+      }
+    },
+    selectAgentTool(name) {
+      this.agentForm.mcp_tool = name;
+      this.agentToolMenuOpen = false;
+    },
+    /* 试搜返回的是 tools/call 的原始结果：纯文本内容直接铺开比看一串 JSON 好读，
+       带非文本块（图片等）时退回完整 JSON，免得丢掉结构 */
+    formatMcpResult(data) {
+      const content = data && Array.isArray(data.content) ? data.content : [];
+      const texts = content.filter((c) => c && typeof c.text === "string");
+      if (content.length && texts.length === content.length) return texts.map((c) => c.text).join("\n\n");
+      try {
+        return JSON.stringify(data, null, 2);
+      } catch {
+        return String(data);
+      }
+    },
+    async testAgentSearch() {
+      if (this.agentSearching) return;
+      const query = String(this.agentTestQuery || "").trim();
+      if (!query) {
+        this.toast("请先填写试搜内容", "error");
+        return;
+      }
+      let body;
+      try {
+        body = this.agentPayload();
+      } catch (e) {
+        this.toast(e.message, "error");
+        return;
+      }
+      if (!body.mcp_url || !body.mcp_tool) {
+        this.toast("请先测试连接并选择搜索工具", "error");
+        return;
+      }
+      this.agentSearching = true;
+      try {
+        const data = await this.api("/api/admin/agent/search", {
+          method: "POST",
+          body: JSON.stringify({ settings: body, query }),
+        });
+        this.agentSearchOutput = this.formatMcpResult(data);
+        this.toast("搜索成功；当前表单尚未保存");
+      } catch (e) {
+        this.toast(e.message || "搜索失败", "error");
+      } finally {
+        this.agentSearching = false;
       }
     },
 

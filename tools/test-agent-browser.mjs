@@ -264,28 +264,51 @@ try {
       await new Promise((resolve) => mock.listen(8767, "127.0.0.1", resolve));
       const admin = await context.newPage();
       admin.on("pageerror", (e) => errors.push(e.message));
-      await admin.goto("http://127.0.0.1:8766/static/agent.html");
+      await admin.goto("http://127.0.0.1:8766/");
+      // Agent 配置是管理后台的一个页签，排第二（概览之后），不再是独立页面
+      const navLabels = await admin
+        .locator(".nav .nav-item")
+        .allTextContents();
+      assert.equal(navLabels[0].trim(), "概览");
+      assert.equal(navLabels[1].trim(), "Agent");
+      await admin.getByRole("button", { name: "Agent", exact: true }).click();
       await admin.waitForFunction(
-        () => document.querySelector("#state").textContent === "已保存",
+        () => document.querySelector("#agent-max-steps")?.value === "24",
       );
-      await admin.locator("#mcp_url").fill("http://127.0.0.1:8767/mcp");
-      await admin.locator("#mcp_token").fill("test-only-secret");
-      await admin.locator("#connect").click();
+      assert.equal(
+        await admin.locator(".page-title").textContent(),
+        "Agent 工作台",
+      );
+      await admin
+        .locator("#agent-mcp-url")
+        .fill("http://127.0.0.1:8767/mcp");
+      await admin.locator("#agent-mcp-token").fill("test-only-secret");
+      await admin.locator("#agent-connect").click();
+      // 连接成功后自动选中第一个工具，下拉触发器应显示 search_web
       await admin.waitForFunction(() =>
-        document.querySelector("#state").textContent.includes("连接成功"),
+        document
+          .querySelector("#agent-tool-trigger")
+          ?.textContent.includes("search_web"),
       );
-      await admin.locator("#mcp_tool").selectOption("search_web");
-      await admin.locator("#mcp_enabled").check();
-      await admin.locator("#search").click();
+      await admin.locator("#agent-mcp-enabled").check();
+      await admin.locator("#agent-search").click();
       await admin.waitForFunction(() =>
-        document.querySelector("#state").textContent.includes("搜索成功"),
+        (
+          document.querySelector(".agent-result .payload-pre")?.textContent ||
+          ""
+        ).includes("测试搜索结果"),
       );
-      await admin.locator("#save").click();
+      await admin
+        .locator(".config-bar")
+        .getByRole("button", { name: "保存设置" })
+        .click();
       await admin.waitForFunction(
         () =>
-          document.querySelector("#state").textContent === "Agent 配置已保存",
+          document.querySelector(".page-dirty-hint")?.textContent ===
+          "所有修改已保存",
       );
-      assert.equal(await admin.locator("#mcp_token").inputValue(), "");
+      // 令牌只写不读：保存后输入框必须清空
+      assert.equal(await admin.locator("#agent-mcp-token").inputValue(), "");
       assert.equal(
         (await page.request.get(base + "/api/admin/agent")).status(),
         404,

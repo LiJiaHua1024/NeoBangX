@@ -48,9 +48,12 @@
       </div>
 
       <nav class="nav">
-        <button class="nav-item" :class="{ on: tab === 'agent' }" @click="switchTab('agent')"><span>Agent</span></button>
         <button class="nav-item" :class="{ on: tab === 'dashboard' }" @click="switchTab('dashboard')">
           <span>概览</span>
+        </button>
+        <!-- Agent 配置排在概览之后：它是最常调整的功能配置，但不该抢走打开后台时的落地页 -->
+        <button class="nav-item" :class="{ on: tab === 'agent' }" @click="switchTab('agent')">
+          <span>Agent</span>
         </button>
         <button class="nav-item" :class="{ on: tab === 'analytics' }" @click="switchTab('analytics')">
           <span>用量分析</span>
@@ -99,10 +102,10 @@
         <div>
           <h1 class="page-title" x-text="pageTitle"></h1>
           <p class="page-desc" x-text="pageDesc"></p>
-          <!-- 配置类页签：统一的草稿状态提示。保存/重置入口常驻顶栏，无需滚到底部。-->
-          <p class="page-dirty-hint" :class="{ 'is-dirty': (isConfigTab && configDirty) || (isParseTab && parseDirty) }"
-             x-show="isConfigTab || isParseTab" x-cloak
-             x-text="configSaving || savingMineru ? '保存中…' : ((isConfigTab ? configDirty : parseDirty) ? '● 有未保存的修改' : '所有修改已保存')"></p>
+          <!-- 草稿类页签：统一的草稿状态提示。保存/重置入口常驻顶栏，无需滚到底部。-->
+          <p class="page-dirty-hint" :class="{ 'is-dirty': pageDraftDirty }"
+             x-show="isDraftTab" x-cloak
+             x-text="pageDraftSaving ? '保存中…' : (pageDraftDirty ? '● 有未保存的修改' : '所有修改已保存')"></p>
         </div>
         <div class="topbar-actions">
           <!-- 窄屏下侧栏页脚被收起，主题入口移到顶栏，保证手机上仍可切换 -->
@@ -112,7 +115,7 @@
                       @click="setTheme(th.id)" :title="th.name" :aria-label="th.name"></button>
             </template>
           </div>
-          <!-- 配置类页签的唯一保存/重置入口：随顶栏常驻，无需滚动。-->
+          <!-- 草稿类页签的唯一保存/重置入口：随顶栏常驻，无需滚动。-->
           <template x-if="isConfigTab">
             <div class="config-bar">
               <button class="btn-ghost" @click="resetConfigDraft()" :disabled="!configDirty || configSaving">重置</button>
@@ -125,6 +128,13 @@
               <button class="btn-ghost" @click="resetParseDraft()" :disabled="!parseDirty || savingMineru">重置</button>
               <button class="btn-primary" @click="saveMineru()" :disabled="!parseDirty || savingMineru"
                       x-text="savingMineru ? '保存中…' : '保存设置'"></button>
+            </div>
+          </template>
+          <template x-if="isAgentTab">
+            <div class="config-bar">
+              <button class="btn-ghost" @click="resetAgentDraft()" :disabled="!agentDirty || agentSaving">重置</button>
+              <button class="btn-primary" @click="saveAgent()" :disabled="!agentDirty || agentSaving"
+                      x-text="agentSaving ? '保存中…' : '保存设置'"></button>
             </div>
           </template>
           <button class="btn-ghost refresh-btn" @click="refreshAll({ feedback: true })" :disabled="loading"
@@ -166,8 +176,179 @@
         <button class="security-banner-close" @click="dismissMirrorBanner()">知道了</button>
       </div>
 
+      <!-- Agent 工作台配置：和其它配置页签一样走顶栏「保存设置 / 重置」与草稿提示，
+           控件（开关 / 字段 / 自绘下拉 / 折叠块）全部复用本后台既有组件 -->
+      <template x-if="tab === 'agent'"><section class="panel-stack">
+        <div class="glass card">
+          <div>
+            <h2 class="card-title">工作台与执行预算</h2>
+            <p class="muted">关闭开关后用户端不再出现 Agent 入口；已保存的任务、材料与成果都保留，重新开启即可继续。</p>
+          </div>
+
+          <div class="switch-row mt-4">
+            <label class="switch" :class="{ disabled: agentSaving }">
+              <input type="checkbox" id="agent-enabled" x-model="agentForm.enabled" :disabled="agentSaving" aria-label="开启 Agent 工作台">
+              <span class="switch-slider"></span>
+            </label>
+            <div class="switch-copy">
+              <div class="switch-title">开启 Agent 工作台</div>
+              <div class="field-hint">对全部使用码生效，保存后立即生效，无需重启服务。</div>
+            </div>
+          </div>
+
+          <div class="agent-budget-grid mt-4">
+            <label class="field">
+              <span>每轮最多步骤</span>
+              <input type="number" id="agent-max-steps" x-model.number="agentForm.max_steps" min="2" max="100" step="1">
+              <span class="field-hint">一轮内的模型调用次数上限，含工具往返</span>
+            </label>
+            <label class="field">
+              <span>每轮 token 预算</span>
+              <input type="number" id="agent-max-tokens" x-model.number="agentForm.max_tokens" min="4096" max="1500000" step="1">
+              <span class="field-hint">一轮累计消耗的输入 + 输出上限</span>
+            </label>
+            <label class="field">
+              <span>单次输出 token 上限</span>
+              <input type="number" id="agent-output-tokens" x-model.number="agentForm.output_tokens" min="2048" max="131072" step="1">
+              <span class="field-hint">单条模型回复最多写多少 token</span>
+            </label>
+            <label class="field">
+              <span>每轮最长秒数</span>
+              <input type="number" id="agent-max-seconds" x-model.number="agentForm.max_seconds" min="60" max="7200" step="1">
+              <span class="field-hint">到点保存已有内容，等待用户继续</span>
+            </label>
+            <label class="field">
+              <span>执行并发数</span>
+              <input type="number" id="agent-concurrency" x-model.number="agentForm.concurrency" min="1" max="8" step="1">
+              <span class="field-hint">同时执行的轮次上限，其余排队</span>
+            </label>
+          </div>
+
+          <p class="field-hint mt-3">预算只约束新发起的执行轮次：已开始的轮次沿用发起时的预算；达到上限时保存已有内容并等待用户继续，不截断已有记录。</p>
+        </div>
+
+        <div class="glass card agent-mcp-card">
+          <div>
+            <h2 class="card-title">网页搜索 MCP</h2>
+            <p class="muted">管理员在这里配置真实服务。用户端只看到「网页搜索」开关；连接地址、令牌和固定参数不会发给用户或模型。</p>
+          </div>
+
+          <div class="switch-row mt-4">
+            <label class="switch" :class="{ disabled: agentSaving }">
+              <input type="checkbox" id="agent-mcp-enabled" x-model="agentForm.mcp_enabled" :disabled="agentSaving" aria-label="对用户提供网页搜索">
+              <span class="switch-slider"></span>
+            </label>
+            <div class="switch-copy">
+              <div class="switch-title">对用户提供网页搜索</div>
+              <div class="field-hint">开启前必须先测试连接并选定工具，否则保存会被拦截。</div>
+            </div>
+          </div>
+
+          <div class="agent-mcp-conn mt-4">
+            <label class="field">
+              <span>MCP 地址 · Streamable HTTP</span>
+              <input type="url" id="agent-mcp-url" x-model="agentForm.mcp_url" placeholder="https://your-service.example/mcp" autocomplete="off" spellcheck="false">
+              <span class="field-hint">支持 HTTP JSON / SSE 响应；不支持本地 stdio 或旧版独立 SSE 端点</span>
+            </label>
+            <label class="field">
+              <span>Bearer 令牌</span>
+              <input type="password" id="agent-mcp-token" x-model="agentForm.mcp_token" autocomplete="new-password">
+              <span class="field-hint" x-text="agentTokenHint"></span>
+            </label>
+            <label class="field">
+              <span>单次请求超时（秒）</span>
+              <input type="number" id="agent-mcp-timeout" x-model.number="agentForm.mcp_timeout" min="5" max="180" step="1">
+              <span class="field-hint">连接、列工具与搜索共用</span>
+            </label>
+          </div>
+
+          <div class="switch-row mt-4">
+            <label class="switch switch-sm" :class="{ disabled: agentSaving || !agentHasToken }">
+              <input type="checkbox" id="agent-clear-token" x-model="agentForm.clear_token" :disabled="agentSaving || !agentHasToken" aria-label="清除已保存的令牌">
+              <span class="switch-slider"></span>
+            </label>
+            <div class="switch-copy">
+              <div class="switch-title">清除已保存的令牌</div>
+              <div class="field-hint">保存后删除已存的令牌；已经有新令牌时以新值为准，无需勾选。</div>
+            </div>
+          </div>
+
+          <div class="form-actions agent-actions">
+            <button type="button" class="btn-ghost" id="agent-connect" @click="connectAgentMcp()" :disabled="agentConnecting"
+                    x-text="agentConnecting ? '连接中…' : '测试连接并读取工具'"></button>
+            <span class="field-hint" x-show="agentTools.length" x-text="`已发现 ${agentTools.length} 个工具，选定后保存生效`"></span>
+          </div>
+
+          <div class="agent-inline-fields mt-4">
+            <div class="field agent-field-tool">
+              <span>搜索工具</span>
+              <div class="custom-select" @click.outside="agentToolMenuOpen = false">
+                <button type="button" class="custom-select-trigger" id="agent-tool-trigger" :class="{ open: agentToolMenuOpen }"
+                        :disabled="!agentTools.length" aria-label="搜索工具"
+                        @click="agentToolMenuOpen = !agentToolMenuOpen">
+                  <span class="truncate" x-text="agentToolLabel"></span>
+                  <span class="chev">▼</span>
+                </button>
+                <div class="custom-select-menu" id="agent-tool-menu" x-show="agentToolMenuOpen" x-cloak>
+                  <template x-for="tool in agentTools" :key="'agent-tool-' + tool.name">
+                    <button type="button" class="custom-select-item" :class="{ on: agentForm.mcp_tool === tool.name }"
+                            @click="selectAgentTool(tool.name)" x-text="tool.name"></button>
+                  </template>
+                </div>
+              </div>
+              <span class="field-hint" x-text="agentToolHint"></span>
+            </div>
+            <label class="field">
+              <span>查询文本对应的参数字段</span>
+              <input type="text" id="agent-mcp-query-field" x-model="agentForm.mcp_query_field" placeholder="query" spellcheck="false">
+              <span class="field-hint">用户的搜索问题写进工具的哪个参数</span>
+            </label>
+          </div>
+
+          <label class="field mt-4">
+            <span>固定参数（JSON 对象）</span>
+            <textarea id="agent-mcp-arguments" class="agent-json-input" x-model="agentForm.mcp_arguments" rows="4" spellcheck="false" placeholder='{"max_results": 5}'></textarea>
+            <span class="field-hint">和查询字段一起提交给工具；必须是 JSON 对象，例如 {"max_results": 5}</span>
+          </label>
+
+          <details class="payload-block mt-4" x-show="agentSchemaText">
+            <summary><span class="payload-title">所选工具的参数定义</span></summary>
+            <pre class="payload-pre mono" x-text="agentSchemaText"></pre>
+          </details>
+
+          <p class="field-hint mt-3">以上开关、地址、令牌与参数都是草稿，改完点顶栏“保存设置”统一落盘；「测试连接」「试运行搜索」用当前表单即时验证，不落盘。</p>
+        </div>
+
+        <div class="glass card">
+          <div>
+            <h2 class="card-title">试运行搜索</h2>
+            <p class="muted">用当前表单（含未保存的修改）真实调用一次搜索，确认地址、令牌、工具和参数都能用。结果不落盘，也不影响用户端。</p>
+          </div>
+
+          <label class="field agent-test-field mt-4">
+            <span>试搜内容</span>
+            <input type="text" id="agent-test-query" x-model="agentTestQuery" placeholder="例如：高考英语 阅读理解">
+            <span class="field-hint">会原样写入上面配置的查询字段</span>
+          </label>
+
+          <div class="form-actions agent-actions">
+            <button type="button" class="btn-ghost" id="agent-search" @click="testAgentSearch()"
+                    :disabled="agentSearching || !agentTestQuery.trim()"
+                    x-text="agentSearching ? '搜索中…' : '试运行搜索'"></button>
+            <span class="field-hint" x-show="agentSearchOutput">以下是搜索服务返回的原始内容</span>
+          </div>
+
+          <div class="agent-result" x-show="agentSearchOutput" x-cloak>
+            <div class="agent-result-head">
+              <span>搜索结果</span>
+              <button type="button" class="link-btn" @click="agentSearchOutput = ''">清空</button>
+            </div>
+            <pre class="payload-pre mono" x-text="agentSearchOutput"></pre>
+          </div>
+        </div>
+      </section></template>
+
       <!-- 概览 -->
-      <section x-show="tab === 'agent'" style="height:calc(100dvh - 170px);min-height:500px"><iframe src="/static/agent.html" title="Agent 配置" style="width:100%;height:100%;border:0;border-radius:16px"></iframe></section>
       <template x-if="tab === 'dashboard'"><section class="panel-stack">
         <div class="stat-grid">
           <div class="stat-card glass">
@@ -1632,6 +1813,14 @@
         </div>
       </section></template>
     </main>
+
+    <!-- 窄屏草稿保存条：顶栏会随整页滚走，所以在顶栏之外再放一份固定条。
+         放在 .topbar 里会被 .glass 的 backdrop-filter 当成包含块，钉不到屏幕底部。 -->
+    <div class="config-bar-fixed" x-show="isDraftTab" x-cloak>
+      <button class="btn-ghost" @click="resetDraft()" :disabled="!pageDraftDirty || pageDraftSaving">重置</button>
+      <button class="btn-primary" @click="saveDraft()" :disabled="!pageDraftDirty || pageDraftSaving"
+              x-text="pageDraftSaving ? '保存中…' : '保存设置'"></button>
+    </div>
 
     <!-- 生成使用码弹窗 -->
     <div class="modal-mask" x-show="createOpen" x-transition.opacity @click.self="createOpen = false">

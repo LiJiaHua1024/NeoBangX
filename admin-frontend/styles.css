@@ -519,6 +519,11 @@ body {
 .topbar-actions { display: flex; align-items: center; gap: 0.85rem; flex-shrink: 0; }
 /* 配置类页签顶栏唯一的保存/重置入口：常驻顶栏，无需滚动 */
 .config-bar { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
+/* 窄屏用的同一组按钮（位置见媒体查询：钉在屏幕底部）。宽屏只留顶栏那份 */
+.config-bar-fixed { display: flex; align-items: center; gap: 0.6rem; }
+@media (min-width: 641px) {
+  .config-bar-fixed { display: none !important; }
+}
 /* 顶栏主题入口只在窄屏出现，宽屏用侧栏页脚那份。
    必须叠加 .theme-dots 提高特异性：下方 .theme-dots 的 display:flex 同权重且更靠后 */
 .theme-dots.theme-dots-top { display: none; }
@@ -645,6 +650,8 @@ select option { background: var(--bg); color: var(--text); }
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 .custom-select-trigger:hover { background: var(--hover-bg); }
+.custom-select-trigger:disabled { opacity: 0.55; cursor: not-allowed; }
+.custom-select-trigger:disabled:hover { background: var(--input-bg); }
 .custom-select-trigger.open {
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
@@ -932,6 +939,66 @@ select option { background: var(--bg); color: var(--text); }
 .field > span:first-child { font-size: 0.78rem; color: var(--dim); font-weight: 600; }
 .field-hint { font-size: 0.72rem; color: var(--faint); }
 .form-actions { display: flex; gap: 0.6rem; margin-top: 1.25rem; }
+
+/* ---------- Agent 工作台配置页 ----------
+   预算项是五个短数字：宽屏一行铺开，窄屏按 150px 自动落列（思路同 .free-limit-grid） */
+.agent-budget-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem 1.2rem;
+}
+/* MCP 连接三件套：地址最长、令牌次之、超时定宽，避免三个等宽输入框被拉成同一副面孔 */
+.agent-mcp-conn {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 190px;
+  gap: 1rem 1.2rem;
+  align-items: start;
+}
+.agent-budget-grid > .field,
+.agent-mcp-conn > .field,
+.agent-inline-fields > .field { min-width: 0; }
+/* 工具与查询字段都是短控件，左边对齐即可，不拉满整行 */
+.agent-inline-fields {
+  display: flex; flex-wrap: wrap;
+  gap: 1rem 1.2rem;
+  align-items: flex-start;
+}
+.agent-inline-fields > .field { flex: 0 1 220px; }
+.agent-inline-fields > .field.agent-field-tool { flex-basis: 320px; }
+.agent-test-field { max-width: 420px; }
+/* 按钮与状态文案同一行对齐（.form-actions 默认 stretch） */
+.agent-actions { align-items: center; flex-wrap: wrap; }
+/* 固定参数是 JSON：等宽字 + 可纵向拉伸；JSON 会被格式化换行，不需要拉满整行 */
+.agent-json-input {
+  min-height: 120px; max-width: 760px; resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem; line-height: 1.6;
+}
+/* .glass 的 backdrop-filter 让每张卡片各自成为层叠上下文，卡片之间按 DOM 顺序绘制：
+   工具下拉菜单要盖住下方卡片，需手动抬层（同 .parse-model-card） */
+.agent-mcp-card { position: relative; z-index: 30; }
+/* 试运行结果沿用日志详情的 payload 排版，只补一层卡片外壳 */
+.agent-result {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+.agent-result-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.8rem; font-weight: 650;
+}
+.agent-result .payload-pre { border-top: 1px solid var(--border); max-height: 360px; }
+@media (max-width: 960px) {
+  .agent-mcp-conn { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .agent-mcp-conn { grid-template-columns: 1fr; }
+  .agent-inline-fields > .field { flex-basis: 100%; }
+  .agent-test-field { max-width: 100%; }
+}
 
 .modal-mask {
   position: fixed; inset: 0; z-index: 50;
@@ -1562,8 +1629,11 @@ body.modal-open .panel-stack {
   /* 配置保存入口常驻顶栏：窄屏下按钮另起一行、撑满可点，不过度挤压标题 */
   .topbar-actions { flex-wrap: wrap; row-gap: 0.5rem; }
   /* 保存条钉在屏幕底部：窄屏是整页滚动，顶栏会随页面滚走，改完最后一项还得一路滚回顶部才能保存。
-     两个 config-bar 分别挂在 isConfigTab / isParseTab 上，同时只会有一个存在，不会互相压住 */
-  .config-bar {
+     固定条挂在 .topbar 之外的 .config-bar-fixed 上——.glass 的 backdrop-filter 会成为
+     fixed 后代的包含块，放在顶栏里会被钉在顶栏内部而不是屏幕底部。
+     顶栏里的三份 config-bar（isConfigTab / isParseTab / isAgentTab）窄屏统一隐藏。 */
+  .topbar .config-bar { display: none; }
+  .config-bar-fixed {
     position: fixed;
     left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom));
     z-index: 40;
@@ -1575,7 +1645,8 @@ body.modal-open .panel-stack {
   }
   /* 给固定条让位，别压住最后一行 */
   .main { padding-bottom: 4.75rem; }
-  .config-bar .btn-primary, .config-bar .btn-ghost { flex: 1 1 auto; min-height: 44px; }
+  .config-bar .btn-primary, .config-bar .btn-ghost,
+  .config-bar-fixed .btn-primary, .config-bar-fixed .btn-ghost { flex: 1 1 auto; min-height: 44px; }
 
   /* ---------- 4. 安全横幅：文字独占整行，按钮另起一行 ---------- */
   .security-banner { padding: 12px 14px; gap: 10px; }
