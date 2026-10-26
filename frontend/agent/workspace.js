@@ -1823,6 +1823,51 @@ $("#undo-template").onclick = () => {
   changed();
   $("#undo-template").hidden = true;
 };
+/* 应用模板会覆盖的字段：官方模板只换提示词，工具配置只换工具，个人提示词模板换整份配置。 */
+const KEEP_ON_TEMPLATE = new Set(["materials", "goal", "model", "template_id"]);
+function templateFields(template) {
+  if (template.kind === "tool") return ["tools", "teaching_tools"];
+  if (!template.config) return ["prompt"];
+  return [
+    ...new Set([
+      ...Object.keys(template.config),
+      ...Object.keys(state.task.config),
+    ]),
+  ].filter((key) => !KEEP_ON_TEMPLATE.has(key));
+}
+function canon(value) {
+  if (Array.isArray(value)) return `[${value.map(canon).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canon(value[key])}`)
+      .join(",")}}`;
+  return JSON.stringify(value ?? null);
+}
+function sameValue(key, a, b) {
+  // 工具勾选顺序无意义，按集合比较。
+  if (key === "tools")
+    return canon([...(a || [])].sort()) === canon([...(b || [])].sort());
+  return canon(a) === canon(b);
+}
+/* 被覆盖的字段若与目标相同，或能从默认配置、模板库里原样找回，就不算会丢的改动。 */
+function wouldLoseEdits(template) {
+  const config = state.task.config;
+  const target = template.config || { prompt: template.prompt };
+  const sources = [
+    state.catalog.defaults,
+    ...state.catalog.official_templates.map((item) => ({ prompt: item.prompt })),
+    ...state.catalog.templates.map((item) => item.config),
+  ];
+  return templateFields(template).some(
+    (key) =>
+      !sameValue(key, config[key], target[key]) &&
+      !sources.some(
+        (source) =>
+          source && key in source && sameValue(key, config[key], source[key]),
+      ),
+  );
+}
 $("#template").onchange = () => {
   const template = getTemplate();
   if (!template) {
@@ -1830,6 +1875,7 @@ $("#template").onchange = () => {
     changed();
     return;
   }
+  if (!wouldLoseEdits(template)) return applyTemplate(template);
   confirmAction(
     "应用模板",
     "将替换任务提示词或工具配置；当前材料与目标保留。",
@@ -1839,6 +1885,7 @@ $("#template").onchange = () => {
 $("#reset-prompt").onclick = () => {
   const template = getTemplate();
   if (!template) return error(Error("请先选择模板"));
+  if (!wouldLoseEdits(template)) return applyTemplate(template);
   confirmAction("恢复模板", "恢复模板会替换当前编辑内容。", () =>
     applyTemplate(template),
   );
@@ -1865,7 +1912,10 @@ async function saveTemplate(kind) {
   askText(
     kind === "tool" ? "保存工具配置" : "另存为我的模板",
     "模板名称",
-    state.task.title,
+    // 标题还是默认的“新任务”时，用当前所选模板名作为更有意义的默认名。
+    state.task.title === "新任务"
+      ? getTemplate()?.name || state.task.title
+      : state.task.title,
     async (name) => {
       await requireSaved();
       const result = await api("/templates", {
