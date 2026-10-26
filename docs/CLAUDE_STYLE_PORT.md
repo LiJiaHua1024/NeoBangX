@@ -28,7 +28,7 @@
 
 - 普通工具页、管理后台（`/admin`、`admin-frontend`）保持原样。
 - 上游针对 DSH 宿主的私有路由、账号服务、模型目录、计费、设置页、插件市场、壁纸插件互操作、Windows 标题栏与页面缩放。
-- 上游的 DeepSeek 配色卡、Deepy 小鲸鱼、Clawd 螃蟹的远程 GIF 素材（仓库只提供图片/GIF，不参与本次工作台；版权见第 8 节）。
+- 上游的 DeepSeek 配色卡与 Deepy 小鲸鱼（未复制；Clawd 螃蟹帧图按用户要求复制，版权见第 8 节）。
 
 ## 3 上游资产与功能的对应清单
 
@@ -60,7 +60,8 @@
 | `features/chat-send` | 发送动画（消息飞入） | adapt：保留消息进入的 320ms 过冲与发送后的落位；不做跨层飞行动画（会增加长会话的合成层） |
 | `features/chat-files` | 文件行、附件、差异 | adapt：材料行与版本差异；差异用现有 worker 的逐行比较，样式按 Claude 的删除/新增色 |
 | `features/context-stats` | 上下文计量、token、缓存 | adapt：保留本轮 tokens、步骤、状态；不伪造缓存/费用数据 |
-| `features/model`、`features/effort` | 模型/推理档选择器 | adapt：模型选择保留真实模型；不显示不存在的推理档，避免伪造能力 |
+| `features/model`、`features/effort` | 模型/推理档选择器 | port/adapt：模型选择器按上游改为分组弹层（厂商字标、描述行、选中勾、250ms 生长、键盘与 Escape）；数据仍读真实模型目录。上游第一级 +「更多模型」第二级/搜索在 NeoBangX 的扁平小目录里合并为一张可滚动分组卡，避免把少量模型藏进第二层；不显示不存在的推理档 |
+| `features/caret` | 输入光标接管：原生光标透明、绘制 2px 竖线、80ms 位移、1000ms 闪烁 | port：`frontend/agent/caret.mjs` 用隐藏镜像测量 textarea 光标，位移/闪烁/减少动效按上游；测量失败立即交还原生光标 |
 | `features/turn-nav`、`features/sidebar-peek` | 回合导航、侧栏预览 | n/a：工作台有独立「轨迹」页与常驻侧栏；不引入第二个导航层 |
 | `features/search` | 全局搜索面板 | adapt：保留任务搜索输入；不伪造跨会话全文搜索 |
 
@@ -69,13 +70,13 @@
 | 上游 | 内容 | 本次处理 |
 | --- | --- | --- |
 | `features/workspace` | 侧栏工作区/归档分段 | adapt：NeoBangX 的任务列表按「今天 / 过去 7 天 / 更早」分组；运行中任务带呼吸点；保留搜索、加载更多、复制/删除 |
-| `features/home`、`hero-menu`、`home-ripple` | 新会话首页、问候、用量卡、涟漪 | adapt：新任务显示「这次想完成什么？」的首页式空态与大输入卡片；不做用量图表（工作台没有该数据） |
-| `features/composer` | 输入卡片、附件、工具栏、底部状态条、焦点态 | port：18px 卡片、白底、1px 边框、焦点双环、工具栏 7px 按钮、发送/停止、附件 chip、模型选择、底部状态条 |
+| `features/home`、`hero-menu`、`home-ripple` | 新会话首页、问候、用量卡、涟漪 | adapt：新任务显示「这次想完成什么？」的首页式空态与单行输入卡片；不做用量图表（工作台没有该数据） |
+| `features/composer` | 输入卡片、附件、工具栏、底部状态条、焦点态 | port：对话态单行 14px 圆角输入卡片、卡片内 `↵` 发送/停止、卡片下方 28px 工具行（模型入口在右端）、1px 边框与焦点双环、附件 chip 移到卡片上方；空目标仍可直接执行 |
 | `features/session-title` | 标题就地重命名 | port：标题输入框无边框，聚焦时显示 1px 蓝环；名称即时保存 |
 | `features/account`、`settings` | 账号抽屉、设置页 | adapt：账号入口保留「切换使用码」；主题切换改为浅色/深色/跟随系统三段控件；不引入设置页 |
 | `features/header-band` | 顶部栏 | adapt：任务标题、状态、对话/轨迹、主题、任务菜单、工作区开关 |
-| `features/brand` | 品牌 lockup | adapt：使用 NeoBangX 现有的闪电标记与名称，排布、字号、serif 字体按上游；不复制 Claude 商标 |
-| `features/mascot`、`deepy`、`crab` | 角色动画 | n/a：工作台没有可信的角色状态机；不引入与业务无关的 GIF。保留品牌标记作为唯一角色元素，理由见 5.8 |
+| `features/brand` | 品牌 lockup | adapt：使用 NeoBangX 现有的闪电标记与名称，排布、字号、serif 字体按上游；不复制 Claude 商标作为产品品牌 |
+| `features/mascot`、`deepy`、`crab` | 角色动画 | port：Clawd 帧图与帧表复制到 `frontend/agent/mascot/crab/`，WAAPI steps 播放；按真实任务状态切换思考/打字/完成/失败/睡眠，点击有反应；Deepy 未复制（业务品牌不是 DeepSeek） |
 | `features/rightbar-fit`、`view-tabs` 宿主窗口逻辑 | 宿主右栏像素换算 | n/a：直接使用 CSS 像素与 ResizeObserver |
 
 ### 3.4 内部页面
@@ -154,7 +155,13 @@
 
 ### 5.8 角色
 
-上游的 Clawd/Deepy 是 DSH/DeepSeek 角色，与 NeoBangX 的教学业务没有对应状态；直接搬入会变成与业务无关的装饰。保留品牌标记作为唯一角色元素，并把上游角色的「状态表达」移植到真实状态：运行中呼吸点、等待行、失败/完成/等待补充的文字+图标+颜色三重表达。理由：用户要求保留“角色”，但角色必须表达真实状态，不能用假动画替代。
+用户明确要求把 Claude 的角色图搬过来，因此本次复制 **Clawd**（Claude Code 的像素螃蟹）的帧图与帧表，而不是继续用抽象标记代替：
+
+- 帧图逐帧复制自上游 `packages/assets/src/mascot/crab/`，播放器按 `mascot-player.ts` 的 WAAPI `steps()` 方式移植；80ms/帧、透明边距 1 格、裁切盒与帧表全部照抄（`frontend/agent/mascot.mjs`）。
+- 角色只表达真实状态：`task.status` + 最新步骤类型决定思考 / 打字 / 完成 / 失败 / 空闲；60 秒无操作会睡，点击/拖动有反应，页面切到轨迹或手机工作区时隐藏。
+- 减少动效时停在帧表指定的静止帧；点击仍是唯一触发器，与上游一致。
+- 不使用 Deepy：NeoBangX 不是 DeepSeek 品牌，搬入小鲸鱼会制造错误的品牌关系。
+- Clawd 是 Anthropic 的角色，帧图不适用 MIT；许可与替换要求见第 8 节。
 
 ## 6 设计令牌（Claude 卡）
 
@@ -164,9 +171,9 @@
 
 字体：Anthropic Sans Web Text / Inter 回落用于界面；Anthropic Serif Web Text / Noto Serif 回落用于对话正文与标题；Anthropic Mono Web / JetBrains Mono 用于代码。中文回落到 Noto Sans SC / Source Han Sans SC / PingFang SC / Microsoft YaHei。
 
-圆角：4 / 8 / 16；弹层 12，行 6，输入卡片 18，分段 7，按钮 pill 9999。
+圆角：4 / 8 / 16；弹层 12，行 6，输入卡片 14，分段 7，按钮 pill 9999。
 
-动效：反馈 120ms，揭示 120ms，弹层 150ms，打开 250ms，发送 320ms，滑轨 240ms，滚动跟随 240ms；曲线见 `tokens.css`。`prefers-reduced-motion` 下全部 0.01ms。
+动效：反馈 120ms，揭示 120ms，弹层 150ms，打开 250ms，发送 320ms，滑轨 240ms，滚动跟随 240ms，光标位移 80ms，光标闪烁 1000ms；曲线见 `tokens.css`。`prefers-reduced-motion` 下光标位移/闪烁与页面动效一起停。
 
 ## 7 实施状态
 
@@ -175,7 +182,10 @@
 - [x] 设计令牌与基础样式
 - [x] 侧栏与顶栏
 - [x] 对话、流式、折叠、跟随
-- [x] 输入卡片
+- [x] 输入卡片（单行卡片、`↵` 发送、工具行、模型入口）
+- [x] 输入光标平滑位移与闪烁
+- [x] 模型选择器（分组、厂商字标、描述、选中勾、生长动效）
+- [x] Clawd 角色与真实任务状态
 - [x] 工作区四页
 - [x] 弹层与内部页面
 - [x] 响应式与移动端
@@ -188,17 +198,19 @@
 - 上游代码：MIT。移植的 CSS 结构、选择器写法、交互参数与文案来自固定提交；衍生文件在文件头注明来源。
 - 钠（Sodium）：PolyForm Shield 1.0.0。本次未复制其运行时代码，只复现其性能目标；此说明保留上游许可归属。
 - 字体：Inter、Noto Serif、JetBrains Mono 为 SIL OFL 1.1，许可证见 `frontend/agent/fonts/OFL.txt`。Anthropic Sans/Serif/Mono 是 Anthropic 的字体，上游明确说明“仅供个人使用、不随 MIT 发布”；本仓库复制自上游的仓库副本，仅用于个人项目的界面复刻，不随包再分发。若用于商业分发，需替换为 OFL 字体。
-- 角色：Clawd 是 Anthropic 的角色，Deepy 由 calmly-eating-bugs 绘制；本次未复制其图像素材。
-- 图标：沿用 NeoBangX 原有 Lucide 风格图标集；未复制上游品牌图标。
+- 角色：Clawd 是 Anthropic 的角色。本次按用户要求复制了上游 `packages/assets/src/mascot/crab/` 的帧图与 `sheets.ts` 的帧表；这些帧图不在上游 MIT 覆盖范围内，上游明确标注为 Anthropic 角色形象。它们只用于个人界面复刻，商业分发前必须替换或取得授权。说明见 `frontend/agent/mascot/NOTICE.md`。Deepy 由 calmly-eating-bugs 绘制，本次未复制。
+- 厂商字标：`frontend/agent/brands/*.svg` 复制自上游由 Lobe Icons 组合的字标；Lobe Icons 为 MIT（Copyright (c) 2023 LobeHub），厂商名称与标志是各自权利人的商标。说明见 `frontend/agent/brands/NOTICE.md`。
+- 模型描述：`frontend/agent/model-descriptions.json` 复制自上游 `packages/client/data/model-descriptions.json`（MIT），仅在模型自身没有配置描述时作为回退；配置里的描述优先。
+- 图标：界面其余图标沿用 NeoBangX 原有 Lucide 风格图标集。
 
 ## 9 验收证据
 
-最近一次完整验收：`node tools/test-claude-agent-browser.mjs`，15 组场景全部通过，0 个浏览器错误（`.debug/claude-port/2026-10-25T16-10-49-667Z/`）。提交到仓库的证据在 `docs/evidence/claude-port/`：
+最近一次完整验收：`node tools/test-claude-agent-browser.mjs`，16 组场景全部通过，0 个浏览器错误（`.debug/claude-port/2026-10-26T02-51-11-288Z/`）。提交到仓库的证据在 `docs/evidence/claude-port/`：
 
-- 15 组场景：登录、双主题持久化、空目标执行与刷新恢复、20 万字符以上思考、长成果折叠、审阅忽略、版本编辑/比较/采用/导出、工作区配置、补充要求刷新恢复、失败/停止、跨窗口冲突、10 种视口、1440×1240 双主题、200 步 + 30 万字符、减少动效。
-- 200 条轨迹 + 30 万字符成果、12,428 个 DOM 节点时，40 次页签切换 p95 104 ms、最大 138 ms（软件渲染，无 GPU）。
+- 16 组场景：登录、双主题持久化、输入卡片/平滑光标/模型选择器/Clawd、空目标执行与刷新恢复、20 万字符以上思考、长成果折叠、审阅忽略、版本编辑/比较/采用/导出、工作区配置、补充要求刷新恢复、失败/停止、跨窗口冲突、10 种视口、1440×1240 双主题、200 步 + 30 万字符、减少动效。
+- 200 条轨迹 + 30 万字符成果、12,439 个 DOM 节点时，40 次页签切换 p95 112.9 ms、最大 116.8 ms（软件渲染，无 GPU）。
 - 30 万字符导出 SHA-256 与测试种子一致；20 万字符以上思考展开 715 ms 内完成，阅读器搜索与下载全文正常。
-- 录屏与 trace 在 `.debug/claude-port/<run>/video/` 与 `trace.zip`（未提交）。最近一次 trace 含 1,276 个 screencast 帧、609 个 DOM 快照、269 组动作，0 个 console error；已抽取录屏帧与 trace 快照检查等待行动画、输入卡片、阅读器、冲突态与长文滚动。
+- 录屏与 trace 在 `.debug/claude-port/<run>/video/` 与 `trace.zip`（未提交）。最近一次 trace 含 2,042 个 screencast 帧、739 个 DOM 快照、328 组动作，0 个 console error；已抽取录屏帧与 trace 快照检查等待行动画、输入卡片、模型选择器、Clawd、阅读器、冲突态与长文滚动。
 - 对照图：`docs/evidence/claude-port/compare-{light,dark}.png`，上游固定提交与本次 1440×1240 对话并排。
 - 逐项截图与说明：`docs/evidence/claude-port/README.md`。
 
@@ -233,7 +245,7 @@ Playwright 浏览器：`~/.cache/ms-playwright/chromium-1194`。系统缺少的 
 
 ## 12 待联调与限制
 
-- 软件渲染环境（SwiftShader，无独立显卡；Chromium 141 headless）：滚动帧率、长列表合成层数量与真实硬件不同；不冒充硬件加速结果。验收 p95 104 ms、最大 138 ms 是该环境下的数字。
+- 软件渲染环境（SwiftShader，无独立显卡；Chromium 141 headless）：滚动帧率、长列表合成层数量与真实硬件不同；不冒充硬件加速结果。验收 p95 112.9 ms、最大 116.8 ms 是该环境下的数字。
 - 真实模型 API、真实文件解析、真机触控和 iOS 软键盘未在本服务器验证；假模型只覆盖接口契约、流式分块与错误/停止路径，不评估真实模型质量或真实文档解析。IE/旧版 Safari 未验证。
 - 上游 `smoke` 的两个失败项已记录，不作为本移植的通过依据。
 - Anthropic 字体只作个人使用；商业分发前需替换。

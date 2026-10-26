@@ -125,6 +125,7 @@
   --dur-flight: 400ms;
   --dur-bounce: 350ms;
   --dur-preview: 4000ms;
+  --period-blink: 1000ms;
   --dur-pulse: 1600ms;
   --dur-spin: 850ms;
   --dur-breathe: 2400ms;

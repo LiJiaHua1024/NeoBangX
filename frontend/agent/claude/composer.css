@@ -1,12 +1,17 @@
-/* Claude 风格工作台 · 输入卡片
-   来源：dsh-claude-style@1e7acc5b 的 features/composer（card.css、inline.css、
-   bottom-gap.css）与 docs/screenshots/claude-conversation-*.png。 */
+/* Claude 风格工作台 · 输入区
+   来源：dsh-claude-style@1e7acc5b 的 features/composer
+   （card.css / inline.css / inline-bar.css / bottom-gap.css）与
+   docs/screenshots/claude-conversation-*.png。
+   单行输入卡片 + 卡片内 `↵` 发送键 + 卡片下方工具行；模型入口在工具行右端。
+
+   本工作台的输入是 textarea，不是上游的 contenteditable；尺寸、边框、
+   焦点环、占位符、光标、按钮位置和工具行位置按上游数值复刻。 */
 
 .composer-seat {
   position: relative;
   flex: none;
   z-index: var(--layer-control);
-  padding: 0 32px 14px;
+  padding: 0 32px 12px;
   background:
     linear-gradient(to top, var(--canvas) 0%, var(--canvas) 72%, transparent 100%);
   background-color: var(--canvas);
@@ -31,20 +36,20 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  width: var(--conversation-w);
+  gap: 4px;
+  width: min(var(--conversation-w), 100%);
   max-width: 100%;
   margin: 0 auto;
 }
 
-/* 附件 chip 行：卡片上方 */
+/* 附件/模板 chip 行：和 Claude 的 workspace / permission 行一样，站在卡片上方。 */
 .composer-context {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
   min-height: 0;
-  padding: 8px 12px 0;
+  padding: 0 2px 2px;
 }
 .composer-context:empty {
   display: none;
@@ -52,19 +57,25 @@
 .context-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 24px;
-  max-width: 220px;
-  padding: 0 8px;
-  border: 0.5px solid var(--border-2);
-  border-radius: var(--radius-pill);
+  gap: 6px;
+  height: 28px;
+  max-width: 260px;
+  padding: 0 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
   background: var(--canvas);
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 18px;
+  transition: border-color var(--timing-feedback), color var(--timing-feedback);
+}
+.context-chip:hover {
+  border-color: var(--border-2);
+  color: var(--ink);
 }
 .context-chip .aw-svg {
-  width: 12px;
-  height: 12px;
+  width: 13px;
+  height: 13px;
   color: var(--ink-3);
 }
 .context-chip span {
@@ -81,61 +92,143 @@
 }
 .context-chip .more {
   color: var(--ink-3);
-  font-size: 10px;
+  font-size: 11px;
 }
 
-/* 输入卡片本体 */
+/* 输入卡片本体：上游 inline 输入框的 14px 圆角、7px 内边距与 24px 行高。 */
 .composer-card {
+  --caret-color: var(--ink);
   position: relative;
+  z-index: 2;
   display: flex;
-  flex-direction: column;
-  gap: 0;
-  min-height: 48px;
-  padding: 2px 2px 2px;
+  align-items: flex-end;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 44px 8px 14px;
   border: 1px solid var(--border-1);
-  border-radius: var(--radius-composer);
+  border-radius: 14px;
   background: var(--surface-1);
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 1px 3px rgba(20, 20, 19, 0.03);
+  box-sizing: border-box;
   transition: border-color var(--timing-feedback), box-shadow var(--timing-feedback);
 }
 .composer-card:focus-within {
   border-color: var(--composer-focus-border);
   box-shadow: var(--shadow-composer-focus);
 }
-.composer-input {
-  display: block;
-  width: 100%;
-  min-height: 34px;
-  max-height: 240px;
-  padding: 8px 14px 0;
-  color: var(--ink);
-  font-family: var(--font-sans);
-  font-size: 15px;
-  line-height: 1.55;
-  overflow-y: auto;
-  background: transparent;
-  border: 0;
-  outline: none;
-}
-.composer-input::placeholder {
-  color: var(--ink-4);
-}
-.composer-card[data-hero="true"] .composer-input {
-  min-height: 84px;
-  padding-top: 14px;
+html[data-agent-theme="dark"] .composer-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 .composer-card[data-drag="true"] {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
+.composer-input {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 24px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  caret-color: auto;
+}
+.composer-input::placeholder {
+  color: var(--ink-4);
+  font-size: 14px;
+  opacity: 1;
+}
+.composer-input::-webkit-scrollbar {
+  width: 6px;
+}
 
-/* 卡片底部工具栏 */
-.composer-bar {
+/* 卡片内右下角：↵ 发送 / 停止。上游是 26×26、圆角 6px、透明底。 */
+.composer-actions {
+  position: absolute;
+  right: 7px;
+  bottom: 8px;
   display: flex;
   align-items: center;
   gap: 2px;
-  min-height: 30px;
-  padding: 0 4px 1px 6px;
+  z-index: 3;
+}
+.send-btn,
+.stop-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-4);
+  cursor: pointer;
+  transition: color var(--timing-feedback), background-color var(--timing-feedback);
+}
+.send-btn:hover:not(:disabled),
+.stop-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.send-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.send-glyph {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+.composer-card:not([data-draft-empty]) .send-btn {
+  color: var(--ink);
+}
+.send-btn[data-busy="true"] {
+  color: var(--ink-3);
+}
+.stop-btn {
+  color: var(--ink);
+}
+.stop-glyph {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1.6px solid currentColor;
+  border-radius: 50%;
+}
+.stop-glyph::after {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 1.2px;
+  background: currentColor;
+}
+
+/* 卡片下方工具行：材料、工具、状态、统计、模型。 */
+.composer-bar {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 28px;
+  padding: 0 4px;
 }
 .composer-bar .grow {
   flex: 1;
@@ -147,7 +240,7 @@
   gap: 5px;
   height: 28px;
   padding: 0 7px;
-  border-radius: var(--radius-segment);
+  border-radius: 6px;
   color: var(--ink-2);
   font-size: 12px;
   white-space: nowrap;
@@ -162,8 +255,8 @@
   color: var(--ink);
 }
 .composer-btn .aw-svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
 }
 .composer-btn .count {
   color: var(--ink-3);
@@ -176,166 +269,152 @@
 .composer-btn[data-active="true"] .count {
   color: var(--accent);
 }
-
-/* 模型选择：文字 + 无箭头 */
-.model-trigger {
-  max-width: 190px;
-}
-.model-trigger .model-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-2);
-  font-size: 12px;
-}
-.model-trigger:hover .model-name {
-  color: var(--ink);
-}
-
-/* 发送 / 停止 */
-.send-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  flex: none;
-  border-radius: var(--radius-segment);
-  background: var(--ink);
-  color: var(--canvas);
-  transition: background-color var(--timing-feedback), opacity var(--timing-feedback),
-    transform var(--dur-instant) var(--ease-standard);
-}
-.send-btn:hover {
-  background: color-mix(in srgb, var(--ink) 84%, var(--canvas));
-}
-.send-btn:active {
-  transform: scale(0.94);
-}
-.send-btn:disabled {
-  opacity: 0.28;
-}
-.send-btn .aw-svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 2;
-}
-.send-btn[data-mode="send"] .btn-label {
+.composer-live {
   display: none;
-}
-.send-btn[data-mode="start"] {
-  width: auto;
-  padding: 0 12px;
-  gap: 6px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 12px;
-  font-weight: 500;
-}
-.send-btn[data-mode="start"]:hover {
-  background: var(--accent-hover);
-}
-.stop-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  flex: none;
-  border-radius: var(--radius-segment);
-  border: 1px solid var(--border-2);
-  background: var(--canvas);
-  color: var(--ink);
-}
-.stop-btn:hover {
-  background: var(--hover);
-}
-.stop-btn .aw-svg {
-  width: 13px;
-  height: 13px;
-  fill: currentColor;
-}
-
-/* 卡片下方状态行：状态 / 统计 / 连接 */
-.composer-foot {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 22px;
-  padding: 0 3px;
-  color: var(--ink-4);
-  font-size: 11px;
-  user-select: none;
-}
-.composer-foot .foot-left {
-  display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  overflow: hidden;
+  max-width: 38%;
+  height: 28px;
+  padding: 0 4px;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
 }
-.composer-foot .foot-left .aw-svg {
+.composer-live:has(#composer-status[data-state="running"]),
+.composer-live:has(#composer-status[data-state="queued"]),
+.composer-live:has(#composer-status[data-state="stopping"]),
+.composer-live:has(#composer-status[data-state="waiting"]),
+.composer-live:has(#composer-status[data-state="failed"]) {
+  display: inline-flex;
+}
+.composer-live .live-cloud {
+  display: inline-flex;
+  flex: none;
+}
+.composer-live .aw-svg {
   width: 12px;
   height: 12px;
 }
-.composer-foot .foot-status {
+.composer-live .foot-status {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.composer-foot .foot-status[data-state="running"] {
+.composer-live .foot-status[data-state="running"] {
   color: var(--accent);
 }
-.composer-foot .foot-status[data-state="failed"] {
+.composer-live .foot-status[data-state="failed"] {
   color: #b4453c;
 }
-.composer-foot .foot-status[data-state="waiting"] {
+.composer-live .foot-status[data-state="waiting"] {
   color: #a4621d;
 }
-.composer-foot .foot-spacer {
-  flex: 1;
+.policy-link {
+  flex: none;
+  height: 28px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--ink-4);
+  font-size: 11px;
+  white-space: nowrap;
 }
-.composer-foot .foot-stats {
+.policy-link:hover {
+  background: var(--hover);
+  color: var(--ink-2);
+}
+.foot-stats {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  height: 28px;
+  padding: 0 2px;
+  color: var(--ink-4);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .conn-inline {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  color: var(--ink-4);
-  font-size: 11px;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  margin-left: 2px;
 }
 .conn-inline::before {
   content: "";
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--ink-4);
 }
 .conn-inline[data-state="live"]::before {
   background: #3d8a5c;
 }
+.conn-inline[data-state="waiting"]::before {
+  background: #a4621d;
+}
 .conn-inline[data-state="error"]::before {
   background: #b4453c;
 }
 
-/* 输入卡片的浮层：材料、工具、模型 */
+/* 模型入口：和上游底行一样是纯文字、28px 高、6px 圆角、hover 才出现底板。 */
+.model-seat {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 280px;
+  flex: none;
+}
+.model-trigger {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  min-width: 0;
+  max-width: 280px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  text-align: right;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--timing-feedback), color var(--timing-feedback);
+}
+.model-trigger:hover,
+.model-trigger[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+.model-trigger[data-empty="true"] {
+  color: var(--ink-3);
+}
+.model-trigger-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 材料 / 工具浮层：仍然由卡片下方的按钮触发。 */
 .composer-pop {
   position: absolute;
-  bottom: calc(100% + 8px);
   left: 0;
+  bottom: calc(100% + 8px);
   z-index: var(--layer-picker);
-  width: 320px;
+  width: 330px;
   max-width: min(86vw, 360px);
   max-height: 380px;
   overflow: auto;
   padding: 6px;
   border: 1px solid var(--border-1);
-  border-radius: var(--radius-popover);
+  border-radius: 12px;
   background: var(--overlay);
   box-shadow: var(--shadow-popover);
   animation: popover-in var(--dur-surface) var(--ease-settle);
@@ -357,7 +436,7 @@
   width: 100%;
   min-height: 32px;
   padding: 5px 8px;
-  border-radius: var(--radius-row);
+  border-radius: 6px;
   color: var(--ink);
   font-size: 12px;
   text-align: left;
@@ -405,113 +484,14 @@
   font-size: 12px;
 }
 .composer-pop-foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  margin-top: 4px;
   padding: 6px 8px 2px;
   border-top: 0.5px solid var(--divider);
-  margin-top: 4px;
 }
 .composer-pop-foot button {
-  color: var(--link);
+  color: var(--ink-3);
   font-size: 11px;
 }
-
-/* 首页/空态的大输入卡片 */
-.composer-seat[data-hero="true"] {
-  padding-bottom: 18px;
-}
-.composer-seat[data-hero="true"] .composer-stack {
-  gap: 10px;
-}
-.composer-seat[data-hero="true"] .composer-bar {
-  padding-bottom: 4px;
-}
-.composer-seat[data-hero="true"] .composer-foot {
-  justify-content: center;
-}
-
-/* 模型下拉：原生 select 只作为值容器，外观在这里绘制 */
-.aw-select {
-  position: relative;
-  display: inline-flex;
-  min-width: 0;
-}
-.aw-select select {
-  appearance: none;
-  width: 100%;
-  height: 28px;
-  padding: 0 24px 0 8px;
-  border: 0;
-  border-radius: var(--radius-segment);
-  background: transparent;
-  color: var(--ink-2);
-  font-size: 12px;
-  cursor: pointer;
-}
-.aw-select::after {
-  content: "";
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  border-right: 1.3px solid var(--ink-3);
-  border-bottom: 1.3px solid var(--ink-3);
-  transform: translateY(-70%) rotate(45deg);
-  pointer-events: none;
-}
-.aw-select:hover select {
-  background: var(--hover);
+.composer-pop-foot button:hover {
   color: var(--ink);
 }
-.aw-select select:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-.select-shell {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 28px;
-  padding: 0 8px;
-  border-radius: var(--radius-segment);
-  color: var(--ink-2);
-  font-size: 12px;
-}
-.select-shell:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
-.select-menu {
-  position: absolute;
-  z-index: var(--layer-picker);
-  min-width: 180px;
-  max-height: 320px;
-  overflow: auto;
-  padding: 5px;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius-popover);
-  background: var(--overlay);
-  box-shadow: var(--shadow-popover);
-}
-.select-menu button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  height: 30px;
-  padding: 0 8px;
-  border-radius: var(--radius-row);
-  color: var(--ink);
-  font-size: 12px;
-  text-align: left;
-}
-.select-menu button:hover {
-  background: var(--hover);
-}
-.select-menu button[aria-selected="true"] {
-  background: var(--hover);
-}
-
-/* 移动端底部安全区由 responsive.css 处理 */

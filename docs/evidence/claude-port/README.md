@@ -4,38 +4,43 @@
 
 ## 截图
 
-所有截图来自隔离后端（`backend/tests/workspace_browser_server.py`）与 Chromium 141 无头渲染，接口与状态均来自假模型或测试接口，不使用真实模型。
+所有截图来自隔离后端（`backend/tests/workspace_browser_server.py`）与 Chromium 141 无头渲染，接口与状态均来自假模型或测试接口，不使用真实模型。测试目录使用一个完成态任务，避免把验收脚本自己创建的空白任务带进截图。
 
 | 文件 | 视口 | 主题 | 状态 |
 | --- | --- | --- | --- |
-| `home-light-1440x900.png` / `home-dark-1440x900.png` | 1440×900 | 浅色 / 深色 | 新任务空态、材料 chip、目标与开始按钮 |
-| `conversation-light-1440x1240.png` / `conversation-dark-1440x1240.png` | 1440×1240 | 浅色 / 深色 | 与上游截图同视口：侧栏 + 对话，隐藏工作区，用户目标、思考折叠、工具行、长成果折叠、审阅行、成果卡片 |
-| `conversation-light-1920x1080.png` | 1920×1080 | 浅色 | 大屏三栏 |
+| `home-light-1440x900.png` / `home-dark-1440x900.png` | 1440×900 | 浅色 / 深色 | 新任务空态、单行输入卡片、`↵` 发送键、工具行右端的模型入口、Clawd |
+| `conversation-light-1440x1240.png` / `conversation-dark-1440x1240.png` | 1440×1240 | 浅色 / 深色 | 与上游截图同视口：隐藏工作区，用户目标、334,665 字符思考折叠、工具行、长成果折叠、审阅行、成果卡片、Clawd 完成态 |
+| `conversation-light-1440x1000.png` | 1440×1000 | 浅色 | 对话 + 两栏工作区 |
+| `conversation-light-1920x1080.png` | 1920×1080 | 浅色 | 大屏 |
 | `conversation-light-1024x768.png` | 1024×768 | 浅色 | 单主区 + 抽屉入口 |
 | `tablet-light-768x1024.png` | 768×1024 | 浅色 | 平板单主区 |
+| `model-picker-light-1440x1000.png` / `model-picker-dark-1440x1000.png` | 1440×1000 | 浅色 / 深色 | 模型选择器：分组、厂商字标、描述、选中勾；无原生 select |
+| `composer-caret-light-1440x1000.png` | 1440×1000（裁 820×260） | 浅色 | 输入卡片、2px 绘制光标、`↵`、工具行、Clawd |
+| `clawd-thinking-light-1440x1000.png` | 1440×1000（裁 820×260） | 浅色 | Clawd 思考帧（气泡） |
 | `workspace-overlay-light-1280x800.png` | 1280×800 | 浅色 | 工作区浮层与遮罩 |
 | `workspace-prompt-light-1440x1000.png` / `workspace-prompt-dark-1440x1000.png` | 1440×1000 | 浅色 / 深色 | 提示词编辑、模板、自动保存 |
 | `workspace-materials-light-1440x1000.png` | 1440×1000 | 浅色 | 材料上传与选中 |
 | `workspace-tools-light-1440x1000.png` | 1440×1000 | 浅色 | 工具开关、教学工具、审阅设置 |
 | `workspace-results-light-1440x1000.png` / `workspace-results-dark-1440x1000.png` | 1440×1000 | 浅色 / 深色 | 版本、成果正文与操作 |
 | `review-modal-light-1440x1000.png` | 1440×1000 | 浅色 | 审阅意见、忽略与生成候选稿 |
-| `mobile-chat-light-390x844.png` / `mobile-chat-dark-390x844.png` | 390×844 | 浅色 / 深色 | 手机单栏、输入卡片、对话与底部切换 |
+| `mobile-chat-light-390x844.png` / `mobile-chat-dark-390x844.png` | 390×844 | 浅色 / 深色 | 手机单栏、输入卡片、材料 chip、Clawd、底部切换 |
+| `mobile-model-picker-light-390x844.png` | 390×844 | 浅色 | 手机模型选择器（340px 卡片，8px 间距） |
 | `mobile-workspace-light-390x844.png` / `mobile-workspace-dark-390x844.png` | 390×844 | 浅色 / 深色 | 手机工作区 |
 | `mobile-drawer-light-390x844.png` | 390×844 | 浅色 | 任务抽屉（关闭按钮、底部切换让位） |
 
 ## 对照
 
-`compare-light.png`、`compare-dark.png` 把上游 `docs/screenshots/claude-conversation-{light,dark}.png`（固定提交 `1e7acc5b`）与本次 `/agent` 的 1440×1240 截图并排。上游没有右侧工作区，因此对照图使用隐藏工作区的对话状态。
+`compare-light.png`、`compare-dark.png` 把上游 `docs/screenshots/claude-conversation-{light,dark}.png`（固定提交 `1e7acc5b`）与本次 `/agent` 的 1440×1240 截图并排。两边都隐藏工作区，保留同一条完成态对话内容。上游没有右侧工作区，NeoBangX 的三栏形态放在工作区截图里。
 
-差异属于宿主业务适配：侧栏任务按更新时间分组、保留材料/成果/工具工作区、输入卡片保留附件与额度状态、思考/工具行来自真实执行记录。字体、颜色、圆角、层级、正文宽度、表格、代码、折叠、等待行、滚动跟随与动效参数按上游。
+差异属于宿主业务适配：侧栏任务按更新时间分组、保留材料/成果/工具工作区、空目标直接执行、真实执行记录与审阅。输入卡片、`↵`、工具行高度、模型入口位置、字体、颜色、圆角、层级、正文宽度、表格、代码、折叠、等待行、滚动跟随与动效参数按上游。
 
 ## 自动化与性能
 
-- `browser-report.json`：最近一次 `node tools/test-claude-agent-browser.mjs` 的 15 组场景全部通过，0 个浏览器错误。
-- `performance.json`：200 条轨迹 + 30 万字符成果、12,428 个 DOM 节点下，40 次工作区页签切换 p95 为 104 ms、最大 138 ms（Ubuntu 22.04，Chromium 141 无头软件渲染，无 GPU）。
+- `browser-report.json`：最近一次 `node tools/test-claude-agent-browser.mjs` 的 **16 组场景全部通过，0 个浏览器错误**。新增的一组直接操作：`↵` 按钮、Shift+Enter 换行、绘制光标（80ms 位移、1000ms 闪烁）、模型分组/字标/键盘/选中、Clawd 帧变化。
+- `performance.json`：200 条轨迹 + 30 万字符成果、12,439 个 DOM 节点下，40 次工作区页签切换 p95 为 112.9 ms、最大 116.8 ms（Ubuntu 22.04，Chromium 141 无头软件渲染，无 GPU）。
 - 同一场景下 200 条步骤完整保留，30 万字符成果导出 SHA-256 与种子值一致，分页单页正文 ≤ 13,000 字符。
 - 20 万字符以上思考：折叠计数、展开全文、阅读器搜索、下载完整文本；30 万字符成果：分页、导出、原文末行保留。
-- 交互视频与 trace 由验收脚本写在 `.debug/claude-port/<run>/video/` 与 `trace.zip`，不提交到仓库。最近一次 trace 含 1,276 个 screencast 帧、609 个 DOM 快照、269 组动作、0 个 console error；已抽取帧与快照检查等待行动画、输入卡片、阅读器、冲突态与长文滚动。
+- 交互视频与 trace 由验收脚本写在 `.debug/claude-port/<run>/video/` 与 `trace.zip`，不提交到仓库。最近一次 trace 已抽取帧与快照检查等待行动画、输入卡片、模型选择器、阅读器、冲突态与长文滚动。
 
 ## 启动项目
 
@@ -47,7 +52,7 @@ DATA_DIR=/tmp/neobangx-data \
 # 浏览器打开 http://<host>:8000/agent
 ```
 
-本次在 Ubuntu 22.04 上用上述命令启动，`/agent` 与 `/static/agent/claude/tokens.css` 均返回 200。普通工具页与 `/admin` 未改版，仍需各自的原有配置。
+本次在 Ubuntu 22.04 上用上述命令启动，`/agent`、`/static/agent/claude/tokens.css`、`/static/agent/caret.mjs`、`/static/agent/model-picker.mjs` 均返回 200。普通工具页与 `/admin` 未改版，仍需各自的原有配置。
 
 ## 复现验收
 

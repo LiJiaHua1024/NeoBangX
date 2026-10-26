@@ -31,8 +31,14 @@ with SessionLocal() as db:
     if not db.scalar(select(UsageCode).where(UsageCode.code=='WORKSPACE-TEST')):
         db.add(UsageCode(code='WORKSPACE-TEST',quota=100,is_enabled=True));db.commit()
 save_settings(WorkspaceSettings())
-cfg={'models':[{'id':'test-model','name':'浏览器验收模型','enabled':True,'user_usable':True}],
-     'available_model_ids':['test-model'],'default_model':'test-model','providers':[]}
+# 仅用于浏览器验收：多组模型让选择器的分组、字标、描述和选中勾都能被真实操作。
+# 假模型不区分 id，因此这里的模型名不会影响执行结果。
+cfg={'models':[
+        {'id':'test-model','name':'浏览器验收模型','description':'界面验收用的本地假模型。','enabled':True,'user_usable':True},
+        {'id':'deepseek/deepseek-v4.1-flash-1017','name':'DeepSeek V4.1 Flash','description':'非对称模型结构，小成本大智能。','enabled':True,'user_usable':True},
+        {'id':'minimax/minimax-m3.1-flash','name':'MiniMax M3.1 Flash','description':'兼具前沿编程能力与原生多模态的开放权重模型。','enabled':True,'user_usable':True},
+        {'id':'openrouter/anthropic/claude-sonnet-4.5','name':'Claude Sonnet 4.5','description':'长上下文与复杂代码任务的均衡选择。','enabled':True,'user_usable':True}],
+     'available_model_ids':['test-model','deepseek/deepseek-v4.1-flash-1017','minimax/minimax-m3.1-flash','openrouter/anthropic/claude-sonnet-4.5'],'default_model':'test-model','providers':[]}
 api._load_cfg=lambda:cfg
 api._validate_model=lambda *_:None
 runner._load_cfg=lambda:cfg

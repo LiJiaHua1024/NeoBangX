@@ -3,6 +3,9 @@ import { FullReader, saveBlob, copyText } from "./reader.mjs";
 import { fillIcons, icon } from "./icons.mjs";
 import { initTheme } from "./claude-theme.mjs";
 import { Conversation } from "./conversation.mjs";
+import { createModelPicker } from "./model-picker.mjs";
+import { installCaret } from "./caret.mjs";
+import { createClawd } from "./mascot.mjs";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -26,6 +29,10 @@ const KIND_ICON = {
   arguments: "route",
 };
 const TAB_IDS = new Set(["prompt", "materials", "tools", "results"]);
+
+let modelPicker = null;
+let caret = null;
+let clawd = null;
 
 const state = {
   catalog: null,
@@ -55,6 +62,39 @@ let reader = null,
   taskQuery = "",
   shadeFor = "",
   modalCleanup = null;
+
+/* ---------------- 输入区增强（光标 / 模型 / Clawd） ---------------- */
+function initComposerSurfaces() {
+  modelPicker = createModelPicker({
+    trigger: $("#model-trigger"),
+    popover: $("#model-popover"),
+    label: $("#model-trigger .model-trigger-label"),
+    onSelect(model) {
+      const id = String(model?.id || "");
+      $("#model").value = id;
+      if (state.task) {
+        state.task.config.model = id;
+        changed();
+        updateStatus();
+      }
+    },
+  });
+  caret = installCaret($("#message"));
+  clawd = createClawd($("#composer-card"));
+  syncClawd();
+}
+
+/** Tell the crab what the task is doing. Cheap to call on every poll. */
+function syncClawd() {
+  if (!clawd) return;
+  const kind = state.conversation?.latestEntryKind?.() || "";
+  clawd.update({
+    taskId: state.task?.id || "",
+    status: state.task?.status || "",
+    kind,
+    visible: app.dataset.mode !== "trajectory" && app.dataset.view !== "work",
+  });
+}
 
 /* ---------------- 基础 ---------------- */
 function token() {
@@ -112,8 +152,10 @@ function saveState(text, stateName) {
 }
 function connState(text, stateName, detail = "") {
   const el = $("#connection");
-  el.textContent = text;
+  const label = el.querySelector(".sr");
+  if (label) label.textContent = text;
   el.dataset.state = stateName;
+  el.setAttribute("aria-label", text);
   el.title = detail || text;
 }
 function shortTime(iso) {
@@ -135,6 +177,13 @@ function autoGrow(textarea) {
   const max =
     Number(getComputedStyle(textarea).maxHeight.replace("px", "")) || 520;
   textarea.style.height = `${Math.min(textarea.scrollHeight, max)}px`;
+  if (textarea.id === "message") caret?.refresh();
+}
+function updateDraftEmpty() {
+  const card = $("#composer-card");
+  const message = $("#message");
+  if (!card || !message) return;
+  card.toggleAttribute("data-draft-empty", message.value.length === 0);
 }
 function isNarrow() {
   return matchMedia("(max-width: 1099px)").matches;
@@ -197,18 +246,21 @@ function setView(view, push = true) {
     button.toggleAttribute("aria-current", button.dataset.view === view);
   }
   if (view === "chat") $("#activity-dot").textContent = "";
+  syncClawd();
   if (push && state.task) {
     history.replaceState({ ...history.state, view }, "", location.href);
   }
 }
 function setMode(mode, push = true) {
   if (mode !== "trajectory") mode = "chat";
+  if (mode === "trajectory") modelPicker?.close();
   app.dataset.mode = mode;
   for (const button of $$(".view-tabs [data-mode]")) {
     button.toggleAttribute("aria-current", button.dataset.mode === mode);
   }
   state.conversation?.setMode(mode, { push });
   if (mode === "trajectory") $("#activity-dot").textContent = "";
+  syncClawd();
   if (push && state.task) {
     const url = new URL(location.href);
     if (mode === "trajectory") url.hash = "trajectory";
@@ -636,6 +688,7 @@ $("#goal").addEventListener("input", () => {
 });
 $("#message").addEventListener("input", () => {
   autoGrow($("#message"));
+  updateDraftEmpty();
   if (!state.task) return;
   if (!state.task.runs.length && $("#goal").value !== $("#message").value) {
     $("#goal").value = $("#message").value;
@@ -644,7 +697,7 @@ $("#message").addEventListener("input", () => {
   }
 });
 $("#message").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey && !state.composing) {
+  if (event.key === "Enter" && !event.shiftKey && !state.composing && !event.isComposing) {
     event.preventDefault();
     sendMessage();
   }
@@ -1111,6 +1164,7 @@ async function createTask(config) {
   await listTasks();
 }
 async function openTask(id, push = true) {
+  modelPicker?.close();
   if (state.task?.id === id) {
     const hash = location.hash.slice(1);
     setMode(hash === "trajectory" ? "trajectory" : "chat", false);
@@ -1123,6 +1177,7 @@ async function openTask(id, push = true) {
   const task = await api(`/tasks/${id}`);
   if (generation !== state.generation) return;
   state.task = task;
+  app.dataset.task = task.id;
   state.configChangedDuringRun = false;
   state.templateUndo = null;
   $("#undo-template").hidden = true;
@@ -1201,11 +1256,13 @@ function fill() {
     if (el.type === "checkbox") el.checked = Boolean(task.config[key]);
     else el.value = task.config[key] ?? "";
   }
+  modelPicker?.setValue(task.config.model || "");
   autoGrow($("#prompt"));
   autoGrow($("#behavior"));
   $("#template").value = task.config.template_id || "";
   $("#message").value = task.runs.length ? "" : task.config.goal || "";
   autoGrow($("#message"));
+  updateDraftEmpty();
   $("#message").placeholder = task.runs.length
     ? "补充要求，或直接继续任务…"
     : "这次想完成什么？";
@@ -1251,6 +1308,7 @@ function updateStatus() {
   state.conversation?.updateComposerState();
   state.conversation?.updateWaiting();
   state.conversation?.refreshEmpty();
+  syncClawd();
 }
 
 /* ---------------- 轨迹卡片 ---------------- */
@@ -1573,6 +1631,7 @@ async function start(mode = "execute", instruction = "", baseVersion = "", teach
   state.conversation?.applyEvent({ kind: "run", data: run });
   $("#message").value = "";
   autoGrow($("#message"));
+  updateDraftEmpty();
   setMode("chat", false);
   setView("chat", false);
   updateStatus();
@@ -1599,6 +1658,7 @@ async function sendMessage() {
     await api(path("/notes"), { method: "POST", body: { text } });
     $("#message").value = "";
     autoGrow($("#message"));
+    updateDraftEmpty();
     poll();
     return;
   }
@@ -2214,6 +2274,7 @@ function confirmAction(title, text, run) {
 /* 政策 */
 $$("[data-policy]").forEach((button) => {
   button.onclick = async () => {
+    closeMenus();
     try {
       const catalog = await api("/catalog");
       modal(
@@ -2463,12 +2524,13 @@ async function boot() {
       ? "无限额度"
       : `剩余 ${state.catalog.user.remaining} 次`;
     $("#account-avatar").textContent = state.catalog.user.code?.slice(-1) || "N";
-    $("#model").innerHTML = state.catalog.models
-      .map(
-        (model) =>
-          `<option value="${esc(model.id)}">${esc(model.name || model.id)}${model.is_free ? " · 免费" : ""}</option>`,
-      )
-      .join("");
+    const initialModel =
+      $("#model").value ||
+      state.catalog.default_model ||
+      state.catalog.models[0]?.id ||
+      "";
+    $("#model").value = initialModel;
+    modelPicker.setModels(state.catalog.models, initialModel);
     $("#run-policy").textContent = state.catalog.billing;
     renderTemplateOptions();
     await listTasks();
@@ -2534,5 +2596,6 @@ $$(".mobile-switch [data-view]").forEach((button) => {
   button.onclick = () => setView(button.dataset.view);
 });
 $("#activity-dot").textContent = "";
+initComposerSurfaces();
 updateStatus();
 boot().catch(error);

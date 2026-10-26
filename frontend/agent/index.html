@@ -48,6 +48,9 @@
     <link rel="stylesheet" href="/static/agent/claude/conversation.css" />
     <link rel="stylesheet" href="/static/agent/claude/markdown.css" />
     <link rel="stylesheet" href="/static/agent/claude/composer.css" />
+    <link rel="stylesheet" href="/static/agent/claude/model-picker.css" />
+    <link rel="stylesheet" href="/static/agent/claude/caret.css" />
+    <link rel="stylesheet" href="/static/agent/claude/mascot.css" />
     <link rel="stylesheet" href="/static/agent/claude/workspace.css" />
     <link rel="stylesheet" href="/static/agent/claude/overlays.css" />
     <link rel="stylesheet" href="/static/agent/claude/responsive.css" />
@@ -234,6 +237,9 @@
                 <button id="open-workspace" type="button" class="desktop-only">
                   <span data-icon="panel-right"></span><span>打开工作区</span>
                 </button>
+                <button type="button" data-policy>
+                  <span data-icon="sliders"></span><span>额度与预算</span>
+                </button>
                 <hr />
                 <button id="delete-task" type="button" class="danger">
                   <span data-icon="trash"></span><span>删除任务</span>
@@ -309,8 +315,8 @@
 
             <div class="composer-seat" id="composer-seat" data-hero="true">
               <div class="composer-stack">
-                <div class="composer-card" id="composer-card" data-hero="true">
-                  <div id="composer-context" class="composer-context"></div>
+                <div id="composer-context" class="composer-context"></div>
+                <div class="composer-card" id="composer-card" data-hero="true" data-draft-empty>
                   <label class="sr" for="message">任务目标或补充要求</label>
                   <textarea
                     id="message"
@@ -318,44 +324,7 @@
                     rows="1"
                     placeholder="这次想完成什么？"
                   ></textarea>
-                  <div class="composer-bar">
-                    <button
-                      id="composer-materials"
-                      class="composer-btn"
-                      type="button"
-                      aria-label="选择材料"
-                      title="材料"
-                      aria-expanded="false"
-                    >
-                      <span data-icon="paperclip"></span>
-                      <span class="count" id="composer-material-count"></span>
-                    </button>
-                    <button
-                      id="composer-tools"
-                      class="composer-btn"
-                      type="button"
-                      aria-label="选择工具"
-                      title="工具"
-                      aria-expanded="false"
-                    >
-                      <span data-icon="sliders"></span>
-                      <span class="count" id="composer-tool-count"></span>
-                    </button>
-                    <label class="sr" for="model">执行模型</label>
-                    <div class="aw-select model-trigger">
-                      <select id="model" aria-label="执行模型"></select>
-                    </div>
-                    <span class="grow"></span>
-                    <button
-                      id="send"
-                      class="send-btn"
-                      type="button"
-                      data-mode="start"
-                      aria-label="开始任务"
-                    >
-                      <span class="btn-label" data-label>开始任务</span>
-                      <span data-icon="arrow-up"></span>
-                    </button>
+                  <div class="composer-actions">
                     <button
                       id="stop"
                       class="stop-btn"
@@ -364,10 +333,92 @@
                       title="停止本轮"
                       hidden
                     >
-                      <span data-icon="stop"></span>
+                      <span class="stop-glyph" aria-hidden="true"></span>
+                    </button>
+                    <button
+                      id="send"
+                      class="send-btn"
+                      type="button"
+                      data-mode="start"
+                      aria-label="开始任务"
+                      title="Enter 发送 · Shift+Enter 换行"
+                    >
+                      <svg
+                        class="send-glyph"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.5"
+                        stroke-linejoin="miter"
+                        aria-hidden="true"
+                        focusable="false"
+                      >
+                        <path d="M8 3.75h5.25v7H3M6 7.75l-3 3 3 3" />
+                      </svg>
                     </button>
                   </div>
+                </div>
 
+                <div class="composer-bar">
+                  <button
+                    id="composer-materials"
+                    class="composer-btn"
+                    type="button"
+                    aria-label="选择材料"
+                    title="材料"
+                    aria-expanded="false"
+                  >
+                    <span data-icon="paperclip"></span>
+                    <span class="count" id="composer-material-count"></span>
+                  </button>
+                  <button
+                    id="composer-tools"
+                    class="composer-btn"
+                    type="button"
+                    aria-label="选择工具"
+                    title="工具"
+                    aria-expanded="false"
+                  >
+                    <span data-icon="sliders"></span>
+                    <span class="count" id="composer-tool-count"></span>
+                  </button>
+                  <span class="composer-live" id="composer-live">
+                    <span class="live-cloud" data-icon="cloud"></span>
+                    <span
+                      class="foot-status"
+                      id="composer-status"
+                      role="status"
+                      aria-live="polite"
+                      data-state="idle"
+                      >准备就绪</span
+                    >
+                    <span id="run-policy" hidden></span>
+                  </span>
+                  <span class="grow"></span>
+                  <span class="foot-stats">
+                    <span id="composer-rounds">0 轮</span>
+                    <span aria-hidden="true">·</span>
+                    <span id="composer-tokens">0 tok</span>
+                    <span class="conn-inline" id="connection" data-state="idle" role="status" aria-label="连接中"
+                      ><span class="sr">连接中</span></span
+                    >
+                  </span>
+                  <span class="model-seat">
+                    <label class="sr" for="model-trigger">执行模型</label>
+                    <button
+                      id="model-trigger"
+                      class="model-trigger"
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-controls="model-popover"
+                      aria-expanded="false"
+                      aria-label="选择执行模型"
+                      title="选择执行模型"
+                    >
+                      <span class="model-trigger-label">选择模型</span>
+                    </button>
+                    <input id="model" type="hidden" />
+                  </span>
                   <div
                     id="materials-pop"
                     class="composer-pop"
@@ -376,29 +427,7 @@
                   ></div>
                   <div id="tools-pop" class="composer-pop" data-align="left" hidden></div>
                 </div>
-
-                <div class="composer-foot">
-                  <span class="foot-left">
-                    <span data-icon="cloud"></span>
-                    <span class="foot-status" id="composer-status" role="status" aria-live="polite" data-state="idle"
-                      >执行在后台继续</span
-                    >
-                    <span id="run-policy" hidden></span>
-                  </span>
-                  <button class="action-link" type="button" data-policy>
-                    额度与预算
-                  </button>
-                  <span class="foot-spacer"></span>
-                  <span class="foot-stats">
-                    <span id="composer-rounds">0 轮</span>
-                    <span aria-hidden="true">·</span>
-                    <span id="composer-tokens">0 tok</span>
-                    <span class="desktop-stat" aria-hidden="true">·</span>
-                    <span class="conn-inline" id="connection" data-state="idle"
-                      >连接中</span
-                    >
-                  </span>
-                </div>
+                <div id="model-popover" class="model-popover" hidden></div>
               </div>
             </div>
           </section>

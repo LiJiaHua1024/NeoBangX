@@ -1,0 +1,56 @@
+/* Claude 风格工作台 · 输入光标
+   来源：dsh-claude-style@1e7acc5b 的 features/caret/caret.css
+   （2px 竖线、80ms 位移、1000ms 闪烁；减少动效时两者都停）。 */
+
+[data-caret-active] {
+  caret-color: transparent;
+}
+
+[data-caret-host] {
+  position: relative;
+}
+
+[data-caret-layer] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 4;
+  box-sizing: content-box;
+  width: 2px;
+  min-width: 0;
+  max-width: none;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  background: var(--caret-color, var(--ink));
+  visibility: hidden;
+  pointer-events: none;
+  will-change: transform;
+  transition: transform var(--dur-instant) var(--ease-standard);
+  animation: agent-caret-blink var(--period-blink) step-end infinite;
+}
+
+[data-caret-layer][data-caret-visible] {
+  visibility: visible;
+}
+
+@keyframes agent-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-caret-layer] {
+    transition: none;
+    animation: none;
+  }
+}
+
+html[data-motion="reduced"] [data-caret-layer] {
+  transition: none;
+  animation: none;
+}

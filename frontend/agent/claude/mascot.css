@@ -1,0 +1,73 @@
+/* Claude 风格工作台 · Clawd
+   来源：dsh-claude-style@1e7acc5b 的 features/mascot/crab.css、
+   mascot-player.ts、sheets.ts。像素帧图来自上游仓库；Clawd 是 Anthropic
+   的角色形象，帧图不适用 MIT，仅作个人界面复刻（见 mascot/NOTICE.md）。
+
+   螃蟹站在输入卡片上沿、靠右端；精灵窗口按帧裁切，整张 sheet 用位移播放。 */
+
+.clawd {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  z-index: 6;
+  width: 104px;
+  height: 72px;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.clawd:not([data-ready]) {
+  visibility: hidden;
+}
+.clawd-sprite {
+  position: absolute;
+  left: calc(var(--clawd-x, 0) * 2px);
+  top: calc(var(--clawd-y, 0) * 2px);
+  width: calc(var(--clawd-w, 0) * 2px);
+  height: calc(var(--clawd-h, 0) * 2px);
+  overflow: hidden;
+}
+.clawd-strip {
+  position: relative;
+  display: block;
+  width: calc(var(--clawd-cell-w, 0) * 16px);
+  height: calc(var(--clawd-strip-h, 0) * 2px);
+  background-image: var(--clawd-sheet, none);
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  will-change: transform;
+}
+/* 墨色层：笔记本、气泡、音符、帽子和提示线，用三级文字色，随主题变。 */
+.clawd-strip::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--ink-3);
+  -webkit-mask: var(--clawd-ink, none) no-repeat 0 0 / 100% 100%;
+  mask: var(--clawd-ink, none) no-repeat 0 0 / 100% 100%;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.clawd-hit {
+  position: absolute;
+  left: 48px;
+  top: 40px;
+  width: 48px;
+  height: 32px;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: pointer;
+}
+@media (max-width: 767px) {
+  .clawd {
+    right: 2px;
+    transform: scale(0.9);
+    transform-origin: 100% 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .clawd-strip {
+    will-change: auto;
+  }
+}

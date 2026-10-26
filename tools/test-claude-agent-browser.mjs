@@ -120,6 +120,30 @@ try {
   });
   const shots = (name) => path.join(SHOTS, name);
 
+  /** Wait until the newly created task is the one the page has actually opened. */
+  async function newTask() {
+    const previous = await page.locator("#app").getAttribute("data-task");
+    await page.locator("#new-task").click();
+    await page.waitForFunction(
+      (before) => {
+        const current = document.querySelector("#app")?.dataset.task;
+        return current && current !== before;
+      },
+      previous,
+      { timeout: 20000 },
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#task-status")?.textContent === "草稿",
+      {},
+      { timeout: 20000 },
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#save-state")?.textContent === "已保存",
+      {},
+      { timeout: 20000 },
+    );
+  }
+
   await checked("登录并建立空白任务", async () => {
     await page.goto(`${BASE}/agent`, { waitUntil: "networkidle" });
     await page.locator("#login-code").waitFor({ state: "visible" });
@@ -131,8 +155,7 @@ try {
       {},
       { timeout: 20000 },
     );
-    await page.locator("#new-task").click();
-    await page.waitForTimeout(800);
+    await newTask();
     assert(await page.locator("#empty").isVisible(), "空态未显示");
     assert.equal(await page.locator("#composer-seat").getAttribute("data-hero"), "true");
     firstTaskUrl = page.url();
@@ -157,6 +180,116 @@ try {
       await page.evaluate(() => document.documentElement.dataset.agentTheme),
       "light",
     );
+  });
+
+  await checked("Claude 输入框、平滑光标、模型选择器与 Clawd", async () => {
+    assert.equal(await page.locator("#model").getAttribute("type"), "hidden");
+    assert.equal(await page.locator("select#model").count(), 0, "仍在用原生 select");
+    assert.equal(
+      await page.locator("#model-trigger").getAttribute("aria-haspopup"),
+      "listbox",
+    );
+    // Enter 发送、Shift+Enter 换行；提示在 title 里。
+    assert(
+      (await page.locator("#send").getAttribute("title")).includes("Shift+Enter"),
+    );
+    await page.locator("#message").click();
+    await page.keyboard.type("逐字平滑");
+    await page.waitForTimeout(90);
+    const caret = page.locator("[data-caret-layer]");
+    assert.equal(await caret.count(), 1, "没有绘制光标");
+    assert(
+      (await caret.getAttribute("data-caret-visible")) !== null,
+      "光标未显示",
+    );
+    assert.equal(
+      await caret.evaluate((el) => getComputedStyle(el).transitionDuration),
+      "0.08s",
+    );
+    assert(
+      (
+        await caret.evaluate((el) =>
+          el.getAnimations().map((item) => item.animationName),
+        )
+      ).includes("agent-caret-blink"),
+      "光标没有闪烁动画",
+    );
+    const before = await caret.evaluate((el) => getComputedStyle(el).transform);
+    await page.keyboard.type("，继续");
+    await page.waitForTimeout(35);
+    const after = await caret.evaluate((el) => getComputedStyle(el).transform);
+    assert.notEqual(before, after, "光标没有随输入移动");
+    await page.keyboard.press("Shift+Enter");
+    assert(
+      (await page.locator("#message").inputValue()).includes("\n"),
+      "Shift+Enter 没有换行",
+    );
+
+    // 模型选择器：Claude 的分组卡片，而不是浏览器原生 select。
+    await page.locator("#model-trigger").click();
+    await page.waitForTimeout(420);
+    assert.equal(
+      await page.locator("#model-popover").getAttribute("data-open"),
+      "true",
+    );
+    assert.equal(
+      await page.locator(".model-row").count(),
+      4,
+      "模型行数量不对",
+    );
+    assert(
+      (await page.locator(".model-brand-lockup").count()) >= 3,
+      "缺少厂商字标",
+    );
+    await page.screenshot({ path: shots("05-model-picker-light.png") });
+    // Escape closes and returns focus; ArrowDown walks the list.
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    assert.equal(
+      await page.locator("#model-popover").getAttribute("data-open"),
+      null,
+    );
+    await page.locator("#model-trigger").click();
+    await page.waitForTimeout(350);
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(150);
+    assert.equal(
+      await page.locator(".model-row[data-active]").count(),
+      1,
+      "键盘没有选中行",
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(250);
+    await page.locator("#model-trigger").click();
+    await page.waitForTimeout(350);
+    await page
+      .locator('.model-row[data-model-id="deepseek/deepseek-v4.1-flash-1017"]')
+      .click();
+    await page.waitForTimeout(500);
+    assert.equal(
+      await page.locator("#model").inputValue(),
+      "deepseek/deepseek-v4.1-flash-1017",
+    );
+    assert(
+      (await page.locator("#model-trigger").innerText()).includes("DeepSeek"),
+      "模型按钮没有更新",
+    );
+
+    // Clawd 站在卡片上沿，并且按帧播放。
+    assert.equal(await page.locator(".clawd").count(), 1, "缺少 Clawd");
+    await page.waitForFunction(() =>
+      document.querySelector(".clawd")?.hasAttribute("data-ready"),
+    );
+    const frameBefore = await page
+      .locator(".clawd-strip")
+      .evaluate((el) => getComputedStyle(el).transform);
+    await page.waitForTimeout(420);
+    const frameAfter = await page
+      .locator(".clawd-strip")
+      .evaluate((el) => getComputedStyle(el).transform);
+    assert.notEqual(frameBefore, frameAfter, "Clawd 没有播放");
+    await page.screenshot({ path: shots("06-composer-clawd-light.png") });
+    await page.locator("#message").fill("");
   });
 
   await checked("空目标直接执行、流式跟随、刷新恢复", async () => {
@@ -189,6 +322,10 @@ try {
     );
     assert(await page.locator(".assistant").count() >= 2);
     assert(await page.locator(".tool-call").count() >= 2);
+    assert(
+      (await page.locator("#model-trigger").innerText()).includes("DeepSeek"),
+      "模型选择未保存",
+    );
     assert(
       (await page.locator(".turn-start").count()) >= 1,
       "空目标执行缺少开始状态行",
@@ -294,8 +431,7 @@ try {
   });
 
   await checked("工作区：提示词、材料、工具、教学工具、模板", async () => {
-    await page.locator("#new-task").click();
-    await page.waitForTimeout(700);
+    await newTask();
     await page.locator("[data-tab=prompt]").click();
     await page.locator("#prompt").fill("自定义提示词：只处理阅读材料，保留原文。");
     await page.waitForTimeout(1100);
@@ -320,7 +456,7 @@ try {
       { timeout: 20000 },
     );
     assert.equal(await page.locator("#composer-material-count").textContent(), "1");
-    await page.locator("#composer-card #composer-context .context-chip").first().waitFor();
+    await page.locator("#composer-context .context-chip").first().waitFor();
     await page.locator("[data-tab=tools]").click();
     const toggle = page.locator("#tools-list .switch input").first();
     const before = await toggle.isChecked();
@@ -376,8 +512,7 @@ try {
   });
 
   await checked("失败与停止状态可读、可恢复", async () => {
-    await page.locator("#new-task").click();
-    await page.waitForTimeout(700);
+    await newTask();
     await page.locator("#goal").fill("模拟失败");
     await page.waitForTimeout(900);
     await page.locator("#send").click();
@@ -388,8 +523,7 @@ try {
     );
     assert((await page.locator(".error-box").first().innerText()).length > 0);
     await page.screenshot({ path: shots("07-failed.png") });
-    await page.locator("#new-task").click();
-    await page.waitForTimeout(700);
+    await newTask();
     await page.locator("#goal").fill("慢速执行");
     await page.waitForTimeout(900);
     await page.locator("#send").click();

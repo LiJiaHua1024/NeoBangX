@@ -1378,6 +1378,15 @@ export class Conversation {
     return this.entries.get(id) || null;
   }
 
+  /** The latest entry's kind, so the composer mascot can mirror the work. */
+  latestEntryKind() {
+    const entries = [...this.entries.values()];
+    entries.sort((a, b) =>
+      String(a.created_at || "").localeCompare(String(b.created_at || "")),
+    );
+    return entries[entries.length - 1]?.kind || "";
+  }
+
   destroy() {
     this.destroyed = true;
     this.stopClock();

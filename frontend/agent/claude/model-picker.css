@@ -1,0 +1,221 @@
+/* Claude 风格工作台 · 模型选择器
+   来源：dsh-claude-style@1e7acc5b 的 features/model/model-picker.css、
+   shared/popover.css 与 docs/screenshots（模型弹层）。行结构、商户字标、
+   描述行、右侧选中勾、菜单生长动效均按上游；分组标题改为截图里的
+   轻量文字标题，而不是上游第二级的反色 chip。 */
+
+.model-popover {
+  --menu-surface: color-mix(in srgb, var(--ink) 3.5%, var(--card));
+  position: fixed;
+  z-index: var(--layer-takeover);
+  box-sizing: border-box;
+  max-height: min(70vh, 560px);
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0 6px;
+  border: 1px solid color-mix(in srgb, var(--ink) 6%, transparent);
+  border-radius: 14px;
+  background: var(--menu-surface);
+  box-shadow:
+    0 12px 32px rgba(20, 20, 19, 0.12),
+    0 2px 7px rgba(20, 20, 19, 0.06);
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.97) translateY(4px);
+  transform-origin: bottom right;
+  transition:
+    opacity var(--dur-exit) var(--ease-settle),
+    transform var(--dur-exit) var(--ease-settle),
+    visibility 0s linear var(--dur-exit);
+}
+.model-popover:focus {
+  outline: none;
+}
+.model-popover[data-open="true"] {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+  transition:
+    opacity var(--dur-open) var(--ease-settle),
+    transform var(--dur-open) var(--ease-settle),
+    visibility 0s;
+}
+html[data-agent-theme="dark"] .model-popover {
+  --menu-surface: var(--card);
+  border-color: color-mix(in srgb, var(--ink) 9%, transparent);
+  box-shadow:
+    0 16px 42px rgba(0, 0, 0, 0.55),
+    0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.model-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 6px;
+  scrollbar-gutter: stable;
+}
+.model-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.model-group + .model-group {
+  margin-top: 2px;
+}
+.model-group-label {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 9px 10px 3px;
+  background: var(--menu-surface);
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-group:first-child .model-group-label {
+  padding-top: 5px;
+}
+.model-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 42px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: background-color var(--dur-feedback) var(--ease-standard);
+}
+.model-row:hover,
+.model-row[data-active] {
+  background: color-mix(in srgb, var(--ink) 6.5%, transparent);
+}
+.model-row:focus {
+  outline: none;
+}
+.model-row:focus-visible {
+  outline: none;
+}
+.model-row-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.model-row-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.model-row-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 19px;
+  letter-spacing: -0.005em;
+}
+.model-brand-lockup {
+  display: inline-block;
+  flex: none;
+  height: 16px;
+  margin-right: 3px;
+  vertical-align: baseline;
+}
+.model-brand-lockup svg {
+  display: block;
+  height: 100%;
+  width: auto;
+  overflow: visible;
+}
+/* 上游的两层字标：浅色画彩色层，深色画单色层；只带一层的商户两层都显示。 */
+html[data-agent-theme="dark"] .model-brand-lockup .dsh-combine-mark-color:not(.dsh-combine-mark-mono) {
+  display: none;
+}
+html[data-agent-theme="light"] .model-brand-lockup .dsh-combine-mark-mono:not(.dsh-combine-mark-color) {
+  display: none;
+}
+.model-row-desc {
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-row-tag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.model-row-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 1px;
+  color: var(--accent);
+  opacity: 0;
+}
+.model-row[data-selected="true"] .model-row-check {
+  opacity: 1;
+}
+.model-empty {
+  padding: 16px 12px;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 767px) {
+  .model-popover {
+    max-height: min(62vh, 520px);
+  }
+  .model-scroll {
+  }
+  .model-row {
+    min-height: 46px;
+    padding: 8px 10px;
+  }
+  .model-row-name {
+    font-size: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-popover,
+  .model-popover:focus {
+  outline: none;
+}
+.model-popover[data-open="true"] {
+    transition: none;
+  }
+}
