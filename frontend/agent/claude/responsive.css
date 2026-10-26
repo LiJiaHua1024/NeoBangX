@@ -1,508 +1,500 @@
 /* Claude 风格工作台 · 响应式
    断点按可用 CSS 像素，不看设备型号：≥1440 三栏，1100–1439 两栏 + 工作区浮层，
-   768–1099 单主区 + 抽屉，<768 手机单栏 + 底部对话/工作区分段。 */
+   768–1099 单主区 + 抽屉，<768 手机单栏 + 底部对话/工作区分段。
+
+   断点不用 @media：整页缩放（zoom.mjs）不会改变媒体查询看到的视口，而 Ctrl +/- 会。
+   为了让缩放后的版式和浏览器缩放一致，<html data-vp> 按「视口 ÷ 缩放」写入断点标记：
+   wN = 有效宽度 ≤ N（原 max-width: Npx），hN = 有效高度 ≤ N（原 max-height: Npx）。
+   前缀一律包在 :where() 里，特异性与原来的 @media 规则相同。 */
 
 /* ---------- 1100–1439：工作区浮层 ---------- */
-@media (max-width: 1439px) {
-  .workspace-panel {
-    position: fixed;
-    top: calc(var(--header-h) + 4px);
-    right: 8px;
-    bottom: 8px;
-    left: auto;
-    width: min(540px, calc(100vw - 24px));
-    max-width: none;
-    padding: 0;
-    transform: translateX(calc(100% + 20px));
-    opacity: 0;
-    pointer-events: none;
-    transition: transform var(--dur-slide) var(--ease-settle),
-      opacity var(--dur-surface) var(--ease-standard);
-    z-index: var(--layer-overlay);
-    background: transparent;
-  }
-  .app[data-workspace="open"] .workspace-panel {
-    transform: translateX(0);
-    opacity: 1;
-    pointer-events: auto;
-  }
-  .workspace-panel .workspace-card {
-    box-shadow: var(--shadow-popover);
-  }
-  .splitter {
-    display: none;
-  }
-  .app[data-focus="work"] .workspace-panel {
-    transform: none;
-    opacity: 1;
-    pointer-events: auto;
-    top: calc(var(--header-h) + 4px);
-    left: 8px;
-    right: 8px;
-    width: auto;
-    padding: 0;
-  }
-  .app[data-focus="work"] .conversation {
-    display: none;
-  }
+:where(html[data-vp~="w1439"]) .workspace-panel {
+  position: fixed;
+  top: calc(var(--header-h) + 4px);
+  right: 8px;
+  bottom: 8px;
+  left: auto;
+  width: min(540px, calc(100vw / var(--zoom) - 24px));
+  max-width: none;
+  padding: 0;
+  transform: translateX(calc(100% + 20px));
+  opacity: 0;
+  pointer-events: none;
+  transition: transform var(--dur-slide) var(--ease-settle),
+    opacity var(--dur-surface) var(--ease-standard);
+  z-index: var(--layer-overlay);
+  background: transparent;
+}
+:where(html[data-vp~="w1439"]) .app[data-workspace="open"] .workspace-panel {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+:where(html[data-vp~="w1439"]) .workspace-panel .workspace-card {
+  box-shadow: var(--shadow-popover);
+}
+:where(html[data-vp~="w1439"]) .splitter {
+  display: none;
+}
+:where(html[data-vp~="w1439"]) .app[data-focus="work"] .workspace-panel {
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  top: calc(var(--header-h) + 4px);
+  left: 8px;
+  right: 8px;
+  width: auto;
+  padding: 0;
+}
+:where(html[data-vp~="w1439"]) .app[data-focus="work"] .conversation {
+  display: none;
 }
 
 /* ---------- 768–1099：侧栏抽屉、单主区 ---------- */
-@media (max-width: 1099px) {
-  .app {
-    --sidebar-w: 280px;
-  }
-  .sidebar {
-    position: fixed;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 280px;
-    min-width: 280px;
-    transform: translateX(-100%);
-    transition: transform var(--dur-slide) var(--ease-settle);
-    box-shadow: none;
-    z-index: 50;
-  }
-  .app[data-sidebar="open"] .sidebar {
-    transform: translateX(0);
-    box-shadow: var(--shadow-popover);
-  }
-  .app[data-sidebar="collapsed"] .sidebar {
-    width: 280px;
-    min-width: 280px;
-    transform: translateX(-100%);
-  }
-  .app[data-sidebar="collapsed"] .brand-name,
-  .app[data-sidebar="collapsed"] .brand-sub,
-  .app[data-sidebar="collapsed"] .sidebar-actions .label,
-  .app[data-sidebar="collapsed"] .sidebar-search,
-  .app[data-sidebar="collapsed"] .sidebar-scroll,
-  .app[data-sidebar="collapsed"] .sidebar-bottom .account-meta,
-  .app[data-sidebar="collapsed"] .sidebar-bottom .account-caret {
-    display: revert;
-  }
-  .app[data-sidebar="collapsed"] .sidebar-top {
-    justify-content: flex-start;
-    padding: 0 12px 0 14px;
-  }
-  .app[data-sidebar="collapsed"] .sidebar-actions {
-    padding: 4px 10px 2px;
-  }
-  .app[data-sidebar="collapsed"] .new-task {
-    justify-content: flex-start;
-    padding: 0 8px;
-  }
-  .app[data-sidebar="collapsed"] .new-task .plus-chip {
-    margin: 0;
-  }
-  .topbar-menu {
-    display: inline-flex;
-  }
-  .sidebar-top .sidebar-collapse {
-    display: none;
-  }
-  .sidebar-close {
-    display: inline-flex;
-  }
-  .task-row {
-    height: 36px;
-  }
-  .topbar .icon-btn {
-    width: 36px;
-    height: 36px;
-  }
-  .workspace-tabs button {
-    height: 34px;
-  }
-  .mobile-switch button {
-    height: 36px;
-  }
-  .composer-btn {
-    min-width: 36px;
-  }
-  .send-btn,
-  .stop-btn {
-    width: 28px;
-    height: 28px;
-  }
-  .transcript {
-    padding-left: 24px;
-    padding-right: 24px;
-  }
-  .composer-seat {
-    padding-left: 24px;
-    padding-right: 24px;
-  }
-  .empty {
-    padding-left: 24px;
-    padding-right: 24px;
-  }
-  .workspace-panel {
-    top: 8px;
-    left: 8px;
-    right: 8px;
-    bottom: 8px;
-    width: auto;
-  }
+:where(html[data-vp~="w1099"]) .app {
+  --sidebar-w: 280px;
+}
+:where(html[data-vp~="w1099"]) .sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 280px;
+  min-width: 280px;
+  transform: translateX(-100%);
+  transition: transform var(--dur-slide) var(--ease-settle);
+  box-shadow: none;
+  z-index: 50;
+}
+:where(html[data-vp~="w1099"]) .app[data-sidebar="open"] .sidebar {
+  transform: translateX(0);
+  box-shadow: var(--shadow-popover);
+}
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .sidebar {
+  width: 280px;
+  min-width: 280px;
+  transform: translateX(-100%);
+}
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .brand-name,
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .brand-sub,
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .sidebar-actions .label,
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .sidebar-search,
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .sidebar-scroll,
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .sidebar-bottom .account-meta,
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .sidebar-bottom .account-caret {
+  display: revert;
+}
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .sidebar-top {
+  justify-content: flex-start;
+  padding: 0 12px 0 14px;
+}
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .sidebar-actions {
+  padding: 4px 10px 2px;
+}
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .new-task {
+  justify-content: flex-start;
+  padding: 0 8px;
+}
+:where(html[data-vp~="w1099"]) .app[data-sidebar="collapsed"] .new-task .plus-chip {
+  margin: 0;
+}
+:where(html[data-vp~="w1099"]) .topbar-menu {
+  display: inline-flex;
+}
+:where(html[data-vp~="w1099"]) .sidebar-top .sidebar-collapse {
+  display: none;
+}
+:where(html[data-vp~="w1099"]) .sidebar-close {
+  display: inline-flex;
+}
+:where(html[data-vp~="w1099"]) .task-row {
+  height: 36px;
+}
+:where(html[data-vp~="w1099"]) .topbar .icon-btn {
+  width: 36px;
+  height: 36px;
+}
+:where(html[data-vp~="w1099"]) .workspace-tabs button {
+  height: 34px;
+}
+:where(html[data-vp~="w1099"]) .mobile-switch button {
+  height: 36px;
+}
+:where(html[data-vp~="w1099"]) .composer-btn {
+  min-width: 36px;
+}
+:where(html[data-vp~="w1099"]) .send-btn,
+:where(html[data-vp~="w1099"]) .stop-btn {
+  width: 28px;
+  height: 28px;
+}
+:where(html[data-vp~="w1099"]) .transcript {
+  padding-left: 24px;
+  padding-right: 24px;
+}
+:where(html[data-vp~="w1099"]) .composer-seat {
+  padding-left: 24px;
+  padding-right: 24px;
+}
+:where(html[data-vp~="w1099"]) .empty {
+  padding-left: 24px;
+  padding-right: 24px;
+}
+:where(html[data-vp~="w1099"]) .workspace-panel {
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  width: auto;
 }
 
 /* ---------- <768：手机单栏 ---------- */
-@media (max-width: 767px) {
-  :root {
-    --header-h: 52px;
-    --composer-fade-h: 24px;
-  }
-  .app[data-sidebar="open"] .scrim {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  .topbar {
-    gap: 6px;
-    padding: 0 8px 0 6px;
-    z-index: 60;
-  }
-  .scrim {
-    z-index: 70;
-  }
-  .workspace-panel {
-    z-index: 55;
-  }
-  .sidebar {
-    z-index: 80;
-  }
-  .title-wrap {
-    gap: 5px;
-  }
-  .task-title-input {
-    width: auto;
-    flex: 1;
-    min-width: 0;
-    max-width: none;
-    font-size: 14px;
-    padding: 5px 4px;
-    margin-left: 0;
-  }
-  .status-pill {
-    height: 19px;
-    padding: 0 6px;
-    font-size: 10px;
-  }
-  .view-tabs {
-    display: none;
-  }
-  .top-actions .desktop-only {
-    display: none;
-  }
-  .top-actions .divider {
-    display: none;
-  }
+/* 令牌落在 :root 本身，不能再加后代前缀；比 tokens.css 的 :root 高一级即可覆盖。 */
+:root[data-vp~="w767"] {
+  --header-h: 52px;
+  --composer-fade-h: 24px;
+}
+:where(html[data-vp~="w767"]) .app[data-sidebar="open"] .scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+:where(html[data-vp~="w767"]) .topbar {
+  gap: 6px;
+  padding: 0 8px 0 6px;
+  z-index: 60;
+}
+:where(html[data-vp~="w767"]) .scrim {
+  z-index: 70;
+}
+:where(html[data-vp~="w767"]) .workspace-panel {
+  z-index: 55;
+}
+:where(html[data-vp~="w767"]) .sidebar {
+  z-index: 80;
+}
+:where(html[data-vp~="w767"]) .title-wrap {
+  gap: 5px;
+}
+:where(html[data-vp~="w767"]) .task-title-input {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  font-size: 14px;
+  padding: 5px 4px;
+  margin-left: 0;
+}
+:where(html[data-vp~="w767"]) .status-pill {
+  height: 19px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+:where(html[data-vp~="w767"]) .view-tabs {
+  display: none;
+}
+:where(html[data-vp~="w767"]) .top-actions .desktop-only {
+  display: none;
+}
+:where(html[data-vp~="w767"]) .top-actions .divider {
+  display: none;
+}
 
-  .layout {
-    flex-direction: column;
-  }
-  .conversation {
-    width: 100%;
-    padding-bottom: 52px;
-  }
-  .app[data-view="work"] .conversation {
-    display: none;
-  }
-  .workspace-panel {
-    position: fixed;
-    inset: var(--header-h) 0 0 0;
-    width: 100%;
-    min-width: 0;
-    max-width: none;
-    height: auto;
-    padding: 0;
-    transform: none;
-    opacity: 1;
-    pointer-events: auto;
-    z-index: var(--layer-chrome);
-    display: none;
-    background: var(--canvas);
-  }
-  .app[data-view="work"] .workspace-panel,
-  .app[data-workspace="open"] .workspace-panel {
-    display: flex;
-  }
-  .app[data-view="chat"] .workspace-panel:not([data-mobile="open"]) {
-    display: none;
-  }
-  .workspace-panel .workspace-card {
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-  }
-  .workspace-head {
-    height: 44px;
-    padding-left: 6px;
-  }
-  .workspace-body {
-    padding: 14px 14px calc(84px + env(safe-area-inset-bottom, 0px));
-  }
-  .app[data-focus="work"] .workspace-panel {
-    display: flex;
-    inset: var(--header-h) 0 0 0;
-  }
-  .app[data-focus="chat"] .conversation {
-    display: flex;
-  }
+:where(html[data-vp~="w767"]) .layout {
+  flex-direction: column;
+}
+:where(html[data-vp~="w767"]) .conversation {
+  width: 100%;
+  padding-bottom: 52px;
+}
+:where(html[data-vp~="w767"]) .app[data-view="work"] .conversation {
+  display: none;
+}
+:where(html[data-vp~="w767"]) .workspace-panel {
+  position: fixed;
+  inset: var(--header-h) 0 0 0;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  height: auto;
+  padding: 0;
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  z-index: var(--layer-chrome);
+  display: none;
+  background: var(--canvas);
+}
+:where(html[data-vp~="w767"]) .app[data-view="work"] .workspace-panel,
+:where(html[data-vp~="w767"]) .app[data-workspace="open"] .workspace-panel {
+  display: flex;
+}
+:where(html[data-vp~="w767"]) .app[data-view="chat"] .workspace-panel:not([data-mobile="open"]) {
+  display: none;
+}
+:where(html[data-vp~="w767"]) .workspace-panel .workspace-card {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+:where(html[data-vp~="w767"]) .workspace-head {
+  height: 44px;
+  padding-left: 6px;
+}
+:where(html[data-vp~="w767"]) .workspace-body {
+  padding: 14px 14px calc(84px + env(safe-area-inset-bottom, 0px));
+}
+:where(html[data-vp~="w767"]) .app[data-focus="work"] .workspace-panel {
+  display: flex;
+  inset: var(--header-h) 0 0 0;
+}
+:where(html[data-vp~="w767"]) .app[data-focus="chat"] .conversation {
+  display: flex;
+}
 
-  .transcript {
-    padding: 16px 16px calc(var(--composer-fade-h) + 8px);
-  }
-  .turn {
-    padding-bottom: 20px;
-  }
-  .turn + .turn {
-    padding-top: 20px;
-  }
-  .user-bubble {
-    max-width: 88%;
-    font-size: 14.5px;
-    padding: 9px 14px;
-  }
-  .assistant-text {
-    font-size: 15px;
-    line-height: 1.85;
-  }
-  .reasoning-body {
-    max-height: 260px;
-  }
-  .turn-actions {
-    flex-wrap: wrap;
-  }
-  .turn-actions .usage {
-    width: 100%;
-    margin-top: 2px;
-  }
+:where(html[data-vp~="w767"]) .transcript {
+  padding: 16px 16px calc(var(--composer-fade-h) + 8px);
+}
+:where(html[data-vp~="w767"]) .turn {
+  padding-bottom: 20px;
+}
+:where(html[data-vp~="w767"]) .turn + .turn {
+  padding-top: 20px;
+}
+:where(html[data-vp~="w767"]) .user-bubble {
+  max-width: 88%;
+  font-size: 14.5px;
+  padding: 9px 14px;
+}
+:where(html[data-vp~="w767"]) .assistant-text {
+  font-size: 15px;
+  line-height: 1.85;
+}
+:where(html[data-vp~="w767"]) .reasoning-body {
+  max-height: 260px;
+}
+:where(html[data-vp~="w767"]) .turn-actions {
+  flex-wrap: wrap;
+}
+:where(html[data-vp~="w767"]) .turn-actions .usage {
+  width: 100%;
+  margin-top: 2px;
+}
 
-  .composer-seat {
-    padding: 0 12px calc(8px + env(safe-area-inset-bottom, 0px));
-  }
-  .composer-seat::before {
-    height: 24px;
-    top: -24px;
-  }
-  .composer-stack {
-    gap: 6px;
-  }
-  .composer-card {
-    border-radius: 16px;
-  }
-  .field .prompt-editor,
-  .prompt-editor {
-    min-height: 200px;
-    max-height: 56vh;
-  }
-  .composer-card {
-    min-height: 44px;
-    padding: 9px 42px 9px 12px;
-  }
-  .composer-input,
-  .composer-card[data-hero="true"] .composer-input {
-    min-height: 24px;
-    max-height: 168px;
-    padding: 0;
-    font-size: 16px;
-    line-height: 24px;
-  }
-  .composer-input::placeholder {
-    font-size: 16px;
-  }
-  .composer-actions {
-    right: 5px;
-    bottom: 7px;
-  }
-  .composer-bar {
-    min-height: 32px;
-    padding: 0 2px;
-  }
-  .composer-btn {
-    height: 30px;
-    padding: 0 7px;
-  }
-  .composer-btn .aw-svg {
-    width: 16px;
-    height: 16px;
-  }
-  .send-btn,
-  .stop-btn {
-    width: 28px;
-    height: 28px;
-  }
-  .composer-live {
-    max-width: 30%;
-  }
-  .foot-stats {
-    gap: 4px;
-    font-size: 10px;
-  }
-  .model-trigger {
-    max-width: 160px;
-    padding: 0 4px;
-  }
-  .model-seat {
-    max-width: 168px;
-  }
-  .composer-pop {
-    width: min(88vw, 340px);
-  }
+:where(html[data-vp~="w767"]) .composer-seat {
+  padding: 0 12px calc(8px + env(safe-area-inset-bottom, 0px));
+}
+:where(html[data-vp~="w767"]) .composer-seat::before {
+  height: 24px;
+  top: -24px;
+}
+:where(html[data-vp~="w767"]) .composer-stack {
+  gap: 6px;
+}
+:where(html[data-vp~="w767"]) .composer-card {
+  border-radius: 16px;
+}
+:where(html[data-vp~="w767"]) .field .prompt-editor,
+:where(html[data-vp~="w767"]) .prompt-editor {
+  min-height: 200px;
+  max-height: calc(56vh / var(--zoom));
+}
+:where(html[data-vp~="w767"]) .composer-card {
+  min-height: 44px;
+  padding: 9px 42px 9px 12px;
+}
+:where(html[data-vp~="w767"]) .composer-input,
+:where(html[data-vp~="w767"]) .composer-card[data-hero="true"] .composer-input {
+  min-height: 24px;
+  max-height: 168px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 24px;
+}
+:where(html[data-vp~="w767"]) .composer-input::placeholder {
+  font-size: 16px;
+}
+:where(html[data-vp~="w767"]) .composer-actions {
+  right: 5px;
+  bottom: 7px;
+}
+:where(html[data-vp~="w767"]) .composer-bar {
+  min-height: 32px;
+  padding: 0 2px;
+}
+:where(html[data-vp~="w767"]) .composer-btn {
+  height: 30px;
+  padding: 0 7px;
+}
+:where(html[data-vp~="w767"]) .composer-btn .aw-svg {
+  width: 16px;
+  height: 16px;
+}
+:where(html[data-vp~="w767"]) .send-btn,
+:where(html[data-vp~="w767"]) .stop-btn {
+  width: 28px;
+  height: 28px;
+}
+:where(html[data-vp~="w767"]) .composer-live {
+  max-width: 30%;
+}
+:where(html[data-vp~="w767"]) .foot-stats {
+  gap: 4px;
+  font-size: 10px;
+}
+:where(html[data-vp~="w767"]) .model-trigger {
+  max-width: 160px;
+  padding: 0 4px;
+}
+:where(html[data-vp~="w767"]) .model-seat {
+  max-width: 168px;
+}
+:where(html[data-vp~="w767"]) .composer-pop {
+  width: min(88vw / var(--zoom), 340px);
+}
 
-  .empty {
-    padding: 20px 12px 80px;
-  }
-  .empty-greeting {
-    font-size: 18px;
-    line-height: 24px;
-  }
-  .empty-mark,
-  .empty-mark .aw-svg {
-    width: 19px;
-    height: 19px;
-  }
+:where(html[data-vp~="w767"]) .empty {
+  padding: 20px 12px 80px;
+}
+:where(html[data-vp~="w767"]) .empty-greeting {
+  font-size: 18px;
+  line-height: 24px;
+}
+:where(html[data-vp~="w767"]) .empty-mark,
+:where(html[data-vp~="w767"]) .empty-mark .aw-svg {
+  width: 19px;
+  height: 19px;
+}
 
-  .latest {
-    bottom: calc(var(--composer-h, 190px) + 10px);
-  }
-  .modal {
-    width: calc(100vw - 16px) !important;
-    max-height: calc(100dvh - 24px);
-    border-radius: 14px;
-  }
-  .modal-head {
-    padding-left: 14px;
-    min-height: 48px;
-  }
-  .modal-body {
-    max-height: calc(100dvh - 132px);
-    padding: 14px;
-    font-size: 13px;
-  }
-  .modal-actions {
-    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
-  }
-  .reader-search {
-    flex-wrap: wrap;
-  }
-  .reader-search input {
-    flex-basis: 100%;
-  }
-  .reader-toolbar button {
-    min-height: 34px;
-    font-size: 11.5px;
-  }
-  .reader-window {
-    height: 48dvh;
-  }
-  .toast {
-    bottom: calc(70px + env(safe-area-inset-bottom, 0px));
-  }
+:where(html[data-vp~="w767"]) .latest {
+  bottom: calc(var(--composer-h, 190px) + 10px);
+}
+:where(html[data-vp~="w767"]) .modal {
+  width: calc(100vw / var(--zoom) - 16px) !important;
+  max-height: calc(100dvh / var(--zoom) - 24px);
+  border-radius: 14px;
+}
+:where(html[data-vp~="w767"]) .modal-head {
+  padding-left: 14px;
+  min-height: 48px;
+}
+:where(html[data-vp~="w767"]) .modal-body {
+  max-height: calc(100dvh / var(--zoom) - 132px);
+  padding: 14px;
+  font-size: 13px;
+}
+:where(html[data-vp~="w767"]) .modal-actions {
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+}
+:where(html[data-vp~="w767"]) .reader-search {
+  flex-wrap: wrap;
+}
+:where(html[data-vp~="w767"]) .reader-search input {
+  flex-basis: 100%;
+}
+:where(html[data-vp~="w767"]) .reader-toolbar button {
+  min-height: 34px;
+  font-size: 11.5px;
+}
+:where(html[data-vp~="w767"]) .reader-window {
+  height: calc(48dvh / var(--zoom));
+}
+:where(html[data-vp~="w767"]) .toast {
+  bottom: calc(70px + env(safe-area-inset-bottom, 0px));
 }
 
 /* 手机底部：对话 / 工作区 */
 .mobile-switch {
   display: none;
 }
-@media (max-width: 767px) {
-  .mobile-switch {
-    position: fixed;
-    left: 50%;
-    transform: translateX(-50%);
-    bottom: calc(6px + env(safe-area-inset-bottom, 0px));
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 3px;
-    border: 1px solid var(--border-1);
-    border-radius: var(--radius-pill);
-    background: var(--canvas);
-    box-shadow: var(--shadow-card);
-    z-index: 65;
-  }
-  .mobile-switch button {
-    height: 32px;
-    padding: 0 16px;
-    border-radius: var(--radius-pill);
-    color: var(--ink-3);
-    font-size: 12px;
-    font-weight: 500;
-  }
-  .mobile-switch button[aria-current="page"] {
-    background: var(--hover);
-    color: var(--ink);
-  }
-  .mobile-switch .dot {
-    display: inline-block;
-    width: 5px;
-    height: 5px;
-    margin-left: 4px;
-    border-radius: 50%;
-    background: var(--accent);
-    vertical-align: 1px;
-  }
-  .mobile-switch .dot:empty {
-    display: none;
-  }
-  .app[data-view="work"] .composer-seat,
-  .app[data-view="work"] .latest {
-    display: none;
-  }
-  /* 抽屉打开时，底部切换让位，避免压在任务列表上。 */
-  body.nav-open .mobile-switch {
-    display: none;
-  }
+:where(html[data-vp~="w767"]) .mobile-switch {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-pill);
+  background: var(--canvas);
+  box-shadow: var(--shadow-card);
+  z-index: 65;
+}
+:where(html[data-vp~="w767"]) .mobile-switch button {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+:where(html[data-vp~="w767"]) .mobile-switch button[aria-current="page"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+:where(html[data-vp~="w767"]) .mobile-switch .dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: 1px;
+}
+:where(html[data-vp~="w767"]) .mobile-switch .dot:empty {
+  display: none;
+}
+:where(html[data-vp~="w767"]) .app[data-view="work"] .composer-seat,
+:where(html[data-vp~="w767"]) .app[data-view="work"] .latest {
+  display: none;
+}
+/* 抽屉打开时，底部切换让位，避免压在任务列表上。 */
+:where(html[data-vp~="w767"]) body.nav-open .mobile-switch {
+  display: none;
 }
 
 /* ---------- 窄屏 360–480：去掉次要动作 ---------- */
-@media (max-width: 480px) {
-  .composer-btn .btn-label {
-    display: none;
-  }
-  .foot-stats {
-    display: none;
-  }
-  .conn-inline {
-    display: none;
-  }
-  .model-trigger {
-    max-width: 150px;
-  }
-  .model-seat {
-    max-width: 156px;
-  }
-  .panel-intro h1 {
-    font-size: 17px;
-  }
+:where(html[data-vp~="w480"]) .composer-btn .btn-label {
+  display: none;
+}
+:where(html[data-vp~="w480"]) .foot-stats {
+  display: none;
+}
+:where(html[data-vp~="w480"]) .conn-inline {
+  display: none;
+}
+:where(html[data-vp~="w480"]) .model-trigger {
+  max-width: 150px;
+}
+:where(html[data-vp~="w480"]) .model-seat {
+  max-width: 156px;
+}
+:where(html[data-vp~="w480"]) .panel-intro h1 {
+  font-size: 17px;
 }
 
-/* ---------- 低高度：小屏笔记本 ---------- */
-@media (max-height: 700px) and (min-width: 768px) {
-  :root {
-    --header-h: 48px;
-  }
-  .empty-mark {
-    margin-bottom: 12px;
-  }
-  .empty p {
-    margin-top: 6px;
-  }
-  .empty-guide {
-    margin-top: 12px;
-  }
-  .composer-seat {
-    padding-bottom: 10px;
-  }
-  .workspace-body {
-    padding-top: 14px;
-  }
+/* ---------- 低高度：小屏笔记本（高 ≤700 且宽 ≥768） ---------- */
+:root[data-vp~="h700"]:not([data-vp~="w767"]) {
+  --header-h: 48px;
+}
+:where(html[data-vp~="h700"]:not([data-vp~="w767"])) .empty-mark {
+  margin-bottom: 12px;
+}
+:where(html[data-vp~="h700"]:not([data-vp~="w767"])) .empty p {
+  margin-top: 6px;
+}
+:where(html[data-vp~="h700"]:not([data-vp~="w767"])) .empty-guide {
+  margin-top: 12px;
+}
+:where(html[data-vp~="h700"]:not([data-vp~="w767"])) .composer-seat {
+  padding-bottom: 10px;
+}
+:where(html[data-vp~="h700"]:not([data-vp~="w767"])) .workspace-body {
+  padding-top: 14px;
 }
 
-/* 平板横屏：底部安全区 */
-@media (min-width: 768px) and (max-height: 500px) {
-  .composer-seat {
-    padding-bottom: 6px;
-  }
+/* 平板横屏：底部安全区（高 ≤500 且宽 ≥768） */
+:where(html[data-vp~="h500"]:not([data-vp~="w767"])) .composer-seat {
+  padding-bottom: 6px;
 }

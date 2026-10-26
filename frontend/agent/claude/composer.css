@@ -409,7 +409,7 @@ html[data-agent-theme="dark"] .composer-card {
   bottom: calc(100% + 8px);
   z-index: var(--layer-picker);
   width: 330px;
-  max-width: min(86vw, 360px);
+  max-width: min(86vw / var(--zoom), 360px);
   max-height: 380px;
   overflow: auto;
   padding: 6px;

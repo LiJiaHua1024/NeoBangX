@@ -4,9 +4,9 @@
 
 /* ---------- 对话框 ---------- */
 dialog.modal {
-  width: min(720px, calc(100vw - 40px));
+  width: min(720px, calc(100vw / var(--zoom) - 40px));
   max-width: none;
-  max-height: min(86dvh, 900px);
+  max-height: min(86dvh / var(--zoom), 900px);
   margin: auto;
   padding: 0;
   border: 1px solid var(--border-1);
@@ -18,7 +18,7 @@ dialog.modal {
   transform-origin: center;
 }
 dialog.modal[data-wide="true"] {
-  width: min(960px, calc(100vw - 40px));
+  width: min(960px, calc(100vw / var(--zoom) - 40px));
 }
 dialog.modal[open] {
   animation: dialog-in var(--dur-open) var(--ease-settle);
@@ -54,7 +54,7 @@ dialog.modal::backdrop {
   height: 30px;
 }
 .modal-body {
-  max-height: calc(86dvh - 120px);
+  max-height: calc(86dvh / var(--zoom) - 120px);
   overflow-y: auto;
   padding: 18px 20px;
   color: var(--ink-2);
@@ -220,7 +220,7 @@ dialog.modal::backdrop {
   bottom: 26px;
   transform: translateX(-50%);
   z-index: var(--layer-toast);
-  max-width: min(560px, calc(100vw - 32px));
+  max-width: min(560px, calc(100vw / var(--zoom) - 32px));
   padding: 9px 14px;
   border: 1px solid var(--border-1);
   border-radius: var(--radius-2);
@@ -285,6 +285,59 @@ dialog.modal::backdrop {
   height: 14px;
   margin-left: auto;
 }
+.theme-sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border-1);
+}
+.theme-menu .zoom-hint {
+  margin-left: 6px;
+  color: var(--ink-4, var(--ink-3));
+  font-size: 10.5px;
+}
+.zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 3px 3px;
+}
+.zoom-btn,
+.zoom-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  border-radius: var(--radius-row);
+  color: var(--ink);
+  transition: background-color var(--timing-feedback), color var(--timing-feedback);
+}
+.zoom-btn {
+  width: 34px;
+  flex: none;
+  color: var(--ink-2);
+}
+.zoom-btn .aw-svg {
+  width: 14px;
+  height: 14px;
+}
+.zoom-value {
+  flex: 1;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.zoom-btn:hover:not(:disabled),
+.zoom-value:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.zoom-btn:disabled {
+  color: var(--ink-4, var(--ink-3));
+  opacity: 0.45;
+  cursor: default;
+}
+.zoom-value:disabled {
+  cursor: default;
+}
 
 /* ---------- 阅读器（reader.mjs） ---------- */
 .reader-meta {
@@ -339,7 +392,7 @@ dialog.modal::backdrop {
 }
 .reader-window {
   position: relative;
-  height: min(52dvh, 540px);
+  height: min(52dvh / var(--zoom), 540px);
   min-height: 220px;
   overflow: auto;
   overflow-anchor: none;
@@ -503,7 +556,7 @@ dialog.modal::backdrop {
 .diff-block pre {
   margin: 0;
   padding: 10px 12px;
-  max-height: 42vh;
+  max-height: calc(42vh / var(--zoom));
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

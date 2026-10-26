@@ -40,6 +40,28 @@
           ? "reduced"
           : "full";
         root.style.background = theme === "dark" ? "#191919" : "#ffffff";
+
+        // 整页缩放与断点同样要在首帧前定好，否则会先按 100% 画一帧再跳。
+        // 常量与 data-vp 的算法必须和 /static/agent/zoom.mjs 保持一致。
+        var pct = 100;
+        try {
+          var raw = localStorage.getItem("nbx_agent_zoom");
+          if (raw !== null) pct = Math.round(Number(raw));
+        } catch (e) {}
+        if (!(pct >= 80 && pct <= 160)) pct = 100;
+        var z = pct / 100;
+        root.style.setProperty("--zoom", String(z));
+        if (z !== 1) root.style.zoom = String(z);
+        var vw = window.innerWidth / z;
+        var vh = window.innerHeight / z;
+        var vp = [];
+        [1439, 1099, 767, 720, 480].forEach(function (b) {
+          if (vw < b + 1) vp.push("w" + b);
+        });
+        [700, 500].forEach(function (b) {
+          if (vh < b + 1) vp.push("h" + b);
+        });
+        root.dataset.vp = vp.join(" ");
       })();
     </script>
     <link rel="stylesheet" href="/static/agent/claude/tokens.css" />
@@ -73,12 +95,14 @@
     >
       <!-- 侧栏/工作区的初始开合必须在首帧前按视口算好；workspace.js 是延迟加载的模块，
            等它的 boot() 再改会先画出展开态、再带着过渡收回去。
-           断点与 workspace.js 的 isNarrow / isMobile / isOverlayWorkspace 保持一致。 -->
+           断点与 workspace.js 的 isNarrow / isMobile / isOverlayWorkspace 保持一致；
+           读的是 <head> 里按整页缩放算好的 data-vp，而不是 matchMedia。 -->
       <script>
         (function () {
           var app = document.getElementById("app");
-          var mq = function (q) {
-            return window.matchMedia(q).matches;
+          var vp = " " + (document.documentElement.dataset.vp || "") + " ";
+          var bp = function (token) {
+            return vp.indexOf(" " + token + " ") >= 0;
           };
           var get = function (key) {
             try {
@@ -88,12 +112,12 @@
             }
           };
           app.dataset.sidebar =
-            mq("(max-width: 1099px)") || get("nbx_agent_sidebar") === "collapsed"
+            bp("w1099") || get("nbx_agent_sidebar") === "collapsed"
               ? "collapsed"
               : "open";
           // 手机端靠 data-view 切换工作区，data-workspace 保持 open（与 setWorkspace 一致）。
-          if (!mq("(max-width: 767px)")) {
-            app.dataset.workspace = mq("(max-width: 1439px)")
+          if (!bp("w767")) {
+            app.dataset.workspace = bp("w1439")
               ? "closed"
               : get("nbx_agent_workspace") === "closed"
                 ? "closed"

@@ -7,6 +7,7 @@ import { createModelPicker } from "./model-picker.mjs";
 import { installCaret } from "./caret.mjs";
 import { createClawd } from "./mascot.mjs";
 import { enhanceSelects, refreshSelects } from "./select.mjs";
+import { matches as vpMatches, onBreakpoint, toCss, viewportCss } from "./zoom.mjs";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -186,14 +187,15 @@ function updateDraftEmpty() {
   if (!card || !message) return;
   card.toggleAttribute("data-draft-empty", message.value.length === 0);
 }
+/* 断点按「视口 ÷ 整页缩放」算（见 zoom.mjs），与 responsive.css 的 data-vp 同口径 */
 function isNarrow() {
-  return matchMedia("(max-width: 1099px)").matches;
+  return vpMatches("w1099");
 }
 function isMobile() {
-  return matchMedia("(max-width: 767px)").matches;
+  return vpMatches("w767");
 }
 function isOverlayWorkspace() {
-  return matchMedia("(max-width: 1439px)").matches;
+  return vpMatches("w1439");
 }
 
 /* ---------------- 外壳：侧栏、工作区、视图、菜单 ---------------- */
@@ -311,9 +313,10 @@ function menuAt(anchor, html, onClick) {
   menu.innerHTML = html;
   document.body.append(menu);
   const box = anchor.getBoundingClientRect();
+  const view = viewportCss();
   const width = menu.offsetWidth;
-  menu.style.left = `${Math.min(box.left, innerWidth - width - 8)}px`;
-  menu.style.top = `${Math.min(box.bottom + 4, innerHeight - menu.offsetHeight - 8)}px`;
+  menu.style.left = `${Math.min(toCss(box.left), view.width - width - 8)}px`;
+  menu.style.top = `${Math.min(toCss(box.bottom) + 4, view.height - menu.offsetHeight - 8)}px`;
   menu.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
@@ -344,7 +347,7 @@ function menuAt(anchor, html, onClick) {
 function viewport() {
   document.documentElement.style.setProperty(
     "--vh",
-    `${window.visualViewport?.height || innerHeight}px`,
+    `${toCss(window.visualViewport?.height || innerHeight)}px`,
   );
 }
 window.visualViewport?.addEventListener("resize", viewport);
@@ -357,7 +360,7 @@ function placeLatest() {
   const seat = composerSeat.getBoundingClientRect();
   const conversation = $("#chat").getBoundingClientRect();
   if (!seat.height || !conversation.height) return;
-  const bottom = Math.max(12, Math.round(conversation.bottom - seat.top + 8));
+  const bottom = Math.max(12, Math.round(toCss(conversation.bottom - seat.top) + 8));
   latest.style.bottom = `${bottom}px`;
   app.style.setProperty("--composer-h", `${composerSeat.offsetHeight}px`);
 }
@@ -390,7 +393,7 @@ $("#separator").onpointerdown = (event) => {
   handle.classList.add("dragging");
   handle.onpointermove = (move) => {
     const box = $(".layout").getBoundingClientRect();
-    workspaceWidth(box.right - move.clientX);
+    workspaceWidth(toCss(box.right - move.clientX));
   };
   handle.onpointerup = () => {
     handle.onpointermove = null;
@@ -749,8 +752,8 @@ window.addEventListener("resize", () => {
   }
   if (isNarrow() && app.dataset.sidebar === "collapsed") hideShade();
 });
-matchMedia("(max-width: 1099px)").addEventListener("change", (event) => {
-  if (event.matches) {
+onBreakpoint("w1099", (narrow) => {
+  if (narrow) {
     app.dataset.sidebar = "collapsed";
     hideShade();
     setView("chat", false);
@@ -761,9 +764,8 @@ matchMedia("(max-width: 1099px)").addEventListener("change", (event) => {
         : "open";
   }
 });
-matchMedia("(min-width: 1440px)").addEventListener("change", (event) => {
-  if (event.matches) setWorkspace(true, { persist: false });
-  else setWorkspace(false, { persist: false });
+onBreakpoint("w1439", (overlay) => {
+  setWorkspace(!overlay, { persist: false });
 });
 
 /* ---------------- 工作区：材料、工具、教学工具 ---------------- */

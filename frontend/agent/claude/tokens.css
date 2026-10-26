@@ -56,6 +56,9 @@
 }
 
 :root {
+  /* 整页缩放倍数，由 index.html / zoom.mjs 写在 <html> 内联样式上。
+     zoom 会把 vw / vh / dvh 一起放大，用到视口单位的地方都要除以它。 */
+  --zoom: 1;
   --font-sans: "Anthropic Sans Web Text", "Claude Style Inter", "Noto Sans SC",
     "Source Han Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;

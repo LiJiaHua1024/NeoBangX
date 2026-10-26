@@ -13,6 +13,7 @@
  */
 
 import { aaLevelOf, strikeTip } from "./rating.mjs";
+import { toCss, viewportCss } from "./zoom.mjs";
 
 const CHECK_SVG =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 5"/></svg>';
@@ -84,19 +85,26 @@ export function createModelPicker({ trigger, popover, label, onSelect }) {
 
   function position() {
     if (!open) return;
-    const width = Math.min(340, window.innerWidth - 16);
+    // 整页缩放下 rect / innerWidth 是屏幕像素，写回 style 前换成 CSS 像素（见 zoom.mjs）。
+    const view = viewportCss();
+    const width = Math.min(340, view.width - 16);
     popover.style.width = `${width}px`;
-    const rect = trigger.getBoundingClientRect();
+    const box = trigger.getBoundingClientRect();
+    const rect = {
+      top: toCss(box.top),
+      right: toCss(box.right),
+      bottom: toCss(box.bottom),
+    };
     // A short viewport gets a shorter card that scrolls, not a card whose
     // bottom is off screen. This is the open's own measurement; the row's
     // own copy is already in place before the card is shown.
     popover.style.maxHeight = `${Math.max(140, Math.min(560, rect.top - 16))}px`;
     const height = popover.offsetHeight;
-    let left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
+    let left = Math.min(Math.max(8, rect.right - width), view.width - width - 8);
     let top = rect.top - height - 8;
     let origin = "bottom right";
     if (top < 8) {
-      top = Math.min(rect.bottom + 8, window.innerHeight - height - 8);
+      top = Math.min(rect.bottom + 8, view.height - height - 8);
       origin = "top right";
     }
     popover.style.transformOrigin = origin;

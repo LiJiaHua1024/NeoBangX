@@ -215,7 +215,7 @@
 .prompt-editor {
   width: 100%;
   min-height: 240px;
-  max-height: 60vh;
+  max-height: calc(60vh / var(--zoom));
   padding: 12px 14px;
   border: 1px solid transparent;
   border-radius: var(--radius-2);
@@ -1159,8 +1159,6 @@
   color: var(--ink);
   text-decoration: underline;
 }
-@media (max-width: 767px) {
-  .action-link {
-    display: none;
-  }
+:where(html[data-vp~="w767"]) .action-link {
+  display: none;
 }

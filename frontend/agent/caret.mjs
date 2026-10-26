@@ -15,6 +15,8 @@
  * the caret and measures the first line box of the back half.
  */
 
+import { toCss, zoomScale } from "./zoom.mjs";
+
 const CARET_ATTR = "data-caret-layer";
 const HOST_ATTR = "data-caret-host";
 const ACTIVE_ATTR = "data-caret-active";
@@ -153,18 +155,20 @@ function createLayer(input) {
 
 function place(layer, box) {
   const rect = layer.host.getBoundingClientRect();
+  // `box` and `rect` are screen pixels; under the page zoom (zoom.mjs) the
+  // translate below is in CSS pixels and gets zoomed again, so convert first.
   // Snap to whole pixels: a fractional box is antialiased into a grey fringe
   // and reads as a different caret.
   const left = Math.round(
-    box.left - rect.left - layer.host.clientLeft + layer.host.scrollLeft,
+    toCss(box.left - rect.left) - layer.host.clientLeft + layer.host.scrollLeft,
   );
   const top = Math.round(
-    box.top - rect.top - layer.host.clientTop + layer.host.scrollTop,
+    toCss(box.top - rect.top) - layer.host.clientTop + layer.host.scrollTop,
   );
   const fresh = !layer.visible;
   if (fresh) layer.caret.style.transitionProperty = "none";
   layer.caret.style.transform = `translate(${left}px, ${top}px)`;
-  layer.caret.style.height = `${box.height}px`;
+  layer.caret.style.height = `${toCss(box.height)}px`;
   if (fresh) {
     layer.visible = true;
     layer.caret.setAttribute(VISIBLE_ATTR, "");
@@ -223,10 +227,12 @@ export function installCaret(input) {
     const borderLeft = Number.parseFloat(style.borderLeftWidth) || 0;
     const borderTop = Number.parseFloat(style.borderTopWidth) || 0;
     // The mirror carries the textarea's padding and no border; the textarea's
-    // border and its own scroll are the only corrections left.
+    // border and its own scroll are the only corrections left. Those two are
+    // CSS pixels while the rects are screen pixels, so scale them to match.
+    const scale = zoomScale();
     return {
-      left: field.left + borderLeft + spot.dx - input.scrollLeft,
-      top: field.top + borderTop + spot.dy - input.scrollTop,
+      left: field.left + (borderLeft - input.scrollLeft) * scale + spot.dx,
+      top: field.top + (borderTop - input.scrollTop) * scale + spot.dy,
       height: spot.height,
     };
   };

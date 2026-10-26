@@ -59,12 +59,10 @@
   touch-action: none;
   cursor: pointer;
 }
-@media (max-width: 767px) {
-  .clawd {
-    right: 2px;
-    transform: scale(0.9);
-    transform-origin: 100% 100%;
-  }
+:where(html[data-vp~="w767"]) .clawd {
+  right: 2px;
+  transform: scale(0.9);
+  transform-origin: 100% 100%;
 }
 @media (prefers-reduced-motion: reduce) {
   .clawd-strip {

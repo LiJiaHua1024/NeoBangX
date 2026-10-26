@@ -4,6 +4,7 @@
    面板的壳、行高、悬停与选中勾沿用 Claude 的 popover / 菜单节奏。 */
 
 import { icon } from "./icons.mjs";
+import { toCss, viewportCss } from "./zoom.mjs";
 
 const finePointer = () => matchMedia("(pointer: fine)").matches;
 
@@ -85,15 +86,23 @@ function open(select, trigger) {
     panel.append(item);
   });
 
-  const rect = trigger.getBoundingClientRect();
+  // 整页缩放下 rect / innerWidth 是屏幕像素，写回 style 前换成 CSS 像素（见 zoom.mjs）。
+  const box = trigger.getBoundingClientRect();
+  const rect = {
+    left: toCss(box.left),
+    top: toCss(box.top),
+    bottom: toCss(box.bottom),
+    width: toCss(box.width),
+  };
+  const view = viewportCss();
   panel.hidden = false;
   panel.style.minWidth = `${Math.max(rect.width, 190)}px`;
-  panel.style.maxWidth = `${Math.min(360, innerWidth - 16)}px`;
+  panel.style.maxWidth = `${Math.min(360, view.width - 16)}px`;
   const width = panel.offsetWidth;
-  panel.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - width - 8))}px`;
+  panel.style.left = `${Math.max(8, Math.min(rect.left, view.width - width - 8))}px`;
   const below = rect.bottom + 6;
   const above = rect.top - 6 - panel.offsetHeight;
-  const openAbove = below + panel.offsetHeight > innerHeight - 8 && above > 8;
+  const openAbove = below + panel.offsetHeight > view.height - 8 && above > 8;
   panel.style.top = `${openAbove ? above : below}px`;
   panel.style.transformOrigin = openAbove ? "bottom center" : "top center";
 

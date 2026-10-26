@@ -1,6 +1,17 @@
 /* /agent 的 Claude 双主题。
    与普通工具页的 nbx_theme 分开：工作台只呈现 Claude 浅色/深色，默认跟随系统。
-   URL #agent-theme=light|dark 可强制，供截图与验收固定状态。 */
+   URL #agent-theme=light|dark 可强制，供截图与验收固定状态。
+   同一个「外观」菜单里还放了整页缩放（zoom.mjs）。 */
+
+import { icon } from "./icons.mjs";
+import {
+  ZOOM_DEFAULT,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  setZoom,
+  stepZoom,
+  zoomPercent,
+} from "./zoom.mjs";
 
 export const THEME_KEY = "nbx_agent_theme";
 const OPTIONS = [
@@ -92,7 +103,32 @@ export function initTheme(onChange = () => {}) {
               : ""
           }</span>
         </button>`,
-      ).join("");
+      ).join("") +
+      `<div class="theme-sep" role="separator"></div>
+      <div class="popover-title">页面缩放<span class="zoom-hint">只影响 Agent 工作台</span></div>
+      <div class="zoom-row" role="group" aria-label="页面缩放">
+        <button type="button" class="zoom-btn" data-zoom="out" aria-label="缩小页面" title="缩小">${icon("minus")}</button>
+        <button type="button" class="zoom-value" data-zoom="reset"></button>
+        <button type="button" class="zoom-btn" data-zoom="in" aria-label="放大页面" title="放大">${icon("plus")}</button>
+      </div>`;
+    paintZoom();
+  };
+
+  /* 只改缩放行的文字与可用态，不整块重绘：点击目标若被 innerHTML 换掉，
+     document 上的「点外面就关」会把它当成菜单外的点击。 */
+  const paintZoom = () => {
+    const pct = zoomPercent();
+    const value = menu.querySelector(".zoom-value");
+    if (!value) return;
+    value.textContent = `${pct}%`;
+    value.title = pct === ZOOM_DEFAULT ? "当前为默认大小" : `恢复 ${ZOOM_DEFAULT}%`;
+    value.setAttribute(
+      "aria-label",
+      pct === ZOOM_DEFAULT ? `页面缩放 ${pct}%` : `页面缩放 ${pct}%，点击恢复 ${ZOOM_DEFAULT}%`,
+    );
+    value.disabled = pct === ZOOM_DEFAULT;
+    menu.querySelector('[data-zoom="out"]').disabled = pct <= ZOOM_MIN;
+    menu.querySelector('[data-zoom="in"]').disabled = pct >= ZOOM_MAX;
   };
 
   const close = () => {
@@ -110,6 +146,16 @@ export function initTheme(onChange = () => {}) {
     menu.hidden ? open() : close();
   };
   menu.onclick = (event) => {
+    const zoom = event.target.closest("[data-zoom]");
+    if (zoom) {
+      // 缩放可连点，菜单保持打开。
+      if (zoom.dataset.zoom === "in") stepZoom(1);
+      else if (zoom.dataset.zoom === "out") stepZoom(-1);
+      else setZoom(ZOOM_DEFAULT);
+      paintZoom();
+      if (zoom.disabled) menu.querySelector(".zoom-value:not(:disabled), .zoom-btn:not(:disabled)")?.focus();
+      return;
+    }
     const item = event.target.closest("[data-theme-pref]");
     if (!item) return;
     applyTheme(item.dataset.themePref);
@@ -134,6 +180,7 @@ export function initTheme(onChange = () => {}) {
     }
   });
   document.addEventListener("agent:theme", paint);
+  document.addEventListener("agent:zoom", paintZoom);
   const syncForced = () => {
     const forced = forcedTheme();
     if (forced) applyTheme(forced, { persist: false });

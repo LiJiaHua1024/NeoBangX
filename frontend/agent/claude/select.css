@@ -106,7 +106,7 @@
 .aw-listbox {
   position: fixed;
   z-index: var(--layer-takeover);
-  max-height: min(320px, 46dvh);
+  max-height: min(320px, 46dvh / var(--zoom));
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 5px;

@@ -295,14 +295,13 @@
 }
 
 /* 长文中的表格在手机上变成逐条阅读（现有能力，保留切换） */
-@media (max-width: 720px) {
-  .md table {
-    font-size: 13px;
-  }
-  .md th,
-  .md td {
-    padding: 7px 12px;
-  }
+/* 断点用 <html data-vp>（按整页缩放后的视口算，见 zoom.mjs），不用 @media。 */
+:where(html[data-vp~="w720"]) .md table {
+  font-size: 13px;
+}
+:where(html[data-vp~="w720"]) .md th,
+:where(html[data-vp~="w720"]) .md td {
+  padding: 7px 12px;
 }
 .document table.cards,
 .md table.cards {
