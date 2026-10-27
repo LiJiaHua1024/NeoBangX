@@ -619,8 +619,10 @@ export class Conversation {
       const line = shown.indexOf("\n");
       if (line >= 0) shown = shown.slice(line + 1);
     }
-    if (state.reasoningText.textContent !== shown)
-      state.reasoningText.textContent = shown;
+    if (state.reasoningShown !== shown) {
+      state.reasoningShown = shown;
+      paintParagraphs(state.reasoningText, shown);
+    }
     if (state.reasoningBody) {
       if (!running && state.reasoningBody.dataset.streaming === "true") {
         state.reasoningBody.scrollTop = 0;
@@ -1645,6 +1647,26 @@ function pretty(text) {
   } catch {
     return text;
   }
+}
+
+/** 思考是纯文本：按空行切成段落，段间距交给 CSS，不再让空行占满一整行高。
+ * 复用已有段落节点，流式刷新时只改变化的那几段。 */
+function paintParagraphs(root, text) {
+  const parts = String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split(/\n[ \t]*(?:\n[ \t]*)+/)
+    .map((part) => part.replace(/^\n+|\s+$/g, ""))
+    .filter(Boolean);
+  const nodes = root.children;
+  parts.forEach((part, i) => {
+    let node = nodes[i];
+    if (!node) {
+      node = document.createElement("p");
+      root.append(node);
+    }
+    if (node.textContent !== part) node.textContent = part;
+  });
+  while (nodes.length > parts.length) nodes[nodes.length - 1].remove();
 }
 
 function briefOf(label, input, output) {
