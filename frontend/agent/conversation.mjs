@@ -3,7 +3,7 @@
    chat-files / chat-reveal 的可见行为，按 NeoBangX 的轮询与按游标读取正文接口重写。
    这里不伪造任何内容：正文、思考、工具输入输出都来自后端已保存的块。 */
 
-import { escapeHTML as esc } from "./core.mjs";
+import { ACTIVE, escapeHTML as esc } from "./core.mjs";
 import { pickGreeting } from "./greetings.mjs";
 import { icon } from "./icons.mjs";
 import { markCurrent, playEnter } from "./motion.mjs";
@@ -54,9 +54,6 @@ const STATUS_NAMES = {
   interrupted: "已中断",
   draft: "草稿",
 };
-const FOLD_AT = 8000;
-const FOLD_HEAD = 1200;
-
 const nf = new Intl.NumberFormat("zh-CN");
 const boxAttr = (el, name, on) => {
   if (!el) return;
@@ -64,6 +61,15 @@ const boxAttr = (el, name, on) => {
   else el.removeAttribute(name);
 };
 const chars = (n) => `${nf.format(Math.max(0, Number(n) || 0))} 字`;
+
+/* 切换任务后轮询从游标 0 回放整份事件日志，每条事件都是写入当时的快照。
+   步骤只会从 running 走到终态、轮次只会从 ACTIVE 走到终态，都不会倒回去；
+   所以本地已是终态、事件却说还在进行，就是回放出来的旧快照。照单全收的话，
+   每条思考都会按历史重新展开、流式、再收起，还会被慢一拍的流式回调卡在展开状态。 */
+const isStale = (previous, next, active) =>
+  Boolean(previous?.status) && !active(previous.status) && active(next?.status);
+const entryActive = (status) => status === "running";
+const runActive = (status) => ACTIVE.has(status);
 
 function timeOf(iso) {
   const date = new Date(iso || "");
@@ -379,6 +385,7 @@ export class Conversation {
     if (!value || this.destroyed) return false;
     if (event.kind === "run") {
       const previous = this.runs.get(value.id);
+      if (isStale(previous, value, runActive)) return false;
       this.runs.set(value.id, { ...previous, ...value });
       const turn = this.ensureTurn(this.runs.get(value.id));
       if (turn) turn.run = this.runs.get(value.id);
@@ -390,6 +397,7 @@ export class Conversation {
     }
     if (event.kind === "entry") {
       const previous = this.entries.get(value.id);
+      if (isStale(previous, value, entryActive)) return false;
       this.upsertEntry(value, { render: true });
       if (value.status === "running") this.startStream(value);
       else if (previous?.status === "running") this.stopStream(value.id);
@@ -612,7 +620,8 @@ export class Conversation {
   /** 运行中只把末尾几行放进窗口；完成后展开的是全文。 */
   paintReasoning(state, entry, text) {
     if (!state.reasoningText) return;
-    const running = entry.status === "running";
+    // 正文是异步读回来的，调用方手里的 entry 可能已经过期；按当前状态决定窗口还是全文。
+    const running = (this.entries.get(entry.id) || entry).status === "running";
     let shown = text || "";
     if (running && shown.length > 1800) {
       shown = shown.slice(-1800);
@@ -709,74 +718,9 @@ export class Conversation {
     }
   }
 
+  /** 回答始终完整渲染，不折叠。 */
   paintOutput(state, entry, text) {
-    if (!state.markdown && !state.fold) return;
-    const foldAt = entry.status === "running" ? 2000 : FOLD_AT;
-    if (text.length <= foldAt) {
-      if (state.fold) {
-        state.fold = null;
-        state.output.replaceChildren();
-        const md = document.createElement("div");
-        md.className = "md";
-        state.output.append(md);
-        state.markdown = new MarkdownView(md);
-      }
-      state.markdown?.setText(text);
-      state.output.dataset.folded = "false";
-      return;
-    }
-    if (text.length > foldAt) {
-      if (!state.fold) {
-        const holder = document.createElement("div");
-        holder.className = "message-fold has-fade";
-        const preview = document.createElement("div");
-        preview.className = "md";
-        const full = document.createElement("div");
-        full.className = "md";
-        full.hidden = true;
-        holder.append(preview, full);
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "message-fold-toggle";
-        toggle.innerHTML = `${icon("chevron-down")}<span>展开全文</span>`;
-        holder.append(toggle);
-        state.output.replaceChildren(holder);
-        state.fold = { holder, preview, full, toggle, open: false };
-        state.previewView = new MarkdownView(preview);
-        state.fullView = new MarkdownView(full);
-        toggle.addEventListener("click", () => {
-          const open = !state.fold.open;
-          state.fold.open = open;
-          state.fold.preview.hidden = open;
-          state.fold.full.hidden = !open;
-          state.fold.holder.classList.toggle("has-fade", !open);
-          state.fold.holder.classList.toggle("open", open);
-          state.fold.toggle.innerHTML = open
-            ? `${icon("chevron-up")}<span>收起</span>`
-            : `${icon("chevron-down")}<span>展开全文</span>`;
-          if (open) {
-            // 展开后完整渲染，不省略任何内容。
-            state.fullView.setText(state.outputText);
-            this.pinIfFollowing();
-          } else {
-            this.pinIfFollowing();
-          }
-        });
-      }
-      if (state.fold.open) state.fullView.setText(text);
-      else {
-        let cut = Math.min(FOLD_HEAD, text.length);
-        // 不在 UTF-16 代理对中间截断预览。
-        if (cut > 0 && /[\uD800-\uDBFF]/.test(text[cut - 1])) cut -= 1;
-        state.previewView.setText(text.slice(0, cut) + "\n\n……");
-      }
-      state.fold.toggle.innerHTML = state.fold.open
-        ? `${icon("chevron-up")}<span>收起</span>`
-        : `${icon("chevron-down")}<span>展开全文</span>`;
-      state.output.dataset.folded = "true";
-    } else {
-      state.markdown.setText(text);
-    }
+    state.markdown?.setText(text);
   }
 
   renderTool(entry) {
@@ -1574,8 +1518,12 @@ export class Conversation {
           // 轮询失败不打断对话；下一拍重试。
         }
       }
+      // 读正文期间完成事件可能已经到了：按最新状态判断，不能拿 await 之前的
+      // running 快照去 updateEntry，否则刚收起的思考会被重新展开并停在流式窗口里。
+      const latest = this.entries.get(entry.id);
+      if (!latest || latest.status !== "running" || this.destroyed) return;
       const state = this.entryViews?.get(entry.id);
-      if (state?.kind === "model") this.updateEntry(this.turns.get(current.run_id), state, current);
+      if (state?.kind === "model") this.updateEntry(this.turns.get(latest.run_id), state, latest);
     }, 380);
     this.streams.set(entry.id, timer);
   }

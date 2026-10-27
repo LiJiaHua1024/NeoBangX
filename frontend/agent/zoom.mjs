@@ -112,7 +112,7 @@ export function setZoom(value) {
   percent = next;
   applyZoom();
   syncViewport();
-  // 和浏览器缩放一样补发 resize：浮层定位、「有新进展」位置、工作区开合都按 resize 重算。
+  // 和浏览器缩放一样补发 resize：浮层定位、工作区开合都按 resize 重算。
   window.dispatchEvent(new Event("resize"));
   document.dispatchEvent(new CustomEvent("agent:zoom", { detail: { percent } }));
   return percent;

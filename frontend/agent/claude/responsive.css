@@ -366,7 +366,7 @@
 }
 
 :where(html[data-vp~="w767"]) .latest {
-  bottom: calc(var(--composer-h, 190px) + 10px);
+  bottom: calc(100% + 10px);
 }
 :where(html[data-vp~="w767"]) .modal {
   width: calc(100vw / var(--zoom) - 16px) !important;

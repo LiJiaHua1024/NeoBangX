@@ -710,8 +710,7 @@ try {
     await page.locator('.view-tabs [data-mode="chat"]').click();
   });
 
-  await checked("长成果折叠、展开保留全文", async () => {
-    await page.locator(".message-fold-toggle").first().click();
+  await checked("长成果直接完整显示、不折叠", async () => {
     await page.waitForFunction(
       () => {
         const blocks = [...document.querySelectorAll(".assistant-block .md")];
@@ -720,13 +719,14 @@ try {
       {},
       { timeout: 30000 },
     );
+    assert.equal(await page.locator(".message-fold-toggle").count(), 0, "长成果不应再有展开/收起按钮");
     const texts = await page
       .locator(".assistant-block")
       .evaluateAll((blocks) => blocks.map((block) => block.textContent));
     assert(texts.some((text) => text.includes("最终内容 END")), "长成果末尾丢失");
     assert(
       Math.max(...texts.map((text) => text.length)) > 30000,
-      "长成果展开后长度不足",
+      "长成果全文长度不足",
     );
     await page.screenshot({ path: shots("06-long-output-expanded.png") });
   });

@@ -356,13 +356,13 @@
               </div>
             </div>
 
-            <button id="latest" class="latest" type="button" hidden>
-              <span data-icon="arrow-down"></span>
-              <span>有新进展</span>
-              <span class="new-dot" aria-hidden="true"></span>
-            </button>
-
             <div class="composer-seat" id="composer-seat" data-hero="true">
+              <!-- 挂在输入区里、画在渐隐遮罩之上：跟着卡片高度走，也不会被遮罩盖住下半截。 -->
+              <button id="latest" class="latest" type="button" hidden>
+                <span data-icon="arrow-down"></span>
+                <span>有新进展</span>
+                <span class="new-dot" aria-hidden="true"></span>
+              </button>
               <div class="composer-stack">
                 <div id="composer-context" class="composer-context"></div>
                 <div class="composer-card" id="composer-card" data-hero="true" data-draft-empty>

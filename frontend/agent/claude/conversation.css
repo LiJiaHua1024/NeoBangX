@@ -314,52 +314,6 @@
   animation: caret-blink var(--dur-fade) steps(1) infinite;
 }
 
-/* 长回答折叠 */
-.message-fold {
-  position: relative;
-  max-height: none;
-  overflow: visible;
-}
-.message-fold .md {
-  max-height: 320px;
-  overflow: hidden;
-}
-.message-fold.open .md {
-  max-height: none;
-  overflow: visible;
-}
-.message-fold.has-fade::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 96px;
-  bottom: 34px;
-  background: linear-gradient(to bottom, transparent, var(--canvas) 82%);
-  pointer-events: none;
-}
-.message-fold-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  margin-top: -4px;
-  padding: 0 8px;
-  border-radius: var(--radius-row);
-  color: var(--ink-2);
-  font-family: var(--font-sans);
-  font-size: 12px;
-}
-.message-fold-toggle:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
-.message-fold-toggle .aw-svg {
-  width: 13px;
-  height: 13px;
-}
-
 /* ---------- 思考折叠 ---------- */
 .reasoning {
   margin: 0;
@@ -784,12 +738,14 @@
   height: 12px;
 }
 
-/* 跳到最新 */
+/* 跳到最新：放在 .composer-seat 里，按输入区顶边定位，叠在 ::before 渐隐之上、
+   材料/工具浮层（--layer-picker）之下。居中用独立的 translate，入场动画只改
+   transform，两者叠加，动画期间不会先偏右再跳回中间。 */
 .latest {
   position: absolute;
   left: 50%;
-  bottom: calc(var(--composer-h, 170px) + 12px);
-  transform: translateX(-50%);
+  bottom: calc(100% + 14px);
+  translate: -50% 0;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -801,7 +757,7 @@
   color: var(--ink-2);
   font-size: 12px;
   box-shadow: var(--shadow-card);
-  z-index: var(--layer-control);
+  z-index: 1;
   animation: popover-in var(--dur-surface) var(--ease-settle);
 }
 .latest:hover {

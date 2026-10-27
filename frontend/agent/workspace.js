@@ -362,23 +362,6 @@ function viewport() {
 window.visualViewport?.addEventListener("resize", viewport);
 viewport();
 
-/* 「有新进展」浮在输入卡片上方；卡片高度随附件/多行变化，用实测值定位。 */
-const composerSeat = $("#composer-seat");
-function placeLatest() {
-  const latest = $("#latest");
-  const seat = composerSeat.getBoundingClientRect();
-  const conversation = $("#chat").getBoundingClientRect();
-  if (!seat.height || !conversation.height) return;
-  const bottom = Math.max(12, Math.round(toCss(conversation.bottom - seat.top) + 8));
-  latest.style.bottom = `${bottom}px`;
-  app.style.setProperty("--composer-h", `${composerSeat.offsetHeight}px`);
-}
-if ("ResizeObserver" in window) {
-  new ResizeObserver(placeLatest).observe(composerSeat);
-}
-window.addEventListener("resize", placeLatest);
-placeLatest();
-
 function workspaceWidth(value) {
   const w = Math.round(Math.min(680, Math.max(360, value)));
   app.style.setProperty("--workspace-width", `${w}px`);
