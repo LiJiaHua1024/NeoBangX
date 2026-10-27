@@ -204,7 +204,7 @@ def copy_task(task_id: str, owner: Owner):
     with SessionLocal() as db:
         original = store.owned(db, task_id, owner)
         config = store.decode(original.config)
-        task = Task(id=store.uid(), owner=owner, title=(original.title + " · 副本")[:200], config="{}")
+        task = Task(id=store.uid(), owner=owner, title=(original.title + "（副本）")[:200], config="{}")
         db.add(task)
         db.flush()
         ids, material_map = [], {}

@@ -39,7 +39,7 @@ export function aaRangeText(level) {
 export function strikeTip(aa) {
   const level = aaLevelOf(aa);
   if (!level) return "";
-  return `AA 智能指数 ${Number(aa)}（${aaRangeText(level)}）· ${level.name}${
+  return `AA 智能指数 ${Number(aa)}（${aaRangeText(level)}），${level.name}${
     level.alias ? `（${level.alias}）` : ""
   } —— ${level.gist}`;
 }

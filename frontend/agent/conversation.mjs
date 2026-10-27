@@ -3,7 +3,7 @@
    chat-files / chat-reveal 的可见行为，按 NeoBangX 的轮询与按游标读取正文接口重写。
    这里不伪造任何内容：正文、思考、工具输入输出都来自后端已保存的块。 */
 
-import { ACTIVE, escapeHTML as esc } from "./core.mjs";
+import { ACTIVE, escapeHTML as esc, setParts } from "./core.mjs";
 import { pickGreeting } from "./greetings.mjs";
 import { icon } from "./icons.mjs";
 import { markCurrent, playEnter } from "./motion.mjs";
@@ -304,6 +304,7 @@ export class Conversation {
     this.destroyed = false;
     this.clock = null;
     this.pendingVersions = new Map();
+    this.tokenFloor = new Map();
 
     this.latest.onclick = () => this.scrollToLatest();
     this.transcript.addEventListener("scroll", () => this.onScroll(), {
@@ -358,6 +359,7 @@ export class Conversation {
     this.briefWaits.clear();
     this.loading.clear();
     this.entryViews = new Map();
+    this.tokenFloor.clear();
     this.observers.forEach((observer) => observer.disconnect());
     this.observers.clear();
     this.root.replaceChildren();
@@ -1055,9 +1057,11 @@ export class Conversation {
       card.className = "result-card";
       card.innerHTML = `<span class="result-glyph">${icon("file-text")}</span><span class="result-main"><strong></strong><small></small></span><span class="result-open">查看成果${icon("chevron-right")}</span>`;
       card.querySelector("strong").textContent = version.title;
-      card.querySelector("small").textContent = `${
-        version.id === this.task?.adopted_version ? "已采用 · " : ""
-      }${version.complete ? "完整" : "待补全"} · ${chars(version.chars)}`;
+      setParts(card.querySelector("small"), [
+        version.id === this.task?.adopted_version ? "已采用" : "",
+        version.complete ? "完整" : "待补全",
+        chars(version.chars),
+      ]);
       card.addEventListener("click", () => this.onOpenResult(version.id));
       turn.results.append(card);
     }
@@ -1157,6 +1161,7 @@ export class Conversation {
     };
     tick();
     if (!this.clock) this.clock = setInterval(tick, 1000);
+    this.refreshUsage(turn);
     this.updateComposerState();
   }
 
@@ -1170,10 +1175,11 @@ export class Conversation {
     if (isWriter(last)) {
       if (last.status !== "running") return "正在整理成果";
       // 修订的输出是修改块，字数不代表成果篇幅，只说明阶段。
-      const revising = /^修订 · /.test(String(last.label || ""));
+      // 新标签是「修订《标题》」，旧记录是「修订 · 标题」。
+      const revising = /^修订(《| · )/.test(String(last.label || ""));
       const written = this.writerChars(turn, last);
       if (revising) return written ? "正在修改成果" : "正在构思修改";
-      return written ? `正在撰写成果 · ${chars(written)}` : "正在构思成果";
+      return written ? `正在撰写成果，已写 ${chars(written)}` : "正在构思成果";
     }
     if (last.kind === "tool") {
       return last.status === "running"
@@ -1213,7 +1219,7 @@ export class Conversation {
     const run = this.runs.get(turn.run.id) || turn.run;
     const elapsed = durationOf(run.created_at, run.finished_at);
     const label =
-      run.mode === "execute" ? `用时 ${elapsed}` : `${MODE_NAMES[run.mode] || run.mode} · ${elapsed}`;
+      run.mode === "execute" ? `用时 ${elapsed}` : `${MODE_NAMES[run.mode] || run.mode}用时 ${elapsed}`;
     time.textContent = label;
     turn.el.dataset.status = run.status;
     button.title = "在执行轨迹中查看这一轮";
@@ -1221,7 +1227,7 @@ export class Conversation {
       time.textContent =
         run.mode === "execute"
           ? `用时 ${durationOf(run.created_at)}`
-          : `${MODE_NAMES[run.mode] || run.mode} · ${durationOf(run.created_at)}`;
+          : `${MODE_NAMES[run.mode] || run.mode}用时 ${durationOf(run.created_at)}`;
     }
   }
 
@@ -1237,12 +1243,12 @@ export class Conversation {
       run.status,
     );
     const actions = turn.actions;
-    const usage = run.tokens ? `${nf.format(run.tokens)} tok` : "";
+    turn.usageMarkup = this.usageMarkup(run);
     actions.innerHTML = `
       <button class="action" type="button" data-copy aria-label="复制回答" title="复制回答">${icon("copy")}</button>
       <button class="action" type="button" data-trajectory aria-label="在执行轨迹中查看这一轮" title="查看轨迹">${icon("route")}</button>
       <span class="spacer"></span>
-      <span class="usage">${usage ? `${icon("terminal")}<span>${usage}</span>` : ""}<span class="turn-time">${timeOf(run.finished_at || run.created_at)}</span></span>`;
+      <span class="usage">${turn.usageMarkup}</span>`;
     actions.querySelector("[data-copy]").addEventListener("click", async () => {
       let text = this.finalText(turn);
       if (!text) {
@@ -1277,6 +1283,40 @@ export class Conversation {
       stop.addEventListener("click", () => this.onRequestStop());
       actions.insertBefore(stop, actions.querySelector(".spacer"));
     }
+  }
+
+  /** 本轮用量。已结算部分在每次调用结束后才更新；执行中加上进行中调用的上下文与已收到输出的估算，
+   * 并且不回落，避免结算事件晚到一拍时数字先掉再涨。结束后显示结算值。 */
+  runTokens(run) {
+    const settled = Number(run?.tokens) || 0;
+    if (!run || !ACTIVE.has(run.status)) {
+      this.tokenFloor.delete(run?.id);
+      return settled;
+    }
+    let live = settled;
+    for (const entry of this.entries.values()) {
+      if (entry.run_id !== run.id || entry.status !== "running") continue;
+      const details = entry.details || {};
+      live += (Number(details.context_tokens) || 0) + (Number(details.live_tokens) || 0);
+    }
+    const shown = Math.max(live, this.tokenFloor.get(run.id) || 0);
+    this.tokenFloor.set(run.id, shown);
+    return shown;
+  }
+
+  usageMarkup(run) {
+    const tokens = this.runTokens(run);
+    return `${tokens ? `${icon("terminal")}<span>${nf.format(tokens)} tok</span>` : ""}<span class="turn-time">${timeOf(run.finished_at || run.created_at)}</span>`;
+  }
+
+  /** 只换用量文字，不重建操作按钮，执行中频繁刷新也不打断悬停和焦点。 */
+  refreshUsage(turn) {
+    const run = this.runs.get(turn.run.id) || turn.run;
+    const markup = this.usageMarkup(run);
+    if (markup === turn.usageMarkup) return;
+    const usage = turn.actions.querySelector(".usage");
+    if (usage) usage.innerHTML = markup;
+    turn.usageMarkup = markup;
   }
 
   finalText(turn) {
@@ -1394,13 +1434,13 @@ export class Conversation {
         STATUS_NAMES[this.task?.status] ||
         (active ? "执行中" : "准备就绪");
       status.textContent = active
-        ? `${value} · 执行在后台继续`
+        ? `${value}，在后台继续执行`
         : value;
       status.dataset.state = this.task?.status || "idle";
     }
     const rounds = this.task?.runs?.length || 0;
     const tokens = (this.task?.runs || []).reduce(
-      (sum, run) => sum + (run.tokens || 0),
+      (sum, run) => sum + this.runTokens(this.runs.get(run.id) || run),
       0,
     );
     const roundsEl = document.getElementById("composer-rounds");

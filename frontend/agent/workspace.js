@@ -1,4 +1,4 @@
-import { ACTIVE, STATUS, escapeHTML as esc, newKey, pageText } from "./core.mjs";
+import { ACTIVE, STATUS, escapeHTML as esc, newKey, pageText, partsHTML, setParts } from "./core.mjs";
 import { FullReader, saveBlob, copyText } from "./reader.mjs";
 import { fillIcons, icon } from "./icons.mjs";
 import { initTheme } from "./claude-theme.mjs";
@@ -520,7 +520,7 @@ async function listTasks(reset = true) {
     row.setAttribute("role", "button");
     row.tabIndex = 0;
     row.setAttribute("aria-current", String(task.id === state.task?.id));
-    row.title = `${task.title} · ${STATUS[task.status] || task.status}`;
+    row.title = `${task.title}（${STATUS[task.status] || task.status}）`;
     row.innerHTML = `
       <span class="task-dot">${icon("message-square")}</span>
       <span class="task-name"></span>
@@ -657,7 +657,7 @@ async function save() {
         saveState("需处理冲突", "conflict");
         return false;
       }
-      saveState("未同步 · 草稿已保留", "conflict");
+      saveState("未同步，草稿已保留", "conflict");
       throw e;
     } finally {
       state.saving = null;
@@ -771,9 +771,10 @@ function renderMaterials() {
     check.className = "check";
     check.innerHTML = `<input type="checkbox"><span class="material-main"><span class="material-name"></span><span class="material-meta"></span></span>`;
     check.querySelector(".material-name").textContent = material.name;
-    check.querySelector(".material-meta").textContent = `${fmtChars(
-      material.chars,
-    )} · ${material.has_original ? "原文已保存" : "解析文本"}`;
+    setParts(check.querySelector(".material-meta"), [
+      fmtChars(material.chars),
+      material.has_original ? "原文已保存" : "解析文本",
+    ]);
     const input = check.querySelector("input");
     input.checked = state.task.config.materials.includes(material.id);
     input.onchange = () => {
@@ -1022,7 +1023,7 @@ function renderComposerContext() {
     const chip = document.createElement("span");
     chip.className = "context-chip";
     chip.innerHTML = `${icon("book-open")}<span></span>`;
-    chip.querySelector("span").textContent = `模板 · ${template.name}`;
+    chip.querySelector("span").textContent = `模板：${template.name}`;
     host.append(chip);
   }
   const count = state.task.config.materials.length;
@@ -1301,7 +1302,7 @@ async function openTask(id, push = true) {
   poll();
   if (state.dirty && !state.conflict)
     saveTimer = setTimeout(() => save().catch(error), 800);
-  document.title = `${task.title} · NeoBangX Agent`;
+  document.title = `${task.title} - NeoBangX Agent`;
 }
 function fill() {
   const task = state.task;
@@ -1309,7 +1310,7 @@ function fill() {
   const template = state.catalog?.official_templates
     .concat(state.catalog?.templates || [])
     .find((item) => item.id === task.config.template_id);
-  setText($("#prompt-origin"), template ? `模板 · ${template.name}` : "任务副本");
+  setText($("#prompt-origin"), template ? `模板：${template.name}` : "任务副本");
   $("#task-title").value = task.title;
   for (const [id, key] of Object.entries(FIELDS)) {
     const el = $("#" + id);
@@ -1362,7 +1363,7 @@ function updateStatus() {
   setText(
     $("#composer-status"),
     active
-      ? `${STATUS[status] || "执行中"} · 执行在后台继续`
+      ? `${STATUS[status] || "执行中"}，在后台继续执行`
       : STATUS[status] || "准备就绪",
   );
   $("#composer-status").dataset.state = status || "idle";
@@ -1424,15 +1425,13 @@ function entryCard(item) {
   setText(stateEl, STATUS[item.status] || item.status);
   if (stateEl.dataset.state !== item.status) stateEl.dataset.state = item.status;
   const counts = item.details.chars || {};
-  const meta =
-    Object.entries(counts)
-      .filter(([key]) => key !== "prompt")
-      .map(
-        ([key, n]) =>
-          `${{ reasoning: "思考", output: "输出", arguments: "调用", input: "参数" }[key] || key} ${Number(n).toLocaleString()} 字符`,
-      )
-      .join(" · ") || "等待输出";
-  setText(card.querySelector(".entry-meta"), meta);
+  const meta = Object.entries(counts)
+    .filter(([key]) => key !== "prompt")
+    .map(
+      ([key, n]) =>
+        `${{ reasoning: "思考", output: "输出", arguments: "调用", input: "参数" }[key] || key} ${Number(n).toLocaleString()} 字符`,
+    );
+  setParts(card.querySelector(".entry-meta"), meta.length ? meta : ["等待输出"]);
   setText(
     card.querySelector(".entry-note"),
     item.details.error ||
@@ -1488,7 +1487,7 @@ function runCard(run) {
     $("#timeline").append(card);
   }
   card.dataset.status = run.status;
-  const label = `${{ execute: "执行", continue: "继续", review: "审阅", revise: "修订", tool_test: "教学工具试运行" }[run.mode] || run.mode} · ${STATUS[run.status] || run.status}`;
+  const label = `${{ execute: "执行", continue: "继续", review: "审阅", revise: "修订", tool_test: "教学工具试运行" }[run.mode] || run.mode}${STATUS[run.status] || run.status}`;
   const strong = card.querySelector("strong");
   if (strong.dataset.label !== label) {
     strong.dataset.label = label;
@@ -1496,9 +1495,9 @@ function runCard(run) {
     strong.querySelector("span").textContent = label;
   }
   setText(card.querySelector(".aw-steplink span"), "本轮配置");
-  setText(
+  setParts(
     card.querySelector("small"),
-    run.error || `步骤 ${run.step} · ${Number(run.tokens).toLocaleString()} tokens`,
+    run.error ? [run.error] : [`${run.step} 步`, `${Number(run.tokens).toLocaleString()} tokens`],
   );
   syncTimelineEmpty();
 }
@@ -1579,7 +1578,7 @@ async function poll() {
     connState(
       "已连接",
       "live",
-      ACTIVE.has(state.task.status) ? "已连接 · 任务在后台执行" : "已连接",
+      ACTIVE.has(state.task.status) ? "已连接，任务在后台执行" : "已连接",
     );
     pollTimer = setTimeout(
       poll,
@@ -1593,7 +1592,7 @@ async function poll() {
       "error",
       navigator.onLine
         ? "连接中断，正在重试；任务状态待同步"
-        : "离线 · 任务状态待同步",
+        : "离线，任务状态待同步",
     );
     pollTimer = setTimeout(poll, 5000);
   }
@@ -1607,7 +1606,7 @@ async function openEntry(id, kind) {
     { label: "步骤" };
   const taskId = state.task.id;
   modal(
-    `${entry.label} · ${{ reasoning: "思考全文", prompt: "实际指令", input: "输入参数", output: "输出全文", arguments: "工具调用" }[kind]}`,
+    `${entry.label}：${{ reasoning: "思考全文", prompt: "实际指令", input: "输入参数", output: "输出全文", arguments: "工具调用" }[kind]}`,
     '<div id="full-reader"></div>',
     [],
     { wide: true },
@@ -1932,10 +1931,10 @@ function renderTemplateOptions() {
   const options =
     '<option value="">自定义提示词</option>' +
     state.catalog.official_templates
-      .map((template) => `<option value="${esc(template.id)}">官方 · ${esc(template.name)}</option>`)
+      .map((template) => `<option value="${esc(template.id)}">${esc(template.name)}（官方）</option>`)
       .join("") +
     state.catalog.templates
-      .map((template) => `<option value="${esc(template.id)}">我的 · ${esc(template.name)}</option>`)
+      .map((template) => `<option value="${esc(template.id)}">${esc(template.name)}（我的）</option>`)
       .join("");
   $("#template").innerHTML = options;
   $("#teaching-select").innerHTML = state.catalog.official_templates
@@ -2027,13 +2026,13 @@ async function compare(title, before, after) {
     label.className = "diff-label";
     label.textContent =
       { same: "未修改", removed: "− 原版", added: "+ 修改版" }[block.kind] +
-      ` · ${block.lines.length} 行`;
+      `（${block.lines.length} 行）`;
     const pre = document.createElement("pre");
     pre.textContent = block.lines.join("\n");
     section.append(label, pre);
     body.append(section);
   }
-  modal(`${title} · 共同首尾与完整变更段`, body, [], { wide: true });
+  modal(`${title}：共同首尾与完整变更段`, body, [], { wide: true });
 }
 $("#compare-prompt").onclick = () =>
   compare(
@@ -2047,7 +2046,7 @@ $("#compare-conflict").onclick = async () => {
   try {
     const remote = await api(path());
     const local = structuredClone(state.task);
-    modal("保存冲突 · 本地草稿仍保留", "<p>先比较两份完整配置，再选择处理方式。</p>", [
+    modal("保存冲突，本地草稿仍保留", "<p>先比较两份完整配置，再选择处理方式。</p>", [
       {
         text: "比较完整配置",
         run: () =>
@@ -2071,7 +2070,7 @@ $("#compare-conflict").onclick = async () => {
           await api(`/tasks/${copy.id}`, {
             method: "PUT",
             body: {
-              title: local.title + " · 本地草稿",
+              title: local.title + "（本地草稿）",
               revision: copy.revision,
               config,
             },
@@ -2130,14 +2129,14 @@ function renderVersions() {
     button.dataset.current = String(version.id === state.version?.id);
     button.innerHTML = `<span class="num">${index + 1}</span><span class="version-main"><strong></strong><small></small></span>${adopted ? '<span class="adopted">已采用</span>' : ""}`;
     button.querySelector("strong").textContent = version.title;
-    button.querySelector("small").textContent = `${version.complete ? "完整" : "待补全"} · ${fmtChars(version.chars)}`;
+    setParts(button.querySelector("small"), [version.complete ? "完整" : "待补全", fmtChars(version.chars)]);
     button.onclick = () => selectVersion(version.id).catch(error);
     $("#versions-list").append(button);
   });
   $("#version-select").innerHTML = versions
     .map(
       (version, index) =>
-        `<option value="${version.id}">版本 ${index + 1} · ${esc(version.title)}${version.id === state.task.adopted_version ? " · 已采用" : ""}</option>`,
+        `<option value="${version.id}">版本 ${index + 1}：${esc(version.title)}${version.id === state.task.adopted_version ? "（已采用）" : ""}</option>`,
     )
     .join("");
   if (state.version) $("#version-select").value = state.version.id;
@@ -2197,9 +2196,7 @@ function renderDocument() {
     });
     decorateDocument(root);
   }
-  $("#result-page").textContent = `${state.page + 1} / ${state.pages.length} 段${
-    page.plain ? " · 长段落原文" : ""
-  }`;
+  setParts($("#result-page"), [`${state.page + 1} / ${state.pages.length} 段`, page.plain ? "长段落原文" : ""]);
   $("#result-prev").disabled = state.page === 0;
   $("#result-next").disabled = state.page === state.pages.length - 1;
   $("#adopt").disabled =
@@ -2262,7 +2259,7 @@ $("#compare-version").onclick = async () => {
 };
 $("#edit-version").onclick = () => {
   const baseVersion = state.version;
-  askText("编辑成果 · 保存为新版本", "完整正文", baseVersion.content, async (content) => {
+  askText("编辑成果并保存为新版本", "完整正文", baseVersion.content, async (content) => {
     const result = await api(path("/versions"), {
       method: "POST",
       body: {
@@ -2475,7 +2472,7 @@ async function openReview(id) {
     throw Error("审阅格式无效，请查看输出全文；未判为通过");
   }
   modal(
-    "审阅意见 · 建议由你决定",
+    "审阅意见（是否采纳由你决定）",
     `<div class="review-summary">${esc(data.summary)}</div><div id="review-issues"></div>`,
     [
       {
@@ -2532,9 +2529,10 @@ async function openReview(id) {
     el.className = "tool-card aw-issue";
     el.innerHTML = `<label class="check"><input type="checkbox" value="${index}"><span>${esc(
       issue.problem,
-    )}<small>${
-      issue.certainty === "confirmed" ? "审阅判断：有依据" : "待核实"
-    }${entry.details.ignored?.includes(index) ? " · 已忽略" : ""}</small></span></label><p><b>原文</b>${esc(
+    )}<small class="parts">${partsHTML([
+      issue.certainty === "confirmed" ? "审阅判断：有依据" : "待核实",
+      entry.details.ignored?.includes(index) ? "已忽略" : "",
+    ])}</small></span></label><p><b>原文</b>${esc(
       issue.quote || "未定位",
     )}</p><p><b>依据</b>${esc(issue.evidence)}</p><p><b>建议</b>${esc(
       issue.fix,
@@ -2557,7 +2555,7 @@ async function sourceLinks(id) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "version-row";
-    button.textContent = `${match.name || match.material_id} · 字符 ${match.start || 0}`;
+    setParts(button, [match.name || match.material_id, `字符 ${match.start || 0}`]);
     button.onclick = async () => {
       try {
         const data = await api(path(`/materials/${match.material_id}`));
@@ -2648,7 +2646,7 @@ async function boot() {
 function maskCode(code) {
   const value = String(code || "");
   if (!value) return "使用码";
-  return `使用码 ····${value.slice(-4)}`;
+  return `使用码尾号 ${value.slice(-4)}`;
 }
 window.addEventListener("popstate", () => {
   const id = location.pathname.match(/\/agent\/tasks\/([a-f0-9]+)/)?.[1];

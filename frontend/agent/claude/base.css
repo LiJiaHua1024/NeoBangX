@@ -217,6 +217,10 @@ select {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* 并列的几段信息只靠间距分开，不用分隔符号（见 core.mjs 的 setParts）。 */
+.parts > span + span {
+  margin-left: 0.5em;
+}
 .hidden,
 [hidden] {
   display: none !important;

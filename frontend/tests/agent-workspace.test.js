@@ -128,16 +128,19 @@ test("writer calls stay out of the conversation and only drive the waiting line"
     ["s1", { id: "s1", run_id: "r1", kind: "model", label: "执行步骤 1", status: "done", details: { role: "agent", chars: { output: 4 } } }],
     ["t1", { id: "t1", run_id: "r1", kind: "tool", label: "create_document", status: "running", details: {} }],
     ["w1", writer("w1", "试卷分析", 1200, "incomplete")],
-    ["w2", writer("w2", "试卷分析 · 续写 1", 300)],
+    ["w2", writer("w2", "试卷分析（续写 1）", 300)],
   ]);
   const turn = { run: { status: "running" }, entries: ["s1", "t1", "w1", "w2"] };
   const fake = { entries, task: { status: "running" }, writerChars: proto.writerChars, caches: new Map([["s1:output", { text: "调度回答" }]]) };
   // 续写按 source 合计字数；正文本身不进对话。
-  assert.equal(proto.waitingText.call(fake, turn), "正在撰写成果 · 1,500 字");
-  entries.set("w2", writer("w2", "试卷分析 · 续写 1", 0, "running", { chars: { reasoning: 9 } }));
-  assert.equal(proto.waitingText.call(fake, turn), "正在撰写成果 · 1,200 字");
-  entries.set("w3", writer("w3", "修订 · 试卷分析", 80, "running", { source: "tool:rev" }));
+  assert.equal(proto.waitingText.call(fake, turn), "正在撰写成果，已写 1,500 字");
+  entries.set("w2", writer("w2", "试卷分析（续写 1）", 0, "running", { chars: { reasoning: 9 } }));
+  assert.equal(proto.waitingText.call(fake, turn), "正在撰写成果，已写 1,200 字");
+  entries.set("w3", writer("w3", "修订《试卷分析》", 80, "running", { source: "tool:rev" }));
   turn.entries.push("w3");
+  assert.equal(proto.waitingText.call(fake, turn), "正在修改成果");
+  // 旧记录的修订标签是「修订 · 标题」。
+  entries.set("w3", writer("w3", "修订 · 试卷分析", 80, "running", { source: "tool:rev" }));
   assert.equal(proto.waitingText.call(fake, turn), "正在修改成果");
   // 复制回答取调度 Agent 的消息，不取写作者的稿子。
   fake.caches.set("w3:output", { text: "<edit>…</edit>" });
@@ -148,7 +151,30 @@ test("writer calls stay out of the conversation and only drive the waiting line"
   assert.equal(streamFake.streams.size, 0);
   // 旧记录没有 role：调度的标签一直是「执行步骤 N」，其余模型调用都是写作者。
   const legacy = { entries: new Map([["old", { id: "old", run_id: "r1", kind: "model", label: "试卷分析", status: "running", details: { chars: { output: 5 } } }]]), task: { status: "running" }, writerChars: proto.writerChars };
-  assert.equal(proto.waitingText.call(legacy, { run: { status: "running" }, entries: ["old"] }), "正在撰写成果 · 5 字");
+  assert.equal(proto.waitingText.call(legacy, { run: { status: "running" }, entries: ["old"] }), "正在撰写成果，已写 5 字");
   const step = { entries: new Map([["s", { id: "s", run_id: "r1", kind: "model", label: "执行步骤 2", status: "running", details: { chars: { output: 5 } } }]]), task: { status: "running" } };
   assert.equal(proto.waitingText.call(step, { run: { status: "running" }, entries: ["s"] }), "正在撰写");
+});
+
+test("run usage grows during a model call and never dips before settling", async () => {
+  const { Conversation } = await import("../agent/conversation.mjs");
+  const proto = Conversation.prototype;
+  const fake = {
+    tokenFloor: new Map(),
+    entries: new Map([
+      ["a", { id: "a", run_id: "r1", kind: "model", status: "done", details: { context_tokens: 900, live_tokens: 50 } }],
+      ["b", { id: "b", run_id: "r1", kind: "model", status: "running", details: { context_tokens: 1000, live_tokens: 200 } }],
+    ]),
+  };
+  const run = { id: "r1", status: "running", tokens: 3000 };
+  // 已结算 3000，加上进行中调用的上下文 1000 与已收到输出 200；已结束的调用不再重复计入。
+  assert.equal(proto.runTokens.call(fake, run), 4200);
+  fake.entries.set("b", { ...fake.entries.get("b"), details: { context_tokens: 1000, live_tokens: 700 } });
+  assert.equal(proto.runTokens.call(fake, run), 4700);
+  // 调用已完成、结算事件还没到：不回落。
+  fake.entries.set("b", { ...fake.entries.get("b"), status: "done" });
+  assert.equal(proto.runTokens.call(fake, run), 4700);
+  // 结算到达，轮次结束后显示结算值。
+  assert.equal(proto.runTokens.call(fake, { ...run, status: "completed", tokens: 4650 }), 4650);
+  assert.equal(fake.tokenFloor.size, 0);
 });

@@ -21,6 +21,31 @@ export function escapeHTML(s) {
       ],
   );
 }
+/** 同一行里并列的几段信息：各段是独立的 span，间距交给 .parts 的样式，不夹分隔符号。
+ * 段间留一个真实空格，复制和读屏时各段不会粘在一起。内容没变时不重建节点。 */
+export function setParts(el, parts) {
+  if (!el) return;
+  const list = parts.filter((part) => part !== "" && part != null).map(String);
+  const key = list.join("\n");
+  if (el.dataset.parts === key && el.childElementCount === list.length) return;
+  el.dataset.parts = key;
+  el.classList.add("parts");
+  const nodes = [];
+  list.forEach((text, i) => {
+    if (i) nodes.push(" ");
+    const span = document.createElement("span");
+    span.textContent = text;
+    nodes.push(span);
+  });
+  el.replaceChildren(...nodes);
+}
+/** 生成 HTML 字符串时用的同款写法。 */
+export function partsHTML(parts) {
+  return parts
+    .filter((part) => part !== "" && part != null)
+    .map((part) => `<span>${escapeHTML(part)}</span>`)
+    .join(" ");
+}
 export function newKey() {
   return (
     globalThis.crypto?.randomUUID?.() ||

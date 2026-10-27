@@ -312,8 +312,10 @@ def test_writer_calls_are_marked_apart_from_scheduler_steps(identity):
         rows = db.scalars(select(WorkspaceEntry).where(WorkspaceEntry.run_id == r['id'], WorkspaceEntry.kind == 'model')).all()
         details = {row.label: store.decode(row.details) for row in rows}
     assert details['成果']['role'] == 'writer' and details['成果']['source'] == 'tool:gen'
-    assert details['修订 · 成果 · 修订']['role'] == 'writer' and details['修订 · 成果 · 修订']['source'] == 'tool:rev'
+    assert details['修订《成果（修订）》']['role'] == 'writer' and details['修订《成果（修订）》']['source'] == 'tool:rev'
     assert details['执行步骤 9']['role'] == 'agent' and 'source' not in details['执行步骤 9']
+    # 调用进行中的用量估算：上下文在开始时记下，输出随每次落盘累加。
+    assert all(d['context_tokens'] > 0 and d['live_tokens'] > 0 for d in details.values())
     store.finish_run(r['id'], 'completed')
 
 

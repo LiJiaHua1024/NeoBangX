@@ -334,6 +334,10 @@ html[data-agent-theme="dark"] .composer-card {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* 轮数与用量之间只留空白，不放分隔符号。 */
+#composer-rounds {
+  margin-right: 4px;
+}
 .conn-inline {
   display: inline-flex;
   align-items: center;

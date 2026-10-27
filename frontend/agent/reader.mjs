@@ -1,4 +1,4 @@
-import { escapeHTML } from "./core.mjs";
+import { escapeHTML, setParts } from "./core.mjs";
 
 // 分页正文：任意长度的记录只挂载一页文本。全文仍可搜索、定位和下载。
 export class FullReader {
@@ -89,8 +89,11 @@ export class FullReader {
     const pre = this.root.querySelector("pre");
     const value = this.slice(start, end);
     if (pre.textContent !== value) pre.textContent = value;
-    this.root.querySelector(".reader-meta").textContent =
-      `全文 ${this.length.toLocaleString()} 字符 · 当前 ${start.toLocaleString()}–${end.toLocaleString()} · 分页仅影响显示，不删减内容`;
+    setParts(this.root.querySelector(".reader-meta"), [
+      `全文 ${this.length.toLocaleString()} 字符`,
+      `当前 ${start.toLocaleString()}–${end.toLocaleString()}`,
+      "分页仅影响显示，不删减内容",
+    ]);
     this.root.querySelector(".reader-page").textContent =
       `${this.page + 1} / ${this.pages}`;
     this.root.querySelector("[data-a=prev]").disabled = this.page === 0;

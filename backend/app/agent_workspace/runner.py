@@ -34,6 +34,7 @@ class Runner:
         self.buffers = {}
         self.last_flush = 0
         self.tokens = 0
+        self.live_tokens = 0
         self.step = 0
         self.created_versions = []
         self.current_entry = None
@@ -73,7 +74,9 @@ class Runner:
     async def flush(self):
         if self.current_entry and self.buffers:
             parts, self.buffers = {k: "".join(v) for k, v in self.buffers.items()}, {}
-            await asyncio.to_thread(store.append_chunks, self.current_entry, parts)
+            # 本轮用量只在调用结束后结算；调用进行中先给出已收到内容的估算，界面用量随输出增长。
+            self.live_tokens += await asyncio.to_thread(count_text_tokens, "".join(parts.values()), self.snapshot["model"])
+            await asyncio.to_thread(store.append_chunks, self.current_entry, parts, {"live_tokens": self.live_tokens})
         self.last_flush = time.monotonic()
 
     async def emit(self, kind, text):
@@ -99,7 +102,8 @@ class Runner:
                                         "review" if review else "model", label,
                                         {"model": self.snapshot["model"], "config_revision": self.snapshot["revision"],
                                          "output_tokens": output_limit, "role": "reviewer" if review else role,
-                                         **({"source": source} if source else {})})
+                                         "context_tokens": context_tokens, **({"source": source} if source else {})})
+        self.live_tokens = 0
         self.current_entry = entry["id"]
         self.last_call_entry = entry["id"]
         await asyncio.to_thread(store.append_chunks, entry["id"], {"prompt": store.encode({"messages": messages, "tools": schemas or []})})
@@ -174,7 +178,7 @@ class Runner:
         # 有限续写，单纯触及输出上限不能变成成功或从头重写。
         for part in range(4):
             try:
-                result, last_entry = await self.call(args["title"] + (f" · 续写 {part}" if part else ""), messages,
+                result, last_entry = await self.call(args["title"] + (f"（续写 {part}）" if part else ""), messages,
                                                      role="writer", source=key)
             except llm.PartialResponseError as exc:
                 content += exc.result.content
@@ -289,7 +293,8 @@ class Runner:
             # 新会话只有一条 user 消息：要求与材料在前，他人稿件与修改意见在后。
             messages[-1] = {"role": "user", "content": messages[-1]["content"] + "\n\n"
                             + writer.revision_request(feedback, records, version["content"])}
-        title = (args.get("title") or version["title"] + " · 修订")[:200]
+        # 默认标题标一次「（修订）」即可，反复修订不叠加；版本号已能区分先后。
+        title = (args.get("title") or version["title"].removesuffix("（修订）") + "（修订）")[:200]
         draft, applied, failures, notes, last_entry, interrupted = version["content"], 0, [], [], "", False
 
         async def save(status, suffix="", label=title):
@@ -306,7 +311,7 @@ class Runner:
             for attempt in range(writer.MAX_REVISION_ATTEMPTS):
                 broken = None
                 try:
-                    result, last_entry = await self.call(f"修订 · {title}" + (f" · 重试 {attempt}" if attempt else ""), messages,
+                    result, last_entry = await self.call(f"修订《{title}》" + (f"（重试 {attempt}）" if attempt else ""), messages,
                                                          role="writer", source=key)
                     text, limited = result.content, result.finish_reason in {"length", "max_tokens"}
                 except llm.PartialResponseError as exc:

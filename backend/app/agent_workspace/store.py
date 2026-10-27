@@ -192,7 +192,7 @@ def start_entry(task_id, run_id, key, kind, label, details=None):
         return entry_dict(row)
 
 
-def append_chunks(entry_id, parts):
+def append_chunks(entry_id, parts, extra=None):
     with SessionLocal() as db:
         row = db.get(Entry, entry_id)
         details = decode(row.details)
@@ -204,6 +204,7 @@ def append_chunks(entry_id, parts):
             for offset in range(0, len(content), 4096):
                 db.add(Chunk(entry_id=entry_id, kind=kind, content=content[offset:offset + 4096]))
             counts[kind] = counts.get(kind, 0) + len(content)
+        details.update(extra or {})
         row.details = encode(details)
         event(db, row.task_id, "entry", entry_dict(row))
         db.commit()

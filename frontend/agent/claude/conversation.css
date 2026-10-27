@@ -381,13 +381,11 @@
 }
 .reasoning-preview {
   min-width: 0;
+  margin-left: 4px;
   overflow: hidden;
   color: var(--ink-3);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.reasoning-preview::before {
-  content: " · ";
 }
 .reasoning-preview[hidden] {
   display: none;
@@ -522,8 +520,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tool-call-brief:not(:empty)::before {
-  content: " · ";
+.tool-call-brief:not(:empty) {
+  margin-left: 4px;
 }
 .tool-call-state:empty {
   display: none;

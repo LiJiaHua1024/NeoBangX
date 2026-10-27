@@ -141,7 +141,7 @@ try {
         .click();
       await page.locator("#modal").waitFor({ state: "hidden" });
       await page.locator("[data-review]").first().click();
-      await page.getByText(/待核实 · 已忽略/).waitFor();
+      await page.getByText(/待核实\s*已忽略/).waitFor();
       await page.locator("#modal-close").click();
     },
   );
