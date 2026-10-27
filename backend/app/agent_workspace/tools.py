@@ -44,10 +44,18 @@ def tool_schemas(config):
                {"material_id": STRING, "offset": NUMBER, "limit": {"type": "integer", "minimum": 1, "maximum": 16000}}, ["material_id"]),
         schema("read_document", "读取指定成果版本，用于核对或修改。版本列表在任务上下文中。",
                {"version_id": STRING, "offset": NUMBER, "limit": {"type": "integer", "minimum": 1, "maximum": 16000}}, ["version_id"]),
-        schema("create_document", "根据完整选中材料和本任务提示词生成新文档或候选修订，返回版本编号。不能用于凭空补写缺失原文。修改时传入 base_version。",
+        schema("create_document", "根据完整选中材料和本任务提示词生成新文档或整篇候选稿，返回版本编号。不能用于凭空补写缺失原文。整篇重写已有成果时传入 base_version；局部修改改用 revise_document。",
                {"title": STRING, "instruction": STRING, "material_ids": IDS, "base_version": STRING, "teaching_tool": STRING}, ["title", "instruction", "material_ids"]),
-        schema("patch_document", "按唯一的连续原文做局部替换，生成候选版本，旧稿保留。匹配失败时缩小问题或请求确认，不自动重写全文。",
-               {"version_id": STRING, "old": STRING, "new": STRING}, ["version_id", "old", "new"]),
+        schema("revise_document",
+               "把修改意见交给该版本的原写作者，按材料核实后局部修改，旧稿保留。一次调用最多产生一个新版本；"
+               "写作者认为不成立的意见不改并说明理由，全部不改时不产生新版本。返回新版本编号和逐条处理说明。"
+               "instruction 写本次要改什么和取舍理由；引用审阅意见时传 review_id 和意见序号 issues（从 1 起，省略则引用全部），不要转抄意见；"
+               "用户本轮原话里已列出具体修改意见时把 include_user_request 设为 true，原话会完整转给写作者。"
+               "局部修改解决不了的问题改用 create_document 并传 base_version。",
+               {"version_id": STRING, "instruction": STRING, "review_id": STRING,
+                "issues": {"type": "array", "items": {"type": "integer", "minimum": 1}, "maxItems": 100},
+                "include_user_request": {"type": "boolean"}, "title": STRING},
+               ["version_id", "instruction"]),
         schema("ask_user", "只有缺少必要材料或存在影响执行的要求冲突时询问用户，保留已完成成果并等待补充。",
                {"question": STRING}, ["question"]),
     ]
@@ -82,7 +90,8 @@ def document(task_id, version_id):
         row = db.get(Version, version_id)
         if not row or row.task_id != task_id:
             raise ValueError("成果版本不存在")
-        return {"id": row.id, "title": row.title, "content": row.content, "complete": row.complete, "provenance": json.loads(row.provenance or "{}")}
+        return {"id": row.id, "title": row.title, "content": row.content, "complete": row.complete,
+                "parent_id": row.parent_id, "origin": row.origin, "provenance": json.loads(row.provenance or "{}")}
 
 
 def search_materials(rows, query, use_regex=False, offset=0):

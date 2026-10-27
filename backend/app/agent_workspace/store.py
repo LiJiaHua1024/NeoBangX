@@ -262,6 +262,25 @@ def entry_text(entry_id, kind):
         return "".join(db.scalars(select(Chunk.content).where(Chunk.entry_id == entry_id, Chunk.kind == kind).order_by(Chunk.id)))
 
 
+def review_data(task_id, entry_id):
+    """已完成审阅的意见与用户忽略的序号（从 0 起）。不属于本任务、未完成或无法解析时报错。"""
+    with SessionLocal() as db:
+        row = db.get(Entry, entry_id)
+        if not row or row.task_id != task_id or row.kind != "review":
+            raise ValueError("审阅记录不存在或不属于本任务")
+        if row.status != "done":
+            raise ValueError("该审阅没有得出完整结论，不能引用其中的意见")
+        details = decode(row.details)
+        text = "".join(db.scalars(select(Chunk.content).where(Chunk.entry_id == entry_id, Chunk.kind == "review").order_by(Chunk.id)))
+    try:
+        data = decode(text)
+        issues = data["issues"]
+    except (ValueError, KeyError, TypeError):
+        raise ValueError("审阅意见无法读取") from None
+    return {"summary": data.get("summary", ""), "issues": issues, "version_id": details.get("version_id", ""),
+            "ignored": set(details.get("ignored", []))}
+
+
 def save_version(task_id, run_id, key, title, content, parent_id="", origin="agent", complete=True, provenance=None):
     with SessionLocal() as db:
         # 幂等工具写入；重复执行不产生多个相同版本。

@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import re
 import time
 from contextlib import suppress
 
@@ -12,8 +11,9 @@ from app.services.llm import count_text_tokens
 from app.services.prompt_loader import DEFAULT_VARIABLES
 from app.services.error_explain import sanitize_error_text
 from app.models import utcnow
-from . import store, tools, llm
-from .instructions import DEFAULT_EXECUTION_REQUEST, REVIEW_POLICY, REVIEW_SCHEMA
+from . import store, tools, llm, writer
+from .instructions import (DEFAULT_EXECUTION_REQUEST, REVIEW_FEEDBACK, REVIEW_POLICY, REVIEW_SCHEMA,
+                           REVISION_RETRY, WRITER_SYSTEM, behavior_of)
 from .settings import load_settings
 
 log = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ class Runner:
                        "previous_conversation": history}
             if not self.config["goal"].strip() and not context["instruction"].strip():
                 context["instruction"] = DEFAULT_EXECUTION_REQUEST
-            self.messages = [{"role": "system", "content": self.config["behavior"]},
+            self.messages = [{"role": "system", "content": behavior_of(self.config)},
                              {"role": "user", "content": store.encode(context)}]
             await self.checkpoint()
 
@@ -144,7 +144,7 @@ class Runner:
                 # 模型选择固定在本轮；提示词和工具从下一步生效。
                 self.snapshot["config"] = self.config
                 self.snapshot["revision"] += 1
-                self.messages[0] = {"role": "system", "content": self.config["behavior"]}
+                self.messages[0] = {"role": "system", "content": behavior_of(self.config)}
                 self.messages.append({"role": "user", "content": "从此步骤使用的新任务配置：\n" + store.encode(self.config)})
             if note["text"]:
                 self.messages.append({"role": "user", "content": note["text"]})
@@ -156,22 +156,18 @@ class Runner:
         if not set(selected) <= set(self.config["materials"]):
             raise ValueError("文档所用材料不在本轮范围内")
         rows = await asyncio.to_thread(tools.materials, self.task_id, selected)
-        material = "\n\n".join(f'<material id="{m["id"]}" name={json.dumps(m["name"], ensure_ascii=False)}>\n{m["content"]}\n</material>' for m in rows)
         template = self.config["prompt"]
         if args.get("teaching_tool"):
             template = self.config.get("teaching_tools", {}).get(args["teaching_tool"])
             if template is None:
                 raise ValueError("此教学工具未在本任务中启用")
-        values = {**DEFAULT_VARIABLES, "user_input": material}
-        prompt = re.sub(r"\{\{(\w+)\}\}", lambda m: values.get(m[1], m[0]), template)
-        if "{{user_input}}" not in template:
-            prompt += "\n\n" + material
         base = args.get("base_version") or self.snapshot.get("base_version") or ""
+        previous = None
         if base:
-            previous = await asyncio.to_thread(tools.document, self.task_id, base)
-            prompt += "\n\n<previous_version>\n" + previous["content"] + "\n</previous_version>"
-        prompt += "\n\n本次目标：" + self.config["goal"] + "\n本次修改或生成要求：" + args["instruction"]
-        messages = [{"role": "system", "content": self.config["behavior"]}, {"role": "user", "content": prompt}]
+            previous = (await asyncio.to_thread(tools.document, self.task_id, base))["content"]
+        prompt = writer.render_prompt(template, DEFAULT_VARIABLES, rows, previous, self.config["goal"], args["instruction"])
+        # 写作者独立于调度策略；system 与 prompt 记入依据，修订时逐字重建以复用前缀缓存。
+        messages = [{"role": "system", "content": WRITER_SYSTEM}, {"role": "user", "content": prompt}]
         content, complete, last_entry = "", False, ""
         # 有限续写，单纯触及输出上限不能变成成功或从头重写。
         for part in range(4):
@@ -201,10 +197,160 @@ class Runner:
                 raise BudgetReached("模型达到单次输出上限，但没有生成正文；思考记录已保存。请调整管理后台 Agent 的单次输出额度或更换模型后重试")
             raise ValueError("模型未返回可用文档")
         provenance = {"requirements": template, "instruction": args["instruction"], "goal": self.config["goal"],
-                      "materials": selected, "teaching_tool": args.get("teaching_tool", ""), "config_revision": self.snapshot["revision"]}
+                      "materials": selected, "teaching_tool": args.get("teaching_tool", ""), "config_revision": self.snapshot["revision"],
+                      "writer": writer.recipe(WRITER_SYSTEM, DEFAULT_VARIABLES, base, prompt, content)}
         version = await asyncio.to_thread(store.save_version, self.task_id, self.id, key, args["title"], content, base, "agent", complete, provenance)
         self.created_versions.append(version["id"])
         return {**version, "entry_id": last_entry}
+
+    async def revision_feedback(self, args):
+        """汇总交给写作者的修改意见。审阅意见按序号从存档原样取出，不经调度 Agent 转述。"""
+        parts = []
+        if args.get("review_id"):
+            review = await asyncio.to_thread(store.review_data, self.task_id, args["review_id"])
+            total = len(review["issues"])
+            numbers = list(dict.fromkeys(args.get("issues") or range(1, total + 1)))
+            if any(n > total for n in numbers):
+                raise ValueError(f"意见序号超出范围，该审阅共 {total} 条意见")
+            # 保留审阅里的原序号，写作者的逐条说明和调度看到的审阅编号一致。
+            chosen = [(n, review["issues"][n - 1]) for n in numbers if n - 1 not in review["ignored"]]
+            if chosen:
+                parts.append("审阅意见：\n" + "\n".join(writer.format_issue(n, issue) for n, issue in chosen))
+        elif args.get("issues"):
+            raise ValueError("引用审阅意见序号时需要同时提供 review_id")
+        request = self.snapshot.get("instruction", "").strip()
+        if args.get("include_user_request") and request:
+            parts.append("用户原话：\n" + request)
+        if args["instruction"].strip():
+            parts.append("修改要求：\n" + args["instruction"].strip())
+        if not parts:
+            raise ValueError("没有可执行的修改意见；所引用的意见可能已被用户忽略")
+        return "\n\n".join(parts)
+
+    async def author_messages(self, author):
+        """按依据重建写作者当时的请求，并接上它的稿子。依据不能逐字重建时返回 None。"""
+        provenance = author["provenance"]
+        recipe = provenance["writer"]
+        rows = await asyncio.to_thread(tools.materials, self.task_id, provenance.get("materials", []))
+        previous = None
+        if recipe.get("base_version"):
+            previous = (await asyncio.to_thread(tools.document, self.task_id, recipe["base_version"]))["content"]
+        prompt = writer.render_prompt(provenance.get("requirements", ""), recipe["values"], rows, previous,
+                                      provenance.get("goal", ""), provenance.get("instruction", ""))
+        if writer.digest(prompt) != recipe["prompt_sha256"]:
+            return None
+        return [{"role": "system", "content": recipe["system"]}, {"role": "user", "content": prompt},
+                {"role": "assistant", "content": author["content"]}]
+
+    async def revision_context(self, version):
+        """返回 (messages, mode)：author 作者改自己的稿；edited 作者稿经用户手改；fresh 没有作者会话可重建。"""
+        node = version
+        for _ in range(writer.MAX_LINEAGE_DEPTH):
+            if writer.authored(node):
+                try:
+                    messages = await self.author_messages(node)
+                except (ValueError, KeyError, TypeError) as exc:
+                    log.warning("修订无法重建作者会话 version=%s: %s", node["id"], exc)
+                    messages = None
+                if messages:
+                    return messages, "author" if node["id"] == version["id"] else "edited"
+                break
+            if not node.get("parent_id"):
+                break
+            try:
+                node = await asyncio.to_thread(tools.document, self.task_id, node["parent_id"])
+            except ValueError:
+                break
+        provenance = version["provenance"]
+        try:
+            rows = await asyncio.to_thread(tools.materials, self.task_id, provenance.get("materials") or self.config["materials"])
+        except ValueError:
+            rows = await asyncio.to_thread(tools.materials, self.task_id, self.config["materials"])
+        prompt = writer.render_prompt(provenance.get("requirements") or self.config["prompt"], DEFAULT_VARIABLES, rows, None, "", "", tail=False)
+        if self.config["goal"].strip():
+            prompt += "\n\n本次目标：" + self.config["goal"]
+        return [{"role": "system", "content": WRITER_SYSTEM}, {"role": "user", "content": prompt}], "fresh"
+
+    async def revise_document(self, args, key):
+        version = await asyncio.to_thread(tools.document, self.task_id, args["version_id"])
+        if not version["complete"]:
+            raise ValueError("该版本尚未完整生成，不能修订；请先补全或选择完整版本")
+        feedback = await self.revision_feedback(args)
+        messages, mode = await self.revision_context(version)
+        records = version["provenance"].get("revisions", [])
+        if mode == "author":
+            messages.append({"role": "user", "content": writer.revision_request(feedback, records)})
+        elif mode == "edited":
+            messages.append({"role": "user", "content": writer.revision_request(feedback, records, version["content"], edited_by_user=True)})
+        else:
+            # 新会话只有一条 user 消息：要求与材料在前，他人稿件与修改意见在后。
+            messages[-1] = {"role": "user", "content": messages[-1]["content"] + "\n\n"
+                            + writer.revision_request(feedback, records, version["content"])}
+        title = (args.get("title") or version["title"] + " · 修订")[:200]
+        draft, applied, failures, notes, last_entry, interrupted = version["content"], 0, [], [], "", False
+
+        async def save(status, suffix="", label=title):
+            provenance = writer.review_view(version["provenance"])
+            if mode == "author":
+                # 作者在自己的稿上改，新稿仍属同一作者会话；用户手改或他人稿件不冒充为作者输出。
+                provenance["writer"] = {**version["provenance"]["writer"], "output_sha256": writer.digest(draft)}
+            record = writer.revision_record(feedback, "\n".join(notes), applied, failures, status)
+            provenance["revisions"] = (records + [record])[-writer.MAX_REVISION_RECORDS:]
+            return await asyncio.to_thread(store.save_version, self.task_id, self.id, key + suffix, label[:200], draft,
+                                           version["id"], "agent", True, provenance)
+
+        try:
+            for attempt in range(writer.MAX_REVISION_ATTEMPTS):
+                broken = None
+                try:
+                    result, last_entry = await self.call(f"修订 · {title}" + (f" · 重试 {attempt}" if attempt else ""), messages)
+                    text, limited = result.content, result.finish_reason in {"length", "max_tokens"}
+                except llm.PartialResponseError as exc:
+                    text, limited, broken = exc.result.content, True, exc
+                    last_entry = self.last_call_entry or last_entry
+                if not text.strip():
+                    if broken:
+                        raise broken
+                    if limited:
+                        raise BudgetReached("修订达到单次输出上限，但没有给出修改；思考记录已保存。请调整管理后台 Agent 的单次输出额度或更换模型后重试")
+                    break
+                parsed = writer.parse_edits(text, truncated=limited)
+                if parsed.explanation:
+                    notes.append(parsed.explanation)
+                draft, count, failed = writer.apply_edits(draft, parsed.edits)
+                applied += count
+                failures = sorted(parsed.problems + failed)
+                if broken:
+                    # 连接中断时已完整收到的修改块照常生效，不在不稳定的连接上继续重试。
+                    interrupted = True
+                    break
+                if not failures or attempt == writer.MAX_REVISION_ATTEMPTS - 1:
+                    break
+                messages += [{"role": "assistant", "content": text},
+                             {"role": "user", "content": REVISION_RETRY.format(failures=writer.describe_failures(failures))}]
+        except (asyncio.CancelledError, BudgetReached):
+            if draft != version["content"]:
+                saved = await save("partial", ":partial", title + "（部分修改）")
+                self.created_versions.append(saved["id"])
+            raise
+        except Exception as exc:
+            if draft == version["content"]:
+                raise
+            # 之前的修改块已经生效，保存下来交给调度判断，不因后续一次失败丢弃。
+            error = sanitize_error_text(str(exc))[:300] or type(exc).__name__
+            saved = await save("partial", ":partial", title + "（部分修改）")
+            self.created_versions.append(saved["id"])
+            return {**saved, "new_version": True, "applied": applied, "explanation": "\n".join(notes)[:4000],
+                    "error": "修订中途出错，已保存出错前完成的修改：" + error, "entry_id": last_entry}
+        info = {"applied": applied, "explanation": "\n".join(notes)[:4000] or "写作者没有给出说明",
+                "unresolved": writer.describe_failures(failures), "entry_id": last_entry}
+        if interrupted:
+            info["notice"] = "与模型的连接中断，只应用了中断前完整收到的修改"
+        if draft == version["content"]:
+            return {"new_version": False, "base_version": version["id"], **info}
+        saved = await save("interrupted" if interrupted else "done")
+        self.created_versions.append(saved["id"])
+        return {**saved, "new_version": True, **info}
 
     async def tool_call(self, call):
         name, raw = call["function"]["name"], call["function"]["arguments"]
@@ -229,15 +375,8 @@ class Runner:
             validate(args, schemas[name]["parameters"])
             if name == "create_document":
                 result = await self.create_document(args, key)
-            elif name == "patch_document":
-                base = await asyncio.to_thread(tools.document, self.task_id, args["version_id"])
-                old = args["old"]
-                if not old or base["content"].count(old) != 1:
-                    raise ValueError("原文不能唯一定位，未修改；请提供更完整且逐字一致的片段")
-                content = base["content"].replace(old, args["new"], 1)
-                result = await asyncio.to_thread(store.save_version, self.task_id, self.id, key,
-                                                 base["title"], content, base["id"], "agent", base["complete"])
-                self.created_versions.append(result["id"])
+            elif name == "revise_document":
+                result = await self.revise_document(args, key)
             elif name == "ask_user":
                 await asyncio.to_thread(store.append_chunks, entry["id"], {"output": args["question"]})
                 await asyncio.to_thread(store.finish_entry, entry["id"], "waiting", {"question": args["question"]})
@@ -274,8 +413,8 @@ class Runner:
         material_ids = list(dict.fromkeys(version["provenance"].get("materials", []) + self.config["materials"]))
         rows = await asyncio.to_thread(tools.materials, self.task_id, material_ids)
         payload = {"goal": self.config["goal"], "requirements": self.config["prompt"],
-                   "instruction": self.snapshot.get("instruction", ""), "materials": rows, "draft": version,
-                   "generation_requirements": version["provenance"]}
+                   "instruction": self.snapshot.get("instruction", ""), "materials": rows, "draft": {**version, "provenance": writer.review_view(version["provenance"])},
+                   "generation_requirements": writer.review_view(version["provenance"])}
         try:
             result, entry_id = await self.call("开放式审阅", [{"role": "system", "content": self.config.get("review_prompt", REVIEW_POLICY)},
                                                            {"role": "user", "content": store.encode(payload)}], review=True)
@@ -297,7 +436,7 @@ class Runner:
                     issue["certainty"] = "uncertain"
             await asyncio.to_thread(store.append_chunks, entry_id, {"review": store.encode(data)})
             await asyncio.to_thread(store.finish_entry, entry_id, "done", {"review_summary": data["summary"][:500], "issues": len(data["issues"]), "version_id": version_id})
-            return data
+            return {**data, "entry_id": entry_id}
         except Exception:
             # 原始审阅全文保留供阅读，无法解析不能误报通过。
             await asyncio.to_thread(store.finish_entry, entry_id, "failed", {"error": "审阅格式无法解析，原文可在详情查看", "version_id": version_id})
@@ -377,25 +516,38 @@ class Runner:
                 latest = await asyncio.to_thread(tools.document, self.task_id, self.created_versions[-1])
                 if not latest["complete"]:
                     raise BudgetReached("成果尚未完整生成，已有内容已保存，可继续补全")
-            if self.config.get("review") and self.created_versions:
-                version_id = self.created_versions[-1]
-                for review_no in range(self.config.get("review_rounds", 1)):
-                    review = await self.review(version_id)
-                    if not review or not review["issues"] or not self.config.get("auto_improve"):
-                        break
-                    confirmed = [i for i in review["issues"] if i["certainty"] == "confirmed"]
-                    if not confirmed:
-                        break
-                    version = await self.create_document({"title": "候选修订", "instruction": "先核实以下意见，只有材料支持时才修改；保留其他内容：\n"+store.encode(confirmed),
-                                                          "material_ids": self.config["materials"], "base_version": version_id}, f"improve:{review_no}")
-                    version_id = version["id"]
-                if self.config.get("auto_improve") and version_id != self.created_versions[0]:
-                    await self.review(version_id)
-                await self.checkpoint()
+            if await self.review_cycle():
+                continue
             if await asyncio.to_thread(store.take_notes, self.id):
                 await self.notes()
                 continue
             return
+
+    async def review_cycle(self):
+        """审阅本轮最新的完整版本。需要调度 Agent 决定是否修订时，把意见放进对话并返回 True。
+
+        每个版本只审一次；auto_improve 打开时最多交回 review_rounds 次，之后的新版本只审阅、只汇报。
+        """
+        if not (self.config.get("review") and self.created_versions):
+            return False
+        state = self.snapshot.setdefault("review_state", {"reviewed": [], "rounds": 0})
+        version_id = self.created_versions[-1]
+        if version_id in state["reviewed"]:
+            return False
+        review = await self.review(version_id)
+        state["reviewed"].append(version_id)
+        await self.checkpoint()
+        rounds = self.config.get("review_rounds", 1)
+        if not review or not review["issues"] or not self.config.get("auto_improve") or state["rounds"] >= rounds:
+            return False
+        state["rounds"] += 1
+        version = await asyncio.to_thread(tools.document, self.task_id, version_id)
+        issues = "\n".join(writer.format_issue(i, issue) for i, issue in enumerate(review["issues"], 1))
+        self.messages.append({"role": "user", "content": REVIEW_FEEDBACK.format(
+            version_id=version_id, title=version["title"], review_id=review["entry_id"], summary=review["summary"],
+            issues=issues, round=state["rounds"], rounds=rounds)})
+        await self.checkpoint()
+        return True
 
 
 async def execute_run(run_id, model_call=None):

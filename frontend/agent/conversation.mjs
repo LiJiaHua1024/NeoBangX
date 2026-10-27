@@ -15,6 +15,7 @@ const PAGE_GREETING = pickGreeting();
 
 const TOOL_NAMES = {
   create_document: "生成成果",
+  revise_document: "修订成果",
   patch_document: "修改成果",
   read_material: "读取材料",
   search_material: "检索材料",
@@ -24,6 +25,7 @@ const TOOL_NAMES = {
 };
 const TOOL_ICONS = {
   create_document: "file-text",
+  revise_document: "edit",
   patch_document: "edit",
   read_material: "book-open",
   search_material: "search",
@@ -1653,7 +1655,7 @@ function briefOf(label, input, output) {
       return data.query ? `“${data.query}”` : "";
     if (label === "read_material") return data.material_id ? `材料 ${data.material_id}` : "";
     if (label === "check_vocabulary") return data.text ? `“${String(data.text).slice(0, 30)}”` : "";
-    if (label === "create_document" || label === "patch_document")
+    if (label === "create_document" || label === "patch_document" || label === "revise_document")
       return data.title || data.instruction || "";
     if (label === "ask_user") return data.question || "";
   } catch {}

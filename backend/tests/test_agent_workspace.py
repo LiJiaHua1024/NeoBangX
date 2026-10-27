@@ -153,13 +153,13 @@ def test_runner_tool_execution_and_unmodified_material(identity,monkeypatch):
     assert tools.materials(t['id'],[m['id']])[0]['content']=='题一原文\n题二原文\n听力未提供'
 
 
-def test_patch_failure_never_rewrites(identity,monkeypatch):
+def test_patch_tool_removed_never_rewrites(identity,monkeypatch):
     t=task(identity);v=store.save_version(t['id'],'','base','原稿','重复 重复')
     r=run(identity,t);obj=runner.Runner(r['id']);monkeypatch.setattr(runner,'_load_cfg',lambda:{})
     async def execute():
         await obj.load()
         return await obj.tool_call({'id':'p1','function':{'name':'patch_document','arguments':json.dumps({'version_id':v['id'],'old':'重复','new':'丢内容'})}})
-    result=asyncio.run(execute());assert result['unchanged']
+    result=asyncio.run(execute());assert result['unchanged'] and '不在本轮允许范围' in result['error']
     assert len(store.task_detail(identity[0],t['id'])['versions'])==1
     store.finish_run(r['id'],'completed')
 
