@@ -116,3 +116,39 @@ test("a stream tick does not reopen reasoning when the entry finished during the
   assert.deepEqual(updates, [], "不能拿读之前的 running 快照去更新已完成的步骤");
   fake.stopStream("e1");
 });
+
+test("writer calls stay out of the conversation and only drive the waiting line", async () => {
+  const { Conversation } = await import("../agent/conversation.mjs");
+  const proto = Conversation.prototype;
+  const writer = (id, label, output, status = "running", extra = {}) => ({
+    id, run_id: "r1", kind: "model", label, status,
+    details: { role: "writer", source: "tool:gen", chars: { output }, ...extra },
+  });
+  const entries = new Map([
+    ["s1", { id: "s1", run_id: "r1", kind: "model", label: "执行步骤 1", status: "done", details: { role: "agent", chars: { output: 4 } } }],
+    ["t1", { id: "t1", run_id: "r1", kind: "tool", label: "create_document", status: "running", details: {} }],
+    ["w1", writer("w1", "试卷分析", 1200, "incomplete")],
+    ["w2", writer("w2", "试卷分析 · 续写 1", 300)],
+  ]);
+  const turn = { run: { status: "running" }, entries: ["s1", "t1", "w1", "w2"] };
+  const fake = { entries, task: { status: "running" }, writerChars: proto.writerChars, caches: new Map([["s1:output", { text: "调度回答" }]]) };
+  // 续写按 source 合计字数；正文本身不进对话。
+  assert.equal(proto.waitingText.call(fake, turn), "正在撰写成果 · 1,500 字");
+  entries.set("w2", writer("w2", "试卷分析 · 续写 1", 0, "running", { chars: { reasoning: 9 } }));
+  assert.equal(proto.waitingText.call(fake, turn), "正在撰写成果 · 1,200 字");
+  entries.set("w3", writer("w3", "修订 · 试卷分析", 80, "running", { source: "tool:rev" }));
+  turn.entries.push("w3");
+  assert.equal(proto.waitingText.call(fake, turn), "正在修改成果");
+  // 复制回答取调度 Agent 的消息，不取写作者的稿子。
+  fake.caches.set("w3:output", { text: "<edit>…</edit>" });
+  assert.equal(proto.finalText.call(fake, turn), "调度回答");
+  // 写作者不拉取正文流。
+  const streamFake = { streams: new Map(), destroyed: false };
+  proto.startStream.call(streamFake, entries.get("w3"));
+  assert.equal(streamFake.streams.size, 0);
+  // 旧记录没有 role：调度的标签一直是「执行步骤 N」，其余模型调用都是写作者。
+  const legacy = { entries: new Map([["old", { id: "old", run_id: "r1", kind: "model", label: "试卷分析", status: "running", details: { chars: { output: 5 } } }]]), task: { status: "running" }, writerChars: proto.writerChars };
+  assert.equal(proto.waitingText.call(legacy, { run: { status: "running" }, entries: ["old"] }), "正在撰写成果 · 5 字");
+  const step = { entries: new Map([["s", { id: "s", run_id: "r1", kind: "model", label: "执行步骤 2", status: "running", details: { chars: { output: 5 } } }]]), task: { status: "running" } };
+  assert.equal(proto.waitingText.call(step, { run: { status: "running" }, entries: ["s"] }), "正在撰写");
+});

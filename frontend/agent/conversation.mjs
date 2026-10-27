@@ -71,6 +71,15 @@ const isStale = (previous, next, active) =>
 const entryActive = (status) => status === "running";
 const runActive = (status) => ACTIVE.has(status);
 
+/** 写作者的生成/修订调用。正文直接进成果，对话里不铺开整篇稿子或修改块，过程留在执行轨迹。
+ * 旧记录没有 role；调度 Agent 的调用标签一直是「执行步骤 N」，其余模型调用都来自写作者。 */
+function isWriter(entry) {
+  if (entry?.kind !== "model") return false;
+  const role = entry.details?.role;
+  if (role) return role === "writer";
+  return !/^执行步骤 \d+$/.test(String(entry.label || ""));
+}
+
 function timeOf(iso) {
   const date = new Date(iso || "");
   if (Number.isNaN(date.getTime())) return "";
@@ -491,6 +500,14 @@ export class Conversation {
   }
 
   renderEntry(turn, entry) {
+    if (isWriter(entry)) {
+      // 只占一个隐藏位置：出错时显示错误，等待行据此显示撰写进度；正文从成果卡片查看。
+      const el = document.createElement("div");
+      el.className = "assistant writer-step";
+      el.dataset.entry = entry.id;
+      el.hidden = true;
+      return { kind: "writer", el };
+    }
     if (entry.kind === "model") {
       const el = document.createElement("div");
       el.className = "assistant";
@@ -555,6 +572,8 @@ export class Conversation {
       this.updateTool(state, entry);
     } else if (state.kind === "review") {
       this.updateReview(state, entry);
+    } else if (state.kind === "writer") {
+      if (entry.status !== "running") this.finishTurn(turn);
     }
     if (details.error && state.kind !== "tool") {
       this.renderError(state, details.error, entry);
@@ -898,6 +917,7 @@ export class Conversation {
     );
     state.el.append(box);
     state.errorBox = box;
+    state.el.hidden = false;
   }
 
   /* ---------- 用户消息 ---------- */
@@ -1147,6 +1167,14 @@ export class Conversation {
     const ids = turn.entries;
     const last = this.entries.get(ids[ids.length - 1]);
     if (!last) return "正在开始";
+    if (isWriter(last)) {
+      if (last.status !== "running") return "正在整理成果";
+      // 修订的输出是修改块，字数不代表成果篇幅，只说明阶段。
+      const revising = /^修订 · /.test(String(last.label || ""));
+      const written = this.writerChars(turn, last);
+      if (revising) return written ? "正在修改成果" : "正在构思修改";
+      return written ? `正在撰写成果 · ${chars(written)}` : "正在构思成果";
+    }
     if (last.kind === "tool") {
       return last.status === "running"
         ? `正在调用${TOOL_NAMES[last.label] || "工具"}`
@@ -1158,6 +1186,19 @@ export class Conversation {
     if ((counts.output || 0) > 0) return "正在撰写";
     if ((counts.reasoning || 0) > 0) return "正在思考";
     return "正在执行";
+  }
+
+  /** 同一次写作的续写分成多次调用，按 source 合计已写字数。 */
+  writerChars(turn, entry) {
+    const source = entry.details?.source;
+    if (!source) return entry.details?.chars?.output || 0;
+    let total = 0;
+    for (const id of turn.entries) {
+      const item = this.entries.get(id);
+      if (isWriter(item) && item.details?.source === source)
+        total += item.details?.chars?.output || 0;
+    }
+    return total;
   }
 
   stopClock() {
@@ -1208,7 +1249,7 @@ export class Conversation {
         const last = [...turn.entries]
           .reverse()
           .map((id) => this.entries.get(id))
-          .find((entry) => entry?.kind === "model" && entry.details?.chars?.output);
+          .find((entry) => entry?.kind === "model" && !isWriter(entry) && entry.details?.chars?.output);
         if (last) {
           try {
             text = await this.ensureContent(last, "output");
@@ -1242,7 +1283,7 @@ export class Conversation {
     const ids = turn.entries;
     for (let i = ids.length - 1; i >= 0; i--) {
       const entry = this.entries.get(ids[i]);
-      if (entry?.kind === "model") {
+      if (entry?.kind === "model" && !isWriter(entry)) {
         const text = this.caches.get(`${entry.id}:output`)?.text;
         if (text) return text;
       }
@@ -1499,7 +1540,8 @@ export class Conversation {
   }
 
   startStream(entry) {
-    if (this.streams.has(entry.id) || this.destroyed) return;
+    // 写作者正文不在对话里显示，不必逐拍拉取；进度只看事件里的字数。
+    if (this.streams.has(entry.id) || this.destroyed || isWriter(entry)) return;
     const kinds = [];
     const counts = entry.details?.chars || {};
     for (const kind of ["reasoning", "output", "input", "arguments"])

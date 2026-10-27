@@ -300,6 +300,23 @@ def generate_then(identity, replies):
     return t, r, obj, v, seen
 
 
+def test_writer_calls_are_marked_apart_from_scheduler_steps(identity):
+    """对话只铺开调度 Agent 的消息；写作者的生成与修订按 role 识别，按 source 归并续写。"""
+    t, r, obj, v, seen = generate_then(identity, ['第 1 条：采纳\n<edit><old>分析甲。</old><new>甲改。</new></edit>', '好的'])
+
+    async def follow():
+        await revise_call(obj, 'rev', version_id=v['id'], instruction='修改')
+        await obj.call('执行步骤 9', [{'role': 'user', 'content': '继续'}])
+    asyncio.run(follow())
+    with SessionLocal() as db:
+        rows = db.scalars(select(WorkspaceEntry).where(WorkspaceEntry.run_id == r['id'], WorkspaceEntry.kind == 'model')).all()
+        details = {row.label: store.decode(row.details) for row in rows}
+    assert details['成果']['role'] == 'writer' and details['成果']['source'] == 'tool:gen'
+    assert details['修订 · 成果 · 修订']['role'] == 'writer' and details['修订 · 成果 · 修订']['source'] == 'tool:rev'
+    assert details['执行步骤 9']['role'] == 'agent' and 'source' not in details['执行步骤 9']
+    store.finish_run(r['id'], 'completed')
+
+
 HALF = '第 1 条：采纳\n<edit><old>分析甲。</old><new>甲改。</new></edit>\n<edit><old>不存在的句子。</old><new>x</new></edit>'
 
 

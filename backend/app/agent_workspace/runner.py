@@ -81,7 +81,8 @@ class Runner:
         if time.monotonic() - self.last_flush > 0.35:
             await self.flush()
 
-    async def call(self, label, messages, schemas=None, review=False):
+    async def call(self, label, messages, schemas=None, review=False, role="agent", source=""):
+        """role 区分调度与写作者：写作者的正文进成果，对话只显示进度；source 把同一次写作的续写归到一起。"""
         self.last_call_entry = None
         if self.step >= self.limits["max_steps"]:
             raise BudgetReached("已达到本轮步骤上限，已有成果保留，可继续执行")
@@ -97,7 +98,8 @@ class Runner:
         entry = await asyncio.to_thread(store.start_entry, self.task_id, self.id, store.uid(),
                                         "review" if review else "model", label,
                                         {"model": self.snapshot["model"], "config_revision": self.snapshot["revision"],
-                                         "output_tokens": output_limit})
+                                         "output_tokens": output_limit, "role": "reviewer" if review else role,
+                                         **({"source": source} if source else {})})
         self.current_entry = entry["id"]
         self.last_call_entry = entry["id"]
         await asyncio.to_thread(store.append_chunks, entry["id"], {"prompt": store.encode({"messages": messages, "tools": schemas or []})})
@@ -172,7 +174,8 @@ class Runner:
         # 有限续写，单纯触及输出上限不能变成成功或从头重写。
         for part in range(4):
             try:
-                result, last_entry = await self.call(args["title"] + (f" · 续写 {part}" if part else ""), messages)
+                result, last_entry = await self.call(args["title"] + (f" · 续写 {part}" if part else ""), messages,
+                                                     role="writer", source=key)
             except llm.PartialResponseError as exc:
                 content += exc.result.content
                 if not content.strip():
@@ -303,7 +306,8 @@ class Runner:
             for attempt in range(writer.MAX_REVISION_ATTEMPTS):
                 broken = None
                 try:
-                    result, last_entry = await self.call(f"修订 · {title}" + (f" · 重试 {attempt}" if attempt else ""), messages)
+                    result, last_entry = await self.call(f"修订 · {title}" + (f" · 重试 {attempt}" if attempt else ""), messages,
+                                                         role="writer", source=key)
                     text, limited = result.content, result.finish_reason in {"length", "max_tokens"}
                 except llm.PartialResponseError as exc:
                     text, limited, broken = exc.result.content, True, exc
