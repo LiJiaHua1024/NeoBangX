@@ -67,6 +67,7 @@
     <link rel="stylesheet" href="/static/agent/claude/tokens.css" />
     <link rel="stylesheet" href="/static/agent/claude/base.css" />
     <link rel="stylesheet" href="/static/agent/claude/shell.css" />
+    <link rel="stylesheet" href="/static/agent/claude/account.css" />
     <link rel="stylesheet" href="/static/agent/claude/conversation.css" />
     <link rel="stylesheet" href="/static/agent/claude/waiting.css" />
     <link rel="stylesheet" href="/static/agent/claude/markdown.css" />
@@ -195,13 +196,19 @@
           <a class="nav-row" href="/">
             <span data-icon="chevron-left"></span><span class="label">返回普通工具</span>
           </a>
-          <button id="account" class="account-row" type="button">
-            <span class="account-avatar" id="account-avatar">N</span>
+          <button
+            id="account"
+            class="account-row"
+            type="button"
+            aria-haspopup="menu"
+            aria-controls="account-popover"
+            aria-expanded="false"
+          >
+            <span class="account-avatar" id="account-avatar" aria-hidden="true">N</span>
             <span class="account-meta">
               <strong id="account-name">使用码</strong>
-              <small id="account-note">点击登录</small>
             </span>
-            <span class="account-caret" data-icon="chevron-down"></span>
+            <span class="account-caret" aria-hidden="true"></span>
           </button>
         </div>
       </aside>

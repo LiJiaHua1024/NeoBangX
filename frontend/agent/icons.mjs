@@ -71,6 +71,8 @@ const PATHS = {
   wrench:
     '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-3-3Z"/>',
   terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+  "log-out":
+    '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.2 1.8"/>',
   check: '<path d="m4.5 12.5 5 5 10-11"/>',
 };

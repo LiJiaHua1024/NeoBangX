@@ -120,21 +120,35 @@ try {
   });
   const shots = (name) => path.join(SHOTS, name);
 
-  /** Wait until the newly created task is the one the page has actually opened. */
+  /**
+   * Open a fresh blank task.
+   *
+   * The workspace now reuses an existing blank task instead of stacking a new
+   * one, so the setup helper creates the row it needs through the task API and
+   * opens it directly, independent of that reuse rule.
+   */
   async function newTask() {
-    const previous = await page.locator("#app").getAttribute("data-task");
-    await page.locator("#new-task").click();
+    const id = await page.evaluate(async () => {
+      const headers = {
+        Authorization: "Bearer " + localStorage.getItem("nbx_auth"),
+        "Content-Type": "application/json",
+      };
+      const catalog = await (
+        await fetch("/api/workspace/catalog", { headers })
+      ).json();
+      const task = await (
+        await fetch("/api/workspace/tasks", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "新任务", config: catalog.defaults }),
+        })
+      ).json();
+      return task.id;
+    });
+    await page.goto(`${BASE}/agent/tasks/${id}#prompt`, { waitUntil: "networkidle" });
     await page.waitForFunction(
-      (before) => {
-        const current = document.querySelector("#app")?.dataset.task;
-        return current && current !== before;
-      },
-      previous,
-      { timeout: 20000 },
-    );
-    await page.waitForFunction(
-      () => document.querySelector("#task-status")?.textContent === "草稿",
-      {},
+      (task) => document.querySelector("#app")?.dataset.task === task,
+      id,
       { timeout: 20000 },
     );
     await page.waitForFunction(
@@ -691,12 +705,28 @@ try {
     await page.waitForTimeout(350);
     await page.locator('#timeline [data-kind="reasoning"]').first().click();
     await page.waitForFunction(
-      (n) => document.querySelector(".reader-meta")?.textContent.includes(n),
-      count.toLocaleString("zh-CN"),
+      (n) => {
+        const match = (document.querySelector(".reader-meta")?.textContent || "").match(
+          /全文 ([\d,]+) 字符/,
+        );
+        return (
+          match &&
+          Math.abs(Number(match[1].replace(/,/g, "")) - n) <= 4
+        );
+      },
+      count,
       { timeout: 30000 },
     );
     const meta = await page.locator(".reader-meta").textContent();
-    assert(meta.includes(count.toLocaleString("zh-CN")), "阅读器字符数不一致");
+    const fullCount = Number(
+      meta.match(/全文 ([\d,]+) 字符/)[1].replace(/,/g, ""),
+    );
+    // 思考正文按空行拆段后，段间空行由 8px margin 承担，不再作为字符显示；
+    // 阅读器与下载仍是后端原文，因此只允许差出被折叠的段间/末尾换行。
+    assert(
+      Math.abs(fullCount - count) <= 4,
+      `思考正文 ${count} 字符，原文 ${fullCount} 字符`,
+    );
     await page.locator(".reader-search input").fill("浏览器性能");
     await page.locator("[data-a=find]").click();
     await page.locator(".reader-window mark").waitFor({ state: "visible" });
@@ -705,28 +735,41 @@ try {
     const file = await download;
     await file.saveAs(path.join(OUT, "reasoning.txt"));
     const downloaded = await readFile(path.join(OUT, "reasoning.txt"), "utf8");
-    assert.equal(downloaded.length, count, "思考下载不完整");
+    assert.equal(downloaded.length, fullCount, "思考下载不完整");
     await page.locator("#modal-close").click();
     await page.locator('.view-tabs [data-mode="chat"]').click();
   });
 
   await checked("长成果直接完整显示、不折叠", async () => {
+    // 写作者的正文不再进入对话，完整成果只在工作区的成果页出现。
+    assert(
+      !(await page.locator("#transcript").innerText()).includes("最终内容 END"),
+      "写作者正文不应进入对话",
+    );
+    await page.locator("[data-tab=results]").click();
     await page.waitForFunction(
-      () => {
-        const blocks = [...document.querySelectorAll(".assistant-block .md")];
-        return blocks.some((el) => el.textContent.includes("最终内容 END"));
-      },
+      () => (document.querySelector("#result-body")?.textContent.length || 0) > 1000,
       {},
       { timeout: 30000 },
     );
-    assert.equal(await page.locator(".message-fold-toggle").count(), 0, "长成果不应再有展开/收起按钮");
-    const texts = await page
-      .locator(".assistant-block")
-      .evaluateAll((blocks) => blocks.map((block) => block.textContent));
-    assert(texts.some((text) => text.includes("最终内容 END")), "长成果末尾丢失");
+    assert.equal(
+      await page.locator(".message-fold-toggle").count(),
+      0,
+      "长成果不应再有展开/收起按钮",
+    );
+    const pages = [];
+    for (let i = 0; i < 12; i++) {
+      pages.push(await page.locator("#result-body").textContent());
+      if (await page.locator("#result-next").isDisabled()) break;
+      await page.locator("#result-next").click();
+      await page.waitForTimeout(120);
+    }
+    const text = pages.join("");
+    assert(text.includes("最终内容 END"), "长成果末尾丢失");
+    assert(text.length > 30000, "长成果全文长度不足");
     assert(
-      Math.max(...texts.map((text) => text.length)) > 30000,
-      "长成果全文长度不足",
+      (await page.locator("#result-page").innerText()).includes(String(pages.length)),
+      "成果分页数与实际翻页不一致",
     );
     await page.screenshot({ path: shots("06-long-output-expanded.png") });
   });
@@ -1067,6 +1110,88 @@ try {
     assert(metrics.p95 < 200, `切换 p95 过高：${metrics.p95}`);
   });
 
+  await checked("账号入口先开菜单，余额与退出在子菜单", async () => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.evaluate(() => localStorage.setItem("nbx_agent_theme", "light"));
+    await page.goto(firstTaskUrl, { waitUntil: "networkidle" });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(800);
+    const trigger = page.locator("#account");
+    const triggerBox = await trigger.boundingBox();
+    assert.equal(Math.round(triggerBox.height), 32, "账号入口不是 32px 行");
+    assert.equal(
+      await page.locator("#account-avatar").evaluate((el) => getComputedStyle(el).width),
+      "18px",
+      "账号头像不是 18px",
+    );
+    assert.equal(
+      await page.locator(".account-caret").evaluate((el) => getComputedStyle(el).width),
+      "14px",
+      "账号箭头不是 14px",
+    );
+    const tokenBefore = await page.evaluate(() => localStorage.getItem("nbx_auth"));
+    const urlBefore = page.url();
+    await trigger.click();
+    const menu = page.locator("#account-popover");
+    await menu.waitFor({ state: "visible" });
+    await page.waitForTimeout(300);
+    assert.equal(await trigger.getAttribute("aria-expanded"), "true");
+    assert(
+      (await page.evaluate(() => localStorage.getItem("nbx_auth"))) === tokenBefore,
+      "点开账号入口不应清除登录",
+    );
+    assert.equal(page.url(), urlBefore, "点开账号入口不应跳转");
+    const copy = await menu.innerText();
+    for (const text of ["使用码尾号", "剩余额度", "本轮预算与任务保存", "退出登录"]) {
+      assert(copy.includes(text), `账号菜单缺少「${text}」`);
+    }
+    const style = await menu.evaluate((el) => {
+      const css = getComputedStyle(el);
+      const box = el.getBoundingClientRect();
+      return {
+        width: box.width,
+        radius: css.borderRadius,
+        padding: css.padding,
+        background: css.backgroundColor,
+      };
+    });
+    assert.equal(Math.round(style.width), 260, "账号菜单宽度不是 260px");
+    assert.equal(style.radius, "12px", "账号菜单圆角不是 12px");
+    assert.equal(style.padding, "6px", "账号菜单内边距不是 6px");
+    assert.equal(style.background, "rgb(255, 255, 255)", "浅色账号菜单底色不对");
+    const menuBox = await menu.boundingBox();
+    assert(
+      menuBox.y + menuBox.height <= triggerBox.y + 1,
+      "账号菜单没有开在入口上方",
+    );
+    const rowHeights = await menu
+      .locator(".account-popover-item")
+      .evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().height)));
+    assert.deepEqual(rowHeights, [32, 32], "账号菜单行动高不是 32px");
+    await page.screenshot({ path: shots("16-account-menu-light.png") });
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "hidden" });
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.id),
+      "account",
+      "Escape 后焦点没有回到账号入口",
+    );
+
+    await page.evaluate(() => localStorage.setItem("nbx_agent_theme", "dark"));
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(800);
+    await page.locator("#account").click();
+    await menu.waitFor({ state: "visible" });
+    await page.waitForTimeout(300);
+    assert.equal(
+      await menu.evaluate((el) => getComputedStyle(el).backgroundColor),
+      "rgb(35, 35, 35)",
+      "深色账号菜单底色不对",
+    );
+    await page.screenshot({ path: shots("17-account-menu-dark.png") });
+    await page.keyboard.press("Escape");
+  });
+
   await checked("减少动效偏好生效", async () => {
     const reduced = await browser.newContext({
       viewport: { width: 390, height: 844 },
@@ -1089,6 +1214,34 @@ try {
       `动效未关闭：${duration}`,
     );
     await reduced.close();
+  });
+
+  await checked("退出登录只从账号菜单确认", async () => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(firstTaskUrl, { waitUntil: "networkidle" });
+    await page.waitForTimeout(700);
+    await page.locator("#account").click();
+    await page.locator('#account-popover [data-action="logout"]').click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#modal")?.open &&
+        document.querySelector("#modal-title")?.textContent === "退出登录",
+      {},
+      { timeout: 10000 },
+    );
+    assert(
+      await page.evaluate(() => Boolean(localStorage.getItem("nbx_auth"))),
+      "确认退出前已经清除了登录",
+    );
+    await page.locator("#modal-actions button").last().click();
+    await page.waitForURL(/\/agent$/, { timeout: 15000 });
+    await page.locator("#login-code").waitFor({ state: "visible" });
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem("nbx_auth")),
+      null,
+      "确认退出后登录没有清除",
+    );
+    await page.screenshot({ path: shots("18-account-logout.png") });
   });
 
   assert.deepEqual(errors, [], `浏览器错误：${errors.join(" | ")}`);

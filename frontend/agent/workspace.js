@@ -68,6 +68,8 @@ let reader = null,
   pollTimer,
   toastTimer,
   taskOffset = 0,
+  accountPopover = null,
+  accountPopoverBound = false,
   taskQuery = "",
   shadeFor = "",
   modalCleanup = null;
@@ -148,7 +150,8 @@ function error(e) {
   toast(e.message || String(e), "error");
   if (e.status === 401) {
     $("#account-name").textContent = "重新登录";
-    $("#account-note").textContent = "使用码已失效";
+    $("#account-avatar").textContent = "!";
+    closeAccountMenu();
   }
 }
 function setText(el, text) {
@@ -307,6 +310,7 @@ function closeMenus() {
   $("#theme-toggle").setAttribute("aria-expanded", "false");
   state.menuClose?.();
   state.menuClose = null;
+  closeAccountMenu();
 }
 function menuAt(anchor, html, onClick) {
   closeMenus();
@@ -350,6 +354,205 @@ function menuAt(anchor, html, onClick) {
   document.addEventListener("keydown", onKey, true);
   state.menuClose = close;
   return menu;
+}
+
+
+/* ---------------- 账号菜单 ---------------- */
+/* 左下角入口按 dsh-claude-style 的 features/account 做成一枚 32px 账号行，
+   点开是同一张 Claude 弹层：14px 姓名、0.5px 分隔线、32px 行。
+   入口只负责开合；退出登录放在弹层最后一行，不再由一次点击直接触发。 */
+function ensureAccountPopover() {
+  if (accountPopover) return accountPopover;
+  const node = document.createElement("div");
+  node.id = "account-popover";
+  node.className = "account-popover";
+  node.dataset.open = "false";
+  node.tabIndex = -1;
+  node.setAttribute("role", "menu");
+  node.setAttribute("aria-label", "账号与额度");
+  node.innerHTML = `
+    <div class="account-popover-header">
+      <div class="account-popover-name" id="account-popover-name">使用码</div>
+    </div>
+    <div role="separator"></div>
+    <div class="account-popover-body">
+      <div class="account-stat" role="group" aria-label="额度">
+        <span class="account-stat-icon">${icon("target")}</span>
+        <span class="account-stat-copy">
+          <span class="account-stat-label">剩余额度</span>
+          <span class="account-stat-desc" id="account-popover-used"></span>
+        </span>
+        <strong class="account-stat-value" id="account-popover-remaining">—</strong>
+      </div>
+      <div role="separator"></div>
+      <button class="account-popover-item" type="button" role="menuitem" data-action="policy">
+        <span class="account-popover-item-icon">${icon("file-text")}</span>
+        <span class="account-popover-item-text">本轮预算与任务保存</span>
+      </button>
+      <div role="separator"></div>
+      <button class="account-popover-item" type="button" role="menuitem" data-action="logout">
+        <span class="account-popover-item-icon">${icon("log-out")}</span>
+        <span class="account-popover-item-text">退出登录</span>
+      </button>
+    </div>`;
+  node.addEventListener("click", (event) => {
+    const action = event.target.closest("[data-action]")?.dataset.action;
+    if (!action) return;
+    event.stopPropagation();
+    if (action === "policy") {
+      closeAccountMenu();
+      openPolicy();
+    } else if (action === "logout") {
+      closeAccountMenu();
+      confirmLogout();
+    }
+  });
+  document.body.append(node);
+  accountPopover = node;
+  return node;
+}
+
+function paintAccount() {
+  const user = state.catalog?.user;
+  const logged = Boolean(user);
+  const name = logged ? maskCode(user.code) : "使用码";
+  setText($("#account-name"), name);
+  setText($("#account-avatar"), logged ? user.code?.slice(-1) || "N" : "N");
+  $("#account").setAttribute(
+    "aria-label",
+    logged ? `${name}，查看额度与账号` : "使用码登录",
+  );
+  if (!accountPopover) return;
+  setText($("#account-popover-name"), logged ? name : "尚未登录");
+  if (!logged) {
+    setText($("#account-popover-remaining"), "—");
+    setText($("#account-popover-used"), "登录后显示");
+    return;
+  }
+  const used = Number(user.used_count || 0).toLocaleString("zh-CN");
+  const total = Number(user.quota || 0).toLocaleString("zh-CN");
+  const unlimited = Boolean(user.is_unlimited);
+  setText(
+    $("#account-popover-remaining"),
+    unlimited ? "无限" : `${Math.max(0, Number(user.remaining) || 0)} 次`,
+  );
+  setText(
+    $("#account-popover-used"),
+    unlimited ? `已使用 ${used} 次 · 不限总额` : `共 ${total} 次 · 已使用 ${used} 次`,
+  );
+}
+
+function placeAccountMenu() {
+  if (!accountPopover || accountPopover.dataset.open !== "true") return;
+  const trigger = $("#account");
+  const box = trigger.getBoundingClientRect();
+  const view = viewportCss();
+  const width = accountPopover.offsetWidth;
+  const height = accountPopover.offsetHeight;
+  let left;
+  let top;
+  if (app.dataset.sidebar === "collapsed" && !vpMatches("w1099")) {
+    /* 52px 轨道里向上会被窗口裁掉，按上游 account-drawer 的 rail 分支放到入口右侧。 */
+    left = toCss(box.right) + 4;
+    if (left + width > view.width - 8) left = Math.max(8, toCss(box.left) - width - 4);
+    top = Math.min(
+      Math.max(8, toCss(box.bottom) - height),
+      Math.max(8, view.height - height - 8),
+    );
+  } else {
+    left = toCss(box.left);
+    top = toCss(box.top) - height - 4;
+    if (top < 8) top = toCss(box.bottom) + 4;
+    left = Math.max(8, Math.min(left, view.width - width - 8));
+    top = Math.max(8, Math.min(top, view.height - height - 8));
+  }
+  accountPopover.style.left = `${left}px`;
+  accountPopover.style.top = `${top}px`;
+}
+
+function onAccountOutside(event) {
+  if (!accountPopover || accountPopover.dataset.open !== "true") return;
+  if (accountPopover.contains(event.target) || $("#account").contains(event.target)) return;
+  closeAccountMenu();
+}
+
+function onAccountKeydown(event) {
+  if (event.key !== "Escape" || !accountPopover || accountPopover.dataset.open !== "true") return;
+  event.preventDefault();
+  event.stopPropagation();
+  closeAccountMenu({ focus: true });
+}
+
+function bindAccountMenu() {
+  if (accountPopoverBound) return;
+  accountPopoverBound = true;
+  document.addEventListener("click", onAccountOutside, true);
+  document.addEventListener("keydown", onAccountKeydown, true);
+  window.addEventListener("resize", placeAccountMenu);
+  document.addEventListener("agent:zoom", placeAccountMenu);
+}
+
+function openAccountMenu() {
+  closeMenus();
+  const menu = ensureAccountPopover();
+  paintAccount();
+  menu.dataset.open = "true";
+  const trigger = $("#account");
+  trigger.dataset.open = "true";
+  trigger.setAttribute("aria-expanded", "true");
+  placeAccountMenu();
+  menu.focus({ preventScroll: true });
+  bindAccountMenu();
+  refreshAccountBalance();
+}
+
+function closeAccountMenu({ focus = false } = {}) {
+  const trigger = $("#account");
+  if (accountPopover && accountPopover.dataset.open === "true") {
+    accountPopover.dataset.open = "false";
+    trigger.dataset.open = "false";
+    trigger.setAttribute("aria-expanded", "false");
+  }
+  if (accountPopoverBound) {
+    document.removeEventListener("click", onAccountOutside, true);
+    document.removeEventListener("keydown", onAccountKeydown, true);
+    window.removeEventListener("resize", placeAccountMenu);
+    document.removeEventListener("agent:zoom", placeAccountMenu);
+    accountPopoverBound = false;
+  }
+  if (focus) trigger.focus({ preventScroll: true });
+}
+
+async function refreshAccountBalance() {
+  if (!state.catalog) return;
+  try {
+    const catalog = await api("/catalog");
+    if (!state.catalog) return;
+    state.catalog.user = catalog.user;
+    paintAccount();
+    placeAccountMenu();
+  } catch (e) {
+    if (e.status === 401) {
+      closeAccountMenu();
+      login();
+    }
+  }
+}
+
+function confirmLogout() {
+  confirmAction(
+    "退出登录",
+    "退出后需要重新输入使用码；已保存的任务仍属于原使用码。",
+    async () => {
+      await requireSaved();
+      state.catalog = null;
+      state.task = null;
+      state.generation++;
+      clearTimeout(pollTimer);
+      localStorage.removeItem("nbx_auth");
+      location.assign("/agent");
+    },
+  );
 }
 
 /* ---------------- 主题、视口、分隔条 ---------------- */
@@ -2389,25 +2592,26 @@ function confirmAction(title, text, run) {
 }
 
 /* 政策 */
+async function openPolicy() {
+  closeMenus();
+  try {
+    const catalog = await api("/catalog");
+    modal(
+      "本轮预算与任务保存",
+      `<div class="policy">
+        <p>${esc(catalog.billing)}</p>
+        <p>当前剩余额度：${catalog.user.is_unlimited ? "无限" : catalog.user.remaining} 次</p>
+        <p>单轮上限：${catalog.limits.steps} 步、${catalog.limits.tokens.toLocaleString()} tokens、${Math.round(catalog.limits.seconds / 60)} 分钟。到达上限会保存已有内容，可继续新一轮。</p>
+        <p>${esc(catalog.retention)}</p>
+        <p>免费模型仍遵守管理员设置的调用频率限制。</p>
+      </div>`,
+    );
+  } catch (e) {
+    error(e);
+  }
+}
 $$("[data-policy]").forEach((button) => {
-  button.onclick = async () => {
-    closeMenus();
-    try {
-      const catalog = await api("/catalog");
-      modal(
-        "本轮预算与任务保存",
-        `<div class="policy">
-          <p>${esc(catalog.billing)}</p>
-          <p>当前剩余额度：${catalog.user.is_unlimited ? "无限" : catalog.user.remaining} 次</p>
-          <p>单轮上限：${catalog.limits.steps} 步、${catalog.limits.tokens.toLocaleString()} tokens、${Math.round(catalog.limits.seconds / 60)} 分钟。到达上限会保存已有内容，可继续新一轮。</p>
-          <p>${esc(catalog.retention)}</p>
-          <p>免费模型仍遵守管理员设置的调用频率限制。</p>
-        </div>`,
-      );
-    } catch (e) {
-      error(e);
-    }
-  };
+  button.onclick = openPolicy;
 });
 
 /* ---------------- 登录 ---------------- */
@@ -2444,17 +2648,14 @@ function login() {
   );
   setTimeout(() => $("#login-code")?.focus(), 30);
 }
-$("#account").onclick = () => {
-  if (!state.catalog) return login();
-  confirmAction("切换使用码", "当前已保存的任务仍属于原使用码。", async () => {
-    await requireSaved();
-    state.catalog = null;
-    state.task = null;
-    state.generation++;
-    clearTimeout(pollTimer);
-    localStorage.removeItem("nbx_auth");
-    location.assign("/agent");
-  });
+$("#account").onclick = (event) => {
+  event.stopPropagation();
+  if (!state.catalog) {
+    closeMenus();
+    return login();
+  }
+  if (accountPopover?.dataset.open === "true") closeAccountMenu({ focus: true });
+  else openAccountMenu();
 };
 
 /* ---------------- 审阅 ---------------- */
@@ -2591,11 +2792,7 @@ async function boot() {
   }
   try {
     state.catalog = await api("/catalog");
-    $("#account-name").textContent = maskCode(state.catalog.user.code);
-    $("#account-note").textContent = state.catalog.user.is_unlimited
-      ? "无限额度"
-      : `剩余 ${state.catalog.user.remaining} 次`;
-    $("#account-avatar").textContent = state.catalog.user.code?.slice(-1) || "N";
+    paintAccount();
     const initialModel =
       $("#model").value ||
       state.catalog.default_model ||
@@ -2670,5 +2867,6 @@ $$(".mobile-switch [data-view]").forEach((button) => {
 $("#activity-dot").textContent = "";
 initComposerSurfaces();
 enhanceSelects();
+ensureAccountPopover();
 updateStatus();
 boot().catch(error);

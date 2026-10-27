@@ -395,13 +395,15 @@ html[data-agent-theme="dark"] .new-task .plus-chip {
 
 .sidebar-bottom {
   flex: none;
-  padding: 6px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  /* 任务列表收起时 .sidebar-scroll 不再撑高，底栏仍要贴着侧栏底边。 */
+  margin-top: auto;
+  padding: 6px 10px calc(6px + env(safe-area-inset-bottom, 0px));
 }
 .sidebar-bottom::before {
   content: "";
   display: block;
   height: 0.5px;
-  margin: 0 6px 6px;
+  margin: 0 -10px 6px;
   background: var(--divider);
 }
 .sidebar-bottom .nav-row {
@@ -414,61 +416,6 @@ html[data-agent-theme="dark"] .new-task .plus-chip {
   width: 13px;
   height: 13px;
   margin: 0 3.5px;
-}
-.account-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  height: 38px;
-  margin-top: 4px;
-  padding: 0 6px;
-  border-radius: var(--radius-row);
-  text-align: left;
-  transition: background-color var(--timing-feedback);
-}
-.account-row:hover {
-  background: var(--hover);
-}
-.account-avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-family: var(--font-serif);
-  font-size: 12px;
-  font-weight: 600;
-}
-.account-meta {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1 1 auto;
-  line-height: 1.25;
-}
-.account-meta strong {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.account-meta small {
-  font-size: 10px;
-  color: var(--ink-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.account-caret {
-  color: var(--ink-3);
-  font-size: 11px;
 }
 .conn {
   display: inline-flex;

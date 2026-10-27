@@ -1,0 +1,273 @@
+/* Claude 风格工作台 · 左下角账号入口与账号弹层
+   来源：dsh-claude-style@1e7acc5b
+   packages/client/src/features/account/account-footer.css、rows.ts、
+   account-drawer.ts 与 shared/popover.css。
+   行高、头像、箭头、卡片壳、分隔线、行内边距和生长方向按上游；
+   内容换成 NeoBangX 自己的使用码、剩余额度与退出登录。 */
+
+/* ---------- 账号入口 ---------- */
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  margin: 4px 0 0;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  text-align: left;
+  transition: background-color var(--timing-feedback);
+}
+.account-row:hover,
+.account-row[data-open="true"] {
+  background: var(--hover);
+}
+.account-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-sans);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  overflow: hidden;
+}
+.account-meta {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 18px;
+}
+.account-meta strong {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-left: auto;
+  color: var(--ink-2);
+}
+.account-caret::after {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E") center / contain no-repeat;
+  transition: transform var(--timing-feedback);
+}
+.account-row[data-open="true"] .account-caret::after {
+  transform: rotate(180deg);
+}
+/* 收起成 52px 轨道时，只剩 18px 头像；入口仍然是一整块 32px 的点击面。 */
+.app[data-sidebar="collapsed"] .account-row {
+  justify-content: center;
+  gap: 0;
+  padding: 0 7px;
+}
+
+/* ---------- 账号弹层 ---------- */
+.account-popover {
+  --account-popover-bg: var(--card);
+  position: fixed;
+  z-index: var(--layer-float);
+  top: 0;
+  left: 0;
+  width: min(260px, calc(100vw / var(--zoom) - 16px));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border-1);
+  border-radius: 12px;
+  background: var(--account-popover-bg);
+  box-shadow:
+    0 8px 24px rgba(20, 20, 19, 0.12),
+    0 2px 6px rgba(20, 20, 19, 0.08);
+  font-family: var(--font-sans);
+  text-align: left;
+  transform-origin: bottom left;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.99);
+  scale: calc(0.97 / 0.99);
+  transition:
+    opacity var(--dur-exit) var(--ease-settle),
+    transform var(--dur-exit) var(--ease-settle),
+    scale 0s linear var(--dur-exit),
+    visibility 0s linear var(--dur-exit);
+}
+html[data-agent-theme="dark"] .account-popover {
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.65),
+    0 2px 8px rgba(0, 0, 0, 0.45);
+}
+.account-popover:focus {
+  outline: none;
+}
+.account-popover[data-open="true"] {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+  scale: 1;
+  transition:
+    opacity var(--dur-open) var(--ease-settle),
+    transform var(--dur-open) var(--ease-settle),
+    scale var(--dur-open) var(--ease-settle),
+    visibility 0s;
+}
+.account-popover-header {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 -6px;
+  padding: 4px 6px;
+}
+.account-popover-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-popover [role="separator"] {
+  height: 0;
+  flex: none;
+  margin: 2px 0;
+  border-top: 0.5px solid var(--divider);
+  background: transparent;
+}
+.account-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* 额度是一行两列的资料行：标题/说明在左，数值在右，和菜单行同高同边距。 */
+.account-stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 2px 7px;
+  box-sizing: border-box;
+  border-radius: 6px;
+}
+.account-stat-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--ink-2);
+}
+.account-stat-icon .aw-svg {
+  width: 16px;
+  height: 16px;
+}
+.account-stat-copy {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+.account-stat-label {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
+}
+.account-stat-desc {
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-stat-value {
+  flex: none;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-popover-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 2px 7px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--timing-feedback);
+}
+.account-popover-item:hover,
+.account-popover-item:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+.account-popover-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--ink-2);
+}
+.account-popover-item-icon .aw-svg {
+  width: 16px;
+  height: 16px;
+}
+.account-popover-item-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
