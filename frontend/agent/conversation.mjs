@@ -21,7 +21,7 @@ const TOOL_NAMES = {
   search_material: "检索材料",
   web_search: "网页搜索",
   check_vocabulary: "词表检查",
-  ask_user: "等待补充",
+  ask_user: "询问",
 };
 const TOOL_ICONS = {
   create_document: "file-text",
@@ -847,7 +847,11 @@ export class Conversation {
     state.status.dataset.state = status;
     state.status.textContent = ["failed", "interrupted", "waiting", "incomplete"].includes(status)
       ? STATUS_NAMES[status] || status
-      : "";
+      : entry.label === "ask_user" && status === "done"
+        ? entry.details?.answer?.skipped
+          ? "已跳过"
+          : "已回答"
+        : "";
     state.el.dataset.status = status;
     if (entry.details?.question) {
       state.brief.textContent = entry.details.question;
@@ -1168,7 +1172,7 @@ export class Conversation {
   waitingText(turn) {
     if (turn.run.status === "stopping") return "正在停止并保存已收到的内容";
     if (turn.run.status === "queued") return "正在排队";
-    if (this.task?.status === "waiting") return "等待你的补充";
+    if (this.task?.status === "waiting") return "等待你的回答";
     const ids = turn.entries;
     const last = this.entries.get(ids[ids.length - 1]);
     if (!last) return "正在开始";
@@ -1403,7 +1407,8 @@ export class Conversation {
   }
 
   updateComposerState() {
-    const active = ["running", "queued", "stopping", "waiting"].includes(
+    // waiting 是终态，输入区仍然可用；有提问时由 ask 面板接管，不在这一层藏按钮。
+    const active = ["running", "queued", "stopping"].includes(
       this.task?.status,
     );
     const send = document.getElementById("send");
@@ -1632,6 +1637,19 @@ export class Conversation {
 
   getEntry(id) {
     return this.entries.get(id) || null;
+  }
+
+  /** 当前等待回答的提问；可能来自旧任务快照，按创建顺序取最后一个。 */
+  pendingAsk() {
+    return (
+      [...this.entries.values()]
+        .filter(
+          (entry) =>
+            entry.kind === "tool" && entry.label === "ask_user" && entry.status === "waiting",
+        )
+        .sort(byCreated)
+        .pop() || null
+    );
   }
 
   /** The latest entry's kind, so the composer mascot can mirror the work. */

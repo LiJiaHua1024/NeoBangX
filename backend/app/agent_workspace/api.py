@@ -86,6 +86,13 @@ class NoteWrite(BaseModel):
     apply_config: bool = False
 
 
+class AnswerWrite(BaseModel):
+    request_key: str = Field(min_length=8, max_length=80)
+    selected: list[str] = Field(default_factory=list, max_length=20)
+    custom: str = Field("", max_length=4000)
+    skipped: bool = False
+
+
 class VersionWrite(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     content: str = Field(min_length=1, max_length=2_000_000)
@@ -298,6 +305,64 @@ def start_run(task_id: str, body: RunWrite, owner: Owner):
         titles.enqueue_agent_title(owner, task_id, instruction=body.instruction,
                                    tool_names=[t.get("name", "") for t in templates.values()])
     return run
+
+
+def answer_instruction(ask, selected, custom, skipped):
+    lines = []
+    if ask.get("header"):
+        lines.append(f"关于「{ask['header']}」")
+    lines.append(f"问题：{ask.get('question', '')}")
+    if skipped:
+        lines.append("回答：已跳过，不提供这项信息。")
+    else:
+        parts = []
+        if selected:
+            parts.append("、".join(selected))
+        if custom:
+            parts.append(f"补充：{custom}")
+        lines.append("回答：" + "；".join(parts))
+    return "\n".join(lines)
+
+
+@router.post("/tasks/{task_id}/entries/{entry_id}/answer", status_code=202)
+def answer_question(task_id: str, entry_id: str, body: AnswerWrite, owner: Owner):
+    task = store.task_detail(owner, task_id)
+    with SessionLocal() as db:
+        row = db.get(Entry, entry_id)
+        if not row or row.task_id != task_id or row.label != "ask_user":
+            raise HTTPException(404, "提问不存在")
+        details = store.decode(row.details)
+        ask = details.get("ask") or {"question": details.get("question", ""), "options": [], "multi_select": False}
+        labels = [str(item.get("label", "")) for item in ask.get("options") or [] if item.get("label")]
+        selected = list(dict.fromkeys(str(label).strip() for label in body.selected if str(label).strip()))
+        custom = body.custom.strip()
+        if body.skipped:
+            selected, custom = [], ""
+        else:
+            unknown = [label for label in selected if label not in labels]
+            if unknown:
+                raise HTTPException(400, "所选选项不属于这个问题")
+            if len(selected) > 1 and not ask.get("multi_select"):
+                raise HTTPException(400, "这个问题只能选择一个选项")
+            if not selected and not custom:
+                raise HTTPException(400, "请选择一个选项或填写回答")
+        answer = {"selected": selected, "custom": custom, "skipped": body.skipped}
+        instruction = answer_instruction(ask, selected, custom, body.skipped)
+        if row.status == "done":
+            previous = db.scalar(select(Run).where(Run.task_id == task_id, Run.request_key == body.request_key))
+            if previous and details.get("answer") == answer:
+                return {"run": {**store.run_dict(previous), "instruction": instruction},
+                        "entry": store.entry_dict(row)}
+            raise HTTPException(409, "这个问题已经回答")
+        if row.status != "waiting" or not row.run_id:
+            raise HTTPException(409, "这个问题已不再等待回答")
+        run = db.get(Run, row.run_id)
+        if not run or run.status != "waiting":
+            raise HTTPException(409, "这个问题已不再等待回答")
+    created = start_run(task_id, RunWrite(request_key=body.request_key, mode="continue",
+                                          instruction=instruction, base_version=task["adopted_version"]), owner)
+    entry = store.answer_question(entry_id, answer)
+    return {"run": {**created, "instruction": instruction}, "entry": entry}
 
 
 @router.post("/tasks/{task_id}/stop")

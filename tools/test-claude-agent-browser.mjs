@@ -901,6 +901,115 @@ try {
     );
   });
 
+  await checked("Ask 提问卡接管输入区：单选、多选、文字与跳过", async () => {
+    async function startAsk(goal) {
+      await newTask();
+      await page.locator("#goal").fill(goal);
+      await page.waitForTimeout(900);
+      await page.locator("#send").click();
+      await page.locator(".ask-card").waitFor({ state: "visible", timeout: 20000 });
+    }
+    async function waitAnswered() {
+      await page.locator(".ask-card").waitFor({ state: "detached", timeout: 20000 });
+      await page.waitForFunction(
+        () => document.querySelector("#task-status")?.textContent === "已完成",
+        {},
+        { timeout: 30000 },
+      );
+      await page.waitForTimeout(300);
+    }
+    function lastBubble() {
+      return page.locator(".user-bubble").last().innerText();
+    }
+
+    // 单选：选项与自定义回答互斥；提交后输入区归还，回答成为新一轮的用户消息。
+    await startAsk("模拟单选提问");
+    assert(await page.locator(".composer-stack").isHidden(), "提问卡没有接管输入区");
+    assert.equal(await page.locator(".ask-eyebrow").innerText(), "处理方式");
+    assert.equal(await page.locator(".ask-option").count(), 3, "选项数量不对");
+    assert.equal(await page.locator(".ask-option[role=radio]").count(), 3, "单选语义不对");
+    assert(await page.locator(".ask-submit").isDisabled(), "未回答时提交按钮可用");
+    const cardBox = await page.locator(".ask-card").boundingBox();
+    assert(cardBox.width > 500, `提问卡宽度异常：${cardBox.width}`);
+    await page.locator(".ask-option").nth(1).click();
+    assert.equal(await page.locator(".ask-option[aria-checked=true]").count(), 1);
+    await page.screenshot({ path: shots("ask-single-light.png") });
+    await page.locator(".ask-input").fill("保留标题");
+    assert.equal(
+      await page.locator(".ask-option[aria-checked=true]").count(),
+      0,
+      "单选下输入自定义回答没有取消选项",
+    );
+    await page.mouse.move(5, 5);
+    await page.screenshot({ path: shots("ask-single-custom-light.png") });
+    await page.locator(".ask-submit").click();
+    await waitAnswered();
+    assert((await lastBubble()).includes("回答：补充：保留标题"), "回答没有进入新一轮");
+    assert(await page.locator(".composer-stack").isVisible(), "回答后输入区没有恢复");
+    await page.screenshot({ path: shots("ask-answered-light.png") });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(900);
+    assert.equal(await page.locator(".ask-card").count(), 0, "刷新后仍在等待已回答的问题");
+    assert(
+      (await page.locator(".user-bubble").allTextContents()).some((text) =>
+        text.includes("回答：补充：保留标题"),
+      ),
+      "刷新后回答丢失",
+    );
+
+    // 同一任务再继续：模型再次提问，跳过不提供信息，但本轮仍继续。
+    await page.locator("#send").click();
+    await page.locator(".ask-card").waitFor({ state: "visible", timeout: 20000 });
+    await page.locator(".ask-skip").click();
+    await page.locator(".ask-card").waitFor({ state: "detached", timeout: 20000 });
+    await page.waitForFunction(
+      () => document.querySelector("#task-status")?.textContent === "已完成",
+      {},
+      { timeout: 30000 },
+    );
+    assert((await lastBubble()).includes("回答：已跳过"), "跳过没有作为回答传入");
+
+    // 多选：两个选项同时保留；深色主题下卡片仍使用同一套令牌。
+    await startAsk("模拟多选提问");
+    assert.equal(await page.locator(".ask-option[role=checkbox]").count(), 3);
+    await page.locator(".ask-option").nth(0).click();
+    await page.locator(".ask-option").nth(2).click();
+    assert.equal(await page.locator(".ask-option[aria-checked=true]").count(), 2);
+    await page.screenshot({ path: shots("ask-multi-light.png") });
+    await page.locator("#theme-toggle").click();
+    await page.locator("[data-theme-pref=dark]").click();
+    await page.waitForFunction(
+      () => document.documentElement.dataset.agentTheme === "dark",
+    );
+    await page.waitForTimeout(350);
+    await page.screenshot({ path: shots("ask-multi-dark.png") });
+    await page.locator("#theme-toggle").click();
+    await page.locator("[data-theme-pref=light]").click();
+    await page.waitForFunction(
+      () => document.documentElement.dataset.agentTheme === "light",
+    );
+    await page.locator(".ask-submit").click();
+    await waitAnswered();
+    assert((await lastBubble()).includes("回答：保留原顺序、先出提纲（推荐）"), "多选回答不完整");
+
+    // 文字：没有 options 时只有输入框，Enter 提交。
+    await startAsk("模拟文字提问");
+    assert.equal(await page.locator(".ask-option").count(), 0, "文字提问不应有选项");
+    assert(await page.locator(".ask-input").isVisible());
+    await page.locator(".ask-input").fill("用第一套方案，保留标题");
+    await page.screenshot({ path: shots("ask-text-light.png") });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(400);
+    const mobileCard = await page.locator(".ask-card").boundingBox();
+    assert(mobileCard.width <= 390, `手机提问卡超出视口：${mobileCard.width}`);
+    await page.screenshot({ path: shots("ask-mobile-light.png") });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.waitForTimeout(400);
+    await page.locator(".ask-input").press("Enter");
+    await waitAnswered();
+    assert((await lastBubble()).includes("回答：补充：用第一套方案，保留标题"), "文字回答丢失");
+  });
+
   await checked("失败与停止状态可读、可恢复", async () => {
     await newTask();
     await page.locator("#goal").fill("模拟失败");

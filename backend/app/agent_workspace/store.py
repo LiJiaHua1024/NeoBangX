@@ -236,6 +236,32 @@ def finish_tool(entry_id, result):
         db.commit()
 
 
+def answer_question(entry_id, answer):
+    """回答等待中的提问：写入回答、结束提问条目和旧轮，返回更新后的条目。"""
+    with SessionLocal() as db:
+        row = db.get(Entry, entry_id)
+        if not row or row.label != "ask_user":
+            raise HTTPException(404, "提问不存在")
+        details = decode(row.details)
+        run = db.get(Run, row.run_id)
+        if row.status == "done":
+            return entry_dict(row)
+        if row.status != "waiting" or not run or run.status != "waiting":
+            raise HTTPException(409, "这个问题已不再等待回答")
+        payload = encode({"question": details.get("question", ""), "answer": answer})
+        for offset in range(0, len(payload), 4096):
+            db.add(Chunk(entry_id=entry_id, kind="output", content=payload[offset:offset + 4096]))
+        details["answer"] = answer
+        details["answered_at"] = utcnow().isoformat()
+        details.setdefault("chars", {})["output"] = len(payload)
+        row.details, row.status = encode(details), "done"
+        run.status, run.error, run.finished_at, run.lease = "completed", "", utcnow(), None
+        event(db, row.task_id, "entry", entry_dict(row))
+        event(db, row.task_id, "run", run_dict(run))
+        db.commit()
+        return entry_dict(row)
+
+
 def conversation_history(task_id, current_run):
     with SessionLocal() as db:
         runs = db.scalars(select(Run).where(Run.task_id == task_id, Run.id != current_run).order_by(Run.created_at)).all()

@@ -56,6 +56,20 @@ async def fake_model(cfg,model,messages,schemas,budget,emit,**kwargs):
         # 仅供界面验收：失败与慢速由目标里的关键字触发，不进入正式运行逻辑。
         if '模拟失败' in goal:
             raise RuntimeError('模拟模型错误：用于界面错误状态验收')
+        if '模拟' in goal and '提问' in goal:
+            instruction=str(context.get('instruction') or '')
+            if '问题：' in instruction:
+                return llm.ModelResult(content='已回答提问，继续执行完成。',tokens=20)
+            kind='多选' if '多选' in goal else ('文字' if '文字' in goal else '单选')
+            args={'question':f'这份材料按哪种{kind}方式处理？','header':'处理方式',
+                  'detail':'两种方式都会保留原文，只影响成果的编排顺序。'}
+            if kind != '文字':
+                args['options']=[{'label':'保留原顺序','description':'按材料原有段落推进'},
+                                 {'label':'按题型重组','description':'把同类题放到一起'},
+                                 {'label':'先出提纲（推荐）','description':'先确认结构再写正文'}]
+                args['multi_select']=kind=='多选'
+            return llm.ModelResult(calls=[{'id':'test-ask','type':'function','function':{
+                'name':'ask_user','arguments':json.dumps(args,ensure_ascii=False)}}],tokens=20)
         args={'title':'试卷分析','instruction':'保留全部已提供内容','material_ids':[m['id'] for m in context['materials']]}
         slow='慢速执行' in goal
         for _ in range(100 if slow else 67):

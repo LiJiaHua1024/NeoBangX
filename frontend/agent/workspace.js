@@ -3,6 +3,7 @@ import { FullReader, saveBlob, copyText } from "./reader.mjs";
 import { fillIcons, icon } from "./icons.mjs";
 import { initTheme } from "./claude-theme.mjs";
 import { Conversation } from "./conversation.mjs";
+import { createAskPanel } from "./ask.mjs";
 import { createModelPicker } from "./model-picker.mjs";
 import { installCaret } from "./caret.mjs";
 import { createClawd } from "./mascot.mjs";
@@ -42,6 +43,7 @@ const TAB_IDS = new Set(["prompt", "materials", "tools", "results"]);
 let modelPicker = null;
 let caret = null;
 let clawd = null;
+let askPanel = null;
 
 const state = {
   catalog: null,
@@ -92,7 +94,20 @@ function initComposerSurfaces() {
   });
   caret = installCaret($("#message"));
   clawd = createClawd($("#composer-card"));
+  askPanel = createAskPanel({
+    host: $("#ask-host"),
+    stack: $(".composer-stack"),
+    onSubmit: answerAsk,
+  });
   syncClawd();
+}
+
+/** 提问卡片接管输入区；没有等待中的提问时把输入框还回来。 */
+function syncAsk() {
+  if (!askPanel) return;
+  const pending =
+    state.task?.status === "waiting" ? state.conversation?.pendingAsk() : null;
+  askPanel.sync(pending);
 }
 
 /** Tell the crab what the task is doing. Cheap to call on every poll. */
@@ -1431,6 +1446,7 @@ async function openTask(id, push = true) {
   // 新建后什么都没做就切到别的任务：这条空白任务随之消失。
   const discard = isDiscardable(state.task) ? state.task.id : "";
   clearTimeout(pollTimer);
+  askPanel?.hide();
   const generation = ++state.generation;
   const task = await api(`/tasks/${id}`);
   if (generation !== state.generation) return;
@@ -1572,6 +1588,7 @@ function updateStatus() {
   $("#composer-status").dataset.state = status || "idle";
   state.conversation?.updateComposerState();
   state.conversation?.updateWaiting();
+  syncAsk();
   state.conversation?.refreshEmpty();
   syncClawd();
 }
@@ -1923,6 +1940,27 @@ async function stopRun() {
   toast("已请求停止，正在保存已收到的内容");
   poll();
 }
+/* 回答 Ask：后端把回答写进旧条目、结束等待轮，并用同一段回答开新一轮。 */
+async function answerAsk(entry, answer) {
+  if (!state.task) throw Error("请先新建任务");
+  const data = await api(path(`/entries/${entry.id}/answer`), {
+    method: "POST",
+    body: { request_key: newKey(), ...answer },
+  });
+  state.task.status = data.run.status;
+  state.task.active_run = data.run.id;
+  upsert(state.task.runs, data.run);
+  state.runs.set(data.run.id, data.run);
+  state.entries.set(data.entry.id, data.entry);
+  runCard(data.run);
+  entryCard(data.entry);
+  state.conversation?.applyEvent({ kind: "entry", data: data.entry });
+  state.conversation?.applyEvent({ kind: "run", data: data.run });
+  updateStatus();
+  state.conversation?.scrollToLatest();
+  poll();
+}
+
 async function sendMessage() {
   if (!state.task) return;
   const text = $("#message").value.trim();

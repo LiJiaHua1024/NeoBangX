@@ -541,3 +541,92 @@ def test_optional_goal_runs_task_prompt_and_keeps_budget_snapshot(client, identi
     assert observed and saved['status'] == 'completed'
     assert saved['snapshot']['instruction'] == instruction
     assert store.task_detail(identity[0], t['id'])['config']['goal'] == goal
+
+
+def test_ask_user_schema_and_question_normalization(identity):
+    schemas = {s['function']['name']: s['function'] for s in tools.tool_schemas(task(identity)['config'])}
+    ask = schemas['ask_user']['parameters']['properties']
+    assert ask['options']['minItems'] == 2 and ask['options']['maxItems'] == 8
+    assert ask['multi_select']['type'] == 'boolean'
+    assert tools.normalize_question({'question': '选哪个方案？', 'options': [
+        {'label': 'A', 'description': '先做减法'}, {'label': 'B'}]}) == {
+        'question': '选哪个方案？', 'header': '', 'detail': '',
+        'options': [{'label': 'A', 'description': '先做减法'}, {'label': 'B'}], 'multi_select': False}
+    assert tools.normalize_question({'question': '选哪些？', 'multi_select': True,
+                                     'options': [{'label': 'A'}, {'label': 'B'}]})['multi_select'] is True
+    for bad in ({'question': ''}, {'question': 'x', 'multi_select': True},
+                {'question': 'x', 'options': [{'label': 'A'}]},
+                {'question': 'x', 'options': [{'label': 'A'}, {'label': 'A'}]}):
+        with pytest.raises(ValueError):
+            tools.normalize_question(bad)
+
+
+def test_ask_user_waits_with_structured_question(identity):
+    t = task(identity)
+    r = run(identity, t)
+    async def execute():
+        obj = runner.Runner(r['id'])
+        await obj.load()
+        with pytest.raises(runner.WaitingForUser):
+            await obj.tool_call({'id': 'ask', 'function': {'name': 'ask_user', 'arguments': store.encode({
+                'question': '用哪一版？', 'header': '版本', 'options': [
+                    {'label': 'A', 'description': '保留原稿'}, {'label': 'B', 'description': '重写'}],
+                'multi_select': True})}})
+    asyncio.run(execute())
+    with SessionLocal() as db:
+        entry = db.scalar(select(WorkspaceEntry).where(WorkspaceEntry.run_id == r['id']))
+        details = json.loads(entry.details)
+    assert entry.status == 'waiting'
+    assert details['ask']['question'] == '用哪一版？'
+    assert [o['label'] for o in details['ask']['options']] == ['A', 'B']
+    assert details['ask']['multi_select'] is True
+    store.finish_run(r['id'], 'completed')
+
+
+def test_answer_question_starts_continuation_and_marks_entry_done(client, identity, monkeypatch):
+    t = task(identity)
+    r = run(identity, t)
+    entry = store.start_entry(t['id'], r['id'], 'ask', 'tool', 'ask_user')
+    store.finish_entry(entry['id'], 'waiting', {
+        'question': '用哪一版？', 'header': '版本',
+        'ask': {'question': '用哪一版？', 'header': '版本', 'detail': '',
+                'options': [{'label': 'A', 'description': '保留原稿'}, {'label': 'B'}],
+                'multi_select': False}})
+    store.finish_run(r['id'], 'waiting')
+    cfg = {'models': [{'id': 'test', 'enabled': True, 'user_usable': True}], 'default_model': 'test'}
+    monkeypatch.setattr(api, '_load_cfg', lambda: cfg)
+    monkeypatch.setattr(api, '_validate_model', lambda *_: None)
+    monkeypatch.setattr(api, 'official_templates', lambda: [])
+    monkeypatch.setattr(api, 'load_settings', lambda: WorkspaceSettings())
+    body = {'request_key': store.uid(), 'selected': ['A'], 'custom': '保留标题'}
+    response = client.post(f"/api/workspace/tasks/{t['id']}/entries/{entry['id']}/answer", json=body)
+    assert response.status_code == 202, response.text
+    data = response.json()
+    assert data['entry']['status'] == 'done'
+    assert data['entry']['details']['answer'] == {'selected': ['A'], 'custom': '保留标题', 'skipped': False}
+    assert data['run']['mode'] == 'continue'
+    assert '问题：用哪一版？' in data['run']['instruction']
+    assert '回答：A；补充：保留标题' in data['run']['instruction']
+    assert store.load_run(r['id'])['status'] == 'completed'
+    saved = store.load_run(data['run']['id'])
+    assert saved['snapshot']['instruction'] == data['run']['instruction']
+    assert saved['status'] == 'queued'
+    # 同一个请求编号重放时不重复创建轮次。
+    again = client.post(f"/api/workspace/tasks/{t['id']}/entries/{entry['id']}/answer", json=body)
+    assert again.status_code == 202 and again.json()['run']['id'] == data['run']['id']
+    store.finish_run(data['run']['id'], 'completed')
+
+
+def test_answer_question_rejects_option_outside_single_choice(client, identity, monkeypatch):
+    t = task(identity)
+    r = run(identity, t)
+    entry = store.start_entry(t['id'], r['id'], 'ask', 'tool', 'ask_user')
+    store.finish_entry(entry['id'], 'waiting', {
+        'question': '选一个', 'ask': {'question': '选一个', 'options': [{'label': 'A'}, {'label': 'B'}],
+                                       'multi_select': False}})
+    store.finish_run(r['id'], 'waiting')
+    monkeypatch.setattr(api, 'load_settings', lambda: WorkspaceSettings())
+    url = f"/api/workspace/tasks/{t['id']}/entries/{entry['id']}/answer"
+    assert client.post(url, json={'request_key': store.uid(), 'selected': ['C']}).status_code == 400
+    assert client.post(url, json={'request_key': store.uid(), 'selected': ['A', 'B']}).status_code == 400
+    assert client.post(url, json={'request_key': store.uid(), 'selected': []}).status_code == 400

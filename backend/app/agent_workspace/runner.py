@@ -368,6 +368,9 @@ class Runner:
         if entry["status"] == "done":
             full = await asyncio.to_thread(store.entry_text, entry["id"], "output")
             return self.result_view(full, entry["id"])
+        if entry["status"] == "waiting":
+            # 进程重启后重放同一调用：提问仍挂着，不能再写一遍。
+            raise WaitingForUser()
         await asyncio.to_thread(store.append_chunks, entry["id"], {"input": raw})
         try:
             args = json.loads(raw)
@@ -387,8 +390,11 @@ class Runner:
             elif name == "revise_document":
                 result = await self.revise_document(args, key)
             elif name == "ask_user":
-                await asyncio.to_thread(store.append_chunks, entry["id"], {"output": args["question"]})
-                await asyncio.to_thread(store.finish_entry, entry["id"], "waiting", {"question": args["question"]})
+                ask = tools.normalize_question(args)
+                payload = store.encode(ask)
+                await asyncio.to_thread(store.append_chunks, entry["id"], {"output": payload})
+                await asyncio.to_thread(store.finish_entry, entry["id"], "waiting",
+                                        {"question": ask["question"], "ask": ask, "chars": {"output": len(payload)}})
                 raise WaitingForUser()
             else:
                 result = await tools.execute_readonly(self.task_id, self.config, name, args)

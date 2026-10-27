@@ -23,6 +23,8 @@ def schema(name, description, properties, required):
 STRING = {"type": "string"}
 IDS = {"type": "array", "items": STRING}
 NUMBER = {"type": "integer", "minimum": 0}
+ASK_OPTION = {"type": "object", "properties": {"label": STRING, "description": STRING},
+              "required": ["label"], "additionalProperties": False}
 CATALOG = [
     {"id": "material_search", "name": "材料检索", "description": "在本任务材料中查找原文和定位依据", "available": True},
     {"id": "regex", "name": "正则查找", "description": "按正则匹配题号、句子和格式", "available": True},
@@ -56,8 +58,13 @@ def tool_schemas(config):
                 "issues": {"type": "array", "items": {"type": "integer", "minimum": 1}, "maxItems": 100},
                 "include_user_request": {"type": "boolean"}, "title": STRING},
                ["version_id", "instruction"]),
-        schema("ask_user", "只有缺少必要材料或存在影响执行的要求冲突时询问用户，保留已完成成果并等待补充。",
-               {"question": STRING}, ["question"]),
+        schema("ask_user",
+               "需要用户补充信息、在方案间取舍或确认后才能继续时，提出一个具体问题并暂停本轮；能从材料或任务推断的内容不要问。"
+               "自由回答不传 options；从选项中选时传 2–8 个 options，可多选时设 multi_select。"
+               "用户可跳过，跳过表示不提供这项信息，不是同意。",
+               {"question": STRING, "header": STRING, "detail": STRING,
+                "options": {"type": "array", "items": ASK_OPTION, "minItems": 2, "maxItems": 8},
+                "multi_select": {"type": "boolean"}}, ["question"]),
     ]
     if "material_search" in enabled or "regex" in enabled:
         tools.append(schema("search_material", "查找本任务材料，返回匹配位置和上下文。无匹配如实返回，使用 offset 翻页。正则模式需要启用正则工具。",
@@ -67,6 +74,49 @@ def tool_schemas(config):
     if "web_search" in enabled and search_available():
         tools.append(schema("web_search", "搜索公开网页并返回来源。仅发送必要查询词，不上传整份私人材料。无结果不能编造来源。", {"query": STRING}, ["query"]))
     return tools
+
+
+def normalize_question(args):
+    """把模型给的提问收成前端可渲染的形状；无法回答的选项在这里拒绝。"""
+    question = str(args.get("question") or "").strip()
+    if not question:
+        raise ValueError("question 不能为空")
+    if len(question) > 2000:
+        raise ValueError("question 最多 2000 字")
+    header = str(args.get("header") or "").strip()
+    if len(header) > 80:
+        raise ValueError("header 最多 80 字")
+    detail = str(args.get("detail") or "").strip()
+    if len(detail) > 4000:
+        raise ValueError("detail 最多 4000 字")
+    raw_options = args.get("options")
+    if raw_options is None:
+        raw_options = []
+    if not isinstance(raw_options, list):
+        raise ValueError("options 必须是数组")
+    if raw_options and not 2 <= len(raw_options) <= 8:
+        raise ValueError("options 需要 2–8 个")
+    options, seen = [], set()
+    for item in raw_options:
+        if not isinstance(item, dict):
+            raise ValueError("每个选项必须是对象")
+        label = str(item.get("label") or "").strip()
+        if not label:
+            raise ValueError("选项 label 不能为空")
+        if len(label) > 120:
+            raise ValueError("选项 label 最多 120 字")
+        if label in seen:
+            raise ValueError("选项 label 不能重复")
+        seen.add(label)
+        description = str(item.get("description") or "").strip()
+        if len(description) > 500:
+            raise ValueError("选项 description 最多 500 字")
+        options.append({"label": label, **({"description": description} if description else {})})
+    multi_select = bool(args.get("multi_select"))
+    if multi_select and not options:
+        raise ValueError("multi_select 需要同时提供 options")
+    return {"question": question, "header": header, "detail": detail,
+            "options": options, "multi_select": multi_select}
 
 
 def read_slice(text, offset=0, limit=8000):

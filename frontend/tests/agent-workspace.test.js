@@ -178,3 +178,21 @@ test("run usage grows during a model call and never dips before settling", async
   assert.equal(proto.runTokens.call(fake, { ...run, status: "completed", tokens: 4650 }), 4650);
   assert.equal(fake.tokenFloor.size, 0);
 });
+
+test("pending ask is the latest waiting ask_user step", async () => {
+  const { Conversation } = await import("../agent/conversation.mjs");
+  const entries = new Map([
+    ["tool", { id: "tool", kind: "tool", label: "read_material", status: "waiting", created_at: "2026-01-01T00:00:00" }],
+    ["ask1", { id: "ask1", kind: "tool", label: "ask_user", status: "done", created_at: "2026-01-01T00:00:01" }],
+    ["ask2", { id: "ask2", kind: "tool", label: "ask_user", status: "waiting", created_at: "2026-01-01T00:00:02" }],
+    ["ask3", { id: "ask3", kind: "tool", label: "ask_user", status: "waiting", created_at: "2026-01-01T00:00:03" }],
+  ]);
+  assert.equal(
+    Conversation.prototype.pendingAsk.call({ entries }).id,
+    "ask3",
+  );
+  assert.equal(
+    Conversation.prototype.pendingAsk.call({ entries: new Map() }),
+    null,
+  );
+});
