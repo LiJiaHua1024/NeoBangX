@@ -1706,6 +1706,17 @@ function runCard(run) {
 }
 
 /* ---------------- 轮询 ---------------- */
+/* 首次开始执行后，后端会用极少量上下文生成任务标题；侧栏与标题框跟着更新。 */
+function applyTitle(title) {
+  if (!state.task || !title || title === state.task.title) return;
+  const input = $("#task-title");
+  // 用户正在改名，或输入框里已有未保存的本地标题时，不覆盖。
+  if (document.activeElement === input || input.value !== state.task.title) return;
+  state.task.title = title;
+  input.value = title;
+  document.title = `${title} - NeoBangX Agent`;
+  listTasks().catch((e) => console.error("agent title sync", e));
+}
 async function poll() {
   clearTimeout(pollTimer);
   if (!state.task) return;
@@ -1741,6 +1752,7 @@ async function poll() {
         state.task.adopted_version = value.version_id;
         renderVersions();
       }
+      if (event.kind === "title") applyTitle(value.title);
       if (event.kind === "note") {
         let card = $(`#timeline [data-note="${value.id}"]`);
         if (!card) {
@@ -1761,6 +1773,7 @@ async function poll() {
     state.task.status = data.task.status;
     state.task.active_run = data.task.active_run;
     state.task.adopted_version = data.task.adopted_version;
+    applyTitle(data.task.title);
     if (data.task.revision > state.task.revision && !state.saving) {
       if (state.dirty) {
         state.conflict = true;

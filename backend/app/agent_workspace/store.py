@@ -113,7 +113,8 @@ def update_task(owner, task_id, revision, config, title=None):
         if not set(ids) <= valid:
             raise HTTPException(400, "材料不属于此任务")
         values = {"config": encode(config), "revision": revision + 1, "updated_at": utcnow()}
-        if title is not None:
+        # 自动标题可能比页面轮询更早完成：旧页面回传未修改的“新任务”时保留已生成的标题。
+        if title is not None and not (title == "新任务" and row.title != "新任务"):
             values["title"] = title
         result = db.execute(update(Task).where(Task.id == task_id, Task.revision == revision).values(**values))
         if result.rowcount != 1:

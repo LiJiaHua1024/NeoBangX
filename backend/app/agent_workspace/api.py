@@ -15,7 +15,7 @@ from app.routers.chat import _load_cfg, _validate_model
 from app.routers.tools import build_tool_groups, get_prompt_loader, _resolve_prompt_filename
 from app.services.free_access import is_free_model
 from app.services.runtime_config import find_model_entry
-from . import store
+from . import store, titles
 from .models import (WorkspaceTask as Task, WorkspaceRun as Run, WorkspaceEntry as Entry,
                      WorkspaceChunk as Chunk, WorkspaceEvent as Event, WorkspaceMaterial as Material,
                      WorkspaceVersion as Version, WorkspaceNote as Note, WorkspaceTemplate as Template)
@@ -292,7 +292,12 @@ def start_run(task_id: str, body: RunWrite, owner: Owner):
     snapshot = {"model": model, "limits": policy.model_dump(include={"max_steps", "max_tokens", "output_tokens", "max_seconds"}),
                 "templates": templates, "base_adopted": task["adopted_version"], "expected_revision": task["revision"],
                 "teaching_tool": body.teaching_tool}
-    return store.create_run(owner, task_id, body.request_key, body.mode, body.instruction, body.base_version, snapshot, not is_free_model(entry), entry)
+    run = store.create_run(owner, task_id, body.request_key, body.mode, body.instruction, body.base_version, snapshot, not is_free_model(entry), entry)
+    # 用户第一次开始工作时就命名，不等待执行结束；只入队一次，失败不影响开始。
+    if body.mode == "execute" and not task["runs"]:
+        titles.enqueue_agent_title(owner, task_id, instruction=body.instruction,
+                                   tool_names=[t.get("name", "") for t in templates.values()])
+    return run
 
 
 @router.post("/tasks/{task_id}/stop")

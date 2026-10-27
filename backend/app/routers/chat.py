@@ -2099,9 +2099,11 @@ async def _generate_title_once(
     client: tuple[str, str] = ("", ""),
     fingerprint: str = "",
     device_summary: str = "",
+    user_prompt: str | None = None,
+    tool_name: str = "标题生成",
 ) -> str:
     """执行一次标题 LLM 调用并按现有口径留痕；重试由持久任务 worker 负责。"""
-    user_prompt = _title_user_prompt(tool_id, input_text, output_text)
+    user_prompt = user_prompt or _title_user_prompt(tool_id, input_text, output_text)
     llm = _build_llm(cfg, model=model, chores=True)
     model_used = model or cfg["chores_model"]
     model_entry = find_model_entry(cfg.get("models") or [], model_used)
@@ -2132,7 +2134,7 @@ async def _generate_title_once(
             _log_llm_call,
             code=code,
             tool_id="title",
-            tool_name="标题生成",
+            tool_name=tool_name,
             model=model_used,
             request_id=request_id,
             status=status,
@@ -2193,7 +2195,11 @@ async def execute_title_job(work: TitleJobWork) -> str:
     try:
         cfg = await asyncio.to_thread(_load_cfg)
         _validate_model(cfg, work.model or None)
-        return await _generate_title_once(
+        # Agent 任务标题只带极少量上下文，由工作台自己拼好提示词；
+        # 生成完成后写回任务，不占用、也不阻塞任务执行本身。
+        from app.agent_workspace.titles import AGENT_TITLE_TOOL_ID, apply_agent_title
+        is_agent_title = work.tool_id == AGENT_TITLE_TOOL_ID
+        title = await _generate_title_once(
             code=code_snapshot,
             tool_id=work.tool_id,
             input_text=work.input_text,
@@ -2204,7 +2210,12 @@ async def execute_title_job(work: TitleJobWork) -> str:
             client=(work.ip, work.user_agent),
             fingerprint=work.fingerprint,
             device_summary=work.device_summary,
+            user_prompt=work.input_text if is_agent_title else None,
+            tool_name="Agent 任务标题" if is_agent_title else "标题生成",
         )
+        if is_agent_title:
+            await asyncio.to_thread(apply_agent_title, work.code_id, work.history_id, title)
+        return title
     except HTTPException as exc:
         raise TitleJobPermanentError(str(exc.detail)) from exc
 
