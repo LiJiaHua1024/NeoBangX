@@ -357,3 +357,35 @@ test("a model-provided id=stop cannot steal the composer controls", async () => 
   assert.equal(decoy.hidden, true, "模型文本里的同名节点不受影响");
   delete global.document;
 });
+
+test("stop-time content repair fetches again after an in-flight poll", async () => {
+  const { Conversation } = await import("../agent/conversation.mjs");
+  const ctx = {
+    taskId: "t1",
+    destroyed: false,
+    caches: new Map(),
+    loading: new Set(),
+    entries: new Map(),
+    paintCache() {},
+    onError() {},
+  };
+  let calls = 0;
+  let serverText = "01234";
+  ctx.api = async (url) => {
+    calls++;
+    const after = Number(/after=(\d+)/.exec(url)[1]);
+    const snapshot = serverText.slice(after);
+    if (calls === 1) await new Promise((r) => setTimeout(r, 60));
+    return { chunks: snapshot ? [{ text: snapshot }] : [], cursor: after + snapshot.length, has_more: false };
+  };
+  const running = { id: "e1", run_id: "r1", kind: "model", status: "running" };
+  const stopped = { id: "e1", run_id: "r1", kind: "model", status: "stopped" };
+  const poll = Conversation.prototype.ensureContent.call(ctx, running, "output");
+  await new Promise((r) => setTimeout(r, 10));
+  serverText = "0123456789"; // 轮询请求在飞时，后端补完了尾部
+  const repaired = await Conversation.prototype.ensureContent.call(ctx, stopped, "output");
+  await poll;
+  assert.equal(repaired, "0123456789", "停止时的补拉必须真的再取一次");
+  assert.equal(ctx.caches.get("e1:output").text, serverText);
+  assert.equal(calls, 2);
+});

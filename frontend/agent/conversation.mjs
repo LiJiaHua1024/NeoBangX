@@ -1567,7 +1567,9 @@ export class Conversation {
     const key = `${entry.id}:${kind}`;
     let cache = this.caches.get(key);
     if (cache?.done) return cache.text;
-    if (this.loading.has(key)) {
+    // 同一 key 有请求在飞时先等它结束；它已经把内容读到终态就直接复用，
+    // 否则继续往下补一次——"停止时补拉最后一屏"正需要这条路径，不能直接返回旧缓存。
+    for (let waited = 0; this.loading.has(key) && waited < 5; waited++) {
       await new Promise((resolve) => {
         const check = setInterval(() => {
           if (!this.loading.has(key)) {
@@ -1576,8 +1578,10 @@ export class Conversation {
           }
         }, 30);
       });
-      return this.caches.get(key)?.text || "";
+      cache = this.caches.get(key);
+      if (cache?.done) return cache.text;
     }
+    if (this.loading.has(key)) return this.caches.get(key)?.text || "";
     this.loading.add(key);
     cache ??= { cursor: 0, text: "", done: false };
     this.caches.set(key, cache);
