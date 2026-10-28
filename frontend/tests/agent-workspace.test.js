@@ -839,3 +839,14 @@ test("the mascot removes its visibility listener on destroy", async () => {
   assert.match(destroy, /removeEventListener\("visibilitychange", onVisibility\)/, "销毁时必须移除");
   assert(!/addEventListener\("visibilitychange", \(\) =>/.test(src), "不能再挂匿名监听");
 });
+
+test("the mobile drawer fits the zoomed viewport", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const css = fs.readFileSync(path.join(__dirname, "../agent/claude/responsive.css"), "utf8");
+  const block = css.slice(css.indexOf(':where(html[data-vp~="w1099"]) .sidebar {'),
+    css.indexOf(':where(html[data-vp~="w1099"]) .app[data-sidebar="open"] .sidebar'));
+  assert.match(block, /width: min\(280px, calc\(100vw \/ var\(--zoom\) - 56px\)\)/,
+    "抽屉宽度要按有效视口收窄");
+  assert.match(block, /min-width: 0/, "固定 280px 的 min-width 会顶回去");
+});

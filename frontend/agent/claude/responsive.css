@@ -59,8 +59,10 @@
   left: 0;
   top: 0;
   bottom: 0;
-  width: 280px;
-  min-width: 280px;
+  /* 与 account.css 的浮层同一口径：整页缩放下 280px 会被放大，必须按有效视口收窄，
+     否则 160% 时抽屉比屏幕还宽、右侧跑到屏外并盖住遮罩。 */
+  width: min(280px, calc(100vw / var(--zoom) - 56px));
+  min-width: 0;
   transform: translateX(-100%);
   transition: transform var(--dur-slide) var(--ease-settle);
   box-shadow: none;
