@@ -433,9 +433,12 @@ def finish_run(run_id, status, error=""):
         task = db.get(Task, row.task_id)
         task.status, task.active_run, task.updated_at = status, "", utcnow()
         if row.charged and status in {"failed", "stopped"}:
-            db.execute(update(UsageCode).where(UsageCode.id == task.owner, UsageCode.used_count > 0)
-                       .values(used_count=UsageCode.used_count - 1))
-            row.charged = False
+            # 已经产出过版本的轮次不再退额度：否则"等成果落库再点停止"可以无限白嫖。
+            delivered = db.scalar(select(Version.id).where(Version.run_id == run_id).limit(1))
+            if not delivered:
+                db.execute(update(UsageCode).where(UsageCode.id == task.owner, UsageCode.used_count > 0)
+                           .values(used_count=UsageCode.used_count - 1))
+                row.charged = False
         # 取消可能落在步骤创建与步骤 try 之间，留下 status=running 的步骤。
         # 终态时统一收尾，并把更新推给正在轮询的页面。
         for entry in db.scalars(select(Entry).where(Entry.run_id == run_id, Entry.status == "running")):

@@ -163,7 +163,7 @@ def get_catalog(owner: Owner):
             "official_templates": official_templates(), "templates": templates, "tools": catalog(),
             "defaults": TaskConfig().model_dump(), "user": user,
             "limits": {"steps": policy.max_steps, "tokens": policy.max_tokens, "seconds": policy.max_seconds},
-            "billing": "每次执行或独立审阅预扣 1 次，失败或停止自动退回；免费模型不扣次数。",
+            "billing": "每次执行或独立审阅预扣 1 次；没有产出成果的失败或停止会退回，已产出成果则按次计费；免费模型不扣次数。",
             "retention": "任务、材料和过程保留至主动删除；使用相同使用码的设备可以访问。"}
 
 
