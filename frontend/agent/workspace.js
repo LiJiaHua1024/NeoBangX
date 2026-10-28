@@ -3,6 +3,7 @@ import { FullReader, saveBlob, copyText } from "./reader.mjs";
 import { fillIcons, icon } from "./icons.mjs";
 import { initTheme } from "./claude-theme.mjs";
 import { Conversation } from "./conversation.mjs";
+import { createPollGuard } from "./poll-guard.mjs";
 import { createAskPanel } from "./ask.mjs";
 import { createModelPicker } from "./model-picker.mjs";
 import { installCaret } from "./caret.mjs";
@@ -65,6 +66,8 @@ const state = {
   conversation: null,
   menuClose: null,
 };
+
+const pollGuard = createPollGuard();
 
 let reader = null,
   saveTimer,
@@ -1742,10 +1745,13 @@ async function poll() {
   if (!state.task) return;
   const generation = state.generation,
     id = state.task.id;
+  const claim = pollGuard.begin();
   const conversation = state.conversation;
   try {
     const data = await api(`/tasks/${id}/events?after=${state.cursor}`);
     if (generation !== state.generation) return;
+    // 有更新的轮询已经发出：这份响应可能更旧，整份丢弃。
+    if (!pollGuard.accepts(claim)) return;
     for (const event of data.events) {
       const value = event.data;
       if (event.kind === "entry") {
@@ -1790,9 +1796,13 @@ async function poll() {
         state.conversation.applyEvent(event);
     }
     state.cursor = data.cursor;
-    state.task.status = data.task.status;
-    state.task.active_run = data.task.active_run;
-    state.task.adopted_version = data.task.adopted_version;
+    // 期间本地已经写过后端更了解的状态（点了开始/停止/回答）：不回收旧值，
+    // 否则状态栏会从"执行中"跳回"草稿"，停止键消失、发送键抢占。
+    if (pollGuard.fresh(claim)) {
+      state.task.status = data.task.status;
+      state.task.active_run = data.task.active_run;
+      state.task.adopted_version = data.task.adopted_version;
+    }
     applyTitle(data.task.title);
     if (data.task.revision > state.task.revision && !state.saving) {
       if (state.dirty) {
@@ -1923,6 +1933,7 @@ async function start(mode = "execute", instruction = "", baseVersion = "", teach
   });
   sessionStorage.removeItem(keyName);
   if (instruction) run.instruction = instruction;
+  pollGuard.bump();
   state.task.status = run.status;
   state.task.active_run = run.id;
   state.configChangedDuringRun = false;
@@ -1960,6 +1971,7 @@ async function stopRun() {
   const before = { status: task.status, run: current ? { ...current } : null };
   state.stopPending = true;
   // 点击即反馈：先让本轮进入“正在停止”，不再等下一次轮询。
+  pollGuard.bump();
   task.status = "stopping";
   if (current && ACTIVE.has(current.status))
     syncRunCard({ ...current, status: "stopping" });
@@ -1968,6 +1980,7 @@ async function stopRun() {
     const data = await api(path("/stop"), { method: "POST" });
     if (data.received === false) {
       // 等待补充或刚好执行完：如实回到服务端状态，不谎报停止成功。
+      pollGuard.bump();
       task.status = data.status || before.status;
       // 服务端仍说运行中才回滚本地轮次；终态交给紧接着的轮询落位，避免先显示回 running。
       if (before.run && data.status === "running") syncRunCard(before.run);
@@ -1978,6 +1991,7 @@ async function stopRun() {
       );
     } else {
       if (data.run) syncRunCard(data.run);
+      pollGuard.bump();
       if (data.status) task.status = data.status;
       toast(
         data.status === "stopped"
@@ -1986,6 +2000,7 @@ async function stopRun() {
       );
     }
   } catch (e) {
+    pollGuard.bump();
     task.status = before.status;
     if (before.run) syncRunCard(before.run);
     error(e);
@@ -2002,6 +2017,7 @@ async function answerAsk(entry, answer) {
     method: "POST",
     body: { request_key: newKey(), ...answer },
   });
+  pollGuard.bump();
   state.task.status = data.run.status;
   state.task.active_run = data.run.id;
   upsert(state.task.runs, data.run);

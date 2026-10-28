@@ -288,3 +288,23 @@ test("no CSS redeclares the workspace width variable set by workspace.js", async
     "面板宽度必须带 --workspace-w 兜底，变量缺失时不至于塌成 0",
   );
 });
+
+test("stale poll responses cannot overwrite a newer one", async () => {
+  const { createPollGuard } = await import("../agent/poll-guard.mjs");
+  const guard = createPollGuard();
+  const first = guard.begin();
+  const second = guard.begin();
+  assert.equal(guard.accepts(second), true);
+  assert.equal(guard.accepts(first), false, "先发出的响应必须被丢弃");
+});
+
+test("local start/stop wins over a poll started before it", async () => {
+  const { createPollGuard } = await import("../agent/poll-guard.mjs");
+  const guard = createPollGuard();
+  const inFlight = guard.begin();     // 用户点开始之前发出的轮询
+  guard.bump();                       // 点开始 → 本地写入 status
+  assert.equal(guard.accepts(inFlight), true);
+  assert.equal(guard.fresh(inFlight), false, "期间本地写过状态，不要用响应覆盖");
+  const next = guard.begin();
+  assert.equal(guard.fresh(next), true, "之后的轮询可以正常同步状态");
+});
