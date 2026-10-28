@@ -401,3 +401,15 @@ test("waiting clock re-resolves the active turn on every tick", async () => {
   assert.match(block[0], /created_at\)/, "用当前回合的起始时间计时");
   assert(!/durationOf\(started\)/.test(block[0]), "不能用闭包里第一轮的起始时间");
 });
+
+test("document paging keeps link reference definitions", async () => {
+  // marked 15 不给 `[1]: https://…` 产生 token，按 token.raw 分页会把这类行整行丢掉。
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const marked = require(path.join(__dirname, "../../frontend/vendor/marked-15.0.12.min.js"));
+  const src = fs.readFileSync(path.join(__dirname, "../agent/document-worker.js"), "utf8");
+  assert.match(src, /raws\.join\(""\) === data\.text \? boundedPages\(raws\) : pageText\(data\.text\)/,
+    "拼不回原文时必须退回纯文本分页");
+  const doc = "# 报告\n\n结论见 [1]。\n\n[1]: https://example.com/a\n\n结尾。\n";
+  assert.notEqual(marked.lexer(doc).map((t) => t.raw).join(""), doc, "该样例确实会丢行");
+});
