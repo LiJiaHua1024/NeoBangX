@@ -12,18 +12,14 @@ from sqlalchemy import select
 
 from app.database import SessionLocal
 from app.models import UsageCode, UsageLog, utcnow
-from app.services.usage_code import issue_token
 from app.agent_workspace import api, store, tools, mcp, runner, llm
 from app.agent_workspace.models import WorkspaceRun, WorkspaceEntry, WorkspaceTask
 from app.agent_workspace.settings import WorkspaceSettings
 
 
 @pytest.fixture
-def identity():
-    with SessionLocal() as db:
-        row=UsageCode(code='WORKSPACE-'+store.uid()[:12].upper(),quota=20,is_enabled=True)
-        db.add(row);db.commit()
-        return row.id, issue_token(row)
+def identity(workspace_code):
+    return workspace_code('WORKSPACE-', quota=20)
 
 
 @pytest.fixture

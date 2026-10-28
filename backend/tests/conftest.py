@@ -46,3 +46,36 @@ def _reset_provider_health():
     provider_health.reset_for_tests()
     yield
     provider_health.reset_for_tests()
+
+
+@pytest.fixture
+def workspace_code():
+    """建工作台使用码，并在测试结束后清掉它名下的计费日志。
+
+    不清理会污染其它测试：`test_db_schema_migration` 会清空 `usage_codes`，
+    SQLite 随后把 id 从小号重新分配给后建的码；留在 `usage_logs` 里、
+    按 `code_id` 统计「自己的记录」的测试（请求日志、视觉论文并行）
+    就会读到这些残留行，全量套件因此随机变红。
+    """
+    import uuid
+
+    from app.models import UsageCode, UsageLog
+    from app.services.usage_code import issue_token
+
+    created: list[int] = []
+
+    def make(prefix: str, quota: int = 20, enabled: bool = True):
+        with SessionLocal() as db:
+            row = UsageCode(code=prefix + uuid.uuid4().hex[:12].upper(), quota=quota, is_enabled=enabled)
+            db.add(row)
+            db.commit()
+            value = row.id, issue_token(row)
+        created.append(value[0])
+        return value
+
+    yield make
+
+    with SessionLocal() as db:
+        for code_id in created:
+            db.query(UsageLog).filter(UsageLog.code_id == code_id).delete()
+        db.commit()

@@ -8,18 +8,14 @@ import pytest
 from app.agent_workspace import api, store, titles
 from app.agent_workspace.models import WorkspaceEvent, WorkspaceRun, WorkspaceTask
 from app.database import SessionLocal
-from app.models import TitleJob, UsageCode
+from app.models import TitleJob
 from app.routers import chat as chat_router
 from app.services.title_jobs import TitleJobWork
 
 
 @pytest.fixture
-def owner():
-    with SessionLocal() as db:
-        row = UsageCode(code="AGENT-TITLE-" + store.uid()[:8].upper(), quota=-1, is_enabled=True)
-        db.add(row)
-        db.commit()
-        return row.id
+def owner(workspace_code):
+    return workspace_code("AGENT-TITLE-", quota=-1)[0]
 
 
 def _task(owner_id: int, title: str = "新任务", **config) -> WorkspaceTask:

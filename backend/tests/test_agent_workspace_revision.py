@@ -7,26 +7,14 @@ import pytest
 from sqlalchemy import select
 
 from app.database import SessionLocal
-from app.models import UsageCode, UsageLog
 from app.agent_workspace import api, store, tools, runner, llm, writer
 from app.agent_workspace.instructions import DEFAULT_BEHAVIOR, LEGACY_BEHAVIORS, WRITER_SYSTEM
 from app.agent_workspace.models import WorkspaceMaterial, WorkspaceTask, WorkspaceEntry
 
 
 @pytest.fixture
-def identity():
-    from app.services.usage_code import issue_token
-    with SessionLocal() as db:
-        row = UsageCode(code='REVISE-' + store.uid()[:12].upper(), quota=50, is_enabled=True)
-        db.add(row)
-        db.commit()
-        value = row.id, issue_token(row)
-    yield value
-    # 之后有测试会清空使用码表，SQLite 随后从小号重新分配 id；
-    # 留下的计费日志会被按 code_id 统计的测试误读成它们自己的记录。
-    with SessionLocal() as db:
-        db.query(UsageLog).filter(UsageLog.code_id == value[0]).delete()
-        db.commit()
+def identity(workspace_code):
+    return workspace_code('REVISE-', quota=50)
 
 
 @pytest.fixture(autouse=True)
