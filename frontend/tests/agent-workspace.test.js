@@ -518,3 +518,10 @@ test("both popovers hand focus back to the next control on Tab", async () => {
     assert.match(tab, /focus\(\{ preventScroll: true \}\)/, `${file} 的 Tab 没有交还焦点`);
   }
 });
+test("select exposes the page label as its accessible name", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/select.mjs"), "utf8");
+  assert.match(src, /aria-labelledby/, "触发器要沿用 <label for>");
+  assert.match(src, /select\.removeAttribute\("aria-hidden"\)/, "原生 select 要留在可访问树里");
+});

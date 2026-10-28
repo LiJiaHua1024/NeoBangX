@@ -203,14 +203,22 @@ export function enhanceSelects(root = document) {
     trigger.setAttribute("aria-expanded", "false");
     const value = document.createElement("span");
     value.className = "aw-select-value";
+    value.id = `aw-select-value-${(select.id || "x") + "-" + (host.dataset.selectReady || "1")}`;
     trigger.append(value);
     const chevron = document.createElement("span");
     chevron.className = "aw-select-chevron";
     chevron.innerHTML = icon("chevron-down");
     host.append(trigger, chevron);
 
+    // 原生 select 是值来源，留在可访问树里；触发器沿用页面已有的 <label for>，
+    // 否则读屏只会念"组合框 + 当前值"（例如不知道这是"从模板开始"）。
+    const label = select.id ? select.ownerDocument.querySelector(`label[for="${select.id}"]`) : null;
+    if (label) {
+      if (!label.id) label.id = `${select.id}-label`;
+      trigger.setAttribute("aria-labelledby", `${label.id} ${value.id || trigger.id || ""}`.trim());
+    }
     select.tabIndex = -1;
-    select.setAttribute("aria-hidden", "true");
+    select.removeAttribute("aria-hidden");
 
     const sync = () => {
       const option = select.selectedOptions[0];
