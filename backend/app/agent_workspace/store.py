@@ -179,6 +179,13 @@ def create_run(owner, task_id, key, mode, instruction, base_version, snapshot, p
         return run_dict(run)
 
 
+def find_entry(run_id, key):
+    """只查不建：用于沿用在升级前用旧幂等键落库的步骤，避免重启后重复执行。"""
+    with SessionLocal() as db:
+        row = db.scalar(select(Entry).where(Entry.run_id == run_id, Entry.key == key))
+        return entry_dict(row) if row else None
+
+
 def start_entry(task_id, run_id, key, kind, label, details=None):
     with SessionLocal() as db:
         row = db.scalar(select(Entry).where(Entry.run_id == run_id, Entry.key == key))

@@ -422,9 +422,19 @@ class Runner:
         self.created_versions.append(saved["id"])
         return {**saved, "new_version": True, **info}
 
-    async def tool_call(self, call):
+    async def tool_call(self, call, key=None):
         name, raw = call["function"]["name"], call["function"]["arguments"]
-        key = "tool:" + call["id"]
+        # 幂等键不能只信 provider 的 id：缺 id 时共用一个空键，第二次调用会拿回第一次的结果。
+        if not key and call.get("id"):
+            key = "tool:" + call["id"]
+        elif not key:
+            key = "tool:" + store.uid()
+        if call.get("id") and key != "tool:" + call["id"]:
+            # 升级前落库的同一调用用的是旧键，沿用它才不会被重复执行一次。
+            legacy_key = "tool:" + call["id"]
+            legacy = await asyncio.to_thread(store.find_entry, self.id, legacy_key)
+            if legacy and legacy["status"] in {"done", "waiting", "interrupted", "failed"}:
+                key = legacy_key
         entry = await asyncio.to_thread(store.start_entry, self.task_id, self.id, key, "tool", name)
         if entry["status"] == "done":
             full = await asyncio.to_thread(store.entry_text, entry["id"], "output")
@@ -553,15 +563,21 @@ class Runner:
         while True:
             # 重启时优先完成检查点里尚未返回的工具调用。
             pending = []
+            position = 0
             for index in range(len(self.messages)-1, -1, -1):
                 message = self.messages[index]
                 if message["role"] == "assistant":
-                    completed = {m.get("tool_call_id") for m in self.messages[index+1:] if m["role"] == "tool"}
-                    pending = [c for c in message.get("tool_calls", []) if c["id"] not in completed]
+                    # 按"已回了几个工具结果"判断跑到哪了：provider 的 id 可能重复或为空，
+                    # 拿 id 集合去比对会把同 id 的第二个调用误判成已完成。
+                    answered = sum(1 for m in self.messages[index+1:] if m["role"] == "tool")
+                    pending = [(at, c) for at, c in enumerate(message.get("tool_calls", [])) if at >= answered]
+                    position = index
                     break
             if pending:
-                for call in pending:
-                    result = await self.tool_call(call)
+                for at, call in pending:
+                    # 键用「消息下标 + 调用下标」：同一 id 指向两次不同调用时不会串，
+                    # 重放时下标仍然稳定（消息已随检查点落库）。
+                    result = await self.tool_call(call, key=f"tool:{position}:{at}")
                     self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": store.encode(result)})
                     await self.checkpoint()
                 continue
