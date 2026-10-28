@@ -102,7 +102,8 @@ class MCPClient:
     async def close(self):
         if self.headers.get("Mcp-Session-Id"):
             try:
-                await self.http.delete(self.cfg.mcp_url, headers=self.headers, timeout=5)
+                # 停止运行时 close 也在取消路径上，DELETE 不能按默认 5s 拖住收尾。
+                await self.http.delete(self.cfg.mcp_url, headers=self.headers, timeout=2)
             except httpx.HTTPError:
                 pass
         await self.http.aclose()

@@ -187,7 +187,7 @@ test("a running task swaps the stop button for send once the draft has content",
     querySelector: () => null,
     setAttribute() {},
   };
-  const stop = { hidden: false };
+  const stop = { hidden: false, disabled: false, title: "" };
   const status = { dataset: {} };
   const elements = {
     send,
@@ -207,6 +207,7 @@ test("a running task swaps the stop button for send once the draft has content",
   proto.updateComposerState.call(fake);
   assert.equal(send.hidden, true, "运行中空草稿：主按钮仍是停止");
   assert.equal(stop.hidden, false);
+  assert.equal(stop.disabled, false);
   fake.message.value = "再补充一句";
   proto.updateComposerState.call(fake);
   assert.equal(send.hidden, false, "运行中有草稿：主按钮换成发送");
@@ -221,7 +222,24 @@ test("a running task swaps the stop button for send once the draft has content",
   proto.updateComposerState.call(fake);
   assert.equal(send.hidden, false, "任务结束后发送键回到原位");
   assert.equal(stop.hidden, true);
+  // 等待补充是终态，出口是回答或跳过，不提供停止。
+  fake.task.status = "waiting";
+  proto.updateComposerState.call(fake);
+  assert.equal(stop.hidden, true, "等待补充不显示停止");
+  // 正在停止：保留按钮但禁用，避免重复提交。
+  fake.task.status = "stopping";
+  proto.updateComposerState.call(fake);
+  assert.equal(stop.hidden, false);
+  assert.equal(stop.disabled, true);
+  assert.equal(stop.title, "正在停止并保存已收到的内容");
   delete global.document;
+});
+
+test("only executing rounds are stoppable", async () => {
+  const { STOPPABLE } = await import("../agent/core.mjs");
+  assert.deepEqual([...STOPPABLE].sort(), ["queued", "running"]);
+  assert.equal(STOPPABLE.has("waiting"), false);
+  assert.equal(STOPPABLE.has("stopping"), false);
 });
 
 test("pending ask is the latest waiting ask_user step", async () => {

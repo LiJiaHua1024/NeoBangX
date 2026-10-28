@@ -1,4 +1,6 @@
 export const ACTIVE = new Set(["queued", "running", "stopping"]);
+/** 只有真正会继续产生输出的轮次才提供停止；“等待补充”的出口是回答或跳过。 */
+export const STOPPABLE = new Set(["running", "queued"]);
 export const STATUS = {
   draft: "草稿",
   queued: "排队中",

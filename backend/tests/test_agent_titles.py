@@ -6,7 +6,7 @@ import asyncio
 import pytest
 
 from app.agent_workspace import api, store, titles
-from app.agent_workspace.models import WorkspaceEvent, WorkspaceTask
+from app.agent_workspace.models import WorkspaceEvent, WorkspaceRun, WorkspaceTask
 from app.database import SessionLocal
 from app.models import TitleJob, UsageCode
 from app.routers import chat as chat_router
@@ -163,3 +163,7 @@ def test_start_run_enqueues_title_for_first_execution(owner):
     api.start_run(task.id, api.RunWrite(request_key=store.uid(), mode="continue"), owner)
     with SessionLocal() as db:
         assert db.query(TitleJob).filter(TitleJob.history_id == task.id).count() == 0
+        # 不把排队中的轮次留给后面的 worker 测试：它们会被别的用例先领走。
+        run_ids = [row.id for row in db.query(WorkspaceRun).filter(WorkspaceRun.task_id == task.id)]
+    for run_id in run_ids:
+        store.finish_run(run_id, "stopped")

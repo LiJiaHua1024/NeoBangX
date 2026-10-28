@@ -384,6 +384,13 @@ def heartbeat(run_id):
         return stop
 
 
+def stop_requested(run_id):
+    """只读检查停止标记，用于覆盖「接口已提交、运行任务还没注册」的窗口。"""
+    with SessionLocal() as db:
+        row = db.get(Run, run_id)
+        return bool(row and row.stop)
+
+
 def claim_run():
     with SessionLocal() as db:
         row = db.scalar(select(Run).where(Run.status == "queued").order_by(Run.created_at).limit(1))

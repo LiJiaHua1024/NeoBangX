@@ -15,7 +15,7 @@ from app.routers.chat import _load_cfg, _validate_model
 from app.routers.tools import build_tool_groups, get_prompt_loader, _resolve_prompt_filename
 from app.services.free_access import is_free_model
 from app.services.runtime_config import find_model_entry
-from . import store, titles
+from . import runner, store, titles
 from .models import (WorkspaceTask as Task, WorkspaceRun as Run, WorkspaceEntry as Entry,
                      WorkspaceChunk as Chunk, WorkspaceEvent as Event, WorkspaceMaterial as Material,
                      WorkspaceVersion as Version, WorkspaceNote as Note, WorkspaceTemplate as Template)
@@ -367,18 +367,33 @@ def answer_question(task_id: str, entry_id: str, body: AnswerWrite, owner: Owner
 
 @router.post("/tasks/{task_id}/stop")
 def stop_run(task_id: str, owner: Owner):
+    queued = False
     with SessionLocal() as db:
         db.execute(update(Task).where(Task.id == task_id, Task.owner == owner).values(updated_at=Task.updated_at))
         task = store.owned(db, task_id, owner)
         row = db.get(Run, task.active_run) if task.active_run else None
-        if row and row.status in store.ACTIVE:
-            row.stop = True
-            if row.status != "queued":
-                row.status = "stopping"
-            task.status = "stopping"
-            store.event(db, task_id, "run", store.run_dict(row))
-            db.commit()
-    return {"received": True}
+        if not row or row.status not in store.ACTIVE:
+            # 等待补充（waiting）与已结束的轮次没有在途执行，如实告诉页面没停到东西。
+            return {"received": False, "status": task.status}
+        queued = row.status == "queued"
+        row.stop = True
+        # 排队中的轮次也先置 stopping：claim_run 只领取 queued，条件更新会失败，不会被误领。
+        row.status = "stopping"
+        task.status = "stopping"
+        store.event(db, task_id, "run", store.run_dict(row))
+        value = store.run_dict(row)
+        run_id = row.id
+        db.commit()
+    if queued:
+        # 排队中还没有在途调用：直接落终态并退回预扣，不必等 worker 槽位。
+        store.finish_run(run_id, "stopped", "已取消尚未开始的执行")
+        with SessionLocal() as db:
+            row = db.get(Run, run_id)
+            if row:
+                value = store.run_dict(row)
+    # 进程内立即取消在途模型调用；跨进程/重启时由心跳读取上面的 stop 标记兜底。
+    runner.request_stop(run_id)
+    return {"received": True, "status": value["status"], "run": value}
 
 
 @router.post("/tasks/{task_id}/notes")

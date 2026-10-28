@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import time
-from contextlib import suppress
 
 from jsonschema import validate
 
@@ -17,6 +16,68 @@ from .instructions import (DEFAULT_EXECUTION_REQUEST, REVIEW_FEEDBACK, REVIEW_PO
 from .settings import load_settings
 
 log = logging.getLogger(__name__)
+
+# 同一进程内运行的轮次：停止接口直接取消这里的任务，不必等下一次心跳。
+# DB 里的 stop 标记仍是跨进程/重启的兜底，心跳间隔只决定兜底的最坏延迟。
+HEARTBEAT_SECONDS = 0.75
+STOP_GRACE_SECONDS = 3.0
+_LOOP = None
+_ACTIVE = {}
+_ORPHANS = set()
+
+
+def request_stop(run_id):
+    """请求停止某个轮次。可在任意线程调用；本进程没有对应运行任务时返回 False。"""
+    loop = _LOOP
+    if loop is None or loop.is_closed():
+        return False
+    try:
+        loop.call_soon_threadsafe(_cancel_active_run, run_id)
+    except RuntimeError:
+        return False
+    return True
+
+
+def _cancel_active_run(run_id):
+    handle = _ACTIVE.get(run_id)
+    if not handle:
+        # 注册前的极短窗口：execute_run 启动后会复查 DB 里的 stop 标记补上。
+        return
+    runner, job, stop_event = handle
+    runner.cancel_reason = ("stopped", "user_stop", "用户已停止本轮执行，已收到的内容已保存")
+    stop_event.set()
+    _request_cancel(job)
+
+
+def _request_cancel(job):
+    # 已经取消过的任务再 cancel 一次会打断它的收尾（第二次 CancelledError），
+    # 导致已收到的正文来不及落库。
+    if not job.done() and job.cancelling() == 0:
+        job.cancel()
+
+
+async def _cancel_and_wait(job):
+    """取消运行任务并有限等待收尾；卡住时先让本轮落终态，迟到写入只会是已收到内容。"""
+    _request_cancel(job)
+    _done, pending = await asyncio.wait({job}, timeout=STOP_GRACE_SECONDS)
+    if pending:
+        log.warning("运行取消后 %.1fs 仍未收尾，先落终态", STOP_GRACE_SECONDS)
+        _ORPHANS.add(job)
+        job.add_done_callback(_drop_orphan)
+    elif not job.cancelled():
+        # 取走异常，避免任务已结束时出现 never retrieved 警告。
+        job.exception()
+
+
+def _consume_task(task):
+    if not task.cancelled():
+        task.exception()
+
+
+def _drop_orphan(job):
+    _ORPHANS.discard(job)
+    if not job.cancelled():
+        job.exception()
 
 
 class WaitingForUser(Exception):
@@ -566,30 +627,42 @@ class Runner:
 
 
 async def execute_run(run_id, model_call=None):
+    global _LOOP
+    _LOOP = asyncio.get_running_loop()
     runner = Runner(run_id, model_call)
     run = await asyncio.to_thread(store.load_run, run_id)
     if run["stop"]:
-        await asyncio.to_thread(store.finish_run, run_id, "stopped")
+        await asyncio.to_thread(store.finish_run, run_id, "stopped", "用户已停止本轮执行，已收到的内容已保存")
         return
     job = asyncio.create_task(runner.execute())
+    stop_event = asyncio.Event()
+    _ACTIVE[run_id] = (runner, job, stop_event)
+    # 停止信号直接唤醒这里的等待，不必等下一次心跳超时。
+    stop_wait = asyncio.create_task(stop_event.wait())
+    stop_wait.add_done_callback(_consume_task)
     try:
+        # 停止请求可能在 load_run 之后、注册之前到达；复查一次标记，补上这个窗口。
+        if await asyncio.to_thread(store.stop_requested, run_id):
+            _cancel_active_run(run_id)
         elapsed = (utcnow() - run["started_at"]).total_seconds() if run["started_at"] else 0
         deadline = time.monotonic() + run["snapshot"]["limits"]["max_seconds"] - elapsed
         while not job.done():
-            if await asyncio.to_thread(store.heartbeat, run_id):
+            if stop_event.is_set() or await asyncio.to_thread(store.heartbeat, run_id):
                 runner.cancel_reason = ("stopped", "user_stop", "用户已停止本轮执行，已收到的内容已保存")
-                job.cancel()
-                with suppress(asyncio.CancelledError):
-                    await job
+                await _cancel_and_wait(job)
                 await asyncio.to_thread(store.finish_run, run_id, "stopped")
                 return
             if time.monotonic() >= deadline:
                 runner.cancel_reason = ("incomplete", "time_limit", "达到本轮时长上限，已收到的内容已保存")
-                job.cancel()
-                with suppress(asyncio.CancelledError):
-                    await job
+                await _cancel_and_wait(job)
                 raise BudgetReached("达到本轮时长上限，已有内容已保存")
-            await asyncio.wait({job}, timeout=0.75)
+            await asyncio.wait({job, stop_wait}, timeout=HEARTBEAT_SECONDS,
+                               return_when=asyncio.FIRST_COMPLETED)
+        if job.cancelled():
+            # 进程内停止信号取消的是 job 本身；execute_run 没有被取消，不能走 worker 关闭的重新排队分支。
+            status = "stopped" if runner.cancel_reason[0] == "stopped" else "interrupted"
+            await asyncio.to_thread(store.finish_run, run_id, status, runner.cancel_reason[2])
+            return
         await job
         await asyncio.to_thread(store.finish_run, run_id, "completed")
     except WaitingForUser:
@@ -598,14 +671,15 @@ async def execute_run(run_id, model_call=None):
         await asyncio.to_thread(store.finish_run, run_id, "incomplete", str(exc))
     except asyncio.CancelledError:
         runner.cancel_reason = ("interrupted", "worker_shutdown", "后台工作进程停止，本轮将重新排队；当前步骤可能需要重新执行")
-        job.cancel()
-        with suppress(asyncio.CancelledError):
-            await job
+        await _cancel_and_wait(job)
         await asyncio.to_thread(store.requeue_run, run_id)
         raise
     except Exception as exc:
         log.exception("Agent 工作台执行失败 run=%s", run_id)
         await asyncio.to_thread(store.finish_run, run_id, "failed", sanitize_error_text(str(exc))[:500])
+    finally:
+        stop_wait.cancel()
+        _ACTIVE.pop(run_id, None)
 
 
 async def worker():

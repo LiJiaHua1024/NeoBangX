@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from datetime import timedelta
 from unittest.mock import AsyncMock
 
@@ -289,6 +290,107 @@ def test_stop_during_generation_persists_received_content(identity,monkeypatch):
     assert store.entry_text(e.id,'reasoning')=='停止前的完整内容'
     assert e.status == 'stopped'
     assert json.loads(e.details)['error_code'] == 'user_stop'
+
+
+def test_stop_running_cancels_without_waiting_for_heartbeat(identity, monkeypatch):
+    """进程内停止信号必须在心跳兜底之前生效；否则 0.75s 的轮询就是延迟下限。"""
+    t = task(identity)
+    r = run(identity, t)
+    with SessionLocal() as db:
+        db.get(WorkspaceRun, r['id']).status = 'running'
+        db.get(WorkspaceTask, t['id']).status = 'running'
+        db.commit()
+    monkeypatch.setattr(runner, '_load_cfg', lambda: {})
+    monkeypatch.setattr(runner, 'HEARTBEAT_SECONDS', 30)
+
+    async def execute():
+        started, cancelled = asyncio.Event(), asyncio.Event()
+
+        async def model(cfg, model, messages, schemas, budget, emit, **kwargs):
+            await emit('output', '停止前的正文')
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        job = asyncio.create_task(runner.execute_run(r['id'], model))
+        await asyncio.wait_for(started.wait(), 5)
+        t0 = time.monotonic()
+        data = api.stop_run(t['id'], identity[0])
+        await asyncio.wait_for(job, 2)
+        return data, time.monotonic() - t0, cancelled.is_set()
+
+    data, elapsed, cancelled = asyncio.run(execute())
+    assert data['received'] is True and data['status'] == 'stopping'
+    assert cancelled is True
+    assert elapsed < 1
+    assert store.load_run(r['id'])['status'] == 'stopped'
+    with SessionLocal() as db:
+        e = db.scalar(select(WorkspaceEntry).where(WorkspaceEntry.run_id == r['id']))
+    assert e.status == 'stopped'
+    assert json.loads(e.details)['error_code'] == 'user_stop'
+    assert store.entry_text(e.id, 'output') == '停止前的正文'
+
+
+def test_stop_queued_run_is_immediate_and_refunds(identity):
+    """排队中还没有在途调用：停止应直接落终态，不能等 worker 槽位。"""
+    t = task(identity)
+    r = run(identity, t)
+    with SessionLocal() as db:
+        assert db.get(UsageCode, identity[0]).used_count == 1
+    data = api.stop_run(t['id'], identity[0])
+    assert data['received'] is True and data['status'] == 'stopped'
+    assert data['run']['status'] == 'stopped'
+    assert store.load_run(r['id'])['status'] == 'stopped'
+    detail = store.task_detail(identity[0], t['id'])
+    assert detail['status'] == 'stopped' and detail['active_run'] == ''
+    with SessionLocal() as db:
+        assert db.get(UsageCode, identity[0]).used_count == 0
+
+
+def test_stop_waiting_round_reports_not_received(identity):
+    """等待补充不是执行中：接口不能返回虚假的成功，页面也不该显示停止按钮。"""
+    t = task(identity)
+    r = run(identity, t)
+    store.finish_run(r['id'], 'waiting')
+    assert api.stop_run(t['id'], identity[0]) == {'received': False, 'status': 'waiting'}
+    assert store.load_run(r['id'])['status'] == 'waiting'
+
+
+def test_stop_grace_marks_terminal_when_cleanup_ignores_cancel(identity, monkeypatch):
+    """收尾不理会取消时，先按上限落终态，避免一直停在 stopping。"""
+    t = task(identity)
+    r = run(identity, t)
+    with SessionLocal() as db:
+        db.get(WorkspaceRun, r['id']).status = 'running'
+        db.get(WorkspaceTask, t['id']).status = 'running'
+        db.commit()
+    monkeypatch.setattr(runner, '_load_cfg', lambda: {})
+    monkeypatch.setattr(runner, 'HEARTBEAT_SECONDS', 30)
+    monkeypatch.setattr(runner, 'STOP_GRACE_SECONDS', 0.2)
+
+    async def execute():
+        started = asyncio.Event()
+
+        async def model(cfg, model, messages, schemas, budget, emit, **kwargs):
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.6)  # 模拟卡住的 close
+                raise
+
+        job = asyncio.create_task(runner.execute_run(r['id'], model))
+        await asyncio.wait_for(started.wait(), 5)
+        t0 = time.monotonic()
+        api.stop_run(t['id'], identity[0])
+        await asyncio.wait_for(job, 2)
+        return time.monotonic() - t0
+
+    assert asyncio.run(execute()) < 0.6
+    assert store.load_run(r['id'])['status'] == 'stopped'
 
 
 def test_tool_result_replay_does_not_duplicate_json(identity):

@@ -51,6 +51,7 @@ const state = {
   dirty: false,
   editSeq: 0,
   saving: null,
+  stopPending: false,
   conflict: false,
   cursor: 0,
   entries: new Map(),
@@ -1817,7 +1818,13 @@ async function poll() {
     );
     pollTimer = setTimeout(
       poll,
-      data.has_more ? 30 : ACTIVE.has(state.task.status) ? 1000 : 5000,
+      data.has_more
+        ? 30
+        : state.task.status === "stopping"
+          ? 300
+          : ACTIVE.has(state.task.status)
+            ? 1000
+            : 5000,
     );
   } catch (e) {
     if (generation !== state.generation) return;
@@ -1936,11 +1943,57 @@ async function start(mode = "execute", instruction = "", baseVersion = "", teach
   poll();
   await listTasks();
 }
+/* 把某一轮的状态同步到三处：轮次表、任务详情里的轮次、对话/轨迹卡片。 */
+function syncRunCard(run) {
+  if (!state.task) return;
+  state.runs.set(run.id, run);
+  upsert(state.task.runs, run);
+  runCard(run);
+  state.conversation?.applyEvent({ kind: "run", data: run });
+}
 async function stopRun() {
-  await api(path("/stop"), { method: "POST" });
-  state.task.status = "stopping";
-  toast("已请求停止，正在保存已收到的内容");
-  poll();
+  if (!state.task || state.stopPending) return;
+  const task = state.task;
+  const runId = task.active_run;
+  const current =
+    state.runs.get(runId) || task.runs.find((item) => item.id === runId);
+  const before = { status: task.status, run: current ? { ...current } : null };
+  state.stopPending = true;
+  // 点击即反馈：先让本轮进入“正在停止”，不再等下一次轮询。
+  task.status = "stopping";
+  if (current && ACTIVE.has(current.status))
+    syncRunCard({ ...current, status: "stopping" });
+  updateStatus();
+  try {
+    const data = await api(path("/stop"), { method: "POST" });
+    if (data.received === false) {
+      // 等待补充或刚好执行完：如实回到服务端状态，不谎报停止成功。
+      task.status = data.status || before.status;
+      // 服务端仍说运行中才回滚本地轮次；终态交给紧接着的轮询落位，避免先显示回 running。
+      if (before.run && data.status === "running") syncRunCard(before.run);
+      toast(
+        data.status === "waiting"
+          ? "本轮正在等待补充，请先回答或跳过"
+          : "本轮已经结束，无需停止",
+      );
+    } else {
+      if (data.run) syncRunCard(data.run);
+      if (data.status) task.status = data.status;
+      toast(
+        data.status === "stopped"
+          ? "已停止，已收到的内容已保存"
+          : "已请求停止，正在保存已收到的内容",
+      );
+    }
+  } catch (e) {
+    task.status = before.status;
+    if (before.run) syncRunCard(before.run);
+    error(e);
+  } finally {
+    state.stopPending = false;
+    updateStatus();
+    poll();
+  }
 }
 /* 回答 Ask：后端把回答写进旧条目、结束等待轮，并用同一段回答开新一轮。 */
 async function answerAsk(entry, answer) {
@@ -1965,6 +2018,10 @@ async function answerAsk(entry, answer) {
 
 async function sendMessage() {
   if (!state.task) return;
+  if (state.task.status === "stopping") {
+    toast("正在停止，请稍候");
+    return;
+  }
   const text = $("#message").value.trim();
   if (ACTIVE.has(state.task?.status)) {
     if (!text) {

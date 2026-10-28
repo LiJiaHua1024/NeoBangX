@@ -1408,7 +1408,7 @@ openrouter/deepseek/deepseek-chat
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/workspace/tasks/{id}/runs` | 创建执行轮次；`request_key` 幂等 |
-| POST | `/api/workspace/tasks/{id}/stop` | 请求停止当前轮次 |
+| POST | `/api/workspace/tasks/{id}/stop` | 立即停止当前轮次；返回 `{received, status, run?}`，`received=false` 表示没有可停止的轮次 |
 | POST | `/api/workspace/tasks/{id}/notes` | 补充要求，或 `apply_config=true` 在下一步应用新配置 |
 | GET | `/api/workspace/tasks/{id}/events?after=` | 增量事件（`run` / `entry` / `note` / `version` / `adopt` / `material` / `config`）；**不含大段正文** |
 | GET | `/api/workspace/tasks/{id}/entries` | 步骤元数据列表（按创建时间），用于恢复对话与轨迹；不含正文 |
@@ -1416,6 +1416,8 @@ openrouter/deepseek/deepseek-chat
 | GET | `/api/workspace/tasks/{id}/runs/{run_id}` | 单轮配置快照 |
 
 轮询事件只携带步骤元数据与字符计数，正文通过 `entries/{entry_id}/content` 按游标读取；这样 20 万字符思考与 30 万字符成果不会挤进事件响应。
+
+**停止语义：** 运行中的轮次由服务进程内的取消信号立即中断在途模型调用，页面先把状态置为 `stopping`；排队中的轮次还没有在途调用，直接落为 `stopped` 并退回预扣，不等待 worker 槽位。取消后最多等 3 秒收尾，超时也先落终态（已收到的正文仍会补写）；跨进程或进程重启时由 0.75 秒的 DB `stop` 标记兜底。`waiting`（等待补充）不是执行中，不能停止，接口返回 `received=false`，其出口是回答或跳过。响应同时给出 `status` 与 `run`（停止瞬间或已终态），前端据此直接落状态。
 
 ### 16.5 成果
 

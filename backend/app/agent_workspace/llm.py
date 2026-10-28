@@ -1,6 +1,7 @@
 """工作台专用原生工具流适配器；不改变普通工具的调用链。"""
 import asyncio
 import inspect
+import logging
 from dataclasses import dataclass, field
 
 from litellm import acompletion
@@ -9,6 +10,30 @@ from app.routers.chat import _build_llm
 from app.services.llm import extract_reasoning_from_delta, strip_reasoning_kwargs, is_reasoning_param_error
 from app.services.llm_router import LLMRouter, is_retryable
 from app.services.runtime_config import find_model_entry
+
+log = logging.getLogger(__name__)
+CLOSE_TIMEOUT_SECONDS = 2.0
+
+
+def _consume_close(task):
+    if not task.cancelled():
+        task.exception()
+
+
+async def _close_stream(stream):
+    """关闭上游流，但不要让 aclose 拖住停止；超时就 detach，由 provider 自己超时。"""
+    close = getattr(stream, "aclose", None)
+    if not close:
+        return
+    value = close()
+    if not inspect.isawaitable(value):
+        return
+    task = asyncio.ensure_future(value)
+    task.add_done_callback(_consume_close)
+    _done, pending = await asyncio.wait({task}, timeout=CLOSE_TIMEOUT_SECONDS)
+    if pending:
+        log.warning("关闭模型流超过 %.1fs，已放弃等待", CLOSE_TIMEOUT_SECONDS)
+        task.cancel()
 
 
 def get(value, key, default=None):
@@ -144,9 +169,5 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
             if not is_retryable(exc):
                 raise
         finally:
-            close = getattr(stream, "aclose", None)
-            if close:
-                value = close()
-                if inspect.isawaitable(value):
-                    await value
+            await _close_stream(stream)
     raise RuntimeError("所有模型连接均不可用，请稍后重试") from last_error

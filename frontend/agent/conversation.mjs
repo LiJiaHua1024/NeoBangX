@@ -3,7 +3,7 @@
    chat-files / chat-reveal 的可见行为，按 NeoBangX 的轮询与按游标读取正文接口重写。
    这里不伪造任何内容：正文、思考、工具输入输出都来自后端已保存的块。 */
 
-import { ACTIVE, escapeHTML as esc, setParts } from "./core.mjs";
+import { ACTIVE, STOPPABLE, escapeHTML as esc, setParts } from "./core.mjs";
 import { pickGreeting } from "./greetings.mjs";
 import { icon } from "./icons.mjs";
 import { markCurrent, playEnter } from "./motion.mjs";
@@ -1243,9 +1243,7 @@ export class Conversation {
 
   renderActions(turn) {
     const run = this.runs.get(turn.run.id) || turn.run;
-    const isActive = ["running", "queued", "stopping", "waiting"].includes(
-      run.status,
-    );
+    const stoppable = STOPPABLE.has(run.status);
     const actions = turn.actions;
     turn.usageMarkup = this.usageMarkup(run);
     actions.innerHTML = `
@@ -1277,7 +1275,7 @@ export class Conversation {
     actions
       .querySelector("[data-trajectory]")
       .addEventListener("click", () => this.onModeChange("trajectory"));
-    if (isActive) {
+    if (stoppable) {
       const stop = document.createElement("button");
       stop.type = "button";
       stop.className = "action";
@@ -1408,9 +1406,10 @@ export class Conversation {
 
   updateComposerState() {
     // waiting 是终态，输入区仍然可用；有提问时由 ask 面板接管，不在这一层藏按钮。
-    const active = ["running", "queued", "stopping"].includes(
-      this.task?.status,
-    );
+    const taskStatus = this.task?.status || "";
+    const active = ["running", "queued", "stopping"].includes(taskStatus);
+    const stoppable = STOPPABLE.has(taskStatus);
+    const stopping = taskStatus === "stopping";
     // 运行中一旦写下补充要求，主按钮就让位给发送；停止仍可在轮次卡片的动作栏里点到。
     const drafted = (this.message?.value || "").trim() !== "";
     const send = document.getElementById("send");
@@ -1435,7 +1434,12 @@ export class Conversation {
         (this.task?.runs?.length || 0) > 0 ? "发送补充" : "开始任务",
       );
     }
-    if (stop) stop.hidden = !active || drafted;
+    if (stop) {
+      // “正在停止”仍保留按钮，但禁用以免重复提交；等待补充不提供停止。
+      stop.hidden = !(stoppable || stopping) || drafted;
+      stop.disabled = stopping;
+      stop.title = stopping ? "正在停止并保存已收到的内容" : "停止本轮";
+    }
     if (status) {
       const value =
         STATUS_NAMES[this.task?.status] ||
