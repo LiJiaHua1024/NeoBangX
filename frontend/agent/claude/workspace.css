@@ -2,15 +2,14 @@
    来源：dsh-claude-style@1e7acc5b 的 theme/chrome.css“右侧栏卡片”、
    theme/typography.css 与 features/composer/card.css 的表单语言。 */
 
-.layout {
-  --workspace-width: var(--workspace-w);
-}
+/* 宽度由 workspace.js 写在 #app 的行内 `--workspace-width` 上；
+   这里不能再给 `.layout` 声明同名变量，否则会遮蔽祖先的行内值。 */
 .workspace-panel {
   position: relative;
   display: flex;
   flex-direction: column;
   flex: none;
-  width: var(--workspace-width);
+  width: var(--workspace-width, var(--workspace-w));
   min-width: 360px;
   max-width: 680px;
   height: 100%;

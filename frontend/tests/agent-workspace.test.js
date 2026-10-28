@@ -259,3 +259,32 @@ test("pending ask is the latest waiting ask_user step", async () => {
     null,
   );
 });
+
+test("no CSS redeclares the workspace width variable set by workspace.js", async () => {
+  // workspace.js 把 `--workspace-width` 写在 #app 的行内样式上。自定义属性按"最近声明"
+  // 取值，所以任何 CSS 里的同名声明（曾经的 `.layout { --workspace-width: ... }`）
+  // 都会遮蔽它，让拖拽与方向键调节完全失效。
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const root = path.join(__dirname, "..", "agent");
+  const files = [];
+  const walk = (dir) => {
+    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, item.name);
+      if (item.isDirectory()) walk(full);
+      else if (item.name.endsWith(".css")) files.push(full);
+    }
+  };
+  walk(root);
+  const offenders = files.filter((file) =>
+    /--workspace-width\s*:/.test(fs.readFileSync(file, "utf8")),
+  );
+  assert.deepEqual(offenders, [], "这些样式表遮蔽了 #app 上的行内变量");
+
+  const css = fs.readFileSync(path.join(root, "claude", "workspace.css"), "utf8");
+  assert.match(
+    css,
+    /\.workspace-panel\s*\{[^}]*width:\s*var\(--workspace-width,\s*var\(--workspace-w\)\)/,
+    "面板宽度必须带 --workspace-w 兜底，变量缺失时不至于塌成 0",
+  );
+});
