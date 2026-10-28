@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -12,7 +14,7 @@ from sqlalchemy import select
 from app.agent_workspace import api, store
 from app.agent_workspace.models import WorkspaceRun, WorkspaceTask
 from app.database import SessionLocal
-from app.models import UsageCode, UsageLog
+from app.models import UsageCode, UsageLog, utcnow
 
 SNAPSHOT = {
     "model": "test",
@@ -86,11 +88,14 @@ def test_failure_without_delivery_refunds(workspace_code, status):
     assert _log_units(run_id) == 0
 
 
-def test_incomplete_run_neither_refunds_nor_charges_twice(workspace_code):
-    """`incomplete` 是"内容已保存但未完成"：不退款，也不重复扣。"""
+def test_incomplete_run_that_did_work_is_not_refunded(workspace_code):
+    """`incomplete` 且已经跑过步骤：内容已保存，不退款也不重复扣。"""
     owner, _ = workspace_code("BILL-", quota=5)
     task_id = _task(owner)
     run_id = _charged_run(owner, task_id)
+    with SessionLocal() as db:
+        db.get(WorkspaceRun, run_id).step = 2
+        db.commit()
 
     store.finish_run(run_id, "incomplete")
 
@@ -150,3 +155,42 @@ def test_recover_runs_requeues_a_crashed_run_without_stop_request(workspace_code
         assert row.status == "queued" and row.lease is None
         assert db.get(WorkspaceTask, task_id).status == "queued"
     assert _used(owner) == 1
+
+
+def test_resumed_run_gets_a_fresh_wall_clock_budget(workspace_code):
+    """崩溃后恢复的轮次沿用旧的 started_at，会让 max_seconds 立刻为负、一步都跑不了。"""
+    owner, _ = workspace_code("BILL-", quota=5)
+    task_id = _task(owner)
+    run_id = _charged_run(owner, task_id)
+    long_ago = utcnow() - timedelta(days=3)
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRun, run_id)
+        row.status, row.started_at, row.lease = "queued", long_ago, None
+        db.commit()
+    store.claim_run()
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRun, run_id)
+        assert row.status == "running"
+        assert (utcnow() - row.started_at).total_seconds() < 60, "领取时应重置墙钟起点"
+    store.finish_run(run_id, "stopped")
+
+
+def test_incomplete_run_without_any_step_refunds(workspace_code):
+    owner, _ = workspace_code("BILL-", quota=5)
+    task_id = _task(owner)
+    run_id = _charged_run(owner, task_id)
+    assert _used(owner) == 1
+    store.finish_run(run_id, "incomplete", "达到本轮时长上限，已收到的内容已保存")
+    assert _used(owner) == 0, "一步都没走的 incomplete 要退额度"
+    assert _charged_flag(run_id) is False
+
+
+def test_incomplete_run_with_steps_keeps_the_charge(workspace_code):
+    owner, _ = workspace_code("BILL-", quota=5)
+    task_id = _task(owner)
+    run_id = _charged_run(owner, task_id)
+    with SessionLocal() as db:
+        db.get(WorkspaceRun, run_id).step = 3
+        db.commit()
+    store.finish_run(run_id, "incomplete")
+    assert _used(owner) == 1, "已经跑过步骤的轮次不退"

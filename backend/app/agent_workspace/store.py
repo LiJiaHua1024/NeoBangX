@@ -421,7 +421,9 @@ def claim_run():
         if not row:
             return None
         result = db.execute(update(Run).where(Run.id == row.id, Run.status == "queued")
-                            .values(status="running", started_at=func.coalesce(Run.started_at, utcnow()), lease=utcnow() + timedelta(seconds=90)))
+                            # 每次领取都重开墙钟预算：崩溃/重启后恢复的轮次沿用旧的 started_at
+                            # 会让 max_seconds 立刻为负，一次模型调用都发不出去。
+                            .values(status="running", started_at=utcnow(), lease=utcnow() + timedelta(seconds=90)))
         if result.rowcount != 1:
             db.rollback()
             return None
@@ -498,7 +500,10 @@ def finish_run(run_id, status, error=""):
             db.commit()
             return
         task.status, task.active_run, task.updated_at = status, "", utcnow()
-        if row.charged and status in {"failed", "stopped"}:
+        # 未产出任何成果的失败/停止要退款；`incomplete` 里"一步都没走"的（恢复后预算已耗尽）
+        # 同样退，否则用户被扣了一次却什么都没得到。
+        refundable = status in {"failed", "stopped"} or (status == "incomplete" and not row.step)
+        if row.charged and refundable:
             # 已经产出过版本的轮次不再退额度：否则"等成果落库再点停止"可以无限白嫖。
             delivered = db.scalar(select(Version.id).where(Version.run_id == run_id).limit(1))
             if not delivered:
