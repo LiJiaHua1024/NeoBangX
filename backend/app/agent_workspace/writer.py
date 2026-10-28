@@ -149,7 +149,12 @@ def apply_edits(draft, edits):
             old, new = old.replace("\n", "\r\n"), new.replace("\n", "\r\n")
             count = draft.count(old)
         if count == 1:
-            draft = draft.replace(old, new, 1)
+            candidate = draft.replace(old, new, 1)
+            if not candidate.strip():
+                # 清空整篇会被存成"最新完整版本"，用户只能手动回退。
+                failures.append((number, "该修改会让成果变为空文档，已拒绝"))
+                continue
+            draft = candidate
             applied += 1
         elif count == 0:
             hint = _near(draft, old)

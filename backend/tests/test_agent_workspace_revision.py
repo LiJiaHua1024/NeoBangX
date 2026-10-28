@@ -470,6 +470,14 @@ def test_claim_of_adoption_without_edit_blocks_is_a_format_problem():
     assert writer.parse_edits('第 1 条：采纳 —— 理由', truncated=True).problems == []
 
 
+def test_apply_edits_refuses_to_blank_the_document():
+    draft, applied, failures = writer.apply_edits('原文一。', [(1, '原文一。', '')])
+    assert draft == '原文一。' and applied == 0
+    assert failures == [(1, '该修改会让成果变为空文档，已拒绝')]
+    # 只留空白同样算清空。
+    assert writer.apply_edits('原文一。', [(1, '原文一。', '  \n ')])[1] == 0
+
+
 def test_rewritten_draft_without_blocks_triggers_a_retry(identity):
     t, m = task(identity)
     r = start(identity, t)
@@ -491,3 +499,24 @@ def test_rewritten_draft_without_blocks_triggers_a_retry(identity):
     assert result['new_version'] and result['applied'] == 1
     store.finish_run(r['id'], 'completed')
 
+
+def test_blank_edit_is_refused_and_retried(identity):
+    t, m = task(identity)
+    r = start(identity, t)
+    seen = []
+    replies = [DRAFT,
+               '第 1 条：采纳 —— 这段分析没有依据，删掉。\n<edit><old>' + DRAFT + '</old><new></new></edit>',
+               '<edit><old>分析甲。</old><new>甲。</new></edit>']
+
+    async def execute():
+        obj = runner.Runner(r['id'], scripted(replies, seen))
+        await obj.load()
+        v = await obj.create_document({'title': '成果', 'instruction': '分析', 'material_ids': [m['id']]}, 'tool:gen')
+        return await revise_call(obj, 'rev', version_id=v['id'], instruction='删掉没有依据的分析')
+
+    result = asyncio.run(execute())
+    assert '空文档' in seen[2][-1]['content']
+    doc = tools.document(t['id'], result['id'])
+    assert doc['content'] == '原文一。原文二。甲。分析乙。'
+    assert doc['complete'] is True
+    store.finish_run(r['id'], 'completed')
