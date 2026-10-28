@@ -48,7 +48,9 @@ def test_catalog_and_exhausted_login(client,identity):
     assert 'mcp_token' not in r.text and 'mcp_url' not in r.text
     with SessionLocal() as db:
         row=db.get(UsageCode,identity[0]);row.quota=0;code=row.code;db.commit()
-    assert client.post('/api/workspace/login',json={'code':code}).status_code==200
+    login=client.post('/api/workspace/login',json={'code':code})
+    assert login.status_code==200
+    assert login.json().get('token','').count('.')==2, "登录必须返回可用的 JWT"
     assert client.get('/api/workspace/tasks').status_code==200
 
 
@@ -57,7 +59,8 @@ def test_owner_and_config_cas(client,identity):
     body={'title':'新名称','revision':1,'config':t['config']}
     assert client.put('/api/workspace/tasks/'+t['id'],json=body).status_code==200
     assert client.put('/api/workspace/tasks/'+t['id'],json=body).status_code==409
-    with pytest.raises(HTTPException):store.task_detail(identity[0]+1000,t['id'])
+    with pytest.raises(HTTPException) as denied:store.task_detail(identity[0]+1000,t['id'])
+    assert denied.value.status_code==404
     assert store.task_detail(identity[0],t['id'])['title']=='新名称'
 
 
@@ -65,7 +68,13 @@ def test_idempotent_run_atomic_charge_and_refund(identity):
     t=task(identity);r=run(identity,t,key='idempotent1');again=run(identity,t,key='idempotent1')
     assert r['id']==again['id']
     with SessionLocal() as db:assert db.get(UsageCode,identity[0]).used_count==1
-    with pytest.raises(HTTPException):run(identity,t)
+    with SessionLocal() as db:
+        row=db.get(UsageCode,identity[0]);row.used_count=row.quota;db.commit()
+    # 新任务没有在途轮次，才会走到额度校验
+    with pytest.raises(HTTPException) as exhausted:run(identity,task(identity))
+    assert exhausted.value.status_code==403, "额度已用尽时必须是 403"
+    with SessionLocal() as db:
+        row=db.get(UsageCode,identity[0]);row.used_count=0;db.commit()
     store.finish_run(r['id'],'stopped');store.finish_run(r['id'],'stopped')
     with SessionLocal() as db:assert db.get(UsageCode,identity[0]).used_count==0
 
@@ -827,3 +836,16 @@ def test_events_cursor_boundary_returns_the_next_event_only(client,identity):
     assert all(ev['id']>cursor for ev in more['events'])
     assert not any(ev['id']<=cursor for ev in more['events'])
     store.finish_run(r['id'],'stopped')
+
+
+def test_concurrent_runs_are_capped_per_user(identity):
+    """同一使用码最多两个在途轮次：第三个要被拦下，空出槽位后可以继续。"""
+    tasks=[task(identity) for _ in range(3)]
+    runs=[run(identity,t) for t in tasks[:2]]
+    with pytest.raises(HTTPException) as blocked:run(identity,tasks[2])
+    assert blocked.value.status_code==429
+    assert '最多' in str(blocked.value.detail)
+    store.finish_run(runs[0]['id'],'stopped')
+    third=run(identity,tasks[2])
+    assert third['status']=='queued'
+    for item in (runs[1]['id'],third['id']):store.finish_run(item,'stopped')

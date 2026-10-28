@@ -156,7 +156,9 @@ def test_start_run_enqueues_title_for_first_execution(owner):
         run.status = "completed"
         run.active_run = ""
         db.commit()
-    api.start_run(task.id, api.RunWrite(request_key=store.uid(), mode="continue"), owner)
+    # 用 execute 而不是 continue：这样"不再入队"是由"任务已有轮次"决定的，
+    # 而不是被 mode 短路掉（原用例两种写法都绿，等于没测）。
+    api.start_run(task.id, api.RunWrite(request_key=store.uid(), mode="execute"), owner)
     with SessionLocal() as db:
         assert db.query(TitleJob).filter(TitleJob.history_id == task.id).count() == 0
         # 不把排队中的轮次留给后面的 worker 测试：它们会被别的用例先领走。

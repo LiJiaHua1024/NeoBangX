@@ -184,8 +184,11 @@ test("a running task swaps the stop button for send once the draft has content",
   const send = {
     hidden: false,
     dataset: {},
+    attrs: {},
     querySelector: () => null,
-    setAttribute() {},
+    setAttribute(name, value) {
+      this.attrs[name] = value;
+    },
   };
   const stop = { hidden: false, disabled: false, title: "" };
   const status = { dataset: {} };
@@ -221,6 +224,9 @@ test("a running task swaps the stop button for send once the draft has content",
   fake.message.value = "";
   proto.updateComposerState.call(fake);
   assert.equal(send.hidden, false, "任务结束后发送键回到原位");
+  // commit b98eb6b 的主题：输入区主按钮在"发送 / 继续 / 开始任务"之间切换。
+  assert.equal(send.dataset.mode, "send");
+  assert.equal(send.attrs["aria-label"], "发送补充");
   assert.equal(stop.hidden, true);
   // 等待补充是终态，出口是回答或跳过，不提供停止。
   fake.task.status = "waiting";
