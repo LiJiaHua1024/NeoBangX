@@ -204,10 +204,34 @@ class MarkdownView {
   }
 }
 
+/* 模型输出只能是内容，不能借用应用自己的 class / id / 表单：
+   显式白名单覆盖 marked 的全部输出（含任务列表复选框），表单类标签一律不放行。 */
+const ALLOWED_TAGS = ["p", "br", "em", "strong", "del", "code", "pre", "blockquote",
+  "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "a",
+  "table", "thead", "tbody", "tr", "th", "td", "sup", "sub", "span", "input"];
+const ALLOWED_ATTR = ["href", "title", "lang", "class", "type", "checked", "disabled", "start"];
+
 function sanitize(html) {
-  return window.DOMPurify.sanitize(html, {
-    FORBID_TAGS: ["img", "iframe", "style", "link", "meta"],
-    FORBID_ATTR: ["style"],
+  const purify = window.DOMPurify;
+  if (purify && !purify.__agentChatHooked) {
+    // class 只留给代码块语言标记（`language-js`），其余一律去掉。
+    purify.addHook("uponSanitizeAttribute", (node, data) => {
+      if (data.attrName === "class" && !/^language-[\w+#.-]+$/.test(data.attrValue)) data.keepAttr = false;
+    });
+    // input 只为任务列表复选框放行：其他输入控件不是正文内容。
+    purify.addHook("uponSanitizeElement", (node, data) => {
+      if (data.tagName === "input" && (node.getAttribute("type") || "").toLowerCase() !== "checkbox") {
+        node.parentNode?.removeChild(node);
+      }
+    });
+    purify.__agentChatHooked = true;
+  }
+  return purify.sanitize(html, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR,
+    FORBID_TAGS: ["img", "iframe", "style", "link", "meta", "form"],
+    FORBID_ATTR: ["style", "id", "name", "action", "method"],
+    ALLOWED_URI_REGEXP: /^(?:https?|mailto):/i,
   });
 }
 

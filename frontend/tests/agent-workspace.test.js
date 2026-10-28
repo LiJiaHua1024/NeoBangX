@@ -308,3 +308,23 @@ test("local start/stop wins over a poll started before it", async () => {
   const next = guard.begin();
   assert.equal(guard.fresh(next), true, "之后的轮询可以正常同步状态");
 });
+
+test("model markdown cannot impersonate app UI or submit forms", async () => {
+  // 模型输出只应是内容：白名单覆盖 marked 的全部输出，但不含表单类标签、
+  // 也不含能借用应用样式的 class / id。（运行时效果用 jsdom 复现过：
+  // error-box / result-card / form / id="stop" 都会被剥掉。）
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/conversation.mjs"), "utf8");
+  const tags = src.match(/const ALLOWED_TAGS = (\[[\s\S]*?\]);/)[1];
+  const attrs = src.match(/const ALLOWED_ATTR = (\[[\s\S]*?\]);/)[1];
+  for (const banned of ["form", "button", "img", "iframe", "style", "link", "meta", "select", "textarea"])
+    assert(!tags.includes(`"${banned}"`), `不应放行 <${banned}>`);
+  for (const banned of ["id", "style", "name", "action", "method", "src", "onclick", "placeholder"])
+    assert(!attrs.includes(`"${banned}"`), `不应放行 ${banned} 属性`);
+  for (const needed of ["table", "pre", "code", "a", "ul", "li", "input"])
+    assert(tags.includes(`"${needed}"`), `标记渲染需要 <${needed}>`);
+  assert.match(src, /ALLOWED_URI_REGEXP: \/\^\(\?:https\?\|mailto\):\/i/);
+  assert.match(src, /language-\[\^?/, "class 只应放行代码语言标记");
+  assert.match(src, /uponSanitizeElement/, "非复选框的 input 需要被移除");
+});
