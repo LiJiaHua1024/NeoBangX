@@ -59,6 +59,8 @@ function checkFor(selected) {
 export function createModelPicker({ trigger, popover, label, onSelect }) {
   let models = [];
   let value = "";
+  // 后台改配置后目录可能已经变了：记住见过的显示名，缺失时至少不把内部 id 甩给用户。
+  const knownNames = new Map();
   let open = false;
   let active = -1;
   let closeTimer = 0;
@@ -72,16 +74,27 @@ export function createModelPicker({ trigger, popover, label, onSelect }) {
   popover.tabIndex = -1;
   popover.hidden = true;
 
+  const findModel = () => models.find((entry) => String(entry.id) === String(value));
   const modelName = () => {
-    const model = models.find((entry) => String(entry.id) === String(value));
-    return model ? model.name || model.id : value || "选择模型";
+    const model = findModel();
+    if (model) return model.name || model.id;
+    if (!value) return "选择模型";
+    return knownNames.get(String(value)) || value;
   };
+  /** 当前值是否还能在本轮目录里选到（目录变化后旧任务可能指向已下架的模型）。 */
+  const modelAvailable = () => !value || Boolean(findModel());
 
   function syncLabel() {
     label.textContent = modelName();
-    trigger.title = `当前模型：${modelName()}`;
-    trigger.setAttribute("aria-label", `选择执行模型，当前 ${modelName()}`);
+    trigger.title = modelAvailable()
+      ? `当前模型：${modelName()}`
+      : `当前模型不可用：${modelName()}`;
+    trigger.setAttribute(
+      "aria-label",
+      modelAvailable() ? `选择执行模型，当前 ${modelName()}` : `当前模型不可用，请重新选择（${modelName()}）`,
+    );
     trigger.toggleAttribute("data-empty", models.length === 0);
+    trigger.toggleAttribute("data-unavailable", !modelAvailable());
   }
 
   function position() {
@@ -343,8 +356,10 @@ export function createModelPicker({ trigger, popover, label, onSelect }) {
 
   return {
     /** Replace the catalog and the current value (task switch, first boot). */
+    modelAvailable,
     setModels(list, current) {
       models = Array.isArray(list) ? list : [];
+      for (const entry of models) knownNames.set(String(entry.id), entry.name || entry.id);
       value = current === undefined || current === null ? "" : String(current);
       syncLabel();
       if (open) {

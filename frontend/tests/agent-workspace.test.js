@@ -884,3 +884,17 @@ test("the results pane shows a skeleton instead of raw markdown", async () => {
   assert.match(render, /if \(!state\.pages\.length\)/, "空分页时渲染骨架");
   assert.match(render, /正在排版/);
 });
+
+test("a model missing from the catalog is flagged and blocks sending", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const picker = fs.readFileSync(path.join(__dirname, "../agent/model-picker.mjs"), "utf8");
+  assert.match(picker, /knownNames/, "要缓存见过的显示名");
+  assert.match(picker, /data-unavailable/, "缺失模型要在触发器上标记");
+  assert.match(picker, /modelAvailable/);
+  const workspace = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  assert.match(workspace, /function modelUnavailable\(\)/, "发送前要判断模型是否可用");
+  assert.match(workspace, /当前模型已不可用，请先在执行模型里重新选择/);
+  assert.match(workspace, /async function refreshCatalogModels\(\)/, "切任务时要刷新目录");
+  assert.match(workspace, /60000/, "刷新要限频");
+});

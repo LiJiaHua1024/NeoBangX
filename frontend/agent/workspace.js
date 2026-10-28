@@ -1592,6 +1592,7 @@ async function openTask(id, push = true, forcedTab = "") {
       saveState("本地草稿已恢复", "draft");
     }
   } catch {}
+  refreshCatalogModels().catch(() => {});
   const hash = location.hash.slice(1);
   const tab = forcedTab || (TAB_IDS.has(hash) ? hash : "prompt");
   if (push) history.pushState({ view: "work" }, "", `/agent/tasks/${id}#${tab}`);
@@ -2025,8 +2026,24 @@ async function openEntry(id, kind) {
   await load();
 }
 
+/* 模型目录只在 boot 拉一次会让后台改配置后一直用旧列表：切任务时顺手刷新（最多 60 秒一次）。 */
+let catalogModelsAt = 0;
+async function refreshCatalogModels() {
+  if (!state.catalog || Date.now() - catalogModelsAt < 60000) return;
+  catalogModelsAt = Date.now();
+  try {
+    const catalog = await api("/catalog");
+    state.catalog.models = catalog.models;
+    state.catalog.default_model = catalog.default_model;
+    modelPicker.setModels(catalog.models, state.task?.config.model || $("#model").value);
+    renderTemplateOptions();
+    updateStatus();
+  } catch {}
+}
+
 /* ---------------- 执行 ---------------- */
 async function start(mode = "execute", instruction = "", baseVersion = "", teachingTool = "") {
+  if (modelUnavailable()) throw Error("当前模型已不可用，请先在执行模型里重新选择");
   await requireSaved();
   const task = state.task,
     gen = state.generation;
@@ -2163,8 +2180,16 @@ async function answerAsk(entry, answer) {
   poll();
 }
 
+function modelUnavailable() {
+  return Boolean(modelPicker && modelPicker.modelAvailable && !modelPicker.modelAvailable());
+}
+
 async function sendMessage() {
   if (!state.task) return;
+  if (modelUnavailable()) {
+    toast("当前模型已不可用，请先在执行模型里重新选择");
+    return;
+  }
   if (state.task.status === "stopping") {
     toast("正在停止，请稍候");
     return;
@@ -3158,6 +3183,7 @@ async function boot() {
       "";
     $("#model").value = initialModel;
     modelPicker.setModels(state.catalog.models, initialModel);
+    catalogModelsAt = Date.now();
     $("#run-policy").textContent = state.catalog.billing;
     renderTemplateOptions();
     await listTasks();
