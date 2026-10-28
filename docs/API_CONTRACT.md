@@ -1410,7 +1410,7 @@ openrouter/deepseek/deepseek-chat
 | POST | `/api/workspace/tasks/{id}/runs` | 创建执行轮次；`request_key` 幂等 |
 | POST | `/api/workspace/tasks/{id}/stop` | 立即停止当前轮次；返回 `{received, status, run?}`，`received=false` 表示没有可停止的轮次 |
 | POST | `/api/workspace/tasks/{id}/notes` | 补充要求，或 `apply_config=true` 在下一步应用新配置 |
-| GET | `/api/workspace/tasks/{id}/events?after=` | 增量事件（`run` / `entry` / `note` / `version` / `adopt` / `material` / `config`）；**不含大段正文** |
+| GET | `/api/workspace/tasks/{id}/events?after=` | 增量事件（`run` / `entry` / `note` / `version` / `adopt` / `material` / `config` / `title`）；**不含大段正文**。`note` 载荷含 `run_id`，客户端据此把补充要求挂到对应回合 |
 | GET | `/api/workspace/tasks/{id}/entries` | 步骤元数据列表（按创建时间），用于恢复对话与轨迹；不含正文 |
 | GET | `/api/workspace/tasks/{id}/entries/{entry_id}/content?kind=&after=&download=` | 按游标读取某一步的正文块；块大小 4096 字符，单次最多 24 块；`kind` 为 `reasoning` / `output` / `input` / `arguments` / `prompt` / `review` |
 | GET | `/api/workspace/tasks/{id}/runs/{run_id}` | 单轮配置快照 |
