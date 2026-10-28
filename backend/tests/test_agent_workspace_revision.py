@@ -455,3 +455,39 @@ def test_saved_legacy_default_behavior_is_upgraded(identity, behavior, expected)
 
     assert asyncio.run(execute()) == expected
     store.finish_run(r['id'], 'completed')
+
+
+def test_claim_of_adoption_without_edit_blocks_is_a_format_problem():
+    """整篇重写却说"采纳"：不能当成"无需修改"，否则用户看到的还是旧稿。"""
+    parsed = writer.parse_edits('第 1 条：采纳 —— 材料支持这个说法，整篇重写如下。\n\n' + DRAFT)
+    assert parsed.edits == []
+    assert [n for n, _ in parsed.problems] == [0]
+    assert '没有按格式给出修改块' in parsed.problems[0][1]
+    # 明确不改的两种说法都不算格式失败。
+    assert writer.parse_edits('第 1 条：不采纳 —— 材料里没有这个说法。').problems == []
+    assert writer.parse_edits('其他要求：已经足够具体，不再修改。').problems == []
+    # 截断时按截断处理，不叠加格式失败。
+    assert writer.parse_edits('第 1 条：采纳 —— 理由', truncated=True).problems == []
+
+
+def test_rewritten_draft_without_blocks_triggers_a_retry(identity):
+    t, m = task(identity)
+    r = start(identity, t)
+    seen = []
+    replies = [DRAFT,
+               '第 1 条：采纳 —— 材料支持这个说法，整篇重写如下。\n\n' + DRAFT.replace('分析甲。', '分析甲（有据）。'),
+               '<edit><old>分析甲。</old><new>分析甲（有据）。</new></edit>']
+
+    async def execute():
+        obj = runner.Runner(r['id'], scripted(replies, seen))
+        await obj.load()
+        v = await obj.create_document({'title': '成果', 'instruction': '分析', 'material_ids': [m['id']]}, 'tool:gen')
+        return await revise_call(obj, 'rev', version_id=v['id'], instruction='把分析补上依据')
+
+    result = asyncio.run(execute())
+    assert len(seen) == 3, "没有给出修改块时应再要一次"
+    assert '没有按格式给出修改块' in seen[2][-1]['content']
+    assert tools.document(t['id'], result['id'])['content'] == '原文一。原文二。分析甲（有据）。分析乙。'
+    assert result['new_version'] and result['applied'] == 1
+    store.finish_run(r['id'], 'completed')
+

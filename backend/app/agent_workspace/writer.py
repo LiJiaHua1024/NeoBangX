@@ -22,6 +22,8 @@ RECORD_CHARS = 2000
 EDIT_START = re.compile(r"<edit>\s*<old>")
 EDIT_BLOCK = re.compile(r"<edit>\s*<old>(.*?)</old>\s*<new>(.*?)</new>\s*</edit>", re.S)
 FENCE_LINE = re.compile(r"^\s*```[\w-]*\s*$", re.M)
+# 「第 N 条：采纳」/「其他要求：采纳」——说明了要改，就必须给出修改块。
+ADOPTED = re.compile(r"(?:第\s*\d+\s*条|其他要求)\s*[:：]\s*采纳")
 
 
 def digest(text):
@@ -103,6 +105,10 @@ def parse_edits(text, truncated=False):
             parsed.problems.append((number, "格式不完整，需要 <edit><old>…</old><new>…</new></edit>"))
     head = text[:starts[0]] if starts else text
     parsed.explanation = FENCE_LINE.sub("", head).strip()
+    # 说了"采纳"却一个修改块都没给：这是格式失败，不能当成"写作者认为无需修改"，
+    # 否则调度 Agent 会向用户报告"已按意见修订"，而成果根本没变。
+    if not parsed.edits and not truncated and ADOPTED.search(parsed.explanation):
+        parsed.problems.append((0, "说明了采纳意见，但没有按格式给出修改块"))
     return parsed
 
 
