@@ -124,7 +124,9 @@ function open(select, trigger) {
 
 function outside(event) {
   if (!current) return;
-  if (event.target === current.trigger) return;
+  // 真实点击落在触发器内部的文字容器上，不是按钮本身：按"包含"判断才不会
+  // 把点自己的下拉当成点击外部（那样会销毁重建面板并跳回顶部）。
+  if (current.trigger.contains(event.target)) return;
   if (panel.contains(event.target)) return;
   close(false);
 }

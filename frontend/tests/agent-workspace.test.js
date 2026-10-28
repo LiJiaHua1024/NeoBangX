@@ -474,3 +474,13 @@ test("loading more tasks cannot append the same page twice", async () => {
   // 追加时按 id 去重，并发或重放都不会画两遍。
   assert.match(body, /!reset && \$\("#task-list"\)\.querySelector\(`\[data-id="\$\{task\.id\}"\]`\)\) continue;/);
 });
+
+test("clicking a select's own label closes it", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/select.mjs"), "utf8");
+  // 真实点击目标是触发器内部的 .aw-select-value，用 `=== event.target` 判断会当成"点外部"，
+  // 于是面板被销毁重建、滚动位置回到顶部。
+  assert.match(src, /if \(current\.trigger\.contains\(event\.target\)\) return;/);
+  assert(!/event\.target === current\.trigger/.test(src));
+});
