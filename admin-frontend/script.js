@@ -1447,6 +1447,8 @@ function adminApp() {
           danger: true,
         });
         if (!ok) return;
+        // 同上：清掉快照，重进页签时从服务端重新加载。
+        this.configSnapshot = "";
       }
       if (leavesParse && !entersParse && this.parseDirty) {
         const ok = await this.askConfirm({
@@ -1457,6 +1459,7 @@ function adminApp() {
           danger: true,
         });
         if (!ok) return;
+        this.parseSnapshot = "";
       }
       if (leavesAgent && !entersAgent && this.agentDirty) {
         const ok = await this.askConfirm({
@@ -1467,6 +1470,8 @@ function adminApp() {
           danger: true,
         });
         if (!ok) return;
+        // 确认放弃就必须真的丢掉草稿：清掉快照，重进页签时重新拉服务端配置。
+        this.agentSnapshot = "";
       }
       this.tab = tab;
       // 组内切换（config/logsettings/mirror）共用同一份草稿，不重载；

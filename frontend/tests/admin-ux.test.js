@@ -140,3 +140,21 @@ test("弹窗补了 dialog 语义与全局 Esc，Provider 卡片写明开关即�
   assert.match(fs.readFileSync(path.join(ROOT, "admin-frontend", "script.js"), "utf8"), /window\.addEventListener\("keydown", \(e\) => \{\s*\n\s*if \(e\.key !== "Escape"\) return;/);
   assert.match(HTML, /「启用」开关即时生效/);
 });
+
+test("放弃 Agent 修改后重进页签会重新加载服务端配置", async () => {
+  const { app, requests } = setup();
+  app.agentForm = { max_steps: 30 };
+  app.agentSnapshot = JSON.stringify({ max_steps: 24 });
+  app.tab = "agent";
+  app.askConfirm = async () => true;              // 用户点了"放弃修改"
+  const pending = app.switchTab("dashboard");
+  await new Promise((r) => setImmediate(r));
+  await pending;
+  assert.equal(app.agentSnapshot, "", "快照要清掉，否则重进页签不会重载");
+  // 再进 agent 页签：必须真的去拉服务端配置
+  const again = app.switchTab("agent");
+  await new Promise((r) => setImmediate(r));
+  assert(requests.some((r) => r.url === "/api/admin/agent"), "重进页签应重新 loadAgent()");
+  for (const r of requests) r.resolve({});
+  await again.catch(() => {});
+});
