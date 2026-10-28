@@ -131,7 +131,15 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
                         result.content += text
                         await emit("output", text)
                     for raw in get(delta, "tool_calls", []) or []:
-                        index = get(raw, "index", 0)
+                        # index 可能缺失、也可能是 None 或字符串：不能直接拿来排序或当键。
+                        # 缺 index 时，带新 id 的分片视为新调用，否则续写最后一个调用。
+                        raw_index = get(raw, "index", None)
+                        try:
+                            index = int(raw_index) if raw_index is not None else None
+                        except (TypeError, ValueError):
+                            index = None
+                        if index is None:
+                            index = len(calls) if get(raw, "id") else (max(calls) if calls else 0)
                         call = calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
                         if get(raw, "id"):
                             call["id"] = get(raw, "id")
