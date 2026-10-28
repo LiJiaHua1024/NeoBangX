@@ -926,3 +926,26 @@ def test_upload_rejects_files_over_the_limit(identity, monkeypatch):
     monkeypatch.setattr(api,'MAX_MATERIAL_BYTES',32)
     files={'file':('big.txt',b'x'*64,'text/plain')}
     assert client.post(f"/api/workspace/tasks/{t['id']}/upload",files=files).status_code==413
+
+
+def test_entries_endpoint_pages_through_every_step(client,identity):
+    """步骤列表要能翻到底：长任务最早的步骤不会再被单次上限截掉。"""
+    t=task(identity);r=run(identity,t)
+    with SessionLocal() as db:
+        for index in range(1200):
+            db.add(WorkspaceEntry(id=store.uid(),task_id=t['id'],run_id=r['id'],key=f'e{index:04d}',
+                                  kind='tool',label=f'步骤{index}'))
+        db.commit()
+    seen=[];offset=0;pages=0
+    while True:
+        data=client.get(f"/api/workspace/tasks/{t['id']}/entries?offset={offset}&limit=500").json()
+        pages+=1
+        seen+=[e['id'] for e in data['entries']]
+        if not data['has_more']:
+            break
+        assert data['offset']==offset+len(data['entries'])
+        offset=data['offset']
+        assert pages<10
+    assert pages==3 and len(seen)==len(set(seen))==1200
+    assert client.get(f"/api/workspace/tasks/{t['id']}/entries?limit=1").json()['has_more'] is True
+    store.finish_run(r['id'],'stopped')

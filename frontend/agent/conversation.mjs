@@ -393,7 +393,13 @@ export class Conversation {
     this.reset(task);
     let entries = [];
     try {
-      entries = (await this.api(`/tasks/${this.taskId}/entries`)).entries || [];
+      // 分页拉全：长任务的步骤不能因为单次上限而从对话恢复里消失。
+      for (let offset = 0; ; ) {
+        const page = await this.api(`/tasks/${this.taskId}/entries?offset=${offset}&limit=500`);
+        entries.push(...(page.entries || []));
+        if (!page.has_more) break;
+        offset = page.offset ?? offset + (page.entries || []).length;
+      }
     } catch (error) {
       this.onError(error);
     }

@@ -690,3 +690,27 @@ test("renderActions only renders the stop button for stoppable runs", async () =
     delete global.document;
   }
 });
+
+test("conversation restores every step by paging the entries endpoint", async () => {
+  const { Conversation } = await import("../agent/conversation.mjs");
+  const calls = [];
+  const ctx = {
+    taskId: "t1",
+    destroyed: false,
+    entries: new Map(),
+    reset() {},
+    rebuild() {},
+    onError: (e) => { throw e; },
+    api: async (url) => {
+      calls.push(url);
+      const offset = Number(/offset=(\d+)/.exec(url)[1]);
+      const all = Array.from({ length: 9 }, (_, i) => ({ id: `e${i}`, kind: "tool", status: "done" }));
+      const page = all.slice(offset, offset + 4);
+      return { entries: page, offset: offset + page.length, has_more: offset + page.length < all.length };
+    },
+  };
+  await Conversation.prototype.load.call(ctx, { id: "t1" });
+  assert.equal(calls.length, 3, "要按 has_more 翻到最后一页");
+  assert.equal(ctx.entries.size, 9);
+  assert.equal(calls[0], "/tasks/t1/entries?offset=0&limit=500");
+});

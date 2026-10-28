@@ -458,13 +458,20 @@ def events(task_id: str, owner: Owner, after: int = Query(0, ge=0)):
 
 
 @router.get("/tasks/{task_id}/entries")
-def list_entries(task_id: str, owner: Owner):
-    """步骤元数据，供对话恢复；正文仍按游标单独读取，避免把大段内容塞进列表。"""
+def list_entries(task_id: str, owner: Owner, offset: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=1000)):
+    """步骤元数据，供对话恢复；正文仍按游标单独读取，避免把大段内容塞进列表。
+
+    真分页：条目只追加不修改顺序，偏移量对已存在的行稳定；客户端按 `has_more`
+    翻页，长任务最早的步骤不会再被截掉。
+    """
     with SessionLocal() as db:
         store.owned(db, task_id, owner)
         rows = db.scalars(select(Entry).where(Entry.task_id == task_id)
-                          .order_by(Entry.created_at, Entry.id).limit(2000)).all()
-        return {"entries": [store.entry_dict(r) for r in rows]}
+                          .order_by(Entry.created_at, Entry.id).offset(offset).limit(limit + 1)).all()
+        more = len(rows) > limit
+        page = rows[:limit]
+        return {"entries": [store.entry_dict(r) for r in page], "has_more": more,
+                "offset": offset + len(page)}
 
 
 @router.get("/tasks/{task_id}/entries/{entry_id}/content")
