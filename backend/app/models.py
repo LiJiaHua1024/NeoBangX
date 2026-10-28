@@ -41,6 +41,9 @@ class UsageCode(Base):
     """使用码。"""
 
     __tablename__ = "usage_codes"
+    # 令牌里存的是这一行的 id：不让 SQLite 复用已删除的 rowid，
+    # 否则旧令牌会指向后来新建的码（新库生效，老库由签发时的码值校验兜住）。
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)

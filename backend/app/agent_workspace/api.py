@@ -14,6 +14,7 @@ from app.models import UsageCode, utcnow
 from app.routers.chat import _load_cfg, _validate_model
 from app.routers.tools import build_tool_groups, get_prompt_loader, _resolve_prompt_filename
 from app.services.free_access import is_free_model
+from app.services.usage_code import code_from_payload
 from app.services.runtime_config import find_model_entry
 from . import runner, store, titles
 from .models import (WorkspaceTask as Task, WorkspaceRun as Run, WorkspaceEntry as Entry,
@@ -33,7 +34,10 @@ def identity(authorization: Annotated[str | None, Header()] = None):
             raise ValueError()
         data = jwt.decode(authorization[7:], settings.jwt_secret, algorithms=["HS256"])
         with SessionLocal() as db:
-            row = db.get(UsageCode, int(data["sub"]))
+            # 不能只看 `sub`：SQLite 会复用 rowid，已删除使用码的旧令牌
+            # 会变成后来占用同号那个人的令牌。code_from_payload 会比对码值。
+            # 工作台只认带 sub 的令牌：没有主体的凭证等同于无效。
+            row = code_from_payload(db, data) if data.get("sub") else None
             if not row or not row.is_enabled:
                 raise ValueError()
             return row.id

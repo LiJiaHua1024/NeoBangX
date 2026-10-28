@@ -117,8 +117,13 @@ def decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="无效的登录凭证") from exc
 
 
-def get_active_code_from_token(db: Session, token: str) -> UsageCode:
-    payload = decode_token(token)
+def code_from_payload(db: Session, payload: dict) -> UsageCode | None:
+    """按令牌载荷定位使用码；找不到返回 None。
+
+    `sub` 是 SQLite rowid，删除最大的码之后新建的码会复用同一个 id，
+    所以只认同「id 与 `code` 声明都对得上」的行，否则一张已删除码的
+    长效令牌会变成后来者（另一个用户）的令牌。
+    """
     code_id = payload.get("sub")
     code_value = payload.get("code")
     row = None
@@ -127,8 +132,17 @@ def get_active_code_from_token(db: Session, token: str) -> UsageCode:
             row = db.get(UsageCode, int(code_id))
         except (TypeError, ValueError):
             row = None
+        if row is not None and code_value and row.code != code_value:
+            row = None
     if row is None and code_value:
+        # 没有 code 声明的旧令牌，或 id 号已被别的码占用：退回按码值查
         row = get_code_by_value(db, code_value)
+    return row
+
+
+def get_active_code_from_token(db: Session, token: str) -> UsageCode:
+    payload = decode_token(token)
+    row = code_from_payload(db, payload)
     if row is None:
         raise HTTPException(status_code=401, detail="使用码不存在")
     if not row.is_enabled:
@@ -155,16 +169,7 @@ def resolve_code_lenient(db: Session, token: str | None) -> tuple[UsageCode | No
     except jwt.InvalidTokenError:
         return None, "invalid"
 
-    code_id = payload.get("sub")
-    code_value = payload.get("code")
-    row = None
-    if code_id:
-        try:
-            row = db.get(UsageCode, int(code_id))
-        except (TypeError, ValueError):
-            row = None
-    if row is None and code_value:
-        row = get_code_by_value(db, code_value)
+    row = code_from_payload(db, payload)
     if row is None:
         return None, "unknown"
     if not row.is_enabled:
