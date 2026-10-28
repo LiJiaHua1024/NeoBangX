@@ -2631,7 +2631,8 @@ async function selectVersion(id) {
   if (generation !== state.generation || state.selectedVersion !== id) return;
   state.version = version;
   state.page = 0;
-  state.pages = pageText(version.content);
+  // 先给骨架：纯文本分页会在切换瞬间把 `#`、`|` 之类的原文闪给用户。
+  state.pages = [];
   $("#result-actions").hidden = false;
   $("#version-select").value = id;
   refreshSelects();
@@ -2643,7 +2644,12 @@ async function selectVersion(id) {
     state.pages = pages;
     renderDocument();
   } catch (e) {
+    // 排版线程失败时退回原文分页，并明确告诉用户看的是原文。
     console.warn(e);
+    if (state.version?.id !== id) return;
+    state.pages = pageText(version.content);
+    renderDocument();
+    toast("文档排版加载失败，已按原文显示");
   }
 }
 function setDocumentHead(version) {
@@ -2654,6 +2660,18 @@ function setDocumentHead(version) {
 }
 function renderDocument() {
   if (!state.version) return;
+  if (!state.pages.length) {
+    // 排版中：只画标题与骨架，不渲染未排版的原文。
+    setDocumentHead(state.version);
+    const body = $("#result-body");
+    body.className = "document";
+    body.textContent = "正在排版…";
+    setParts($("#result-page"), ["排版中"]);
+    $("#result-prev").disabled = true;
+    $("#result-next").disabled = true;
+    $("#adopt").disabled = true;
+    return;
+  }
   const page = state.pages[state.page];
   if (!page) return;
   const raw = $("#result-plain").checked || page.plain;

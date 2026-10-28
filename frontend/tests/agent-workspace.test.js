@@ -872,3 +872,15 @@ test("applying a library template asks before overwriting hand-written text", as
   assert(!/\[data-use\]"\)\.onclick = \(\) => \{\s*applyTemplate\(template\);\s*closeModal\(\);/.test(body),
     "不能直接覆盖");
 });
+
+test("the results pane shows a skeleton instead of raw markdown", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  const select = src.slice(src.indexOf("async function selectVersion("), src.indexOf("function setDocumentHead("));
+  assert.match(select, /state\.pages = \[\];/, "先清空分页，别用纯文本顶上");
+  assert.match(select, /toast\("文档排版加载失败/, "worker 失败要提示而不是只 console.warn");
+  const render = src.slice(src.indexOf("function renderDocument("), src.indexOf("function decorateDocument("));
+  assert.match(render, /if \(!state\.pages\.length\)/, "空分页时渲染骨架");
+  assert.match(render, /正在排版/);
+});
