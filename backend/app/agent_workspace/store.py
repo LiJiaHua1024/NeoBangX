@@ -427,17 +427,46 @@ def recover_runs():
         db.commit()
 
 
+def _settle_log(db, run_id, status, error, *, units=None, tokens=None, created_at=None):
+    """把本轮在主站使用日志里的记录改成终态。`units`/`tokens` 为 None 时保持原值。"""
+    log = db.scalar(select(UsageLog).where(UsageLog.request_id == run_id, UsageLog.tool_id == "agent"))
+    if not log:
+        return
+    log.status = "error" if status == "failed" else "cancelled" if status == "stopped" else "success"
+    log.error_message = error[:500]
+    if tokens is not None:
+        log.total_tokens = tokens
+    if units is not None:
+        log.units = units
+    if status == "failed":
+        log.counts_for_free_limit = False
+    if created_at is not None:
+        log.duration_ms = int((utcnow()-created_at).total_seconds()*1000)
+
+
 def finish_run(run_id, status, error=""):
     with SessionLocal() as db:
         # 状态、退款与终态事件同一事务，重启后可重复调用。
         db.execute(update(Run).where(Run.id == run_id).values(step=Run.step))
         row = db.get(Run, run_id)
+        if row is None:
+            # 使用码被删除后任务与本轮会被级联清掉，但在途 worker 仍在收尾：
+            # 只把主站计费记录改成终态，不写工作台事件（外键目标已经不存在）。
+            _settle_log(db, run_id, status, error)
+            db.commit()
+            return
         if row.status not in ACTIVE:
             return
         if status == "completed" and db.scalar(select(Note.id).where(Note.run_id == run_id, Note.applied.is_(False)).limit(1)):
             status, error = "waiting", "本轮结束时收到新的补充要求，内容已保存，请继续执行"
         row.status, row.error, row.finished_at, row.lease = status, error[:1000], utcnow(), None
         task = db.get(Task, row.task_id)
+        if task is None:
+            # 任务被单独清理（级联未生效的老库）：同样只收尾计费记录。
+            _settle_log(db, run_id, status, error, units=1 if row.charged else 0,
+                        tokens=row.tokens, created_at=row.created_at)
+            db.commit()
+            return
         task.status, task.active_run, task.updated_at = status, "", utcnow()
         if row.charged and status in {"failed", "stopped"}:
             # 已经产出过版本的轮次不再退额度：否则"等成果落库再点停止"可以无限白嫖。
@@ -458,15 +487,8 @@ def finish_run(run_id, status, error=""):
             entry.status = "interrupted"
             entry.details = encode(details)
             event(db, task.id, "entry", entry_dict(entry))
-        log = db.scalar(select(UsageLog).where(UsageLog.request_id == run_id, UsageLog.tool_id == "agent"))
-        if log:
-            log.status = "error" if status == "failed" else "cancelled" if status == "stopped" else "success"
-            log.error_message = error[:500]
-            log.total_tokens = row.tokens
-            log.units = 1 if row.charged else 0
-            if status == "failed":
-                log.counts_for_free_limit = False
-            log.duration_ms = int((utcnow()-row.created_at).total_seconds()*1000)
+        _settle_log(db, run_id, status, error, units=1 if row.charged else 0,
+                    tokens=row.tokens, created_at=row.created_at)
         event(db, task.id, "run", run_dict(row))
         db.commit()
 

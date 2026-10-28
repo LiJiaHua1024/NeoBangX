@@ -1032,6 +1032,18 @@ async def delete_code(
     row = db.get(UsageCode, code_id)
     if not row:
         raise HTTPException(status_code=404, detail="使用码不存在")
+    # 工作台数据挂在 usage_codes 上做级联删除：在途轮次会被连根拔掉，
+    # worker 再也写不回终态（额度也不退）。先要求停下再删。
+    from app.agent_workspace.models import WorkspaceRun, WorkspaceTask
+
+    active = db.scalar(
+        select(func.count()).select_from(WorkspaceRun)
+        .join(WorkspaceTask, WorkspaceRun.task_id == WorkspaceTask.id)
+        .where(WorkspaceTask.owner == code_id,
+               WorkspaceRun.status.in_(("queued", "running", "stopping")))
+    )
+    if active:
+        raise HTTPException(status_code=409, detail="该使用码仍有执行中的任务，请先停止后再删除")
     db.delete(row)
     db.commit()
     return {"status": "deleted", "id": code_id}
