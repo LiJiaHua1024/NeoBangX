@@ -477,7 +477,13 @@ def get_version(task_id: str, version_id: str, owner: Owner):
 
 @router.post("/tasks/{task_id}/versions")
 def edit_version(task_id: str, body: VersionWrite, owner: Owner):
-    store.task_detail(owner, task_id)
+    with SessionLocal() as db:
+        store.owned(db, task_id, owner)
+        # 父版本要先确认属于本任务：交给 save_version 的话会抛裸 ValueError → 500。
+        if body.parent_id:
+            parent = db.get(Version, body.parent_id)
+            if not parent or parent.task_id != task_id:
+                raise HTTPException(404, "基准版本不存在或不属于此任务")
     return store.save_version(task_id, "", "manual:"+body.request_key, body.title, body.content, body.parent_id, "manual")
 
 

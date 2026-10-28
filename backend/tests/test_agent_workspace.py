@@ -728,3 +728,15 @@ def test_answer_question_rejects_option_outside_single_choice(client, identity, 
     assert client.post(url, json={'request_key': store.uid(), 'selected': ['C']}).status_code == 400
     assert client.post(url, json={'request_key': store.uid(), 'selected': ['A', 'B']}).status_code == 400
     assert client.post(url, json={'request_key': store.uid(), 'selected': []}).status_code == 400
+
+
+def test_manual_version_rejects_foreign_or_missing_parent(client,identity):
+    t=task(identity);other=task(identity)
+    foreign=store.save_version(other['id'],'','x','别人的稿','正文')
+    endpoint=f"/api/workspace/tasks/{t['id']}/versions"
+    body={'request_key':'manual-k1','title':'手改','content':'新正文','parent_id':foreign['id']}
+    assert client.post(endpoint,json=body).status_code==404
+    body['parent_id']='does-not-exist'
+    assert client.post(endpoint,json=body).status_code==404
+    body['parent_id']=''
+    assert client.post(endpoint,json=body).status_code==200
