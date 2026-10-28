@@ -211,6 +211,8 @@ function updateDraftEmpty() {
   const message = $("#message");
   if (!card || !message) return;
   card.toggleAttribute("data-draft-empty", message.value.length === 0);
+  // 草稿一有内容，运行中的停止键就要让位给发送键；清空后再换回来。
+  state.conversation?.updateComposerState();
 }
 /* 断点按「视口 ÷ 整页缩放」算（见 zoom.mjs），与 responsive.css 的 data-vp 同口径 */
 function isNarrow() {

@@ -179,6 +179,51 @@ test("run usage grows during a model call and never dips before settling", async
   assert.equal(fake.tokenFloor.size, 0);
 });
 
+test("a running task swaps the stop button for send once the draft has content", async () => {
+  const { Conversation } = await import("../agent/conversation.mjs");
+  const send = {
+    hidden: false,
+    dataset: {},
+    querySelector: () => null,
+    setAttribute() {},
+  };
+  const stop = { hidden: false };
+  const status = { dataset: {} };
+  const elements = {
+    send,
+    stop,
+    "composer-status": status,
+    "composer-rounds": { textContent: "" },
+    "composer-tokens": { textContent: "" },
+  };
+  global.document = { getElementById: (id) => elements[id] ?? null };
+  const proto = Conversation.prototype;
+  const fake = {
+    task: { status: "running", runs: [{ id: "r1" }] },
+    message: { value: "" },
+    runs: new Map(),
+    runTokens: () => 0,
+  };
+  proto.updateComposerState.call(fake);
+  assert.equal(send.hidden, true, "运行中空草稿：主按钮仍是停止");
+  assert.equal(stop.hidden, false);
+  fake.message.value = "再补充一句";
+  proto.updateComposerState.call(fake);
+  assert.equal(send.hidden, false, "运行中有草稿：主按钮换成发送");
+  assert.equal(stop.hidden, true, "发送键让位后停止键收起");
+  assert.equal(send.dataset.mode, "send");
+  fake.message.value = "   ";
+  proto.updateComposerState.call(fake);
+  assert.equal(send.hidden, true, "只有空白不算草稿");
+  assert.equal(stop.hidden, false);
+  fake.task.status = "completed";
+  fake.message.value = "";
+  proto.updateComposerState.call(fake);
+  assert.equal(send.hidden, false, "任务结束后发送键回到原位");
+  assert.equal(stop.hidden, true);
+  delete global.document;
+});
+
 test("pending ask is the latest waiting ask_user step", async () => {
   const { Conversation } = await import("../agent/conversation.mjs");
   const entries = new Map([

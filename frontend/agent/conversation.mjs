@@ -1411,11 +1411,13 @@ export class Conversation {
     const active = ["running", "queued", "stopping"].includes(
       this.task?.status,
     );
+    // 运行中一旦写下补充要求，主按钮就让位给发送；停止仍可在轮次卡片的动作栏里点到。
+    const drafted = (this.message?.value || "").trim() !== "";
     const send = document.getElementById("send");
     const stop = document.getElementById("stop");
     const status = document.getElementById("composer-status");
     if (send) {
-      send.hidden = active;
+      send.hidden = active && !drafted;
       send.dataset.mode = active
         ? "send"
         : (this.task?.runs?.length || 0) > 0
@@ -1433,7 +1435,7 @@ export class Conversation {
         (this.task?.runs?.length || 0) > 0 ? "发送补充" : "开始任务",
       );
     }
-    if (stop) stop.hidden = !active;
+    if (stop) stop.hidden = !active || drafted;
     if (status) {
       const value =
         STATUS_NAMES[this.task?.status] ||
