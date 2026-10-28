@@ -771,3 +771,19 @@ test("a 401 during polling stops the loop and asks for login", async () => {
   assert(/localStorage\.removeItem\("nbx_auth"\)/.test(catchBlock), "401 后要清掉失效令牌");
   assert(/login\(\)/.test(catchBlock), "401 后要弹出登录");
 });
+
+test("the shade is only dismissed by the overlay that owns it", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  assert.match(src, /function hideShade\(kind = ""\) \{[\s\S]{0,160}if \(kind && shadeFor !== kind\) return;/,
+    "hideShade 必须按归属判断");
+  // 断点与 resize 路径都要带上自己的 kind，不能无条件清掉遮罩。
+  const bp = src.slice(src.indexOf('onBreakpoint("w1099"'), src.indexOf('onBreakpoint("w1439"'));
+  assert.match(bp, /hideShade\("nav"\)/);
+  const resizeStart = src.search(/window\.addEventListener\("resize", \(\) => \{\s*\n\s*viewport\(\);/);
+  assert(resizeStart > 0, "没找到主 resize 处理器");
+  const resize = src.slice(resizeStart, resizeStart + 400);
+  assert.match(resize, /hideShade\("workspace"\)/);
+  assert(!/hideShade\(\);/.test(resize), "resize 里不能无条件清遮罩");
+});

@@ -239,7 +239,9 @@ function showShade(kind) {
   $("#shade").hidden = false;
   $("#shade").dataset.open = "true";
 }
-function hideShade() {
+function hideShade(kind = "") {
+  // 只清自己那层遮罩：抽屉关一次不该顺手关掉工作区的遮罩（反之亦然）。
+  if (kind && shadeFor !== kind) return;
   shadeFor = "";
   $("#shade").dataset.open = "false";
   $("#shade").hidden = true;
@@ -256,7 +258,7 @@ function drawer(open, { focus = true } = {}) {
     showShade("nav");
     if (focus) $("#close-nav").focus();
   } else if (shadeFor === "nav") {
-    hideShade();
+    hideShade("nav");
     if (focus && isNarrow()) $("#menu").focus();
   }
 }
@@ -276,7 +278,7 @@ function setWorkspace(open, { persist = true } = {}) {
   $("#workspace-toggle").setAttribute("aria-expanded", String(open));
   $("#workspace-toggle").setAttribute("aria-label", open ? "收起工作区" : "显示工作区");
   if (overlay && open) showShade("workspace");
-  else if (shadeFor === "workspace") hideShade();
+  else hideShade("workspace");
   if (!open && app.dataset.focus === "work") delete app.dataset.focus;
   if (persist) {
     try {
@@ -995,20 +997,20 @@ window.addEventListener("online", () => {
 });
 window.addEventListener("resize", () => {
   viewport();
-  if (isMobile() && shadeFor === "workspace") hideShade();
+  if (isMobile()) hideShade("workspace");
   if (!isOverlayWorkspace()) {
-    if (shadeFor === "workspace") hideShade();
+    hideShade("workspace");
     app.dataset.workspace =
       localStorage.getItem("nbx_agent_workspace") === "closed"
         ? "closed"
         : "open";
   }
-  if (isNarrow() && app.dataset.sidebar === "collapsed") hideShade();
+  if (isNarrow() && app.dataset.sidebar === "collapsed") hideShade("nav");
 });
 onBreakpoint("w1099", (narrow) => {
   if (narrow) {
     app.dataset.sidebar = "collapsed";
-    hideShade();
+    hideShade("nav");
     setView("chat", false);
   } else {
     app.dataset.sidebar =
