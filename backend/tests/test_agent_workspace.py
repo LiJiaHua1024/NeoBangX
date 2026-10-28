@@ -901,3 +901,28 @@ def test_answer_rollback_when_the_answer_cannot_be_saved(client, identity, monke
     after = store.task_detail(identity[0], t['id'])
     created = [run for run in after['runs'] if run['id'] not in {x['id'] for x in before['runs']}]
     assert created and created[0]['status'] == 'stopped'
+
+
+def test_material_quotas_are_enforced(identity, monkeypatch):
+    t=task(identity)
+    monkeypatch.setattr(api,'MAX_MATERIALS_PER_TASK',3)
+    for index in range(3):
+        api.add_material(identity[0],t['id'],f'材料{index}','正文')
+    with pytest.raises(HTTPException) as full:api.add_material(identity[0],t['id'],'第四条','正文')
+    assert full.value.status_code==400 and '最多' in full.value.detail
+
+    # 每用户总量：把上限压到很小，再传一条就该被 413 拦下
+    monkeypatch.setattr(api,'MAX_MATERIALS_PER_TASK',50)
+    monkeypatch.setattr(api,'MAX_USER_MATERIAL_BYTES',10)
+    with pytest.raises(HTTPException) as over:api.add_material(identity[0],t['id'],'超量','正文'*10)
+    assert over.value.status_code==413
+
+
+def test_upload_rejects_files_over_the_limit(identity, monkeypatch):
+    from fastapi.testclient import TestClient
+    t=task(identity)
+    app=FastAPI();app.include_router(api.router)
+    client=TestClient(app,headers={'Authorization':'Bearer '+identity[1]})
+    monkeypatch.setattr(api,'MAX_MATERIAL_BYTES',32)
+    files={'file':('big.txt',b'x'*64,'text/plain')}
+    assert client.post(f"/api/workspace/tasks/{t['id']}/upload",files=files).status_code==413

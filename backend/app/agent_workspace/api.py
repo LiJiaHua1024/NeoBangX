@@ -235,9 +235,25 @@ def copy_task(task_id: str, owner: Owner):
         return {**store.task_dict(task, True), "material_map": material_map}
 
 
+# 材料配额：单任务条数、单文件字节、每用户总量（按解析文本 + 原始文件计）。
+MAX_MATERIALS_PER_TASK = 50
+MAX_MATERIAL_BYTES = 100 * 1024 * 1024
+MAX_USER_MATERIAL_BYTES = 2 * 1024 * 1024 * 1024
+
+
 def add_material(owner, task_id, name, text, original=None, media_type="text/plain"):
+    size = func.coalesce(func.length(Material.content), 0) + func.coalesce(func.length(Material.original), 0)
     with SessionLocal() as db:
         task = store.owned(db, task_id, owner)
+        # 配额在同一事务里校验：并发上传不能绕过上限。
+        count = db.scalar(select(func.count()).select_from(Material).where(Material.task_id == task_id))
+        if count >= MAX_MATERIALS_PER_TASK:
+            raise HTTPException(400, f"每个任务最多 {MAX_MATERIALS_PER_TASK} 条材料，请先删除不用的材料")
+        used = db.scalar(select(func.coalesce(func.sum(size), 0)).select_from(Material)
+                         .join(Task, Material.task_id == Task.id).where(Task.owner == owner))
+        incoming = len(text.encode()) + (len(original) if original else 0)
+        if used + incoming > MAX_USER_MATERIAL_BYTES:
+            raise HTTPException(413, "材料总量已超过 2 GB，请删除不再使用的任务或材料")
         row = Material(id=store.uid(), task_id=task_id, name=name, content=text, original=original, media_type=media_type)
         db.add(row)
         db.flush()
@@ -255,9 +271,9 @@ def paste_material(task_id: str, body: MaterialWrite, owner: Owner):
 @router.post("/tasks/{task_id}/upload")
 async def upload_material(task_id: str, owner: Owner, file: UploadFile = File(...)):
     await asyncio.to_thread(store.task_detail, owner, task_id)
-    data = await file.read(20 * 1024 * 1024 + 1)
-    if len(data) > 20 * 1024 * 1024:
-        raise HTTPException(413, "文件超过 20 MB，请拆分后上传")
+    data = await file.read(MAX_MATERIAL_BYTES + 1)
+    if len(data) > MAX_MATERIAL_BYTES:
+        raise HTTPException(413, "文件超过 100 MB，请拆分后上传")
     name = (file.filename or "material.txt").replace("\\", "/").split("/")[-1][:250]
     try:
         text = await asyncio.to_thread(parse_upload, name, data)

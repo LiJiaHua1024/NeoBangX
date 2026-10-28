@@ -1400,7 +1400,7 @@ openrouter/deepseek/deepseek-chat
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/workspace/tasks/{id}/materials` | 粘贴材料正文 |
-| POST | `/api/workspace/tasks/{id}/upload` | 上传并解析文件（20 MB 上限） |
+| POST | `/api/workspace/tasks/{id}/upload` | 上传并解析文件（单文件 100 MB、单任务 50 条、每用户合计 2 GB） |
 | GET | `/api/workspace/tasks/{id}/materials/{material_id}` | 读取解析文本；`?original=true` 下载原文件 |
 
 ### 16.4 执行与过程
