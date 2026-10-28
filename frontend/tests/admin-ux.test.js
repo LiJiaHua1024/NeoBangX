@@ -145,6 +145,7 @@ test("放弃 Agent 修改后重进页签会重新加载服务端配置", async (
   const { app, requests } = setup();
   app.agentForm = { max_steps: 30 };
   app.agentSnapshot = JSON.stringify({ max_steps: 24 });
+  app.agentLoaded = true;              // 已经成功加载过，当前是"有未保存修改"的状态
   app.tab = "agent";
   app.askConfirm = async () => true;              // 用户点了"放弃修改"
   const pending = app.switchTab("dashboard");
@@ -157,4 +158,34 @@ test("放弃 Agent 修改后重进页签会重新加载服务端配置", async (
   assert(requests.some((r) => r.url === "/api/admin/agent"), "重进页签应重新 loadAgent()");
   for (const r of requests) r.resolve({});
   await again.catch(() => {});
+});
+
+test("加载失败后不能保存默认值覆盖服务端配置", async () => {
+  const { app, requests, errors } = setup();
+  app.api = (url, options) => {
+    requests.push({ url, options });
+    return Promise.reject(new Error("网关超时"));
+  };
+  await app.loadAgent();
+  assert.equal(app.agentLoaded, false);
+  assert.equal(app.agentDirty, false, "没加载成功就不能算有改动");
+  const before = requests.length;
+  await app.saveAgent();
+  assert.equal(requests.length, before, "不该发出任何保存请求");
+  assert.match(errors.join(" "), /尚未加载成功/);
+});
+
+test("加载成功后保存按钮恢复可用", async () => {
+  const { app } = setup();
+  let calls = 0;
+  app.api = () => {
+    calls += 1;
+    return Promise.resolve({ enabled: true, max_steps: 24, concurrency: 2, mcp_arguments: {} });
+  };
+  await app.loadAgent();
+  assert.equal(app.agentLoaded, true);
+  assert.equal(app.agentDirty, false);
+  app.agentForm = { ...app.agentForm, max_steps: 30 };
+  assert.equal(app.agentDirty, true);
+  assert.equal(calls, 1);
 });

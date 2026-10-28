@@ -767,6 +767,9 @@ function adminApp() {
     },
     // agent 页同样走草稿：快照对比算脏，顶栏保存/重置统一落盘
     agentSnapshot: "",
+    // 只有成功读到服务端配置后才允许保存/重置：首次加载失败时表单停在默认值，
+    // 一按保存就会把默认值写回去（清掉 MCP 与预算）。
+    agentLoaded: false,
     get isAgentTab() {
       return this.tab === "agent";
     },
@@ -793,6 +796,7 @@ function adminApp() {
       if (this.isAgentTab) return this.saveAgent();
     },
     get agentDirty() {
+      if (!this.agentLoaded) return false;
       try {
         return JSON.stringify(this.agentForm || {}) !== (this.agentSnapshot || "");
       } catch {
@@ -3764,13 +3768,21 @@ function adminApp() {
           ? [{ name: data.mcp_tool, description: "", inputSchema: this.agentSavedSchema }]
           : [];
         this.snapshotAgent();
+        this.agentLoaded = true;
       } catch (e) {
+        this.agentLoaded = false;
         this.toast(e.message || "加载 Agent 配置失败", "error");
       }
     },
     /* agent 页顶栏「重置」：回到已保存状态。有草稿时先确认。 */
     async resetAgentDraft() {
-      if (!this.agentDirty || this.agentSaving) return;
+      if (this.agentSaving) return;
+      // 首次加载失败时"重置"就是重新拉取：否则用户只能刷新整页。
+      if (!this.agentLoaded) {
+        await this.loadAgent();
+        return;
+      }
+      if (!this.agentDirty) return;
       const ok = await this.askConfirm({
         title: "放弃未保存的修改？",
         message: "将丢弃 Agent 工作台配置里所有未保存的修改，恢复为最近一次已保存的配置。确定继续吗？",
@@ -3783,6 +3795,10 @@ function adminApp() {
     },
     async saveAgent() {
       if (this.agentSaving) return;
+      if (!this.agentLoaded) {
+        this.toast("配置尚未加载成功，请先重新加载再保存", "error");
+        return;
+      }
       let body;
       try {
         body = this.agentPayload();

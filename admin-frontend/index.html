@@ -132,7 +132,7 @@
           </template>
           <template x-if="isAgentTab">
             <div class="config-bar">
-              <button class="btn-ghost" @click="resetAgentDraft()" :disabled="!agentDirty || agentSaving">重置</button>
+              <button class="btn-ghost" @click="resetAgentDraft()" :disabled="agentSaving || (agentLoaded && !agentDirty)">重置</button>
               <button class="btn-primary" @click="saveAgent()" :disabled="!agentDirty || agentSaving"
                       x-text="agentSaving ? '保存中…' : '保存设置'"></button>
             </div>
