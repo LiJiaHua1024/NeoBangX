@@ -723,3 +723,28 @@ test("zoom clamps to the boundary instead of snapping back to 100%", async () =>
   assert.equal(clampZoom("abc"), 100);
   assert.equal(clampZoom(null), 100);
 });
+
+test("reader search restarts from the top when the keyword changes", async () => {
+  const { FullReader } = await import("../agent/reader.mjs");
+  const text = "开头 目标词 中间 第二个词 结尾 目标词";
+  const box = { textContent: "" };
+  const findButton = { disabled: false };
+  const pre = { innerHTML: "" };
+  const root = {
+    querySelector: (sel) =>
+      sel === "[data-a=find]" ? findButton
+        : sel === "[type=search]" ? { value: "第二个词" }
+          : sel === ".reader-meta" ? box
+            : sel === "pre" ? pre
+              : null,
+  };
+  const ctx = Object.create(FullReader.prototype);
+  Object.assign(ctx, { root, text: () => text, size: 12000, page: 0, match: -1, query: "", go() {}, range: () => [0, text.length], slice: (a, b) => text.slice(a, b) });
+  ctx.find();
+  const first = ctx.match;
+  const original = root.querySelector;
+  root.querySelector = (sel) => (sel === "[type=search]" ? { value: "目标词" } : original(sel));
+  ctx.find();
+  assert.equal(first, text.indexOf("第二个词"));
+  assert.equal(ctx.match, text.indexOf("目标词"), "换关键词后必须从 offset 0 重新找");
+});

@@ -11,6 +11,9 @@ export class FullReader {
     this.length = text.length;
     this.page = 0;
     this.size = 12000;
+    // 上一次查找的关键词与命中位置：换词时要重置，否则会跳过新词的首个出现。
+    this.query = "";
+    this.match = -1;
     this.follow = false;
     this.closed = false;
     this.download = download;
@@ -121,6 +124,11 @@ export class FullReader {
     const query = this.root.querySelector("[type=search]").value;
     if (!query) return;
     const full = this.text();
+    // 换了关键词就从头找：沿用上一个词的命中位置会跳过新词的首次出现。
+    if (query !== this.query) {
+      this.query = query;
+      this.match = -1;
+    }
     let at = full.indexOf(query, (this.match ?? -1) + 1);
     if (at < 0) at = full.indexOf(query);
     if (at < 0) {
