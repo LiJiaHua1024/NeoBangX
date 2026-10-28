@@ -484,3 +484,37 @@ test("clicking a select's own label closes it", async () => {
   assert.match(src, /if \(current\.trigger\.contains\(event\.target\)\) return;/);
   assert(!/event\.target === current\.trigger/.test(src));
 });
+
+test("tabbing out of a popover lands on the next control, not body", async () => {
+  const { neighbor } = await import("../agent/focus-walk.mjs");
+  // 极简伪 DOM：只实现 neighbor() 用到的接口。
+  const make = (id, extra = {}) => ({
+    id,
+    hidden: false,
+    getAttribute: () => null,
+    closest: () => null,
+    getClientRects: () => [{}],
+    ...extra,
+  });
+  const trigger = make("trigger");
+  const after = make("after");
+  const hidden = make("hidden", { hidden: true });
+  const disabledish = make("aria", { getAttribute: (n) => (n === "aria-hidden" ? "true" : null) });
+  const list = [trigger, hidden, disabledish, after];
+  const root = { querySelectorAll: () => list };
+  assert.equal(neighbor(trigger, false, root), after);
+  assert.equal(neighbor(after, true, root), trigger);
+  assert.equal(neighbor(after, false, root), null);
+});
+
+test("both popovers hand focus back to the next control on Tab", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  for (const file of ["select.mjs", "model-picker.mjs"]) {
+    const src = fs.readFileSync(path.join(__dirname, "../agent", file), "utf8");
+    assert.match(src, /neighbor\(/, `${file} 未使用 neighbor()`);
+    const start = src.indexOf('event.key === "Tab"');
+    const tab = src.slice(start, start + 400);
+    assert.match(tab, /focus\(\{ preventScroll: true \}\)/, `${file} 的 Tab 没有交还焦点`);
+  }
+});

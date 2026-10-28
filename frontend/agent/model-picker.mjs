@@ -14,6 +14,7 @@
 
 import { aaLevelOf, strikeTip } from "./rating.mjs";
 import { toCss, viewportCss } from "./zoom.mjs";
+import { neighbor } from "./focus-walk.mjs";
 
 const CHECK_SVG =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 5"/></svg>';
@@ -265,7 +266,13 @@ export function createModelPicker({ trigger, popover, label, onSelect }) {
       return;
     }
     if (event.key === "Tab") {
+      // 同自绘下拉：先交还焦点给触发器旁边的元素，再关闭，避免焦点掉到 <body>。
+      const next = neighbor(trigger, event.shiftKey);
       close();
+      if (next) {
+        event.preventDefault();
+        next.focus({ preventScroll: true });
+      }
       return;
     }
     if (event.key === "ArrowDown") {

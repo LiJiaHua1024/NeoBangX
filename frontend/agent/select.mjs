@@ -5,6 +5,7 @@
 
 import { icon } from "./icons.mjs";
 import { toCss, viewportCss } from "./zoom.mjs";
+import { neighbor } from "./focus-walk.mjs";
 
 const finePointer = () => matchMedia("(pointer: fine)").matches;
 
@@ -52,7 +53,14 @@ function createPanel() {
       event.preventDefault();
       close(true);
     } else if (event.key === "Tab") {
+      // 先把焦点交给触发器之后的下一个可聚焦元素，再关闭面板：
+      // 否则焦点随隐藏的祖先一起退回 <body>。
+      const next = neighbor(current.trigger, event.shiftKey);
       close(false);
+      if (next) {
+        event.preventDefault();
+        next.focus({ preventScroll: true });
+      }
     }
   });
 }
