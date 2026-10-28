@@ -1913,7 +1913,9 @@ async function openEntry(id, kind) {
 /* ---------------- 执行 ---------------- */
 async function start(mode = "execute", instruction = "", baseVersion = "", teachingTool = "") {
   await requireSaved();
-  const keyName = `nbx_agent_request_${state.task.id}`,
+  const task = state.task,
+    gen = state.generation;
+  const keyName = `nbx_agent_request_${task.id}`,
     signature = JSON.stringify({ mode, instruction, baseVersion, teachingTool });
   let old;
   try {
@@ -1932,15 +1934,17 @@ async function start(mode = "execute", instruction = "", baseVersion = "", teach
     },
   });
   sessionStorage.removeItem(keyName);
+  // 响应回来时用户可能已经切到别的任务：这份结果只属于发起时的任务。
+  if (state.task !== task || gen !== state.generation) return;
   if (instruction) run.instruction = instruction;
   pollGuard.bump();
-  state.task.status = run.status;
-  state.task.active_run = run.id;
+  task.status = run.status;
+  task.active_run = run.id;
   state.configChangedDuringRun = false;
-  upsert(state.task.runs, run);
+  upsert(task.runs, run);
   state.runs.set(run.id, run);
   runCard(run);
-  state.conversation?.setTask(state.task);
+  state.conversation?.setTask(task);
   state.conversation?.applyEvent({ kind: "run", data: run });
   $("#message").value = "";
   autoGrow($("#message"));
@@ -1964,7 +1968,8 @@ function syncRunCard(run) {
 }
 async function stopRun() {
   if (!state.task || state.stopPending) return;
-  const task = state.task;
+  const task = state.task,
+    gen = state.generation;
   const runId = task.active_run;
   const current =
     state.runs.get(runId) || task.runs.find((item) => item.id === runId);
@@ -1978,6 +1983,8 @@ async function stopRun() {
   updateStatus();
   try {
     const data = await api(path("/stop"), { method: "POST" });
+    // 已切到别的任务：A 的停止结果不能写进 B 的执行轨迹。
+    if (state.task !== task || gen !== state.generation) return;
     if (data.received === false) {
       // 等待补充或刚好执行完：如实回到服务端状态，不谎报停止成功。
       pollGuard.bump();
@@ -2000,27 +2007,35 @@ async function stopRun() {
       );
     }
   } catch (e) {
-    pollGuard.bump();
-    task.status = before.status;
-    if (before.run) syncRunCard(before.run);
+    if (state.task === task && gen === state.generation) {
+      pollGuard.bump();
+      task.status = before.status;
+      if (before.run) syncRunCard(before.run);
+    }
     error(e);
   } finally {
     state.stopPending = false;
-    updateStatus();
-    poll();
+    if (state.task === task && gen === state.generation) {
+      updateStatus();
+      poll();
+    }
   }
 }
 /* 回答 Ask：后端把回答写进旧条目、结束等待轮，并用同一段回答开新一轮。 */
 async function answerAsk(entry, answer) {
   if (!state.task) throw Error("请先新建任务");
+  const task = state.task,
+    gen = state.generation;
   const data = await api(path(`/entries/${entry.id}/answer`), {
     method: "POST",
     body: { request_key: newKey(), ...answer },
   });
+  // 切走之后再落地的回答属于上一个任务：只保留服务端结果，不污染当前页面。
+  if (state.task !== task || gen !== state.generation) return;
   pollGuard.bump();
-  state.task.status = data.run.status;
-  state.task.active_run = data.run.id;
-  upsert(state.task.runs, data.run);
+  task.status = data.run.status;
+  task.active_run = data.run.id;
+  upsert(task.runs, data.run);
   state.runs.set(data.run.id, data.run);
   state.entries.set(data.entry.id, data.entry);
   runCard(data.run);
