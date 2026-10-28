@@ -88,7 +88,8 @@ class WorkspaceVersion(Base):
     __table_args__ = (UniqueConstraint("task_id", "key"),)
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("workspace_tasks.id", ondelete="CASCADE"), index=True)
-    run_id: Mapped[str] = mapped_column(String(40), default="")
+    # 版本存全文：按 run_id 查"本轮是否产出过成果"（退款判定）与 load_run 不能全表扫。
+    run_id: Mapped[str] = mapped_column(String(40), default="", index=True)
     key: Mapped[str] = mapped_column(String(160))
     parent_id: Mapped[str] = mapped_column(String(40), default="")
     title: Mapped[str] = mapped_column(String(200))
@@ -103,7 +104,8 @@ class WorkspaceNote(Base):
     __tablename__ = "workspace_notes"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("workspace_tasks.id", ondelete="CASCADE"), index=True)
-    run_id: Mapped[str] = mapped_column(String(40))
+    # 补充要求每轮都要按 run_id 取一次（apply_notes / 对话恢复）。
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
     text: Mapped[str] = mapped_column(Text, default="")
     config: Mapped[str] = mapped_column(Text, default="")
     applied: Mapped[bool] = mapped_column(Boolean, default=False)

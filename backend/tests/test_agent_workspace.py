@@ -849,3 +849,22 @@ def test_concurrent_runs_are_capped_per_user(identity):
     third=run(identity,tasks[2])
     assert third['status']=='queued'
     for item in (runs[1]['id'],third['id']):store.finish_run(item,'stopped')
+
+
+def test_run_id_lookups_are_indexed(identity):
+    """按 run_id 的查询必须走索引：版本表存全文，全表扫会随使用量线性变慢。"""
+    from sqlalchemy import text
+    t=task(identity);r=run(identity,t)
+    store.save_version(t['id'],r['id'],'k','成果','正文')
+    plans={}
+    with SessionLocal() as db:
+        for name,sql in {
+            'versions':"EXPLAIN QUERY PLAN SELECT id FROM workspace_versions WHERE run_id=:i",
+            'notes':"EXPLAIN QUERY PLAN SELECT id FROM workspace_notes WHERE run_id=:i",
+        }.items():
+            rows=db.execute(text(sql),{'i':r['id']}).fetchall()
+            plans[name]=' '.join(str(row[-1]) for row in rows)
+    for name,plan in plans.items():
+        assert 'SCAN' not in plan.upper() or 'USING' in plan.upper(), f"{name} 仍是全表扫：{plan}"
+        assert 'INDEX' in plan.upper(), f"{name} 没走索引：{plan}"
+    store.finish_run(r['id'],'stopped')
