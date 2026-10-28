@@ -4,6 +4,7 @@ import { fillIcons, icon } from "./icons.mjs";
 import { initTheme } from "./claude-theme.mjs";
 import { Conversation } from "./conversation.mjs";
 import { createPollGuard } from "./poll-guard.mjs";
+import { messageKey, readMessage, writeMessage } from "./drafts.mjs";
 import { createAskPanel } from "./ask.mjs";
 import { createModelPicker } from "./model-picker.mjs";
 import { installCaret } from "./caret.mjs";
@@ -820,6 +821,16 @@ function draftKey() {
     ? `nbx_agent_draft_${state.catalog.user.id}_${state.task.id}`
     : "";
 }
+/* 已执行任务的补充要求不进 config，只能单独存：切任务 / 刷新后原样恢复。 */
+function currentMessageKey() {
+  return messageKey(state.catalog?.user?.id, state.task?.id);
+}
+function savedMessage() {
+  return readMessage(localStorage, currentMessageKey());
+}
+function stashMessage(text) {
+  writeMessage(localStorage, currentMessageKey(), text);
+}
 function localDraft() {
   try {
     const key = draftKey();
@@ -927,6 +938,7 @@ $("#message").addEventListener("input", () => {
   autoGrow($("#message"));
   updateDraftEmpty();
   if (!state.task) return;
+  stashMessage($("#message").value);
   if (!state.task.runs.length && $("#goal").value !== $("#message").value) {
     $("#goal").value = $("#message").value;
     state.task.config.goal = $("#message").value;
@@ -1407,6 +1419,7 @@ async function discardBlank(id) {
   try {
     await api(`/tasks/${id}`, { method: "DELETE" });
     localStorage.removeItem(`nbx_agent_draft_${state.catalog.user.id}_${id}`);
+    localStorage.removeItem(messageKey(state.catalog.user.id, id));
   } catch {
     // 丢弃失败不影响切换；下次新建时会复用这条空白任务。
   }
@@ -1552,7 +1565,11 @@ function fill() {
   autoGrow($("#behavior"));
   $("#template").value = task.config.template_id || "";
   refreshSelects();
-  $("#message").value = task.runs.length ? "" : task.config.goal || "";
+  // 已执行任务：恢复输入框里没发出去的补充要求；还没执行的任务同步目标字段。
+  $("#message").value = task.runs.length
+    ? savedMessage()
+    : task.config.goal || "";
+  updateDraftEmpty();
   autoGrow($("#message"));
   updateDraftEmpty();
   $("#message").placeholder = task.runs.length
@@ -1942,6 +1959,7 @@ async function start(mode = "execute", instruction = "", baseVersion = "", teach
   // 响应回来时用户可能已经切到别的任务：这份结果只属于发起时的任务。
   if (state.task !== task || gen !== state.generation) return;
   if (instruction) run.instruction = instruction;
+  stashMessage("");
   pollGuard.bump();
   task.status = run.status;
   task.active_run = run.id;
@@ -2066,6 +2084,7 @@ async function sendMessage() {
     }
     await api(path("/notes"), { method: "POST", body: { text } });
     $("#message").value = "";
+    stashMessage("");
     autoGrow($("#message"));
     updateDraftEmpty();
     poll();

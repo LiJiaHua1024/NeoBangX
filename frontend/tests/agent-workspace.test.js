@@ -426,3 +426,27 @@ test("streaming markdown appends instead of repainting the whole message", async
   assert.match(body, /hasSelection\(\)/, "有选区时跳过重绘");
   assert.match(body, /selectionchange/, "选区释放后补画");
 });
+
+test("message draft survives switching tasks and reloading", async () => {
+  const { messageKey, readMessage, writeMessage } = await import("../agent/drafts.mjs");
+  const store = new Map();
+  const storage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, v),
+    removeItem: (k) => store.delete(k),
+  };
+  const key = messageKey(7, "t1");
+  assert.match(key, /^nbx_agent_msg_7_t1$/);
+  writeMessage(storage, key, "写了一半的补充要求");
+  assert.equal(readMessage(storage, key), "写了一半的补充要求");
+  // 另一个任务互不影响
+  assert.equal(readMessage(storage, messageKey(7, "t2")), "");
+  // 发送后清空
+  writeMessage(storage, key, "");
+  assert.equal(readMessage(storage, key), "");
+  // 存储不可用时不能抛
+  const broken = { getItem() { throw Error("denied"); }, setItem() { throw Error("denied"); }, removeItem() {} };
+  assert.equal(readMessage(broken, key), "");
+  writeMessage(broken, key, "x");
+  assert.equal(messageKey("", "t1"), "");
+});
