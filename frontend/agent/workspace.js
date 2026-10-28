@@ -3034,10 +3034,24 @@ async function sourceLinks(id) {
   const blob = await api(path(`/entries/${id}/content?download=true`), {
     blob: true,
   });
-  const result = JSON.parse(await blob.text());
+  const text = await blob.text();
+  let result;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    // 条目内容不是 JSON（旧记录或被替换过）：直接把原文当来源文本给用户看，
+    // 不再抛裸 SyntaxError 让弹窗根本不出现。
+    readText("材料来源", text || "没有记录到匹配来源");
+    return;
+  }
+  const record = result && typeof result === "object" ? result : {};
   const matches =
-    result.matches ||
-    (result.material_id ? [{ ...result, start: result.offset }] : []);
+    record.matches ||
+    (record.material_id ? [{ ...record, start: record.offset }] : []);
+  if (!matches.length) {
+    readText("材料来源与位置", "没有记录到匹配来源");
+    return;
+  }
   modal("材料来源与位置", '<div id="source-list"></div>');
   for (const match of matches) {
     const button = document.createElement("button");

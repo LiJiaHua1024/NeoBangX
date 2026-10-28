@@ -807,3 +807,14 @@ test("workspace shortcuts do not fire while typing", async () => {
   assert.match(keydown, /closest\?\.\('input, textarea, select/, "快捷键要先判断焦点是否在输入控件里");
   assert.match(keydown, /if \(typing\) return;/);
 });
+
+test("source links survive an entry whose content is not JSON", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  const body = src.slice(src.indexOf("async function sourceLinks("), src.indexOf("async function sourceLinks(") + 900);
+  assert.match(body, /try \{\s*result = JSON\.parse\(text\);/, "解析要包在 try 里");
+  assert.match(body, /readText\("材料来源"/, "非 JSON 时回退到原文阅读");
+  assert.match(body, /if \(!matches\.length\)/, "没有匹配来源时也要给出口");
+  assert(!/const result = JSON\.parse/.test(body), "不能再用裸 JSON.parse");
+});
