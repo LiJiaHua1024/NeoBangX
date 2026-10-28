@@ -758,3 +758,16 @@ test("the icon table has no duplicate keys and no dead exports", async () => {
   assert.equal(keys.length, new Set(keys).size, `重复的图标键：${keys.filter((k, i) => keys.indexOf(k) !== i)}`);
   assert(!/export const hasIcon/.test(src), "hasIcon 没有调用方，不该作为导出保留");
 });
+
+test("a 401 during polling stops the loop and asks for login", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  const tail = src.slice(src.indexOf('console.error("agent poll"'));
+  const catchBlock = src.slice(src.lastIndexOf("} catch (e) {", src.indexOf('console.error("agent poll"')) - 1200,
+    src.indexOf('console.error("agent poll"'));
+  assert(/e\?\.status === 401/.test(catchBlock), "poll 的 catch 要单独处理 401");
+  assert(/clearTimeout\(pollTimer\)/.test(catchBlock), "401 后必须停止轮询");
+  assert(/localStorage\.removeItem\("nbx_auth"\)/.test(catchBlock), "401 后要清掉失效令牌");
+  assert(/login\(\)/.test(catchBlock), "401 后要弹出登录");
+});

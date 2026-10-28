@@ -1927,6 +1927,16 @@ async function poll() {
     );
   } catch (e) {
     if (generation !== state.generation) return;
+    if (e?.status === 401) {
+      // 令牌失效：停在轮询并立刻要一次登录，不要每 5 秒撞一次 401。
+      clearTimeout(pollTimer);
+      state.catalog = null;
+      state.task = null;
+      localStorage.removeItem("nbx_auth");
+      connState("登录已过期", "idle");
+      login();   // 登录成功后会重新 boot()，轮询随之恢复
+      return;
+    }
     console.error("agent poll", e);
     connState(
       navigator.onLine ? "重连中" : "离线",
