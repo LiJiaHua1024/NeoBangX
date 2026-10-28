@@ -413,3 +413,16 @@ test("document paging keeps link reference definitions", async () => {
   const doc = "# 报告\n\n结论见 [1]。\n\n[1]: https://example.com/a\n\n结尾。\n";
   assert.notEqual(marked.lexer(doc).map((t) => t.raw).join(""), doc, "该样例确实会丢行");
 });
+
+test("streaming markdown appends instead of repainting the whole message", async () => {
+  // 每个分片整段重绘会清掉选区、把代码块滚动位置和复制按钮状态打回原样。
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/conversation.mjs"), "utf8");
+  const body = src.slice(src.indexOf("class MarkdownView {"), src.indexOf("export class Conversation {"));
+  assert(!/text\.length <= 24000/.test(body), "不再按长度切回全量重绘");
+  assert.match(body, /renderIncremental\(\);/);
+  assert.match(body, /startsWith\(this\.renderedText\)/, "只有非追加场景才整段重建");
+  assert.match(body, /hasSelection\(\)/, "有选区时跳过重绘");
+  assert.match(body, /selectionchange/, "选区释放后补画");
+});

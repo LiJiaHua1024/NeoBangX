@@ -112,7 +112,30 @@ class MarkdownView {
     this.rendering = false;
     this.pending = false;
     this.destroyed = false;
+    this.renderedText = "";
+    this.selectionHooked = false;
     this.el.classList.add("md");
+  }
+
+  /* 消息内部有非空选区时先不重画：整段替换会把用户正在复制的文字清掉。 */
+  hasSelection() {
+    const selection = typeof window === "undefined" ? null : window.getSelection?.();
+    if (!selection || selection.isCollapsed) return false;
+    const node = selection.anchorNode;
+    return !!(node && this.el.contains(node));
+  }
+
+  renderWhenSelectionClears() {
+    if (this.selectionHooked) return;
+    this.selectionHooked = true;
+    const onSelectionChange = () => {
+      document.removeEventListener("selectionchange", onSelectionChange);
+      this.selectionHooked = false;
+      if (!this.pending || this.destroyed) return;
+      this.pending = false;
+      this.render();
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
   }
 
   setText(text) {
@@ -130,13 +153,22 @@ class MarkdownView {
   }
 
   render() {
+    if (this.hasSelection()) {
+      // 等用户放开选区再补这一次渲染，不在拖动选区期间反复重排。
+      this.pending = true;
+      this.renderWhenSelectionClears();
+      return;
+    }
     this.rendering = true;
     try {
-      if (this.text.length <= 24000) {
-        this.renderFull();
-      } else {
-        this.renderIncremental();
+      // 不是"在已渲染文本后面追加"（整段被替换）就从头重建；否则一律走增量，
+      // 避免每个分片都重排整段、把代码块滚动位置和复制按钮状态打回原样。
+      if (!String(this.text).startsWith(this.renderedText)) {
+        this.tokens = [];
+        this.nodeCounts = [];
       }
+      this.renderIncremental();
+      this.renderedText = this.text;
     } finally {
       this.rendering = false;
       if (this.pending) {
@@ -154,6 +186,7 @@ class MarkdownView {
     decorate(this.el);
     this.tokens = [];
     this.nodeCounts = [];
+    this.renderedText = this.text;
   }
 
   renderIncremental() {
