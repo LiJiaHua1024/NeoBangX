@@ -437,7 +437,7 @@ html[data-agent-theme="dark"] .new-task .plus-chip {
   background: #3d8a5c;
 }
 .conn[data-state="error"]::before {
-  background: #b4453c;
+  background: var(--danger);
 }
 .conn[data-state="idle"]::before {
   background: var(--ink-4);
@@ -527,15 +527,15 @@ html[data-agent-theme="dark"] .new-task .plus-chip {
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .status-pill[data-state="completed"] {
-  color: #3d7550;
-  border-color: color-mix(in srgb, #3d7550 28%, transparent);
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 28%, transparent);
 }
 .status-pill[data-state="failed"] {
-  color: #b4453c;
-  border-color: color-mix(in srgb, #b4453c 28%, transparent);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
 }
 .status-pill[data-state="waiting"] {
-  color: #a4621d;
+  color: var(--warn);
 }
 
 .view-tabs {
@@ -671,10 +671,10 @@ html[data-agent-theme="dark"] .view-tabs[data-pill]::before {
   color: var(--ink-2);
 }
 .popover .danger {
-  color: #b4453c;
+  color: var(--danger);
 }
 .popover .danger .aw-svg {
-  color: #b4453c;
+  color: var(--danger);
 }
 .popover hr {
   height: 0.5px;
@@ -690,9 +690,9 @@ html[data-agent-theme="dark"] .view-tabs[data-pill]::before {
   gap: 8px;
   margin: 0 18px 6px;
   padding: 8px 10px;
-  border: 0.5px solid color-mix(in srgb, #b4453c 30%, transparent);
+  border: 0.5px solid color-mix(in srgb, var(--danger) 30%, transparent);
   border-radius: var(--radius-2);
-  background: color-mix(in srgb, #b4453c 6%, var(--canvas));
+  background: color-mix(in srgb, var(--danger) 6%, var(--canvas));
   color: var(--ink-2);
   font-size: 12px;
   flex: none;
@@ -700,7 +700,7 @@ html[data-agent-theme="dark"] .view-tabs[data-pill]::before {
 .notice .aw-svg {
   width: 15px;
   height: 15px;
-  color: #b4453c;
+  color: var(--danger);
 }
 .notice button {
   margin-left: auto;

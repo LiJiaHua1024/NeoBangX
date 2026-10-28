@@ -572,3 +572,23 @@ test("dropping files on the material zone uploads them instead of navigating", a
   assert.match(src, /uploadFiles\(\[\.\.\.event\.target\.files\]\)/, "文件选择框复用同一套上传");
   assert.match(src, /window\.addEventListener\("drop"/, "页面其它位置也要拦下默认行为");
 });
+
+test("semantic colors are theme tokens, not light-only literals", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dir = path.join(__dirname, "../agent/claude");
+  const tokens = fs.readFileSync(path.join(dir, "tokens.css"), "utf8");
+  for (const name of ["--ok", "--warn", "--danger", "--danger-ink"])
+    assert.equal((tokens.match(new RegExp(`\\${name}:`, "g")) || []).length, 2, `${name} 需要明暗两套取值`);
+  // 亮色逐字沿用原值，暗色取参考实现的提亮值。
+  assert.match(tokens, /--ok: #3d7550;/);
+  assert.match(tokens, /--ok: #8cbf96;/);
+  assert.match(tokens, /--warn: #e2a45f;/);
+  const offenders = [];
+  for (const file of fs.readdirSync(dir)) {
+    if (!file.endsWith(".css") || file === "tokens.css") continue;
+    const css = fs.readFileSync(path.join(dir, file), "utf8");
+    if (/#(3d7550|a4621d|b4453c|a13f36)/i.test(css)) offenders.push(file);
+  }
+  assert.deepEqual(offenders, [], "样式表里不该再写死亮色语义值");
+});

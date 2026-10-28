@@ -305,10 +305,10 @@ html[data-agent-theme="dark"] .composer-card {
   color: var(--accent);
 }
 .composer-live .foot-status[data-state="failed"] {
-  color: #b4453c;
+  color: var(--danger);
 }
 .composer-live .foot-status[data-state="waiting"] {
-  color: #a4621d;
+  color: var(--warn);
 }
 .policy-link {
   flex: none;
@@ -357,10 +357,10 @@ html[data-agent-theme="dark"] .composer-card {
   background: #3d8a5c;
 }
 .conn-inline[data-state="waiting"]::before {
-  background: #a4621d;
+  background: var(--warn);
 }
 .conn-inline[data-state="error"]::before {
-  background: #b4453c;
+  background: var(--danger);
 }
 
 /* 模型入口：和上游底行一样是纯文字、28px 高、6px 圆角、hover 才出现底板。 */

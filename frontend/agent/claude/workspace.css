@@ -314,12 +314,12 @@
   color: var(--ink);
 }
 .btn-danger {
-  color: #b4453c;
-  border-color: color-mix(in srgb, #b4453c 28%, transparent);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
 }
 .btn-danger:hover {
-  background: color-mix(in srgb, #b4453c 7%, transparent);
-  color: #b4453c;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  color: var(--danger);
 }
 .btn-icon {
   width: 30px;
@@ -516,8 +516,8 @@
   white-space: nowrap;
 }
 .tag.warn {
-  color: #a4621d;
-  background: color-mix(in srgb, #a4621d 9%, transparent);
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
 }
 
 /* 复选/开关 */
@@ -682,7 +682,7 @@
   color: var(--ink);
 }
 .teaching-item .teaching-actions .danger {
-  color: #b4453c;
+  color: var(--danger);
   margin-left: auto;
 }
 
@@ -1110,8 +1110,8 @@
   background: color-mix(in srgb, #3d8a5c 8%, transparent);
 }
 .diff .removed {
-  color: #a13f36;
-  background: color-mix(in srgb, #b4453c 8%, transparent);
+  color: var(--danger-ink);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 .diff .label {
   color: var(--ink-3);

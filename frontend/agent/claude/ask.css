@@ -282,7 +282,7 @@
 .ask-feedback {
   flex: 1;
   min-width: 0;
-  color: #b4453c;
+  color: var(--danger);
   font-size: 11px;
   line-height: 16px;
   text-align: right;

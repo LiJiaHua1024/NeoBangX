@@ -192,6 +192,11 @@ html[data-agent-theme="light"] {
   --link: #184f95;
   --link-underline: rgba(24, 79, 149, 0.6);
   --focus-ring: rgba(20, 20, 19, 0.45);
+  /* 语义色按主题成对定义：亮色沿用既有取值，暗色取参考实现 tokens 的提亮值。 */
+  --ok: #3d7550;
+  --warn: #a4621d;
+  --danger: #b4453c;
+  --danger-ink: #a13f36;
   --selection: #3366d0;
   --selection-ink: #ffffff;
   --scrollbar: rgba(213, 213, 213, 0.9);
@@ -238,6 +243,10 @@ html[data-agent-theme="dark"] {
   --link: #8ab4f8;
   --link-underline: rgba(138, 180, 248, 0.6);
   --focus-ring: rgba(250, 249, 245, 0.6);
+  --ok: #8cbf96;
+  --warn: #e2a45f;
+  --danger: #e08b80;
+  --danger-ink: #e08b80;
   --selection: #3366d0;
   --selection-ink: #ffffff;
   --scrollbar: rgba(62, 62, 62, 0.9);

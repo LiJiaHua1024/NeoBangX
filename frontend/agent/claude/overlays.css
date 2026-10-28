@@ -151,7 +151,7 @@ dialog.modal::backdrop {
   color: var(--ink);
 }
 .modal-body .tool-card .row button.danger {
-  color: #b4453c;
+  color: var(--danger);
 }
 .modal-body .aw-issue {
   padding: 10px 0;
@@ -181,7 +181,7 @@ dialog.modal::backdrop {
 .modal-body .login-error {
   min-height: 18px;
   margin-top: 6px;
-  color: #b4453c;
+  color: var(--danger);
   font-size: 11px;
 }
 .modal-body .login-note {
@@ -232,7 +232,7 @@ dialog.modal::backdrop {
   animation: toast-in var(--dur-surface) var(--ease-settle);
 }
 .toast[data-kind="error"] {
-  border-color: color-mix(in srgb, #b4453c 35%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
 }
 
 /* ---------- 主题菜单 ---------- */
@@ -566,11 +566,11 @@ dialog.modal::backdrop {
   color: var(--ink-2);
 }
 .diff-block.removed {
-  border-color: color-mix(in srgb, #b4453c 26%, var(--border-1));
-  background: color-mix(in srgb, #b4453c 4%, var(--canvas));
+  border-color: color-mix(in srgb, var(--danger) 26%, var(--border-1));
+  background: color-mix(in srgb, var(--danger) 4%, var(--canvas));
 }
 .diff-block.removed pre {
-  color: #a13f36;
+  color: var(--danger-ink);
 }
 .diff-block.added {
   border-color: color-mix(in srgb, #3d8a5c 26%, var(--border-1));

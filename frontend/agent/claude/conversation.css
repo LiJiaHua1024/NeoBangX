@@ -537,10 +537,10 @@
 }
 .tool-call-state[data-state="failed"],
 .tool-call-state[data-state="interrupted"] {
-  color: #b4453c;
+  color: var(--danger);
 }
 .tool-call-state[data-state="waiting"] {
-  color: #a4621d;
+  color: var(--warn);
 }
 .tool-call[data-open="true"] .tool-call-body {
   animation: fold-in var(--dur-reveal) var(--ease-out);
@@ -650,9 +650,9 @@
   align-items: flex-start;
   gap: 8px;
   padding: 9px 11px;
-  border: 0.5px solid color-mix(in srgb, #b4453c 32%, transparent);
+  border: 0.5px solid color-mix(in srgb, var(--danger) 32%, transparent);
   border-radius: var(--radius-2);
-  background: color-mix(in srgb, #b4453c 5%, var(--canvas));
+  background: color-mix(in srgb, var(--danger) 5%, var(--canvas));
   color: var(--ink-2);
   font-size: 12px;
   line-height: 1.6;
@@ -662,7 +662,7 @@
   height: 14px;
   margin-top: 1px;
   flex: none;
-  color: #b4453c;
+  color: var(--danger);
 }
 .error-box .error-action {
   flex: none;
@@ -929,7 +929,7 @@
 }
 .aw-timeline .entry-state[data-state="failed"],
 .aw-timeline .entry-state[data-state="interrupted"] {
-  color: #b4453c;
+  color: var(--danger);
 }
 .aw-timeline .entry-meta {
   display: block;
@@ -939,7 +939,7 @@
 }
 .aw-timeline .entry-note {
   margin-top: 4px;
-  color: #a13f36;
+  color: var(--danger-ink);
   font-size: 11px;
   line-height: 1.5;
 }
