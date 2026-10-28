@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, ValidationError
 from jsonschema import Draft202012Validator
 
 from .settings import WorkspaceSettings, load_settings, save_settings, admin_settings
-from .mcp import connection, search, MCPError
+from .mcp import connection, search, MCPConfigError, MCPError
 
 router = APIRouter(prefix="/api/admin/agent", tags=["admin-agent"])
 
@@ -91,7 +91,9 @@ async def connect(body: SettingsWrite):
                            "inputSchema": t.get("inputSchema", {})} for t in items]}
     except Exception as exc:
         # 不透传 HTTP 客户端异常中的 URL/凭据。
-        raise HTTPException(502, str(exc) if isinstance(exc, MCPError) else "MCP 连接失败，请检查地址、令牌和网络") from None
+        # 配置类错误是管理员自己填的，用 422 让他知道改哪里；其余是连接/协议问题。
+        status = 422 if isinstance(exc, MCPConfigError) else 502
+        raise HTTPException(status, str(exc) if isinstance(exc, MCPError) else "MCP 连接失败，请检查地址、令牌和网络") from None
 
 
 class SearchTest(BaseModel):
@@ -104,4 +106,5 @@ async def test_search(body: SearchTest):
     try:
         return await search(resolved(body.settings), body.query)
     except Exception as exc:
-        raise HTTPException(502, str(exc) if isinstance(exc, MCPError) else "搜索失败，请检查配置与服务状态") from None
+        status = 422 if isinstance(exc, MCPConfigError) else 502
+        raise HTTPException(status, str(exc) if isinstance(exc, MCPError) else "搜索失败，请检查配置与服务状态") from None
