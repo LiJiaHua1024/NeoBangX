@@ -797,3 +797,13 @@ test("clicking the menu trigger again collapses it instead of reopening", async 
   const row = src.slice(src.indexOf("function taskRowMenu("), src.indexOf("function taskRowMenu(") + 400);
   assert.match(row, /state\.menuAnchor === anchor[\s\S]{0,80}state\.menuClose\(\)/, "同一按钮再点一次要收起");
 });
+
+test("workspace shortcuts do not fire while typing", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  const keydown = src.slice(src.indexOf('&& event.key.toLowerCase() === "k"') - 400,
+    src.indexOf('&& event.key.toLowerCase() === "k"'));
+  assert.match(keydown, /closest\?\.\('input, textarea, select/, "快捷键要先判断焦点是否在输入控件里");
+  assert.match(keydown, /if \(typing\) return;/);
+});

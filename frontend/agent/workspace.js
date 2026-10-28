@@ -697,6 +697,10 @@ document.addEventListener("keydown", (event) => {
     }
     closePops();
   }
+  // 输入框、文本域与可编辑区里不抢快捷键：Ctrl/⌘+K、+N 在写作时是浏览器/系统行为，
+  // 不该把焦点跳到搜索框或直接切走任务。
+  const typing = event.target?.closest?.('input, textarea, select, [contenteditable="true"]');
+  if (typing) return;
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
     $("#task-search").focus();
