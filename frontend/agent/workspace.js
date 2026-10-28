@@ -1119,9 +1119,11 @@ $("#add-material").onclick = async () => {
     error(e);
   }
 };
-$("#upload").onchange = async (event) => {
-  const files = [...event.target.files];
-  event.target.disabled = true;
+async function uploadFiles(files) {
+  const input = $("#upload");
+  if (!files.length) return;
+  input.disabled = true;
+  let saved = 0;
   try {
     for (const file of files) {
       const form = new FormData();
@@ -1130,15 +1132,59 @@ $("#upload").onchange = async (event) => {
       await receivedMaterial(
         await api(path("/upload"), { method: "POST", body: form }),
       );
+      saved += 1;
     }
-    toast("文件已保存，解析全文可在材料中查看");
+    toast(
+      files.length > 1
+        ? `${saved} 个文件已保存并选中，解析全文可在材料中查看`
+        : "文件已保存，解析全文可在材料中查看",
+    );
   } catch (e) {
     error(e);
   } finally {
-    event.target.disabled = false;
-    event.target.value = "";
+    input.disabled = false;
+    input.value = "";
   }
-};
+}
+$("#upload").onchange = (event) => uploadFiles([...event.target.files]);
+
+/* 拖拽上传：样式早就有 `[data-drag]` 高亮，这里把它接上，顺便吃掉默认打开文件的行为。 */
+function carriesFiles(event) {
+  return Boolean(event.dataTransfer && [...(event.dataTransfer.types || [])].includes("Files"));
+}
+{
+  const dropzone = $("#dropzone");
+  let dragDepth = 0;
+  dropzone.addEventListener("dragenter", (event) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    dragDepth += 1;
+    dropzone.dataset.drag = "true";
+  });
+  dropzone.addEventListener("dragover", (event) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  });
+  dropzone.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) delete dropzone.dataset.drag;
+  });
+  dropzone.addEventListener("drop", (event) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    dragDepth = 0;
+    delete dropzone.dataset.drag;
+    uploadFiles([...(event.dataTransfer?.files || [])]).catch(error);
+  });
+  // 拖到页面其它地方也要拦下，否则浏览器会直接导航到文件、丢掉整个界面。
+  window.addEventListener("dragover", (event) => {
+    if (carriesFiles(event)) event.preventDefault();
+  });
+  window.addEventListener("drop", (event) => {
+    if (carriesFiles(event)) event.preventDefault();
+  });
+}
 
 function renderTools() {
   const root = $("#tools-list");

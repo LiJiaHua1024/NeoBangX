@@ -558,3 +558,17 @@ test("ask card height follows the effective viewport like other overlays", async
     assert(value.includes("var(--zoom)"), `高度要按有效视口算：${value}`);
   }
 });
+
+test("dropping files on the material zone uploads them instead of navigating", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  // 没有监听时浏览器会直接打开文件、丢掉整个界面。
+  assert.match(src, /dropzone\.addEventListener\("dragover"/);
+  assert.match(src, /dropzone\.addEventListener\("dragenter"/);
+  assert.match(src, /dropzone\.addEventListener\("dragleave"/);
+  assert.match(src, /dropzone\.addEventListener\("drop"/);
+  assert.match(src, /dataTransfer\?\.files/, "drop 要真的把文件交给上传");
+  assert.match(src, /uploadFiles\(\[\.\.\.event\.target\.files\]\)/, "文件选择框复用同一套上传");
+  assert.match(src, /window\.addEventListener\("drop"/, "页面其它位置也要拦下默认行为");
+});
