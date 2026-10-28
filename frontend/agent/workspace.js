@@ -2417,8 +2417,20 @@ function openLibrary() {
     card.innerHTML = `<strong></strong><small>${template.kind === "tool" ? "工具配置" : "提示词模板"}</small><div class="row"><button data-use type="button">用于当前任务</button><button data-new type="button">新建任务</button><button data-del type="button" class="danger">删除</button></div>`;
     card.querySelector("strong").textContent = template.name;
     card.querySelector("[data-use]").onclick = () => {
-      applyTemplate(template);
-      closeModal();
+      // 与下拉入口同一套判断：手写过提示词/工具配置时先确认，别直接覆盖。
+      if (!wouldLoseEdits(template)) {
+        applyTemplate(template);
+        closeModal();
+        return;
+      }
+      confirmAction(
+        "应用模板",
+        "将替换任务提示词或工具配置；当前材料与目标保留。",
+        () => {
+          applyTemplate(template);
+          closeModal();
+        },
+      );
     };
     card.querySelector("[data-new]").onclick = async () => {
       try {

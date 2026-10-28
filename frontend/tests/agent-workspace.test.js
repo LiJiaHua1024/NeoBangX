@@ -861,3 +861,14 @@ test("no rule sets a workspace z-index that is later overridden", async () => {
   assert.equal(withZ.length, 1, `同一个选择器不要写两次 z-index（当前 ${withZ.length} 处）`);
   assert.match(withZ[0], /z-index: var\(--layer-chrome\)/);
 });
+
+test("applying a library template asks before overwriting hand-written text", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  const body = src.slice(src.indexOf('card.querySelector("[data-use]").onclick'), src.indexOf('card.querySelector("[data-use]").onclick') + 800);
+  assert.match(body, /wouldLoseEdits\(template\)/, "要先判断会不会丢手写内容");
+  assert.match(body, /confirmAction\(\s*"应用模板"/, "会覆盖时先弹确认");
+  assert(!/\[data-use\]"\)\.onclick = \(\) => \{\s*applyTemplate\(template\);\s*closeModal\(\);/.test(body),
+    "不能直接覆盖");
+});
