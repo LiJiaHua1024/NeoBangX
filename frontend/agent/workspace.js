@@ -3032,6 +3032,28 @@ async function sourceLinks(id) {
   if (!matches.length) $("#source-list").textContent = "没有匹配来源。";
 }
 
+/* 管理员关闭工作台：不要让用户白填材料再在执行时吃 403。 */
+function showAgentDisabled() {
+  const empty = $("#empty");
+  if (empty) {
+    // 复用空态区块既有的标题排版，只换文案与一个返回按钮，不新增样式。
+    empty.hidden = false;
+    empty.replaceChildren();
+    empty.innerHTML = `
+      <h1 class="empty-greeting">
+        <span class="empty-mark" data-icon="logo" aria-hidden="true"></span>
+        <span class="empty-greeting-text">Agent 工作台已关闭</span>
+      </h1>
+      <p>管理员暂时关闭了 Agent 工作台，已有任务与成果仍然保留。需要使用时请联系管理员开通。</p>
+      <p><a class="btn btn-primary" href="/">返回普通工具</a></p>`;
+    fillIcons();
+  }
+  setWorkspace(false, { persist: false });
+  $("#composer-card")?.setAttribute("hidden", "");
+  $("#message").disabled = true;
+  connState("工作台已关闭", "idle");
+}
+
 /* ---------------- 启动 ---------------- */
 async function boot() {
   fillIcons();
@@ -3054,6 +3076,10 @@ async function boot() {
   }
   try {
     state.catalog = await api("/catalog");
+    if (state.catalog.enabled === false) {
+      showAgentDisabled();
+      return;
+    }
     paintAccount();
     const initialModel =
       $("#model").value ||

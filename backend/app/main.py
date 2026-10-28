@@ -240,8 +240,13 @@ async def get_config():
     else:
         fallback = _user_visible(llm_cfg["models"])
         models = fallback if fallback else []
+    # 工作台总开关：主站入口据此隐藏 Agent 入口，/agent 也能给出禁用页。
+    from app.agent_workspace.settings import load_settings as load_agent_settings
+
+    agent_enabled = bool(load_agent_settings().enabled)
     return {
         "models": models,
+        "agent_enabled": agent_enabled,
         "default_model": llm_cfg["default_model"],
         "app_name": "NeoBangX",
         "version": "1.2.0",

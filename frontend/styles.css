@@ -917,6 +917,10 @@ html[data-theme="sora"] .mascot-peeking {
    它不是一件工具，而是另一种工作模式：用"渐变图标块 + 两行文字 + 箭头"
    做成入口卡，和工具的 .tool-item 拉开层级；有当前工具时再露出带入动作。
    ============================================================ */
+/* 管理端关闭 Agent 工作台时（/api/config.agent_enabled=false），整块入口不渲染。 */
+html[data-agent="off"] .agent-entry-wrap {
+  display: none !important;
+}
 .agent-entry {
   display: flex;
   align-items: center;

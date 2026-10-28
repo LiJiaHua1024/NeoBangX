@@ -4519,6 +4519,14 @@ function nbx() {
     /* ============ 初始化 ============ */
     async init() {
       configureMarked();
+      // 工作台开关是公开配置：关闭时隐藏主站入口，失败则保持默认（入口可见），
+      // 不让部署问题挡住主站本身。
+      fetch("/api/config", { cache: "no-store" })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((cfg) => {
+          if (cfg && cfg.agent_enabled === false) document.documentElement.dataset.agent = "off";
+        })
+        .catch(() => {});
       this.resetMigration();
       this.resetVocab();
       this.resetVisualPaper();

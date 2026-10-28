@@ -611,3 +611,19 @@ test("form fields keep the shared focus-visible ring", async () => {
   const workspace = fs.readFileSync(path.join(dir, "workspace.css"), "utf8");
   assert.match(workspace, /\.field :is\(input, textarea, select\):focus \{\s*\/\*[^*]*\*\/\s*border-color: var\(--accent\);/);
 });
+
+test("the agent switch hides the main-site entry and blocks /agent", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const root = path.join(__dirname, "../..");
+  const styles = fs.readFileSync(path.join(root, "frontend/styles.css"), "utf8");
+  assert.match(styles, /html\[data-agent="off"\] \.agent-entry-wrap \{\s*display: none !important;/);
+  const script = fs.readFileSync(path.join(root, "frontend/script.js"), "utf8");
+  assert.match(script, /dataset\.agent = "off"/, "主站要按公开开关打标记");
+  assert.match(script, /cache: "no-store"/, "开关不能读到缓存的旧值");
+  const workspace = fs.readFileSync(path.join(root, "frontend/agent/workspace.js"), "utf8");
+  assert.match(workspace, /state\.catalog\.enabled === false/, "catalog 关闭时不再进入正常流程");
+  assert.match(workspace, /function showAgentDisabled\(\)/);
+  const main = fs.readFileSync(path.join(root, "backend/app/main.py"), "utf8");
+  assert.match(main, /"agent_enabled": agent_enabled/);
+});
