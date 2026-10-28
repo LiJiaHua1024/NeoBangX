@@ -1,5 +1,6 @@
 """仅由独立的内网管理服务挂载。"""
 import asyncio
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -19,7 +20,12 @@ class SettingsWrite(WorkspaceSettings):
 def resolved(body):
     data = body.model_dump(exclude={"clear_token"})
     if not body.mcp_token and not body.clear_token:
-        data["mcp_token"] = load_settings().mcp_token
+        saved = load_settings()
+        # 令牌绑定到它被保存时的那台主机：换地址就必须重新输入，
+        # 否则"改地址 + 令牌留空"会把已保存的密钥发给新填的任意主机。
+        if saved.mcp_token and urlsplit(body.mcp_url).netloc != urlsplit(saved.mcp_url).netloc:
+            raise HTTPException(422, "MCP 地址已变更，请重新填写令牌")
+        data["mcp_token"] = saved.mcp_token
     return WorkspaceSettings(**data)
 
 
