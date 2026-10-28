@@ -78,7 +78,10 @@ let reader = null,
   accountPopoverBound = false,
   taskQuery = "",
   shadeFor = "",
-  modalCleanup = null;
+  modalCleanup = null,
+  // 破坏性请求在飞时锁住对话框；60 秒后自动解锁（请求可能仍在后台）。
+  modalBusy = false,
+  modalBusyTimer = null;
 
 /* ---------------- 输入区增强（光标 / 模型 / Clawd） ---------------- */
 function initComposerSurfaces() {
@@ -797,6 +800,8 @@ function taskRowMenu(task, anchor) {
       if (action === "delete") {
         confirmAction("删除任务", "此任务的材料、过程和全部成果将一并删除，无法恢复。", async () => {
           await api(`/tasks/${task.id}`, { method: "DELETE" });
+          // 删除已经落地：先关对话框解锁，后面的"新建空白任务"不再把用户挡在里面。
+          closeModal();
           if (task.id === state.task?.id) {
             state.dirty = false;
             await createTask();
@@ -2236,7 +2241,7 @@ function askText(title, label, initial, run) {
     title,
     `<label for="dialog-value">${esc(label)}</label><textarea id="dialog-value"></textarea>`,
     [
-      { text: "取消", run: closeModal },
+      { text: "取消", run: requestClose },
       {
         text: "保存",
         primary: true,
@@ -2687,13 +2692,16 @@ function modal(title, body, buttons = [], { wide = false } = {}) {
     button.textContent = item.text;
     button.className = item.primary ? "btn btn-primary" : "btn btn-ghost";
     button.onclick = async () => {
+      if (modalBusy) return;
+      // 请求发出后锁住对话框：ESC / ✕ / 取消都关不掉，避免"看起来取消了、其实还在执行"。
       button.disabled = true;
+      setModalBusy(true);
       try {
         await item.run();
       } catch (e) {
         error(e);
       } finally {
-        button.disabled = false;
+        setModalBusy(false);
       }
     };
     $("#modal-actions").append(button);
@@ -2701,15 +2709,41 @@ function modal(title, body, buttons = [], { wide = false } = {}) {
   $("#modal-actions").hidden = !buttons.length;
   dialog.showModal();
 }
+/* 破坏性操作进行中：按钮全部禁用，60 秒后自动解锁并提示（请求可能仍在后台）。 */
+function setModalBusy(value) {
+  modalBusy = value;
+  const dialog = $("#modal");
+  dialog.dataset.busy = value ? "true" : "false";
+  for (const button of $("#modal-actions").querySelectorAll("button"))
+    button.disabled = value;
+  clearTimeout(modalBusyTimer);
+  modalBusyTimer = null;
+  if (!value) return;
+  modalBusyTimer = setTimeout(() => {
+    if (!modalBusy) return;
+    setModalBusy(false);
+    toast("操作可能仍在后台进行，请稍后刷新确认");
+  }, 60000);
+}
+function requestClose() {
+  // 请求还在飞：忽略 ESC / ✕ / 取消，等它自己返回。
+  if (modalBusy) return;
+  closeModal();
+}
 function closeModal() {
+  setModalBusy(false);
   reader?.destroy();
   reader = null;
   modalCleanup?.();
   modalCleanup = null;
   if ($("#modal").open) $("#modal").close();
 }
-$("#modal-close").onclick = closeModal;
-$("#modal").addEventListener("cancel", closeModal);
+$("#modal-close").onclick = requestClose;
+$("#modal").addEventListener("cancel", (event) => {
+  // 原生 dialog 的 ESC 会直接关闭：先拦住，再按是否忙碌决定。
+  event.preventDefault();
+  requestClose();
+});
 function readText(title, text) {
   modal(title, '<div id="full-reader"></div>', [], { wide: true });
   reader = new FullReader($("#full-reader"), {
@@ -2720,7 +2754,7 @@ function readText(title, text) {
 }
 function confirmAction(title, text, run) {
   modal(title, `<p>${esc(text)}</p>`, [
-    { text: "取消", run: closeModal },
+    { text: "取消", run: requestClose },
     {
       text: "确认",
       primary: true,
