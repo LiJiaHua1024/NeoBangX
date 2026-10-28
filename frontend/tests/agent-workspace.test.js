@@ -518,10 +518,18 @@ test("both popovers hand focus back to the next control on Tab", async () => {
     assert.match(tab, /focus\(\{ preventScroll: true \}\)/, `${file} 的 Tab 没有交还焦点`);
   }
 });
-test("select exposes the page label as its accessible name", async () => {
+
+test("select keeps aria-selected for the real value and cursor in data-active", async () => {
   const fs = require("node:fs");
   const path = require("node:path");
   const src = fs.readFileSync(path.join(__dirname, "../agent/select.mjs"), "utf8");
-  assert.match(src, /aria-labelledby/, "触发器要沿用 <label for>");
-  assert.match(src, /select\.removeAttribute\("aria-hidden"\)/, "原生 select 要留在可访问树里");
+  const setActive = src.slice(src.indexOf("function setActive("), src.indexOf("function choose("));
+  assert(!/setAttribute\("aria-selected"/.test(setActive), "方向键不应改写 aria-selected");
+  assert.match(setActive, /toggleAttribute\("data-active", cursor\)/);
+  // 可访问名称沿用页面里的 <label for>，并让原生 select 留在可访问树里。
+  assert.match(src, /aria-labelledby/);
+  assert.match(src, /select\.removeAttribute\("aria-hidden"\)/);
+  const css = fs.readFileSync(path.join(__dirname, "../agent/claude/select.css"), "utf8");
+  assert.match(css, /\.aw-option\[data-active\]/);
+  assert(!/\.aw-option\[aria-selected="true"\]/.test(css), "选中字重不该再挂在 aria-selected 上");
 });

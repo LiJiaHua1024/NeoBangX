@@ -152,8 +152,10 @@ function setActive(index, scroll) {
   if (!items.length) return;
   current.active = Math.max(0, Math.min(items.length - 1, index));
   items.forEach((item, i) => {
-    item.classList.toggle("active", i === current.active);
-    item.setAttribute("aria-selected", String(i === current.active));
+    // 键盘游标与"已选中"是两件事：方向键只移动游标，aria-selected 保持真实选中值。
+    const cursor = i === current.active;
+    item.classList.toggle("active", cursor);
+    item.toggleAttribute("data-active", cursor);
   });
   if (scroll) items[current.active]?.scrollIntoView({ block: "nearest" });
 }

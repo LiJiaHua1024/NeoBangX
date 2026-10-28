@@ -146,7 +146,8 @@
 .aw-option.active {
   background: var(--hover);
 }
-.aw-option[aria-selected="true"] {
+/* 游标高亮用 data-active；aria-selected 只表示真实选中值（打勾由 .aw-option-check 表达）。 */
+.aw-option[data-active] {
   font-weight: 500;
 }
 .aw-option.disabled {
