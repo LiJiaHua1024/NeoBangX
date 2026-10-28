@@ -748,3 +748,13 @@ test("reader search restarts from the top when the keyword changes", async () =>
   assert.equal(first, text.indexOf("第二个词"));
   assert.equal(ctx.match, text.indexOf("目标词"), "换关键词后必须从 offset 0 重新找");
 });
+
+test("the icon table has no duplicate keys and no dead exports", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/icons.mjs"), "utf8");
+  const body = src.slice(src.indexOf("const PATHS"), src.indexOf("const cls"));
+  const keys = [...body.matchAll(/^\s{2}"?([\w-]+)"?:/gm)].map((m) => m[1]);
+  assert.equal(keys.length, new Set(keys).size, `重复的图标键：${keys.filter((k, i) => keys.indexOf(k) !== i)}`);
+  assert(!/export const hasIcon/.test(src), "hasIcon 没有调用方，不该作为导出保留");
+});

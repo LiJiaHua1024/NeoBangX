@@ -73,8 +73,6 @@ const PATHS = {
   terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
   "log-out":
     '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
-  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.2 1.8"/>',
-  check: '<path d="m4.5 12.5 5 5 10-11"/>',
 };
 
 const cls = "aw-svg";
@@ -91,5 +89,3 @@ export function fillIcons(root = document) {
     el.dataset.iconDone = "1";
   }
 }
-
-export const hasIcon = (name) => Boolean(PATHS[name]);
