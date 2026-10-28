@@ -168,9 +168,6 @@
 :where(html[data-vp~="w767"]) .scrim {
   z-index: 70;
 }
-:where(html[data-vp~="w767"]) .workspace-panel {
-  z-index: 55;
-}
 :where(html[data-vp~="w767"]) .sidebar {
   z-index: 80;
 }

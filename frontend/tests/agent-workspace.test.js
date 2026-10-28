@@ -850,3 +850,14 @@ test("the mobile drawer fits the zoomed viewport", async () => {
     "抽屉宽度要按有效视口收窄");
   assert.match(block, /min-width: 0/, "固定 280px 的 min-width 会顶回去");
 });
+
+test("no rule sets a workspace z-index that is later overridden", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const css = fs.readFileSync(path.join(__dirname, "../agent/claude/responsive.css"), "utf8");
+  const panels = [...css.matchAll(/:where\(html\[data-vp~="w767"\]\) \.workspace-panel \{([\s\S]*?)\}/g)]
+    .map((m) => m[1]);
+  const withZ = panels.filter((block) => /z-index:/.test(block));
+  assert.equal(withZ.length, 1, `同一个选择器不要写两次 z-index（当前 ${withZ.length} 处）`);
+  assert.match(withZ[0], /z-index: var\(--layer-chrome\)/);
+});
