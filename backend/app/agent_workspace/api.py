@@ -370,7 +370,13 @@ def answer_question(task_id: str, entry_id: str, body: AnswerWrite, owner: Owner
             raise HTTPException(409, "这个问题已不再等待回答")
     created = start_run(task_id, RunWrite(request_key=body.request_key, mode="continue",
                                           instruction=instruction, base_version=adopted), owner)
-    entry = store.answer_question(entry_id, answer)
+    try:
+        entry = store.answer_question(entry_id, answer)
+    except Exception:
+        # 回答没能落库（并发抢答、条目被清理等）：把刚创建的轮次收掉并退回预扣，
+        # 否则用户被扣了一次费却停在"等待回答"，只能手动刷新重试。
+        store.finish_run(created["id"], "stopped", "回答未能落库，本轮已取消")
+        raise
     return {"run": {**created, "instruction": instruction}, "entry": entry}
 
 

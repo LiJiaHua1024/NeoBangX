@@ -868,3 +868,36 @@ def test_run_id_lookups_are_indexed(identity):
         assert 'SCAN' not in plan.upper() or 'USING' in plan.upper(), f"{name} 仍是全表扫：{plan}"
         assert 'INDEX' in plan.upper(), f"{name} 没走索引：{plan}"
     store.finish_run(r['id'],'stopped')
+
+
+def test_answer_rollback_when_the_answer_cannot_be_saved(client, identity, monkeypatch):
+    """回答落库失败时，刚扣费创建的轮次必须被收掉并退款。"""
+    t = task(identity)
+    r = run(identity, t)
+    entry = store.start_entry(t['id'], r['id'], 'ask', 'tool', 'ask_user')
+    store.finish_entry(entry['id'], 'waiting', {
+        'question': '用哪一版？',
+        'ask': {'question': '用哪一版？', 'options': [{'label': 'A'}], 'multi_select': False}})
+    store.finish_run(r['id'], 'waiting')
+    cfg = {'models': [{'id': 'test', 'enabled': True, 'user_usable': True}], 'default_model': 'test'}
+    monkeypatch.setattr(api, '_load_cfg', lambda: cfg)
+    monkeypatch.setattr(api, '_validate_model', lambda *_: None)
+    monkeypatch.setattr(api, 'official_templates', lambda: [])
+    monkeypatch.setattr(api, 'load_settings', lambda: WorkspaceSettings())
+    before = store.task_detail(identity[0], t['id'])
+    with SessionLocal() as db:
+        used_before = db.get(UsageCode, identity[0]).used_count
+
+    def boom(*args, **kwargs):
+        raise HTTPException(409, "这个问题已经回答")
+
+    monkeypatch.setattr(store, 'answer_question', boom)
+    body = {'request_key': store.uid(), 'selected': ['A']}
+    with pytest.raises(HTTPException) as conflict:
+        api.answer_question(t['id'], entry['id'], api.AnswerWrite(**body), identity[0])
+    assert conflict.value.status_code == 409
+    with SessionLocal() as db:
+        assert db.get(UsageCode, identity[0]).used_count == used_before, "失败的回答不该扣费"
+    after = store.task_detail(identity[0], t['id'])
+    created = [run for run in after['runs'] if run['id'] not in {x['id'] for x in before['runs']}]
+    assert created and created[0]['status'] == 'stopped'
