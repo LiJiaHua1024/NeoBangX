@@ -3813,7 +3813,9 @@ function adminApp() {
       }
       this.agentSaving = true;
       try {
-        await this.api("/api/admin/agent", { method: "PUT", body: JSON.stringify(body) });
+        // 这里提交整份表单；接口是 PATCH 语义，少传字段不会再被重置成默认值。
+
+        await this.api("/api/admin/agent", { method: "PATCH", body: JSON.stringify(body) });
         await this.loadAgent();
         this.toast("Agent 配置已保存");
       } catch (e) {

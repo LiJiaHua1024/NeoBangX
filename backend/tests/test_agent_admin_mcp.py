@@ -66,3 +66,46 @@ def test_connect_endpoint_rejects_a_host_change(monkeypatch):
     assert resp.status_code == 422
     assert not called
     assert load_settings().mcp_token == "SECRET-TOKEN"
+
+
+def test_patch_only_changes_the_fields_it_is_given():
+    """PATCH {"enabled": false} 不能把预算与 MCP 配置一起重置。"""
+    from fastapi.testclient import TestClient
+
+    from app.admin_main import app as admin_app
+
+    save_settings(WorkspaceSettings(enabled=True, max_steps=30, mcp_url="https://mcp.example.com/sse",
+                                    mcp_token="SECRET-TOKEN", mcp_tool="search", mcp_query_field="q"))
+    client = TestClient(admin_app)
+    resp = client.patch("/api/admin/agent", json={"enabled": False})
+    assert resp.status_code == 200, resp.text
+    cfg = load_settings()
+    assert cfg.enabled is False
+    assert cfg.max_steps == 30 and cfg.mcp_url == "https://mcp.example.com/sse"
+    assert cfg.mcp_tool == "search" and cfg.mcp_token == "SECRET-TOKEN"
+
+
+def test_patch_validates_and_rejects_unknown_fields():
+    from fastapi.testclient import TestClient
+
+    from app.admin_main import app as admin_app
+
+    save_settings(WorkspaceSettings())
+    client = TestClient(admin_app)
+    assert client.patch("/api/admin/agent", json={"max_steps": 1}).status_code == 422
+    assert client.patch("/api/admin/agent", json={"nope": 1}).status_code == 422
+    assert client.patch("/api/admin/agent", json={"max_steps": 40}).status_code == 200
+    assert load_settings().max_steps == 40
+
+
+def test_patch_keeps_the_token_bound_to_its_host():
+    from fastapi.testclient import TestClient
+
+    from app.admin_main import app as admin_app
+
+    save_settings(WorkspaceSettings(mcp_url="https://mcp.example.com/sse", mcp_token="SECRET-TOKEN"))
+    client = TestClient(admin_app)
+    assert client.patch("/api/admin/agent", json={"mcp_url": "https://evil.example.net/sse"}).status_code == 422
+    assert client.patch("/api/admin/agent",
+                        json={"mcp_url": "https://evil.example.net/sse", "mcp_token": "NEW"}).status_code == 200
+    assert load_settings().mcp_token == "NEW"

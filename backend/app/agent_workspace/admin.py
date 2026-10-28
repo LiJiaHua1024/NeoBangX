@@ -3,7 +3,7 @@ import asyncio
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from jsonschema import Draft202012Validator
 
 from .settings import WorkspaceSettings, load_settings, save_settings, admin_settings
@@ -34,9 +34,7 @@ def get_settings():
     return admin_settings()
 
 
-@router.put("")
-def put_settings(body: SettingsWrite):
-    cfg = resolved(body)
+def _validate_and_save(cfg):
     if cfg.mcp_enabled:
         if not cfg.mcp_url or not cfg.mcp_tool or not cfg.mcp_schema:
             raise HTTPException(422, "请先测试连接、选择搜索工具，再开启网页搜索")
@@ -46,6 +44,41 @@ def put_settings(body: SettingsWrite):
         except Exception:
             raise HTTPException(422, "查询字段或固定参数不符合所选工具的输入格式") from None
     return save_settings(cfg)
+
+
+@router.put("")
+def put_settings(body: SettingsWrite):
+    """整文档替换：未传的字段回落到默认值（保留是为了兼容既有调用方）。"""
+    return _validate_and_save(resolved(body))
+
+
+@router.patch("")
+def patch_settings(body: dict):
+    """只改传过来的字段：`{"enabled": false}` 不会把预算与 MCP 配置一起清空。"""
+    if not isinstance(body, dict):
+        raise HTTPException(422, "请求体需为 JSON 对象")
+    clear_token = bool(body.get("clear_token"))
+    current = admin_settings()
+    current.pop("has_token", None)
+    current.pop("mcp_token", None)
+    merged = {**current, **{key: value for key, value in body.items() if key != "clear_token"}}
+    unknown = set(merged) - set(WorkspaceSettings.model_fields)
+    if unknown:
+        raise HTTPException(422, f"未知字段：{', '.join(sorted(unknown))}")
+    if clear_token:
+        merged["mcp_token"] = ""
+    elif not merged.get("mcp_token"):
+        # 与 PUT 同一口径：令牌绑定到保存时的主机，换地址必须重新填。
+        saved = load_settings()
+        if saved.mcp_token and urlsplit(merged.get("mcp_url", "")).netloc != urlsplit(saved.mcp_url).netloc:
+            raise HTTPException(422, "MCP 地址已变更，请重新填写令牌")
+        merged["mcp_token"] = saved.mcp_token
+    try:
+        cfg = WorkspaceSettings(**merged)
+    except ValidationError as exc:
+        raise HTTPException(422, "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors())) from None
+    return _validate_and_save(cfg)
 
 
 @router.post("/connect")

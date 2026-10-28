@@ -189,3 +189,25 @@ test("加载成功后保存按钮恢复可用", async () => {
   assert.equal(app.agentDirty, true);
   assert.equal(calls, 1);
 });
+
+test("保存 Agent 配置用 PATCH，避免整文档替换", async () => {
+  const { app, requests } = setup();
+  app.agentLoaded = true;
+  app.agentForm = {
+    enabled: false, max_steps: 24, max_tokens: 250000, output_tokens: 16384, max_seconds: 1800,
+    concurrency: 2, mcp_enabled: false, mcp_url: "", mcp_token: "", clear_token: false,
+    mcp_tool: "", mcp_query_field: "query", mcp_arguments: "{}", mcp_timeout: 45,
+  };
+  let settled = false;
+  const pending = app.saveAgent().finally(() => {
+    settled = true;
+  });
+  for (let i = 0; i < 20 && !settled; i++) {
+    await new Promise((r) => setImmediate(r));
+    for (const r of requests) r.resolve?.({});
+  }
+  await pending;
+  const save = requests.find((r) => r.url === "/api/admin/agent" && r.options?.method);
+  assert(save, "没有发出保存请求");
+  assert.equal(save.options.method, "PATCH");
+});
