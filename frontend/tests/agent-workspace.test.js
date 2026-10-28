@@ -627,3 +627,60 @@ test("the agent switch hides the main-site entry and blocks /agent", async () =>
   const main = fs.readFileSync(path.join(root, "backend/app/main.py"), "utf8");
   assert.match(main, /"agent_enabled": agent_enabled/);
 });
+
+test("renderActions only renders the stop button for stoppable runs", async () => {
+  // 原来那条用例只断言 STOPPABLE 的三个字面量等于它自己，删掉渲染逻辑也全绿。
+  const { Conversation } = await import("../agent/conversation.mjs");
+  const makeButton = () => ({
+    attrs: {},
+    setAttribute(name, value) { this.attrs[name] = value; },
+    addEventListener() {},
+    innerHTML: "",
+    className: "",
+    type: "",
+    title: "",
+  });
+  global.document = { createElement: makeButton };
+  const actions = () => {
+    const node = {
+      children: [],
+      set innerHTML(value) { this._html = value; },
+      get innerHTML() { return this._html; },
+      querySelector: () => ({ addEventListener() {} }),
+      insertBefore(child) { this.children.push(child); },
+    };
+    return node;
+  };
+  const ctx = (status) => ({
+    runs: new Map([["r1", { id: "r1", status, created_at: "2026-01-01T00:00:00Z" }]]),
+    usageMarkup: () => "",
+    onRequestStop: () => {},
+    onModeChange: () => {},
+    onError: () => {},
+  });
+  const cases = [
+    ["running", 1],
+    ["queued", 1],
+    ["waiting", 0],
+    ["stopping", 0],
+    ["completed", 0],
+    ["failed", 0],
+  ];
+  try {
+    for (const [status, expected] of cases) {
+      const node = actions();
+      const turn = { run: { id: "r1", status }, actions: node };
+      Conversation.prototype.renderActions.call(ctx(status), turn);
+      assert.equal(node.children.length, expected, `${status} 的停止按钮数量`);
+      if (expected) {
+        assert.equal(node.children[0].attrs["aria-label"], "停止本轮");
+        assert.equal(node.children[0].title, "停止本轮");
+      }
+      // 复制与轨迹按钮始终存在。
+      assert.match(node.innerHTML, /data-copy/);
+      assert.match(node.innerHTML, /data-trajectory/);
+    }
+  } finally {
+    delete global.document;
+  }
+});
