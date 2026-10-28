@@ -462,3 +462,15 @@ test("creating a task leaves exactly one history entry", async () => {
   const pop = src.slice(src.indexOf('window.addEventListener("popstate"'));
   assert.match(pop, /event\.state\?\.view/, "Back 要恢复历史条目里记的视图");
 });
+
+test("loading more tasks cannot append the same page twice", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  const body = src.slice(src.indexOf("let tasksLoading"), src.indexOf("function taskRowMenu("));
+  // 连点两次"加载更多"会带同一个 offset 发两次请求：必须有在途守卫。
+  assert.match(body, /if \(tasksLoading\) return;/, "缺在途守卫");
+  assert.match(body, /tasksLoading = true;[\s\S]*finally \{\s*tasksLoading = false;/, "守卫要覆盖整个请求");
+  // 追加时按 id 去重，并发或重放都不会画两遍。
+  assert.match(body, /!reset && \$\("#task-list"\)\.querySelector\(`\[data-id="\$\{task\.id\}"\]`\)\) continue;/);
+});

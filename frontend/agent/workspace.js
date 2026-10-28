@@ -719,8 +719,19 @@ function groupLabel(iso) {
   if (time >= today - 6 * 86_400_000) return "过去 7 天";
   return "更早";
 }
+let tasksLoading = false;
 async function listTasks(reset = true) {
   if (!state.catalog) return;
+  // 连点"加载更多"会带着同一个 offset 发两次请求：第二次重复追加并跳过一整页。
+  if (tasksLoading) return;
+  tasksLoading = true;
+  try {
+    await loadTasks(reset);
+  } finally {
+    tasksLoading = false;
+  }
+}
+async function loadTasks(reset = true) {
   const query = $("#task-search").value.trim();
   if (reset) {
     taskOffset = 0;
@@ -733,6 +744,8 @@ async function listTasks(reset = true) {
   if (reset) $("#task-list").replaceChildren();
   let lastGroup = "";
   for (const task of data.tasks) {
+    // 追加时按 id 去重：并发或重放都不会把同一任务画两遍。
+    if (!reset && $("#task-list").querySelector(`[data-id="${task.id}"]`)) continue;
     const group = groupLabel(task.updated_at);
     if (group !== lastGroup) {
       const label = document.createElement("div");
