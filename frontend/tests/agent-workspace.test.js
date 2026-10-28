@@ -189,20 +189,20 @@ test("a running task swaps the stop button for send once the draft has content",
   };
   const stop = { hidden: false, disabled: false, title: "" };
   const status = { dataset: {} };
-  const elements = {
-    send,
-    stop,
-    "composer-status": status,
-    "composer-rounds": { textContent: "" },
-    "composer-tokens": { textContent: "" },
-  };
-  global.document = { getElementById: (id) => elements[id] ?? null };
+  const rounds = { textContent: "" };
+  const tokens = { textContent: "" };
   const proto = Conversation.prototype;
+  // 这些引用由构造函数按作用域抓好；模型文本里出现同名 id 也抢不走。
   const fake = {
     task: { status: "running", runs: [{ id: "r1" }] },
     message: { value: "" },
     runs: new Map(),
     runTokens: () => 0,
+    sendEl: send,
+    stopEl: stop,
+    statusEl: status,
+    roundsEl: rounds,
+    tokensEl: tokens,
   };
   proto.updateComposerState.call(fake);
   assert.equal(send.hidden, true, "运行中空草稿：主按钮仍是停止");
@@ -232,7 +232,8 @@ test("a running task swaps the stop button for send once the draft has content",
   assert.equal(stop.hidden, false);
   assert.equal(stop.disabled, true);
   assert.equal(stop.title, "正在停止并保存已收到的内容");
-  delete global.document;
+  assert.equal(rounds.textContent.endsWith("轮"), true);
+  assert.equal(tokens.textContent.endsWith("tok"), true);
 });
 
 test("only executing rounds are stoppable", async () => {
@@ -327,4 +328,32 @@ test("model markdown cannot impersonate app UI or submit forms", async () => {
   assert.match(src, /ALLOWED_URI_REGEXP: \/\^\(\?:https\?\|mailto\):\/i/);
   assert.match(src, /language-\[\^?/, "class 只应放行代码语言标记");
   assert.match(src, /uponSanitizeElement/, "非复选框的 input 需要被移除");
+});
+
+test("a model-provided id=stop cannot steal the composer controls", async () => {
+  const { Conversation } = await import("../agent/conversation.mjs");
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/conversation.mjs"), "utf8");
+  // 输入区控件必须按作用域查找：全局 getElementById 会被模型文本里的同名 id 抢先。
+  for (const id of ["stop", "send", "composer-status", "composer-tokens", "composer-rounds"])
+    assert(!src.includes(`document.getElementById("${id}")`), `${id} 仍走全局查找`);
+
+  const decoy = { hidden: true, disabled: false, title: "", textContent: "9,999 tok" };
+  global.document = { getElementById: () => decoy };
+  const realStop = { hidden: true, disabled: false, title: "" };
+  Conversation.prototype.updateComposerState.call({
+    task: { status: "running", runs: [{ id: "r1" }] },
+    message: { value: "" },
+    runs: new Map(),
+    runTokens: () => 0,
+    sendEl: { hidden: false, dataset: {}, querySelector: () => null, setAttribute() {} },
+    stopEl: realStop,
+    statusEl: { dataset: {} },
+    roundsEl: { textContent: "" },
+    tokensEl: { textContent: "" },
+  });
+  assert.equal(realStop.hidden, false, "真正的停止键要显示出来");
+  assert.equal(decoy.hidden, true, "模型文本里的同名节点不受影响");
+  delete global.document;
 });

@@ -305,6 +305,13 @@ export class Conversation {
     this.composerSeat = document.getElementById("composer-seat");
     this.composerCard = document.getElementById("composer-card");
     this.message = document.getElementById("message");
+    // 输入区控件按作用域抓一次：模型消息里的 `id="stop"` 之类不能让
+    // `document.getElementById` 解析到错的那个节点（那样停止键会永远藏着）。
+    this.sendEl = this.composerCard?.querySelector("#send") || null;
+    this.stopEl = this.composerCard?.querySelector("#stop") || null;
+    this.statusEl = this.composerCard?.querySelector("#composer-status") || null;
+    this.roundsEl = this.composerCard?.querySelector("#composer-rounds") || null;
+    this.tokensEl = this.composerCard?.querySelector("#composer-tokens") || null;
 
     this.runs = new Map();
     this.entries = new Map();
@@ -1436,9 +1443,9 @@ export class Conversation {
     const stopping = taskStatus === "stopping";
     // 运行中一旦写下补充要求，主按钮就让位给发送；停止仍可在轮次卡片的动作栏里点到。
     const drafted = (this.message?.value || "").trim() !== "";
-    const send = document.getElementById("send");
-    const stop = document.getElementById("stop");
-    const status = document.getElementById("composer-status");
+    const send = this.sendEl;
+    const stop = this.stopEl;
+    const status = this.statusEl;
     if (send) {
       send.hidden = active && !drafted;
       send.dataset.mode = active
@@ -1478,8 +1485,8 @@ export class Conversation {
       (sum, run) => sum + this.runTokens(this.runs.get(run.id) || run),
       0,
     );
-    const roundsEl = document.getElementById("composer-rounds");
-    const tokensEl = document.getElementById("composer-tokens");
+    const roundsEl = this.roundsEl;
+    const tokensEl = this.tokensEl;
     if (roundsEl) roundsEl.textContent = `${rounds} 轮`;
     if (tokensEl) tokensEl.textContent = `${nf.format(tokens)} tok`;
   }
