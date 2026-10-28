@@ -778,3 +778,18 @@ def test_note_events_carry_the_run_id(client,identity):
     applied=[e for e in client.get(f"/api/workspace/tasks/{t['id']}/events").json()['events'] if e['kind']=='note']
     assert applied[-1]['data']['applied'] is True and applied[-1]['data']['run_id']==r['id']
     store.finish_run(r['id'],'stopped')
+
+
+def test_catalog_default_model_is_always_offered(client,identity,monkeypatch):
+    """默认模型必须出现在 catalog 给的 models 里，否则新任务默认不可执行。"""
+    cfg={'models':[{'id':'a','name':'A','enabled':True,'user_usable':True},
+                   {'id':'b','name':'B','enabled':True,'user_usable':True}],
+         'available_model_ids':['a'],'default_model':'b','providers':[]}
+    monkeypatch.setattr(api,'_load_cfg',lambda:cfg)
+    data=client.get('/api/workspace/catalog').json()
+    assert [m['id'] for m in data['models']]==['a']
+    assert data['default_model']=='a'
+    cfg['available_model_ids']=None
+    assert client.get('/api/workspace/catalog').json()['default_model']=='b'
+    cfg['models']=[{'id':'b','name':'B','enabled':False}]
+    assert client.get('/api/workspace/catalog').json()['default_model']==''

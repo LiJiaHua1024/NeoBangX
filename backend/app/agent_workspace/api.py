@@ -159,7 +159,11 @@ def get_catalog(owner: Owner):
         code = db.get(UsageCode, owner)
         user = code.to_public_dict()
         user["id"] = owner
-    return {"enabled": policy.enabled, "models": models, "default_model": cfg.get("default_model"),
+    # 默认模型必须在自己给出的列表里：管理员只绑定部分 provider 时，
+    # 原样返回配置里的默认值会让新任务被钉在一个选择器里不存在的模型上。
+    offered = {m["id"] for m in models}
+    default_model = cfg.get("default_model") if cfg.get("default_model") in offered else (models[0]["id"] if models else "")
+    return {"enabled": policy.enabled, "models": models, "default_model": default_model,
             "official_templates": official_templates(), "templates": templates, "tools": catalog(),
             "defaults": TaskConfig().model_dump(), "user": user,
             "limits": {"steps": policy.max_steps, "tokens": policy.max_tokens, "seconds": policy.max_seconds},
