@@ -533,3 +533,15 @@ test("select keeps aria-selected for the real value and cursor in data-active", 
   assert.match(css, /\.aw-option\[data-active\]/);
   assert(!/\.aw-option\[aria-selected="true"\]/.test(css), "选中字重不该再挂在 aria-selected 上");
 });
+
+test("a closed mobile drawer is inert", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  assert.match(src, /function syncNavInert\(\)/, "缺少抽屉的 inert 同步");
+  assert.match(src, /nav\.inert = isNarrow\(\) && app\.dataset\.sidebar !== "open"/);
+  // 初始化与断点切换都要同步一次，否则首屏仍是可聚焦的画外控件。
+  assert.match(src, /syncNavInert\(\);\s*\n\s*setWorkspace\(/);
+  const bp = src.slice(src.indexOf('onBreakpoint("w1099"'), src.indexOf('onBreakpoint("w1439"'));
+  assert.match(bp, /syncNavInert\(\)/);
+});

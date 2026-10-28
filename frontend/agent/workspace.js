@@ -246,6 +246,7 @@ function hideShade() {
 }
 function drawer(open, { focus = true } = {}) {
   app.dataset.sidebar = open ? "open" : "collapsed";
+  syncNavInert();
   document.body.classList.toggle("nav-open", Boolean(open));
   try {
     if (!isNarrow()) localStorage.setItem("nbx_agent_sidebar", open ? "open" : "collapsed");
@@ -258,6 +259,12 @@ function drawer(open, { focus = true } = {}) {
     hideShade();
     if (focus && isNarrow()) $("#menu").focus();
   }
+}
+/* 窄屏抽屉关闭时只是移出视口，仍在焦点顺序与可访问树里：
+   用 inert 把它彻底移出去；桌面侧栏始终可用。 */
+function syncNavInert() {
+  const nav = $("#nav");
+  if (nav) nav.inert = isNarrow() && app.dataset.sidebar !== "open";
 }
 function setWorkspace(open, { persist = true } = {}) {
   const overlay = isOverlayWorkspace();
@@ -1009,6 +1016,7 @@ onBreakpoint("w1099", (narrow) => {
         ? "collapsed"
         : "open";
   }
+  syncNavInert();
 });
 onBreakpoint("w1439", (overlay) => {
   setWorkspace(!overlay, { persist: false });
@@ -2985,6 +2993,7 @@ async function boot() {
   if (localStorage.getItem("nbx_agent_sidebar") === "collapsed" && !isNarrow())
     app.dataset.sidebar = "collapsed";
   if (isNarrow()) app.dataset.sidebar = "collapsed";
+  syncNavInert();
   setWorkspace(
     !isOverlayWorkspace()
       ? localStorage.getItem("nbx_agent_workspace") !== "closed"
