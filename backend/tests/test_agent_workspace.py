@@ -740,3 +740,26 @@ def test_manual_version_rejects_foreign_or_missing_parent(client,identity):
     assert client.post(endpoint,json=body).status_code==404
     body['parent_id']=''
     assert client.post(endpoint,json=body).status_code==200
+
+
+def test_task_detail_reads_runs_in_one_query(identity):
+    """轮次列表不能每行再懒加载一次 snapshot（长任务上线性变慢）。"""
+    t=task(identity)
+    for index in range(12):
+        store.create_run(identity[0],t['id'],store.uid(),'continue',f'第{index}次','',{'model':'test','limits':{'max_steps':2,'max_tokens':1000,'output_tokens':500,'max_seconds':30},'templates':{}},True)
+        store.finish_run(store.task_detail(identity[0],t['id'])['runs'][-1]['id'],'stopped')
+    from sqlalchemy import event as sa_event
+    statements=[]
+    def listen(conn,cursor,statement,parameters,context,executemany):
+        if statement.lstrip().upper().startswith('SELECT'):statements.append(statement)
+    engine=SessionLocal.kw['bind']
+    sa_event.listen(engine,'before_cursor_execute',listen)
+    try:
+        detail=store.task_detail(identity[0],t['id'])
+    finally:
+        sa_event.remove(engine,'before_cursor_execute',listen)
+    assert len(detail['runs'])==12
+    run_queries=[s for s in statements if 'workspace_runs' in s]
+    assert len(run_queries)==1, run_queries
+    # 指令字段仍然给出（只有需要展示的模式才有）。
+    assert detail['runs'][0]['instruction']=='第0次'

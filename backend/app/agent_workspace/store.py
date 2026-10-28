@@ -5,7 +5,6 @@ from datetime import timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import select, update, func, or_
-from sqlalchemy.orm import load_only
 
 from app.database import SessionLocal
 from app.models import UsageCode, UsageLog, utcnow
@@ -84,6 +83,20 @@ def run_dict(row, full=False, with_instruction=False):
     return value
 
 
+INSTRUCTION_MODES = {"continue", "review", "revise", "tool_test"}
+
+
+def _run_row(row):
+    """任务详情里的轮次列表项：只有少数模式需要展示当轮指令。"""
+    value = {"id": row["id"], "status": row["status"], "mode": row["mode"], "step": row["step"],
+             "tokens": row["tokens"], "error": row["error"], "created_at": row["created_at"].isoformat(),
+             "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None}
+    if row["mode"] in INSTRUCTION_MODES:
+        value["instruction"] = row["instruction"] or ""
+        value["base_version"] = row["base_version"] or ""
+    return value
+
+
 def task_detail(owner, task_id):
     with SessionLocal() as db:
         row = owned(db, task_id, owner)
@@ -95,9 +108,13 @@ def task_detail(owner, task_id):
             Version.id, Version.run_id, Version.parent_id, Version.title, Version.origin, Version.complete,
             func.length(Version.content).label("chars"), Version.created_at)
             .where(Version.task_id == task_id).order_by(Version.created_at)).mappings()]
-        value["runs"] = [run_dict(r, with_instruction=r.mode in {"continue", "review", "revise", "tool_test"}) for r in db.scalars(select(Run).options(load_only(
-            Run.id, Run.status, Run.mode, Run.step, Run.tokens, Run.error, Run.created_at, Run.finished_at))
-            .where(Run.task_id == task_id).order_by(Run.created_at))]
+        # 快照整份是配置与官方提示词全文：只用 json_extract 取需要的两个字段，
+        # 避免每个轮次再懒加载一次 snapshot（长任务上线性变慢）。
+        value["runs"] = [_run_row(dict(r)) for r in db.execute(select(
+            Run.id, Run.status, Run.mode, Run.step, Run.tokens, Run.error, Run.created_at, Run.finished_at,
+            func.json_extract(Run.snapshot, "$.instruction").label("instruction"),
+            func.json_extract(Run.snapshot, "$.base_version").label("base_version"),
+        ).where(Run.task_id == task_id).order_by(Run.created_at)).mappings()]
         # 对话恢复需要补充要求；过程正文仍不进入任务详情。
         value["notes"] = [{"id": r.id, "run_id": r.run_id, "text": r.text,
                            "applied": bool(r.applied), "config": bool(r.config)}

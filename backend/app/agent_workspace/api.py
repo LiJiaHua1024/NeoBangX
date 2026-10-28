@@ -330,8 +330,9 @@ def answer_instruction(ask, selected, custom, skipped):
 
 @router.post("/tasks/{task_id}/entries/{entry_id}/answer", status_code=202)
 def answer_question(task_id: str, entry_id: str, body: AnswerWrite, owner: Owner):
-    task = store.task_detail(owner, task_id)
     with SessionLocal() as db:
+        task = store.owned(db, task_id, owner)
+        adopted = task.adopted_version
         row = db.get(Entry, entry_id)
         if not row or row.task_id != task_id or row.label != "ask_user":
             raise HTTPException(404, "提问不存在")
@@ -364,7 +365,7 @@ def answer_question(task_id: str, entry_id: str, body: AnswerWrite, owner: Owner
         if not run or run.status != "waiting":
             raise HTTPException(409, "这个问题已不再等待回答")
     created = start_run(task_id, RunWrite(request_key=body.request_key, mode="continue",
-                                          instruction=instruction, base_version=task["adopted_version"]), owner)
+                                          instruction=instruction, base_version=adopted), owner)
     entry = store.answer_question(entry_id, answer)
     return {"run": {**created, "instruction": instruction}, "entry": entry}
 
