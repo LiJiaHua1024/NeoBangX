@@ -714,3 +714,12 @@ test("conversation restores every step by paging the entries endpoint", async ()
   assert.equal(ctx.entries.size, 9);
   assert.equal(calls[0], "/tasks/t1/entries?offset=0&limit=500");
 });
+
+test("zoom clamps to the boundary instead of snapping back to 100%", async () => {
+  const { clampZoom } = await import("../agent/zoom.mjs");
+  assert.equal(clampZoom(155), 155);
+  assert.equal(clampZoom(200), 160);
+  assert.equal(clampZoom(20), 80);
+  assert.equal(clampZoom("abc"), 100);
+  assert.equal(clampZoom(null), 100);
+});

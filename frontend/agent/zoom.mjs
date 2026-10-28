@@ -20,15 +20,24 @@ export const ZOOM_DEFAULT = 100;
 const WIDTHS = [1439, 1099, 767, 720, 480];
 const HEIGHTS = [700, 500];
 
-const root = document.documentElement;
+// 允许在 node 里导入纯函数（clamp/clampZoom）做回归：没有 DOM 时跳过副作用。
+const hasDom = typeof document !== "undefined" && typeof window !== "undefined";
+const root = hasDom ? document.documentElement : null;
 const listeners = new Map();
 let percent = readZoom();
-let tokens = new Set((root.dataset.vp || "").split(" ").filter(Boolean));
+let tokens = new Set(((root && root.dataset.vp) || "").split(" ").filter(Boolean));
+
+export function clampZoom(value) {
+  return clamp(value);
+}
 
 function clamp(value) {
+  // 没有值或无法解析才回默认；数字越界要夹到边界，
+  // 而不是回落到 100%：155% 再点一次"＋"不该突然变回默认。
+  if (value === null || value === undefined || value === "") return ZOOM_DEFAULT;
   const n = Math.round(Number(value));
-  if (!Number.isFinite(n) || n < ZOOM_MIN || n > ZOOM_MAX) return ZOOM_DEFAULT;
-  return n;
+  if (!Number.isFinite(n)) return ZOOM_DEFAULT;
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, n));
 }
 
 export function readZoom() {
@@ -123,9 +132,11 @@ export function stepZoom(direction) {
 }
 
 /* 另一个 /agent 标签页改了缩放时跟着变 */
-window.addEventListener("storage", (event) => {
-  if (event.key === ZOOM_KEY) setZoom(readZoom());
-});
-window.addEventListener("resize", syncViewport);
-applyZoom();
-syncViewport();
+if (hasDom) {
+  window.addEventListener("storage", (event) => {
+    if (event.key === ZOOM_KEY) setZoom(readZoom());
+  });
+  window.addEventListener("resize", syncViewport);
+  applyZoom();
+  syncViewport();
+}

@@ -48,7 +48,9 @@
           var raw = localStorage.getItem("nbx_agent_zoom");
           if (raw !== null) pct = Math.round(Number(raw));
         } catch (e) {}
-        if (!(pct >= 80 && pct <= 160)) pct = 100;
+        // 与 zoom.mjs 的 clamp 一致：越界夹到边界，不是回落到 100%。
+        if (!isFinite(pct)) pct = 100;
+        pct = Math.min(160, Math.max(80, pct));
         var z = pct / 100;
         root.style.setProperty("--zoom", String(z));
         if (z !== 1) root.style.zoom = String(z);
