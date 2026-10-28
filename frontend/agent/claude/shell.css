@@ -498,7 +498,6 @@ html[data-agent-theme="dark"] .new-task .plus-chip {
 .task-title-input:focus {
   border-color: #2a78d6;
   background: var(--canvas);
-  outline: none;
 }
 .status-pill {
   display: inline-flex;

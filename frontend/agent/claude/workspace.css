@@ -197,9 +197,8 @@
   resize: vertical;
 }
 .field :is(input, textarea, select):focus {
-  border-color: var(--border-3);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 6%, transparent);
-  outline: none;
+  /* 参考实现：输入框聚焦用品牌色描边；键盘焦点环由 base.css 的 :focus-visible 提供。 */
+  border-color: var(--accent);
 }
 .field-narrow {
   max-width: 130px;
@@ -238,10 +237,8 @@
   border-color: var(--border-1);
 }
 .prompt-editor:focus {
-  border-color: var(--border-3);
+  border-color: var(--accent);
   background: var(--canvas);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 6%, transparent);
-  outline: none;
 }
 .editor-foot {
   display: flex;

@@ -83,12 +83,6 @@ html[data-agent-theme="dark"] .model-popover {
 .model-row[data-active] {
   background: color-mix(in srgb, var(--ink) 6.5%, transparent);
 }
-.model-row:focus {
-  outline: none;
-}
-.model-row:focus-visible {
-  outline: none;
-}
 .model-row-copy {
   display: flex;
   flex-direction: column;

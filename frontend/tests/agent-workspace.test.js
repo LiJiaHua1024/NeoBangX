@@ -592,3 +592,22 @@ test("semantic colors are theme tokens, not light-only literals", async () => {
   }
   assert.deepEqual(offenders, [], "样式表里不该再写死亮色语义值");
 });
+
+test("form fields keep the shared focus-visible ring", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dir = path.join(__dirname, "../agent/claude");
+  // base.css 的 :focus-visible 描边是参考实现移植过来的；后续规则不得用 outline:none 覆盖。
+  const offenders = [];
+  for (const file of ["workspace.css", "select.css", "overlays.css", "model-picker.css", "shell.css"]) {
+    const css = fs.readFileSync(path.join(dir, file), "utf8");
+    for (const block of css.split("}")) {
+      if (!/:focus|:focus-visible/.test(block)) continue;
+      if (/outline:\s*none/.test(block) && !/(model-popover|account-popover):focus\s*\{/.test(block + "}"))
+        offenders.push(`${file}: ${block.split("{")[0].trim()}`);
+    }
+  }
+  assert.deepEqual(offenders, [], "这些聚焦规则抹掉了焦点环");
+  const workspace = fs.readFileSync(path.join(dir, "workspace.css"), "utf8");
+  assert.match(workspace, /\.field :is\(input, textarea, select\):focus \{\s*\/\*[^*]*\*\/\s*border-color: var\(--accent\);/);
+});

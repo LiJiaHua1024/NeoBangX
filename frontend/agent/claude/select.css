@@ -64,9 +64,7 @@
   border-color: var(--border-2);
 }
 .aw-select-trigger:focus-visible {
-  border-color: var(--border-3);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 6%, transparent);
-  outline: none;
+  border-color: var(--accent);
 }
 .aw-select-trigger:disabled {
   opacity: 0.45;
