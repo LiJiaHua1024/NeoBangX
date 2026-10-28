@@ -4,7 +4,7 @@ import uuid
 from datetime import timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, func, or_
 from sqlalchemy.orm import load_only
 
 from app.database import SessionLocal
@@ -417,14 +417,27 @@ def claim_run():
 
 
 def recover_runs():
+    stopped = []
     with SessionLocal() as db:
-        rows = db.scalars(select(Run).where(Run.status.in_({"running", "stopping"}), Run.lease < utcnow())).all()
+        # 排队中就被停止的轮次没有 lease（NULL），而 SQL 里 `NULL < now` 恒为 NULL：
+        # 只写 `Run.lease < utcnow()` 会让它们永远收不了尾，卡在"正在停止"。
+        rows = db.scalars(select(Run).where(
+            Run.status.in_({"running", "stopping"}),
+            or_(Run.lease.is_(None), Run.lease < utcnow()))).all()
         for row in rows:
-            row.status = "queued"
+            if row.stop:
+                # 用户已经要求停止：这是"停止的第二段提交失败"留下的孤儿，直接落终态，
+                # 不能再排队（会重新跑起来），也不能留着不退额度。
+                stopped.append(row.id)
+                continue
+            row.status, row.lease = "queued", None
             task = db.get(Task, row.task_id)
-            task.status = "queued"
-            event(db, task.id, "run", run_dict(row))
+            if task is not None:
+                task.status = "queued"
+                event(db, task.id, "run", run_dict(row))
         db.commit()
+    for run_id in stopped:
+        finish_run(run_id, "stopped", "已按停止请求结束")
 
 
 def _settle_log(db, run_id, status, error, *, units=None, tokens=None, created_at=None):

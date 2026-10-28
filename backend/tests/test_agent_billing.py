@@ -110,3 +110,43 @@ def test_stop_loop_cannot_mint_extra_documents(workspace_code):
     with pytest.raises(HTTPException) as exc:
         _charged_run(owner, task_id)
     assert exc.value.status_code == 403
+
+
+def test_recover_runs_settles_a_stop_that_never_reached_its_second_commit(workspace_code):
+    """`stop_run` 第二段提交失败会把轮次留在 `stopping` 且 lease 为 NULL：
+    恢复时必须落终态并退款，否则任务删不掉、额度也拿不回来。"""
+    owner, _ = workspace_code("BILL-", quota=5)
+    task_id = _task(owner)
+    run_id = _charged_run(owner, task_id)
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRun, run_id)
+        row.status, row.stop, row.lease = "stopping", True, None
+        db.get(WorkspaceTask, task_id).status = "stopping"
+        db.commit()
+
+    store.recover_runs()
+
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRun, run_id)
+        assert row.status == "stopped"
+        assert db.get(WorkspaceTask, task_id).status == "stopped"
+    assert _used(owner) == 0, "没产出成果的停止要退额度"
+    assert _charged_flag(run_id) is False
+
+
+def test_recover_runs_requeues_a_crashed_run_without_stop_request(workspace_code):
+    owner, _ = workspace_code("BILL-", quota=5)
+    task_id = _task(owner)
+    run_id = _charged_run(owner, task_id)
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRun, run_id)
+        row.status, row.lease = "running", None
+        db.commit()
+
+    store.recover_runs()
+
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRun, run_id)
+        assert row.status == "queued" and row.lease is None
+        assert db.get(WorkspaceTask, task_id).status == "queued"
+    assert _used(owner) == 1
