@@ -196,7 +196,10 @@ class Runner:
                 details = {"error_code": code, "error": message}
             else:
                 details = llm.error_details(exc)
-                status = "failed" if details["error_code"] in {"empty_response", "model_finish_error"} else "interrupted"
+                # 永久性错误（空响应、异常结束、凭证无效、模型不存在）重试也没用，落 failed；
+                # 其余按可继续的中断处理，让用户能接着跑。
+                status = "failed" if details["error_code"] in {
+                    "empty_response", "model_finish_error", "model_auth", "model_not_found"} else "interrupted"
             await asyncio.to_thread(store.finish_entry, entry["id"], status, details)
             raise
         finally:

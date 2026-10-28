@@ -273,6 +273,14 @@ class LLMRouter:
         self.breaker_skipped = _count_breaker_skipped(base)
         return provider_health.apply_breaker_order(base)
 
+    def ordered_providers(self) -> list[dict]:
+        """按熔断健康状态排好序的 provider 链。
+
+        给 Agent 原生工具流适配器用：它自己挑 provider 走流式工具调用，
+        必须复用同一套「OPEN 沉底」的顺序，否则每次调用都会先打已经挂掉的那一家。
+        """
+        return self._ordered_providers()
+
     def _budget_left(self) -> float:
         """首块总预算剩余（秒）；<=0 的配置表示不限，返回 math.inf。"""
         if self.total_first_token_budget <= 0:

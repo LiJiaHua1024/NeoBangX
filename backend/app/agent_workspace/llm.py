@@ -8,6 +8,7 @@ from litellm import acompletion
 
 from app.routers.chat import _build_llm
 from app.services.llm import extract_reasoning_from_delta, strip_reasoning_kwargs, is_reasoning_param_error
+from app.services import provider_health
 from app.services.llm_router import LLMRouter, is_retryable
 from app.services.runtime_config import find_model_entry
 
@@ -55,6 +56,19 @@ class ResponseError(ValueError):
         self.code = code
 
 
+def _status_code(exc):
+    """从 provider 异常里取出 HTTP 状态码；取不到返回 None。"""
+    for candidate in (getattr(exc, "status_code", None), getattr(exc, "code", None),
+                      getattr(getattr(exc, "response", None), "status_code", None)):
+        try:
+            value = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if 100 <= value <= 599:
+            return value
+    return None
+
+
 def error_details(exc):
     cause = exc.cause if isinstance(exc, PartialResponseError) else exc
     if isinstance(cause, ResponseError):
@@ -63,6 +77,11 @@ def error_details(exc):
         code, message = "model_timeout", "等待模型响应超时"
     elif isinstance(cause, ConnectionError):
         code, message = "model_connection", "与模型服务的连接中断"
+    elif _status_code(cause) in {401, 403}:
+        # 永久性配置错误：不该被当成"可以继续"的中断，否则用户会反复点继续。
+        code, message = "model_auth", "模型服务的凭证无效或无权访问，请联系管理员检查配置"
+    elif _status_code(cause) == 404:
+        code, message = "model_not_found", "模型或接口地址不存在，请联系管理员检查配置"
     else:
         code, message = "model_error", "模型服务调用失败"
     details = {"error_code": code, "error": message, "error_type": type(cause).__name__}
@@ -80,7 +99,8 @@ class PartialResponseError(RuntimeError):
 
 async def complete(cfg, model, messages, tools, max_tokens, emit, response_format=None):
     llm = _build_llm(cfg, model)
-    providers = llm.providers if isinstance(llm, LLMRouter) else [None]
+    # 与主站同一套熔断顺序：已经 OPEN 的 provider 沉底，不再每次先打一遍挂掉的那家。
+    providers = llm.ordered_providers() if isinstance(llm, LLMRouter) else [None]
     if not providers:
         raise ValueError("模型没有可用的服务连接")
     last_error = None
@@ -88,6 +108,10 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
     options = {"reasoning_effort": model_settings.get("reasoning_effort"),
                "extra_body": model_settings.get("extra_body"), "response_format": response_format}
     for provider in providers:
+        provider_id = ((provider or {}).get("id") or "").strip() if provider else ""
+        if provider_id and not provider_health.claim_attempt(provider_id):
+            # HALF_OPEN 的探测名额已被并发请求占用：跳过这一家，别一起打过去。
+            continue
         if provider is None:
             kwargs = llm._build_kwargs(model, messages, None, None, max_tokens, stream=True,
                                        **options)
@@ -178,4 +202,8 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
                 raise
         finally:
             await _close_stream(stream)
-    raise RuntimeError("所有模型连接均不可用，请稍后重试") from last_error
+    if last_error is not None:
+        # 保留原始异常类型：error_details 才能把超时、断连、鉴权失败分开，
+        # 也才不会被一律记成"模型服务调用失败"。
+        raise last_error
+    raise RuntimeError("所有模型连接均不可用，请稍后重试")
