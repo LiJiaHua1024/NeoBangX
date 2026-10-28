@@ -787,3 +787,13 @@ test("the shade is only dismissed by the overlay that owns it", async () => {
   assert.match(resize, /hideShade\("workspace"\)/);
   assert(!/hideShade\(\);/.test(resize), "resize 里不能无条件清遮罩");
 });
+
+test("clicking the menu trigger again collapses it instead of reopening", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  assert.match(src, /anchor\.contains\(event\.target\)/, "点触发器内部的图标不能当成点外面");
+  assert(!/event\.target !== anchor\) close\(\)/.test(src));
+  const row = src.slice(src.indexOf("function taskRowMenu("), src.indexOf("function taskRowMenu(") + 400);
+  assert.match(row, /state\.menuAnchor === anchor[\s\S]{0,80}state\.menuClose\(\)/, "同一按钮再点一次要收起");
+});

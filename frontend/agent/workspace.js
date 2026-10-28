@@ -79,6 +79,7 @@ let reader = null,
   accountPopoverBound = false,
   taskQuery = "",
   shadeFor = "",
+  menuAnchor = null,
   modalCleanup = null,
   // 破坏性请求在飞时锁住对话框；60 秒后自动解锁（请求可能仍在后台）。
   modalBusy = false,
@@ -374,9 +375,12 @@ function menuAt(anchor, html, onClick) {
     document.removeEventListener("click", outside, true);
     document.removeEventListener("keydown", onKey, true);
     state.menuClose = null;
+    state.menuAnchor = null;
   };
   const outside = (event) => {
-    if (!menu.contains(event.target) && event.target !== anchor) close();
+    // 真实点击目标是按钮内部的图标/文字，用 === 比较会当成"点外面"。
+    if (menu.contains(event.target) || anchor.contains(event.target)) return;
+    close();
   };
   const onKey = (event) => {
     if (event.key !== "Escape") return;
@@ -387,6 +391,7 @@ function menuAt(anchor, html, onClick) {
   setTimeout(() => document.addEventListener("click", outside, true), 0);
   document.addEventListener("keydown", onKey, true);
   state.menuClose = close;
+  state.menuAnchor = anchor;
   return menu;
 }
 
@@ -804,6 +809,11 @@ async function loadTasks(reset = true) {
   $("#more-tasks").hidden = !data.has_more;
 }
 function taskRowMenu(task, anchor) {
+  // 同一个"…"按钮再点一次应该收起，而不是关掉再打开。
+  if (state.menuClose && state.menuAnchor === anchor) {
+    state.menuClose();
+    return;
+  }
   menuAt(
     anchor,
     `<button data-action="copy">${icon("copy")}<span>复制任务</span></button>
