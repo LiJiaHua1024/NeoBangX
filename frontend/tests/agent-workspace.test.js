@@ -389,3 +389,15 @@ test("stop-time content repair fetches again after an in-flight poll", async () 
   assert.equal(ctx.caches.get("e1:output").text, serverText);
   assert.equal(calls, 2);
 });
+
+test("waiting clock re-resolves the active turn on every tick", async () => {
+  // 计数闭包住第一轮的 box 与 created_at 时，回答 ask_user 之后第二轮起就不再走动。
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/conversation.mjs"), "utf8");
+  const block = src.match(/const tick = \(\) => \{[\s\S]*?\n    \};/);
+  assert(block, "等待行应当有一个 tick 定时器");
+  assert.match(block[0], /this\.activeTurn\(\)/, "每次都要重新取当前回合");
+  assert.match(block[0], /created_at\)/, "用当前回合的起始时间计时");
+  assert(!/durationOf\(started\)/.test(block[0]), "不能用闭包里第一轮的起始时间");
+});

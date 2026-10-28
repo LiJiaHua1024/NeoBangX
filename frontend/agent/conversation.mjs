@@ -1189,10 +1189,13 @@ export class Conversation {
       box.querySelector(".waiting-sweep-glyphs").dataset.text = text;
     }
     startWaitLoader(box.querySelector(".waiting-loader"));
-    const started = turn.run.created_at;
     const tick = () => {
-      if (box.hidden) return;
-      box.querySelector(".waiting-clock").textContent = durationOf(started);
+      // 每拍重新解析当前回合：回答 ask_user 之后会换成新的盒子与新的起始时间，
+      // 闭包住第一轮的 box / created_at 会让第二轮起计数停住。
+      const current = this.activeTurn();
+      const currentBox = current?.waiting;
+      if (!currentBox || currentBox.hidden) return;
+      currentBox.querySelector(".waiting-clock").textContent = durationOf(current.run.created_at);
     };
     tick();
     if (!this.clock) this.clock = setInterval(tick, 1000);
