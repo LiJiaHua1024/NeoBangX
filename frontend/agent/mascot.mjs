@@ -268,13 +268,15 @@ export function createClawd(host) {
   const onActivity = () => wake();
   document.addEventListener("pointermove", onActivity, { passive: true });
   document.addEventListener("keydown", onActivity);
-  document.addEventListener("visibilitychange", () => {
+  const onVisibility = () => {
+    if (disposed) return;
     if (document.hidden) {
       window.clearTimeout(extraTimer);
     } else if (mode !== "active") {
       scheduleExtra();
     }
-  });
+  };
+  document.addEventListener("visibilitychange", onVisibility);
 
   // Load the idle sheet first so the crab appears whole; the rest follow.
   const load = (key) =>
@@ -389,6 +391,8 @@ export function createClawd(host) {
       animation?.cancel();
       document.removeEventListener("pointermove", onActivity);
       document.removeEventListener("keydown", onActivity);
+      // 匿名函数无法移除：销毁后切回前台仍会安排计时器。
+      document.removeEventListener("visibilitychange", onVisibility);
       root.remove();
     },
   };

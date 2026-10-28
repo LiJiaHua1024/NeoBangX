@@ -828,3 +828,14 @@ test("model images keep their alt text instead of vanishing", async () => {
   assert.match(hook, /replaceChild/, "把 <img> 换成可读文本节点");
   assert.match(hook, /\^https\?:/, "只有 http(s) 地址才给可点链接");
 });
+
+test("the mascot removes its visibility listener on destroy", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/mascot.mjs"), "utf8");
+  assert.match(src, /const onVisibility = \(\) => \{/, "visibilitychange 要用具名处理器");
+  assert.match(src, /document\.addEventListener\("visibilitychange", onVisibility\)/);
+  const destroy = src.slice(src.indexOf("destroy() {"), src.indexOf("destroy() {") + 500);
+  assert.match(destroy, /removeEventListener\("visibilitychange", onVisibility\)/, "销毁时必须移除");
+  assert(!/addEventListener\("visibilitychange", \(\) =>/.test(src), "不能再挂匿名监听");
+});
