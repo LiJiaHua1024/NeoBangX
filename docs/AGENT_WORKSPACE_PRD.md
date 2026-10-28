@@ -324,7 +324,7 @@ Agent 根据目标决定何时查材料、调用教学工具、搜索、检查�
 - 浏览器端完成手机输入与上传、刷新恢复、12 万字符思考阅读、审阅意见忽略、人工编辑与采用、跨窗口冲突、教学工具独立试运行、管理端 MCP 工具发现与搜索、前端开关可用性检查；连同视口检查共 20 个自动验收场景通过，未出现页面脚本错误。
 - 隔离数据压力场景包含 200 条活动与超过 30 万字符的成果，Markdown 全文导出 SHA-256 与保存源文一致，Word 导出成功。本机 Chromium 最后一轮连续切换工作区的 P95 为 19.5 ms；该数据不代表低性能手机或真实模型接口的表现。
 
-可复现入口：`backend/tests/test_agent_workspace.py`、`frontend/tests/agent-workspace.test.js`、`backend/tests/workspace_browser_server.py`、`tools/test-agent-browser.mjs`。浏览器验收服务仅监听本机，使用临时数据库和明确的测试模型；不会读取生产任务或调用真实模型。
+可复现入口：`backend/tests/test_agent_workspace.py`、`frontend/tests/agent-workspace.test.js`、`backend/tests/workspace_browser_server.py`、`tools/test-claude-agent-browser.mjs`（`npm run test:agent-browser`）。浏览器验收服务仅监听本机，使用临时数据库和明确的测试模型；不会读取生产任务或调用真实模型。
 
 ### 16.3 上线前仍需真实环境验收
 
@@ -344,7 +344,7 @@ Agent 根据目标决定何时查材料、调用教学工具、搜索、检查�
 - 时间线改为纵向流水线：左侧节点与竖线、状态徽章、按内容显隐的操作按钮；空任务重新显示三步引导（此前打开任务后空状态会被清空）。
 - 任务列表改为两行条目（标题 + 状态徽章 + 最近更新时间），选中项用左侧竖条与浅底标记。
 - 普通工具页侧栏入口：把原来的裸链接换成入口卡 + “带入当前材料与提示词”次级动作，位置仍在 Logo 下方。
-- 保留 `tools/test-agent-browser.mjs` 依赖的全部 DOM 锚点（`#prompt`、`#mobile-goal`、`.view-switch`、`.entry-header strong`、`#materials-list .material`、`#tools-list .tool-card`、`#versions-list` 文本格式等）。
+- 保留 `tools/test-claude-agent-browser.mjs` 依赖的全部 DOM 锚点（`#prompt`、`#mobile-goal`、`.view-switch`、`.entry-header strong`、`#materials-list .material`、`#tools-list .tool-card`、`#versions-list` 文本格式等）。
 
 ### 17.2 验收状态
 
@@ -374,10 +374,10 @@ Agent 根据目标决定何时查材料、调用教学工具、搜索、检查�
 
 ### 18.2 验收状态
 
-- `npm test` 272 项通过（新增「Agent 配置是后台的第二个页签，控件与其它配置页签同一套」与窄屏固定条的结构断言）；`node --check admin-frontend/script.js`、`node --check tools/test-agent-browser.mjs` 通过；`backend/tests/test_static_cache.py` 32 项通过。
+- `npm test` 272 项通过（新增「Agent 配置是后台的第二个页签，控件与其它配置页签同一套」与窄屏固定条的结构断言）；`node --check admin-frontend/script.js`、`node --check tools/test-claude-agent-browser.mjs` 通过；`backend/tests/test_static_cache.py` 32 项通过。
 - 用隔离服务（`backend/tests/workspace_browser_server.py`）跑通管理端这一段：导航顺序为「概览 → Agent」、页签加载、测试连接并读取工具、勾选网页搜索、试运行搜索、顶栏保存后令牌输入框清空且 `GET /api/admin/agent` 的 `mcp_enabled` / `mcp_tool` / `has_token` 正确；未保存切页签弹确认、取消后草稿保留、重置回滚、非法 JSON 只给 toast 不发请求；390px 下固定条贴屏幕底部、顶栏那份隐藏。
 - 视觉检查覆盖 1600 / 1366 / 1024 / 768 / 390 / 320 与暗色主题（obsidian）：无横向溢出，卡片、开关、下拉菜单与后台其它页签一致。
-- `tools/test-agent-browser.mjs` 里管理端这一段已改成按后台页签驱动；该脚本在前面的「responsive 1920×1080」一步仍会停住（工作区面板默认收起，`[data-tab=prompt]` 不可见），这是本次改动之前就有的状态，没有顺手改工作区。
+- 管理端这一段由 `tools/test-claude-agent-browser.mjs` 按后台页签驱动；旧的分支自建脚本 `tools/test-agent-browser.mjs` 断言了并不存在的 `#mobile-goal`、跑不过且没有 npm 入口，已删除。
 
 ### 18.3 有意不做
 
