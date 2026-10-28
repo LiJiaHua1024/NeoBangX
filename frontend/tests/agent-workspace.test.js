@@ -545,3 +545,16 @@ test("a closed mobile drawer is inert", async () => {
   const bp = src.slice(src.indexOf('onBreakpoint("w1099"'), src.indexOf('onBreakpoint("w1439"'));
   assert.match(bp, /syncNavInert\(\)/);
 });
+
+test("ask card height follows the effective viewport like other overlays", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const css = fs.readFileSync(path.join(__dirname, "../agent/claude/ask.css"), "utf8");
+  // 只看按视口算高度的规则（px / none 之类的固定值不影响缩放）。
+  const heights = [...css.matchAll(/max-height:\s*min\(([^;]+);/g)].map((m) => m[1].trim());
+  assert(heights.length >= 2, heights.join(" / "));
+  for (const value of heights) {
+    assert(!/^min\(\d+vh\s*,/.test(value), `直接写 vh 在放大后会被裁掉：${value}`);
+    assert(value.includes("var(--zoom)"), `高度要按有效视口算：${value}`);
+  }
+});

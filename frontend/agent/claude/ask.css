@@ -10,7 +10,8 @@
 .ask-card {
   display: flex;
   flex-direction: column;
-  max-height: min(60vh, 520px);
+  /* 其它浮层都用「有效视口 / --zoom」表达；直接写 vh 在放大后会被裁掉。 */
+  max-height: min(60vh / var(--zoom), 520px);
   border: 1px solid var(--border-1);
   border-radius: 14px;
   background: var(--surface-1);
@@ -328,7 +329,7 @@ html[data-agent-theme="dark"] .ask-feedback {
   width: 100%;
 }
 :where(html[data-vp~="w767"]) .ask-card {
-  max-height: min(58vh, 460px);
+  max-height: min(58vh / var(--zoom), 460px);
   border-radius: 12px;
 }
 :where(html[data-vp~="w767"]) .ask-head {
