@@ -818,3 +818,13 @@ test("source links survive an entry whose content is not JSON", async () => {
   assert.match(body, /if \(!matches\.length\)/, "没有匹配来源时也要给出口");
   assert(!/const result = JSON\.parse/.test(body), "不能再用裸 JSON.parse");
 });
+
+test("model images keep their alt text instead of vanishing", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/conversation.mjs"), "utf8");
+  const hook = src.slice(src.indexOf('if (data.tagName === "img")'), src.indexOf('if (data.tagName === "img")') + 700);
+  assert.match(hook, /alt/, "要保留 alt 文本");
+  assert.match(hook, /replaceChild/, "把 <img> 换成可读文本节点");
+  assert.match(hook, /\^https\?:/, "只有 http(s) 地址才给可点链接");
+});

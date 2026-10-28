@@ -255,6 +255,22 @@ function sanitize(html) {
     purify.addHook("uponSanitizeElement", (node, data) => {
       if (data.tagName === "input" && (node.getAttribute("type") || "").toLowerCase() !== "checkbox") {
         node.parentNode?.removeChild(node);
+        return;
+      }
+      if (data.tagName === "img") {
+        // 不加载外链图片，但 alt 是可读信息：换成一行文字（有 http(s) 地址时给可点链接）。
+        const alt = String(node.getAttribute("alt") || "").trim();
+        const src = String(node.getAttribute("src") || "").trim();
+        const holder = node.ownerDocument.createElement("span");
+        if (/^https?:\/\//i.test(src)) {
+          const link = node.ownerDocument.createElement("a");
+          link.setAttribute("href", src);
+          link.textContent = `${alt || "图片"}（打开原图）`;
+          holder.append(link);
+        } else {
+          holder.textContent = alt || "图片";
+        }
+        node.parentNode?.replaceChild(holder, node);
       }
     });
     purify.__agentChatHooked = true;
