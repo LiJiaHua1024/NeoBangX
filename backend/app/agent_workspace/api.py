@@ -414,7 +414,8 @@ def add_note(task_id: str, body: NoteWrite, owner: Owner):
                     config=task.config if body.apply_config else "")
         db.add(note)
         db.flush()
-        value = {"id": note.id, "text": note.text or "应用新提示词与工具配置", "applied": False}
+        # 客户端靠 run_id 找对应回合；缺了它补充要求就不会出现在对话里。
+        value = {"id": note.id, "run_id": note.run_id, "text": note.text or "应用新提示词与工具配置", "applied": False}
         store.event(db, task_id, "note", value)
         db.commit()
         return value

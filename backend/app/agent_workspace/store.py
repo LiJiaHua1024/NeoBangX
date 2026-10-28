@@ -383,7 +383,7 @@ def apply_notes(run_id, notes, snapshot, messages):
         for note in notes:
             row = db.get(Note, note["id"])
             row.applied = True
-            event(db, run.task_id, "note", {"id": row.id, "text": row.text, "applied": True})
+            event(db, run.task_id, "note", {"id": row.id, "run_id": row.run_id, "text": row.text, "applied": True})
         db.commit()
 
 

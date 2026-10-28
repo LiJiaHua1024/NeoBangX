@@ -763,3 +763,18 @@ def test_task_detail_reads_runs_in_one_query(identity):
     assert len(run_queries)==1, run_queries
     # 指令字段仍然给出（只有需要展示的模式才有）。
     assert detail['runs'][0]['instruction']=='第0次'
+
+
+def test_note_events_carry_the_run_id(client,identity):
+    """补充要求事件必须带 run_id：客户端靠它找回合，缺了就不渲染。"""
+    t=task(identity);r=run(identity,t)
+    with SessionLocal() as db:
+        row=db.get(WorkspaceTask,t['id']);row.status='running';row.active_run=r['id'];db.commit()
+    assert client.post(f"/api/workspace/tasks/{t['id']}/notes",json={'text':'补一句'}).status_code==200
+    events=[e for e in client.get(f"/api/workspace/tasks/{t['id']}/events").json()['events'] if e['kind']=='note']
+    assert events and events[0]['data']['run_id']==r['id']
+    notes=store.take_notes(r['id'])
+    store.apply_notes(r['id'],notes,{'model':'test','limits':{},'templates':{}},[{'role':'user','content':'x'}])
+    applied=[e for e in client.get(f"/api/workspace/tasks/{t['id']}/events").json()['events'] if e['kind']=='note']
+    assert applied[-1]['data']['applied'] is True and applied[-1]['data']['run_id']==r['id']
+    store.finish_run(r['id'],'stopped')
