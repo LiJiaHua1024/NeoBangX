@@ -17,6 +17,7 @@ _TEST_DATA_DIR = tempfile.mkdtemp(prefix="neobangx-test-data-")
 os.environ["DATA_DIR"] = _TEST_DATA_DIR
 
 import pytest  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
 from app.database import SessionLocal, init_db  # noqa: E402
 from app.services.runtime_config import seed_config_from_env  # noqa: E402
@@ -74,6 +75,24 @@ def workspace_code():
         return value
 
     yield make
+
+    # 收尾遗留的在途/排队轮次：后台 worker 的测试会领取"全局最早的排队轮次"，
+    # 留着排队记录会让它们去跑别人任务，甚至卡住自己的断言。
+    from app.agent_workspace import store as workspace_store
+
+    with SessionLocal() as db:
+        from app.agent_workspace.models import WorkspaceRun, WorkspaceTask
+
+        pending = [
+            run_id
+            for run_id in db.scalars(
+                select(WorkspaceRun.id)
+                .join(WorkspaceTask, WorkspaceRun.task_id == WorkspaceTask.id)
+                .where(WorkspaceTask.owner.in_(created), WorkspaceRun.status.in_(workspace_store.ACTIVE))
+            )
+        ]
+    for run_id in pending:
+        workspace_store.finish_run(run_id, "stopped", "测试收尾")
 
     with SessionLocal() as db:
         for code_id in created:
