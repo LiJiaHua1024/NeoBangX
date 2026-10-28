@@ -1405,6 +1405,8 @@ openrouter/deepseek/deepseek-chat
 
 ### 16.4 执行与过程
 
+> Agent 任务标题按使用码单独限流（`agent_title`，30 次/分）；超限只跳过自动命名，不影响任务开始。
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/workspace/tasks/{id}/runs` | 创建执行轮次；`request_key` 幂等 |

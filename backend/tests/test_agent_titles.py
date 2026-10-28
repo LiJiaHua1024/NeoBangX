@@ -165,3 +165,50 @@ def test_start_run_enqueues_title_for_first_execution(owner):
         run_ids = [row.id for row in db.query(WorkspaceRun).filter(WorkspaceRun.task_id == task.id)]
     for run_id in run_ids:
         store.finish_run(run_id, "stopped")
+
+
+def test_agent_title_uses_its_own_system_prompt(monkeypatch, owner):
+    """标题任务用的是工作台的标题指令（≤15 汉字、不用书名号），不是聊天标题提示词。"""
+    import asyncio as _asyncio
+    from app.routers import chat as chat_router
+    from app.agent_workspace import titles as titles_module
+
+    seen = {}
+
+    class FakeLLM:
+        async def chat(self, **kwargs):
+            seen.update(kwargs)
+            return "单元三 语法讲评"
+
+    monkeypatch.setattr(chat_router, "_build_llm", lambda *args, **kwargs: FakeLLM())
+    monkeypatch.setattr(chat_router, "_load_cfg", lambda: {"models": [], "chores_model": "test"})
+    monkeypatch.setattr(chat_router, "_validate_model", lambda *_: None)
+    monkeypatch.setattr(chat_router, "_log_llm_call", lambda **kwargs: None)
+    task = _task(owner, goal="Unit 3 语法讲评")
+    work = chat_router.TitleJobWork(
+        id=1, attempts=1, code_id=owner, client_job_id="agent-title-x", history_id=task.id,
+        tool_id=titles_module.AGENT_TITLE_TOOL_ID, input_text="目标：Unit 3 语法讲评",
+        output_text="", model="", ip="", user_agent="", fingerprint="", device_summary="",
+    )
+    _asyncio.run(chat_router.execute_title_job(work))
+    assert seen["system_prompt"] == titles_module.TITLE_SYSTEM_PROMPT
+    assert "15 个汉字" in seen["system_prompt"]
+
+
+def test_agent_title_is_rate_limited_in_its_own_bucket(monkeypatch, owner):
+    from app.services import rate_limit
+    from app.agent_workspace import titles as titles_module
+
+    calls = []
+    def limited(identity, bucket):
+        calls.append(bucket)
+        if len(calls) > 1:
+            from fastapi import HTTPException
+            raise HTTPException(429, "请求过于频繁，请稍后再试")
+
+    monkeypatch.setattr(titles_module, "enforce_rate_limit", limited)
+    first = _task(owner, goal="第一次")
+    assert titles_module.enqueue_agent_title(owner, first.id) is not None
+    second = _task(owner, goal="第二次")
+    assert titles_module.enqueue_agent_title(owner, second.id) is None, "超限只跳过命名"
+    assert calls == ["agent_title", "agent_title"]

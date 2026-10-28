@@ -18,6 +18,8 @@ from app.services.free_access import ANON_IDENTITY
 RATE_LIMITS: dict[str, tuple[int, int]] = {
     "analyze": (10, 60),
     "title": (30, 60),
+    # Agent 任务标题独立计数：它按任务自动触发，不和用户主动点的标题抢同一个桶。
+    "agent_title": (30, 60),
     "vocab": (60, 60),
     # PDF 云端解析（MinerU）按次计费，匿名调用额外设一道闸
     "parse": (10, 300),

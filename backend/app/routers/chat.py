@@ -2100,6 +2100,7 @@ async def _generate_title_once(
     fingerprint: str = "",
     device_summary: str = "",
     user_prompt: str | None = None,
+    system_prompt: str | None = None,
     tool_name: str = "标题生成",
 ) -> str:
     """执行一次标题 LLM 调用并按现有口径留痕；重试由持久任务 worker 负责。"""
@@ -2155,7 +2156,7 @@ async def _generate_title_once(
 
     try:
         raw = await llm.chat(
-            system_prompt=TITLE_SYSTEM_PROMPT,
+            system_prompt=system_prompt or TITLE_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             model=model,
             max_tokens=512,
@@ -2197,6 +2198,7 @@ async def execute_title_job(work: TitleJobWork) -> str:
         _validate_model(cfg, work.model or None)
         # Agent 任务标题只带极少量上下文，由工作台自己拼好提示词；
         # 生成完成后写回任务，不占用、也不阻塞任务执行本身。
+        from app.agent_workspace import titles
         from app.agent_workspace.titles import AGENT_TITLE_TOOL_ID, apply_agent_title
         is_agent_title = work.tool_id == AGENT_TITLE_TOOL_ID
         title = await _generate_title_once(
@@ -2211,6 +2213,7 @@ async def execute_title_job(work: TitleJobWork) -> str:
             fingerprint=work.fingerprint,
             device_summary=work.device_summary,
             user_prompt=work.input_text if is_agent_title else None,
+            system_prompt=titles.TITLE_SYSTEM_PROMPT if is_agent_title else None,
             tool_name="Agent 任务标题" if is_agent_title else "标题生成",
         )
         if is_agent_title:

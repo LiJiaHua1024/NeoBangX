@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import logging
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
 
 from app.database import SessionLocal
+from app.services.rate_limit import enforce_rate_limit
 from app.services.title_jobs import enqueue_title_job
 
 from . import store
@@ -99,6 +101,12 @@ def enqueue_agent_title(owner: int, task_id: str, *, instruction: str = "", tool
         material_ids = list(config.get("materials") or [])
     context = build_context(config, instruction, tool_names, _material_rows(task_id, material_ids))
     if not context:
+        return None
+    # 标题按任务自动触发，单独限流；超限只跳过命名，不影响任务开始。
+    try:
+        enforce_rate_limit(f"code:{owner}", "agent_title")
+    except HTTPException as exc:
+        log.warning("Agent 标题限流跳过 task=%s: %s", task_id, exc.detail)
         return None
     try:
         status, _created = enqueue_title_job(
