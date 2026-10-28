@@ -1436,8 +1436,9 @@ async function createTask(config) {
         toast("当前已是空白任务");
         return;
       }
-      history.replaceState({}, "", `/agent/tasks/${blank.id}#prompt`);
-      await openTask(blank.id);
+      // 新任务总从提示词页开始；URL 只由 openTask 推一次，
+      // 否则会留下一条"和当前页完全一样"的死历史（Back 要按两次才动）。
+      await openTask(blank.id, true, "prompt");
       await listTasks();
       return;
     }
@@ -1454,11 +1455,10 @@ async function createTask(config) {
     },
   });
   // 新任务总从提示词页开始，不继承上一个任务的哈希标签。
-  history.replaceState({}, "", `/agent/tasks/${item.id}#prompt`);
-  await openTask(item.id);
+  await openTask(item.id, true, "prompt");
   await listTasks();
 }
-async function openTask(id, push = true) {
+async function openTask(id, push = true, forcedTab = "") {
   modelPicker?.close();
   if (state.task?.id === id) {
     const hash = location.hash.slice(1);
@@ -1510,7 +1510,7 @@ async function openTask(id, push = true) {
     }
   } catch {}
   const hash = location.hash.slice(1);
-  const tab = TAB_IDS.has(hash) ? hash : "prompt";
+  const tab = forcedTab || (TAB_IDS.has(hash) ? hash : "prompt");
   if (push) history.pushState({ view: "work" }, "", `/agent/tasks/${id}#${tab}`);
   fill();
   state.conversation?.destroy();
@@ -3039,7 +3039,7 @@ function maskCode(code) {
   if (!value) return "使用码";
   return `使用码尾号 ${value.slice(-4)}`;
 }
-window.addEventListener("popstate", () => {
+window.addEventListener("popstate", (event) => {
   const id = location.pathname.match(/\/agent\/tasks\/([a-f0-9]+)/)?.[1];
   if (id && id !== state.task?.id) openTask(id, false).catch(error);
   else {
@@ -3048,6 +3048,8 @@ window.addEventListener("popstate", () => {
     if (TAB_IDS.has(hash)) setTab(hash, false);
     else setTab("prompt", false);
   }
+  // 历史条目里记了当时的视图：Back 应该真的回到对话（移动端 setTab 会强制切到工作区）。
+  if (event.state?.view) setView(event.state.view, false);
 });
 $$(".view-tabs [data-mode]").forEach((button) => {
   button.onclick = () => setMode(button.dataset.mode);

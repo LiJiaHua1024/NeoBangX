@@ -450,3 +450,15 @@ test("message draft survives switching tasks and reloading", async () => {
   writeMessage(broken, key, "x");
   assert.equal(messageKey("", "t1"), "");
 });
+
+test("creating a task leaves exactly one history entry", async () => {
+  // 先 replace 再 push 同一 URL 会留下"按一次 Back 毫无变化"的死条目。
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const src = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  const body = src.slice(src.indexOf("async function createTask("), src.indexOf("async function openTask("));
+  assert(!body.includes("history.replaceState"), "新建任务不应 replace 掉上一条历史");
+  assert.match(body, /openTask\([^)]*true, "prompt"\)/, "新任务从提示词页开始，且只 push 一次");
+  const pop = src.slice(src.indexOf('window.addEventListener("popstate"'));
+  assert.match(pop, /event\.state\?\.view/, "Back 要恢复历史条目里记的视图");
+});
