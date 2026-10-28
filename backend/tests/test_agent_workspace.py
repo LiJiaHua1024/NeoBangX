@@ -793,3 +793,37 @@ def test_catalog_default_model_is_always_offered(client,identity,monkeypatch):
     assert client.get('/api/workspace/catalog').json()['default_model']=='b'
     cfg['models']=[{'id':'b','name':'B','enabled':False}]
     assert client.get('/api/workspace/catalog').json()['default_model']==''
+
+
+def test_events_cursor_pages_without_repeat_or_loss(client,identity):
+    """回放游标契约：客户端整个轮询引擎都建立在这上面，必须不重复、不丢、能前进。"""
+    t=task(identity);r=run(identity,t)
+    with SessionLocal() as db:
+        for i in range(450):
+            store.event(db,t['id'],"entry",{"id":f"e{i}"})
+        db.commit()
+    seen,cursor,pages=[],0,0
+    while True:
+        data=client.get(f"/api/workspace/tasks/{t['id']}/events?after={cursor}").json()
+        pages+=1
+        assert all(ev['id']>cursor for ev in data['events']), "游标没有前进"
+        assert data['cursor']>=cursor
+        seen+=[ev['id'] for ev in data['events']]
+        cursor=data['cursor']
+        if not data['has_more']:
+            break
+        assert pages<10, "分页没有收敛"
+    assert len(seen)==len(set(seen)), "同一事件被回放两次"
+    assert len(seen)==451, f"事件数不符：{len(seen)}"  # 450 + 建轮次那一条
+    assert pages==3
+    store.finish_run(r['id'],'stopped')
+
+
+def test_events_cursor_boundary_returns_the_next_event_only(client,identity):
+    t=task(identity);r=run(identity,t)
+    first=client.get(f"/api/workspace/tasks/{t['id']}/events?after=0").json()
+    cursor=first['cursor']
+    more=client.get(f"/api/workspace/tasks/{t['id']}/events?after={cursor}").json()
+    assert all(ev['id']>cursor for ev in more['events'])
+    assert not any(ev['id']<=cursor for ev in more['events'])
+    store.finish_run(r['id'],'stopped')
