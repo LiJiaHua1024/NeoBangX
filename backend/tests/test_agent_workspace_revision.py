@@ -384,7 +384,7 @@ def flow_model(review_texts, observed):
     """调度：生成 → 收到自动审阅后按编号修订 → 结束。写作者：初稿 → 修改块。"""
     reviews, drafts = iter(review_texts), iter([DRAFT, '第 1 条：采纳\n<edit><old>分析甲。</old><new>甲（有出处）。</new></edit>'])
 
-    async def model(cfg, model, messages, schemas, budget, emit, response_format=None):
+    async def model(cfg, model, messages, schemas, budget, emit, response_format=None, **kwargs):
         if response_format:
             observed['review'].append(messages)
             text = next(reviews)

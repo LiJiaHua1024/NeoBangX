@@ -365,7 +365,13 @@ export function createClawd(host) {
         quietSince = now;
         asleep = false;
         const next =
-          state.kind === "output" ? "typing" : state.kind === "tool" ? "typing" : "thinking";
+          state.kind === "compaction"
+            ? "compacting"
+            : state.kind === "output"
+              ? "typing"
+              : state.kind === "tool"
+                ? "typing"
+                : "thinking";
         // Do not strobe between two equal-priority states within a second.
         if (current !== next && now - lastKeyAt < 900) {
           window.clearTimeout(switchTimer);

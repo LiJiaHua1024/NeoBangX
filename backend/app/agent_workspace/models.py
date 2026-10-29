@@ -32,6 +32,8 @@ class WorkspaceRun(Base):
     step: Mapped[int] = mapped_column(Integer, default=0)
     tokens: Mapped[int] = mapped_column(Integer, default=0)
     stop: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 用户在工作台点「压缩上下文」：由接口置位，执行器在下一步开头消费
+    compact_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     charged: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str] = mapped_column(Text, default="")
     lease: Mapped[object | None] = mapped_column(UTCDateTime(), nullable=True)

@@ -751,10 +751,14 @@ function adminApp() {
     agentForm: {
       enabled: true,
       max_steps: 24,
-      max_tokens: 250000,
+      max_tokens: 2000000,
       output_tokens: 16384,
       max_seconds: 1800,
       concurrency: 2,
+      context_budget: 262144,
+      keep_tail_steps: 4,
+      provider_attempts: 3,
+      retry_wait_cap_seconds: 60,
       mcp_enabled: false,
       mcp_url: "",
       mcp_token: "",
@@ -3769,10 +3773,16 @@ function adminApp() {
         output_tokens: [2048, 131072, "单次输出 token 上限"],
         max_seconds: [60, 7200, "每轮最长秒数"],
         concurrency: [1, 8, "执行并发数"],
+        context_budget: [8192, 2000000, "上下文压缩阈值"],
+        keep_tail_steps: [1, 20, "压缩后保留步数"],
+        provider_attempts: [1, 6, "同一 Provider 重试次数"],
+        retry_wait_cap_seconds: [0, 600, "重试等待上限"],
         mcp_timeout: [5, 180, "单次请求超时"],
       };
       const numbers = {};
       for (const [key, [min, max, label]] of Object.entries(ranges)) {
+        // 老配置可能没有新加的口径字段：不传就让后端保持原值，别用 NaN 拦下保存
+        if (this.agentForm[key] == null || this.agentForm[key] === "") continue;
         const value = Number(this.agentForm[key]);
         if (!Number.isInteger(value) || value < min || value > max) {
           throw new Error(`${label}必须是 ${min}–${max} 之间的整数`);
@@ -3801,10 +3811,14 @@ function adminApp() {
         this.agentForm = {
           enabled: data.enabled !== false,
           max_steps: data.max_steps ?? 24,
-          max_tokens: data.max_tokens ?? 250000,
+          max_tokens: data.max_tokens ?? 2000000,
           output_tokens: data.output_tokens ?? 16384,
           max_seconds: data.max_seconds ?? 1800,
           concurrency: data.concurrency ?? 2,
+          context_budget: data.context_budget ?? 262144,
+          keep_tail_steps: data.keep_tail_steps ?? 4,
+          provider_attempts: data.provider_attempts ?? 3,
+          retry_wait_cap_seconds: data.retry_wait_cap_seconds ?? 60,
           mcp_enabled: !!data.mcp_enabled,
           mcp_url: data.mcp_url || "",
           // 令牌只写不读：接口不回传明文，输入框永远从空开始

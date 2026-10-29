@@ -204,8 +204,28 @@
             </label>
             <label class="field">
               <span>每轮 token 预算</span>
-              <input type="number" id="agent-max-tokens" x-model.number="agentForm.max_tokens" min="4096" max="1500000" step="1">
-              <span class="field-hint">一轮累计消耗的输入 + 输出上限</span>
+              <input type="number" id="agent-max-tokens" x-model.number="agentForm.max_tokens" min="4096" max="8000000" step="1">
+              <span class="field-hint">一轮的计费口径上限：只算「未命中缓存的输入 + 输出」，命中缓存的输入不占预算</span>
+            </label>
+            <label class="field">
+              <span>上下文压缩阈值</span>
+              <input type="number" id="agent-context-budget" x-model.number="agentForm.context_budget" min="8192" max="2000000" step="1024">
+              <span class="field-hint">上下文超过它就先压缩再发；压缩后仍超 1.25 倍才报错</span>
+            </label>
+            <label class="field">
+              <span>压缩后保留步数</span>
+              <input type="number" id="agent-keep-tail-steps" x-model.number="agentForm.keep_tail_steps" min="1" max="20" step="1">
+              <span class="field-hint">最近的几步原样保留，更早的步骤换成机械摘要</span>
+            </label>
+            <label class="field">
+              <span>同一 Provider 重试次数</span>
+              <input type="number" id="agent-provider-attempts" x-model.number="agentForm.provider_attempts" min="1" max="6" step="1">
+              <span class="field-hint">Agent 换家会让整段缓存作废，所以先在同一家重试，用尽才换</span>
+            </label>
+            <label class="field">
+              <span>重试等待上限（秒）</span>
+              <input type="number" id="agent-retry-wait-cap" x-model.number="agentForm.retry_wait_cap_seconds" min="0" max="600" step="1">
+              <span class="field-hint">上游 Retry-After 超过它就放弃等待、直接换家</span>
             </label>
             <label class="field">
               <span>单次输出 token 上限</span>

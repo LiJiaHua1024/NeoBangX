@@ -6,11 +6,12 @@ import time
 from jsonschema import validate
 
 from app.routers.chat import _load_cfg
+from app.services import provider_health
 from app.services.llm import count_text_tokens
 from app.services.prompt_loader import DEFAULT_VARIABLES
 from app.services.error_explain import sanitize_error_text
 from app.models import utcnow
-from . import store, tools, llm, writer
+from . import context, store, tools, llm, writer
 from .instructions import (DEFAULT_EXECUTION_REQUEST, REVIEW_FEEDBACK, REVIEW_POLICY, REVIEW_SCHEMA,
                            REVISION_RETRY, WRITER_SYSTEM, behavior_of)
 from .settings import load_settings
@@ -20,6 +21,10 @@ log = logging.getLogger(__name__)
 # 同一进程内运行的轮次：停止接口直接取消这里的任务，不必等下一次心跳。
 # DB 里的 stop 标记仍是跨进程/重启的兜底，心跳间隔只决定兜底的最坏延迟。
 HEARTBEAT_SECONDS = 0.75
+# 与 Agent 设置里的默认值保持一致（老轮次的快照没有这些键时用它兜底）
+DEFAULT_CONTEXT_BUDGET = 262144
+DEFAULT_PROVIDER_ATTEMPTS = 3
+DEFAULT_RETRY_WAIT_CAP = 60.0
 STOP_GRACE_SECONDS = 3.0
 _LOOP = None
 _ACTIVE = {}
@@ -100,6 +105,13 @@ class Runner:
         self.created_versions = []
         self.current_entry = None
         self.cancel_reason = ("interrupted", "execution_cancelled", "后台执行被取消，已收到的内容已保存")
+        # Provider 粘性与缓存观测：一旦换家，本任务不再自动切回
+        self.provider_id = ""
+        self.switches = []
+        self.usage_totals = {"prompt": 0, "cached": 0, "completion": 0, "cached_reported": False}
+        self.partial_retries = 0
+        self.config_changed = False
+        self._token_cache: dict = {}
 
     async def load(self):
         self.run = await asyncio.to_thread(store.load_run, self.id)
@@ -110,6 +122,11 @@ class Runner:
         self.limits = self.snapshot["limits"]
         self.step, self.tokens = self.run["step"], self.run["tokens"]
         self.created_versions = self.run["versions"]
+        self.provider_id = self.snapshot.get("provider") or self.snapshot.get("preferred_provider") or ""
+        self.switches = list(self.snapshot.get("switches") or [])
+        self.usage_totals = {**self.usage_totals, **(self.snapshot.get("usage") or {})}
+        elapsed = (utcnow() - self.run["started_at"]).total_seconds() if self.run.get("started_at") else 0
+        self.deadline = time.monotonic() + max(0.0, self.limits["max_seconds"] - elapsed)
         self.messages = self.run["messages"]
         if not self.messages:
             rows = await asyncio.to_thread(tools.materials, self.task_id, self.config["materials"])
@@ -130,6 +147,8 @@ class Runner:
             await self.checkpoint()
 
     async def checkpoint(self):
+        # 用量与 Provider 都随检查点落库：使用日志在轮次结束时按真实用量结算
+        self.snapshot["usage"] = dict(self.usage_totals)
         await asyncio.to_thread(store.checkpoint, self.id, self.messages, self.step, self.tokens, self.snapshot)
 
     async def flush(self):
@@ -145,19 +164,178 @@ class Runner:
         if time.monotonic() - self.last_flush > 0.35:
             await self.flush()
 
-    async def call(self, label, messages, schemas=None, review=False, role="agent", source=""):
-        """role 区分调度与写作者：写作者的正文进成果，对话只显示进度；source 把同一次写作的续写归到一起。"""
+    def _message_tokens(self, message: dict) -> int:
+        """单条消息的 token 数（按对象身份缓存：消息追加后不再改写，重复计费没意义）。"""
+        key = id(message)
+        value = self._token_cache.get(key)
+        if value is None:
+            value = count_text_tokens(store.encode(message), self.snapshot["model"]) + 3
+            self._token_cache[key] = value
+        return value
+
+    def _context_tokens(self, messages: list[dict], schemas=None) -> int:
+        """整段上下文的 token 估算：逐条缓存求和，避免每步把 256K 重新分词。"""
+        total = sum(self._message_tokens(message) for message in messages)
+        if schemas:
+            key = ("tools", len(schemas), store.encode(schemas))
+            value = self._token_cache.get(key)
+            if value is None:
+                value = count_text_tokens(store.encode(schemas), self.snapshot["model"])
+                self._token_cache[key] = value
+            total += value
+        return total
+
+    async def _compaction_reason(self) -> str:
+        """决定这一步之前要不要"强制"压缩。
+
+        - manual：用户点了「压缩上下文」；
+        - frame-break：刚应用了新配置（工具表变了，前缀本来就要重算，顺手压缩不亏）；
+        - cold：本轮第一步，且粘住的 Provider 正在熔断（大概率要换家，
+          新家反正要冷读，先把上下文压小）。
+        其余情况交给 compact() 自己按 256K 阈值判断。
+        """
+        if await asyncio.to_thread(store.take_compact_request, self.id):
+            return "manual"
+        if self.config_changed:
+            self.config_changed = False
+            return "frame-break"
+        if self.step == 0 and self.provider_id and provider_health.is_open(self.provider_id):
+            return "cold"
+        return ""
+
+    async def compact(self, reason: str = "") -> bool:
+        """按需压缩上下文；返回是否真的压缩了。
+
+        触发：reason 非空（manual / frame-break / cold）或估算超过 context_budget。
+        切点永远在 HEAD 之后，HEAD 逐字节不变 —— 这段前缀的缓存不会被压缩打掉。
+        """
+        budget = int(self.limits.get("context_budget") or DEFAULT_CONTEXT_BUDGET)
+        keep_tail = max(1, int(self.limits.get("keep_tail_steps") or 4))
+        before = await asyncio.to_thread(self._context_tokens, self.messages, None)
+        if not reason and before <= budget:
+            return False
+        if len(self.messages) <= 2 + keep_tail:
+            return False
+        ratio = (float(self.limits.get("switch_compaction_ratio") or 0.5)
+                 if reason == "cold" else 0.7)
+        target = max(8192, int(budget * ratio))
+        plan = await asyncio.to_thread(
+            context.plan_cut, self.messages, keep_tail=keep_tail, target_tokens=target,
+            count_tokens=lambda msgs: self._context_tokens(msgs, None),
+        )
+        if not plan:
+            return False
+        new_messages, stats = plan
+        after = await asyncio.to_thread(self._context_tokens, new_messages, None)
+        if after >= before:
+            return False
+        self.messages = new_messages
+        # 只保留仍在上下文里的消息的计数，避免长期运行把缓存撑大
+        live = {id(message) for message in self.messages}
+        self._token_cache = {key: value for key, value in self._token_cache.items()
+                             if not isinstance(key, int) or key in live}
+        stats.update(before=before, after=after, reason=reason or "pressure")
+        await self.checkpoint()
+        entry = await asyncio.to_thread(store.start_entry, self.task_id, self.id, store.uid(),
+                                        "compaction", "压缩上下文", stats)
+        await asyncio.to_thread(store.finish_entry, entry["id"], "done", stats)
+        log.info("Agent 压缩上下文（%s）：%s → %s tokens，丢了 %s 个单元",
+                 stats["reason"], before, after, stats["dropped_units"])
+        return True
+
+    def hard_context_limit(self) -> int:
+        """上下文硬顶：压缩阈值之上留 25% 余量。
+
+        256K 是「该压缩了」的线，不是「不允许」的线；真正拒绝只在压缩之后
+        仍然超限时发生（材料本身太大，压缩解决不了）。
+        """
+        budget = int(self.limits.get("context_budget") or DEFAULT_CONTEXT_BUDGET)
+        return int(budget * 1.25)
+
+    def provider_attempts(self) -> int:
+        return max(1, int(self.limits.get("provider_attempts") or DEFAULT_PROVIDER_ATTEMPTS))
+
+    def retry_wait_cap(self) -> float:
+        return float(self.limits.get("retry_wait_cap_seconds") or DEFAULT_RETRY_WAIT_CAP)
+
+    def _charge(self, usage: dict | None, cached: int | None, context_tokens: int, output_text: str = "") -> None:
+        """按「未命中缓存的输入 + 输出」计入本轮预算。
+
+        命中缓存的输入按上游缓存价计费（通常是输入价的 10–25%），把它算成未命中
+        会让长任务在缓存好好的时候也被预算掐死；反过来，上游没上报命中信息时
+        一律按未命中算（保守），绝不把「不知道」当成「免费」。
+        """
+        usage = usage or {}
+        prompt = int(usage.get("prompt_tokens") or context_tokens or 0)
+        completion = int(usage.get("completion_tokens") or 0)
+        if not completion and output_text:
+            completion = count_text_tokens(output_text, self.snapshot["model"])
+        hit = int(cached or 0)
+        if hit < 0:
+            hit = 0
+        if hit > prompt:
+            hit = prompt
+        uncached = max(0, prompt - hit)
+        self.tokens += uncached + completion
+        totals = self.usage_totals
+        totals["prompt"] = int(totals.get("prompt") or 0) + prompt
+        totals["cached"] = int(totals.get("cached") or 0) + hit
+        if cached is not None:
+            # 区分「上报了 0」与「没上报」：日志里后者必须是 NULL
+            totals["cached_reported"] = True
+        totals["completion"] = int(totals.get("completion") or 0) + completion
+
+    def _note_provider(self, provider_id: str) -> None:
+        """记录这一步实际走的 Provider；换了家就记一次（本任务不再自动切回）。"""
+        if not provider_id:
+            return
+        previous = self.provider_id
+        if previous and previous != provider_id:
+            self.switches.append({"from": previous, "to": provider_id, "step": self.step})
+            self.snapshot["switches"] = self.switches
+            log.warning("Agent 任务换用 Provider：%s → %s（第 %s 步），本任务不再切回",
+                        previous, provider_id, self.step)
+        self.provider_id = provider_id
+        self.snapshot["provider"] = provider_id
+
+    def _may_retry_partial(self, exc: "llm.PartialResponseError") -> bool:
+        """断流后是否同家重跑本步：prompt 一字未变，重跑几乎全是缓存命中。
+
+        只在「断流前没吐多少内容 + 时间/预算还够 + 是瞬态故障」时做一次，
+        避免把一次真正的输出中断变成反复重跑。
+        """
+        if self.partial_retries >= 1:
+            return False
+        if len(exc.result.content or "") > 2000:
+            return False
+        if not provider_health.is_transient_failure(exc.cause):
+            return False
+        if time.monotonic() + 60 > self.deadline:
+            return False
+        if self.limits["max_tokens"] - self.tokens < 4096:
+            return False
+        self.partial_retries += 1
+        return True
+
+    async def call(self, label, messages, schemas=None, review=False, role="agent", source="", retry=False):
+        """role 区分调度与写作者：写作者的正文进成果，对话只显示进度；source 把同一次写作的续写归到一起。
+
+        retry=True 表示「同一步的重跑」（断流后）：不占新步数、不改 messages，
+        这样前缀缓存原样命中。
+        """
         self.last_call_entry = None
-        if self.step >= self.limits["max_steps"]:
+        if not retry and self.step >= self.limits["max_steps"]:
             raise BudgetReached("已达到本轮步骤上限，已有成果保留，可继续执行")
-        context_tokens = await asyncio.to_thread(count_text_tokens, store.encode({"messages": messages, "tools": schemas or []}), self.snapshot["model"])
-        remaining = self.limits["max_tokens"] - self.tokens - context_tokens
-        if remaining < 256:
+        context_tokens = await asyncio.to_thread(self._context_tokens, messages, schemas)
+        # 预算只算「已花掉的未命中 tokens」，不再把整段上下文预扣一次：
+        # 否则 256K 上下文光第一步就会被判超预算，缓存命中反而让预算纹丝不动。
+        remaining = self.limits["max_tokens"] - self.tokens
+        if remaining < 512:
             raise BudgetReached("已达到本轮 token 预算，已有成果已保留")
-        # 不通过截掉材料来适配窗口。超限时保留任务并要求缩小选材。
-        if context_tokens > 90000:
-            raise BudgetReached("本次上下文过长，请分篇选材后继续；材料与成果没有删减")
-        self.step += 1
+        if context_tokens > self.hard_context_limit():
+            raise BudgetReached("本次上下文过长，请先压缩上下文或分篇选材后继续；材料与成果没有删减")
+        if not retry:
+            self.step += 1
         output_limit = min(self.limits["output_tokens"], remaining)
         entry = await asyncio.to_thread(store.start_entry, self.task_id, self.id, store.uid(),
                                         "review" if review else "model", label,
@@ -168,15 +346,22 @@ class Runner:
         self.current_entry = entry["id"]
         self.last_call_entry = entry["id"]
         await asyncio.to_thread(store.append_chunks, entry["id"], {"prompt": store.encode({"messages": messages, "tools": schemas or []})})
-        self.tokens += context_tokens
         try:
             result = await self.model_call(self.cfg, self.snapshot["model"], messages, schemas,
-                                           output_limit,
-                                           self.emit, response_format=REVIEW_SCHEMA if review else None)
+                                           output_limit, self.emit,
+                                           response_format=REVIEW_SCHEMA if review else None,
+                                           preferred=self.provider_id,
+                                           attempts=self.provider_attempts(),
+                                           retry_wait_cap=self.retry_wait_cap(),
+                                           deadline=self.deadline)
             await self.flush()
-            thinking = await asyncio.to_thread(store.entry_text, entry["id"], "reasoning") if not result.tokens else ""
-            self.tokens += (result.tokens - context_tokens) if result.tokens else await asyncio.to_thread(count_text_tokens, result.content + store.encode(result.calls) + thinking, self.snapshot["model"])
-            details = {"usage": result.usage, "finish_reason": result.finish_reason}
+            thinking = await asyncio.to_thread(store.entry_text, entry["id"], "reasoning") if not result.usage else ""
+            self._charge(result.usage, result.cached_tokens, context_tokens,
+                         result.content + store.encode(result.calls) + thinking)
+            self._note_provider(result.provider_id)
+            details = {"usage": result.usage, "finish_reason": result.finish_reason,
+                       "provider_id": result.provider_id, "attempts": result.attempts,
+                       "cached_tokens": result.cached_tokens, "budget_tokens": self.tokens}
             limited = result.finish_reason in {"length", "max_tokens"}
             if limited:
                 details.update(error_code="output_limit", error=f"模型达到本次输出上限（请求额度 {output_limit:,} tokens），已收到的内容已保存")
@@ -187,10 +372,12 @@ class Runner:
         except BaseException as exc:
             await self.flush()
             partial = "".join([await asyncio.to_thread(store.entry_text, entry["id"], kind) for kind in ("output", "reasoning", "arguments")])
-            if isinstance(exc, llm.PartialResponseError) and exc.result.tokens:
-                self.tokens += exc.result.tokens - context_tokens
+            if isinstance(exc, llm.PartialResponseError):
+                self._charge(exc.result.usage, exc.result.cached_tokens, context_tokens, partial)
+                if exc.result.provider_id:
+                    self._note_provider(exc.result.provider_id)
             else:
-                self.tokens += await asyncio.to_thread(count_text_tokens, partial, self.snapshot["model"])
+                self._charge(None, None, context_tokens, partial)
             if isinstance(exc, asyncio.CancelledError):
                 status, code, message = self.cancel_reason
                 details = {"error_code": code, "error": message}
@@ -200,6 +387,8 @@ class Runner:
                 # 其余按可继续的中断处理，让用户能接着跑。
                 status = "failed" if details["error_code"] in {
                     "empty_response", "model_finish_error", "model_auth", "model_not_found"} else "interrupted"
+                if isinstance(exc, llm.PartialResponseError):
+                    details.update(provider_id=exc.result.provider_id, attempts=exc.result.attempts)
             await asyncio.to_thread(store.finish_entry, entry["id"], status, details)
             raise
         finally:
@@ -212,9 +401,12 @@ class Runner:
             if note["config"]:
                 self.config = note["config"]
                 # 模型选择固定在本轮；提示词和工具从下一步生效。
+                # 不重写 messages[0]：HEAD 是前缀缓存的锚点，改它等于整段重算。
+                # 新配置以追加消息的形式交给模型（下一句就是完整配置 JSON），
+                # 并把这次变化当成一次"换帧"事件，在下一步顺手压缩。
                 self.snapshot["config"] = self.config
                 self.snapshot["revision"] += 1
-                self.messages[0] = {"role": "system", "content": behavior_of(self.config)}
+                self.config_changed = True
                 self.messages.append({"role": "user", "content": "从此步骤使用的新任务配置：\n" + store.encode(self.config)})
             if note["text"]:
                 self.messages.append({"role": "user", "content": note["text"]})
@@ -533,22 +725,6 @@ class Runner:
                 raise ValueError("审阅格式无法解析，未得出审阅结论") from None
             return None
 
-    def compact(self):
-        # 只删除完整的 assistant/tool 组。完整原始调用保存在步骤指令与输出中。
-        if count_text_tokens(store.encode(self.messages), self.snapshot["model"]) < 50000:
-            return
-        tail = self.messages[2:]
-        groups = []
-        for message in tail:
-            if message["role"] == "assistant" or message["role"] == "user" or not groups:
-                groups.append([])
-            groups[-1].append(message)
-        if len(groups) > 8:
-            summary = "较早执行记录已外化到步骤详情。已产生的成果版本：" + ", ".join(self.created_versions)
-            # 用户补充保持全文，避免压掉新要求。
-            notes = [m for group in groups[:-8] for m in group if m["role"] == "user"]
-            self.messages = self.messages[:2] + notes + [{"role": "user", "content": summary}] + [m for group in groups[-8:] for m in group]
-
     async def execute(self):
         await self.load()
         if self.run["mode"] == "tool_test":
@@ -587,8 +763,18 @@ class Runner:
             if self.step >= self.limits["max_steps"]:
                 raise BudgetReached("已达到本轮步骤上限，已有成果保留，可继续执行")
             await self.notes()
-            self.compact()
-            result, entry_id = await self.call(f"执行步骤 {self.step+1}", self.messages, tools.tool_schemas(self.config))
+            await self.compact(await self._compaction_reason())
+            try:
+                result, entry_id = await self.call(f"执行步骤 {self.step+1}", self.messages,
+                                                   tools.tool_schemas(self.config))
+            except llm.PartialResponseError as exc:
+                # 断流：prompt 一字未变，同家重跑本步一次几乎全是缓存命中；
+                # 只有在"没吐多少 + 时间预算够 + 是瞬态故障"时才这么做。
+                if not self._may_retry_partial(exc):
+                    raise
+                log.warning("执行步骤断流，同 Provider 重跑本步一次：%s", exc)
+                result, entry_id = await self.call(f"执行步骤 {self.step}（断流重试）", self.messages,
+                                                   tools.tool_schemas(self.config), retry=True)
             if result.finish_reason in {"length", "max_tokens"}:
                 if result.content:
                     await asyncio.to_thread(store.save_version, self.task_id, self.id, "partial:"+entry_id,

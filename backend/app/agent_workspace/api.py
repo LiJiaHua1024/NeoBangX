@@ -342,7 +342,9 @@ def start_run(task_id: str, body: RunWrite, owner: Owner):
     if "web_search" in config["tools"] and not search_available(policy):
         raise HTTPException(409, "网页搜索未接入，请关闭开关或联系管理员")
     templates = {t["id"]: t for t in official_templates() if t["id"] in config.get("teaching_tools", {}) or t["id"] == config.get("template_id")}
-    snapshot = {"model": model, "limits": policy.model_dump(include={"max_steps", "max_tokens", "output_tokens", "max_seconds"}),
+    snapshot = {"model": model, "limits": policy.model_dump(include={
+        "max_steps", "max_tokens", "output_tokens", "max_seconds", "context_budget",
+        "keep_tail_steps", "provider_attempts", "retry_wait_cap_seconds", "switch_compaction_ratio"}),
                 "templates": templates, "base_adopted": task["adopted_version"], "expected_revision": task["revision"],
                 "teaching_tool": body.teaching_tool}
     run = store.create_run(owner, task_id, body.request_key, body.mode, body.instruction, body.base_version, snapshot, not is_agent_free(entry), entry)
@@ -447,6 +449,19 @@ def stop_run(task_id: str, owner: Owner):
     # 进程内立即取消在途模型调用；跨进程/重启时由心跳读取上面的 stop 标记兜底。
     runner.request_stop(run_id)
     return {"received": True, "status": value["status"], "run": value}
+
+
+@router.post("/tasks/{task_id}/compact")
+def request_compact(task_id: str, owner: Owner):
+    """把「立即压缩上下文」挂到当前轮次：执行器在下一步开头压缩一次。"""
+    with SessionLocal() as db:
+        task = store.owned(db, task_id, owner)
+        row = db.get(Run, task.active_run) if task.active_run else None
+        if not row or row.status not in store.ACTIVE:
+            raise HTTPException(409, "当前没有执行中的轮次，无法压缩上下文")
+        row.compact_requested = True
+        db.commit()
+        return {"status": "scheduled"}
 
 
 @router.post("/tasks/{task_id}/notes")

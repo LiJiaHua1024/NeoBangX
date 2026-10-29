@@ -2244,6 +2244,15 @@ $("#copy-task").onclick = async () => {
     error(e);
   }
 };
+$("#compact-context").onclick = async () => {
+  closeMenus();
+  try {
+    await api(path("/compact"), { method: "POST" });
+    toast("已安排在下一步压缩上下文");
+  } catch (e) {
+    error(e);
+  }
+};
 $("#delete-task").onclick = () => {
   closeMenus();
   confirmAction(

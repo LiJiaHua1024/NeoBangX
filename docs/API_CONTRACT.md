@@ -1384,6 +1384,7 @@ openrouter/deepseek/deepseek-chat
 | 1.20.0 | 2026-10-19 | 撞输出上限改为**所有工具**都发 `truncated`（原先只对工具 32/33 发，其余工具把半份内容当完整结果交付且没有续写入口），载荷补 `completion_tokens` 与 `finish_reason`，前端据此在结果区给「继续生成」出口、把记录标成「待补全」；`error` 事件改为「Chores 模型转写的两句话 + 机器可读分类」：新增 `advice` 与 `code` 字段，`message` 不再是固定的「生成失败，请稍后重试」，失败时先发一条 `explaining` 非终态事件让前端立刻停止显示「生成中」（新增提示词 `prompts/报错解释.md`，注册为 Chores 工作 `error_explain` 以便按模型配推理等级；Chores 不可用时按「精确判定 → Jev → 机械兜底」决定要不要再试，总时长预算 3 秒，仍失败则用机械文案兜底，同类错误走进程内缓存）；失败分类 `error_code` 与上游结束原因 `finish_reason` 随使用日志落库，前端按 `code` 收起注定失败的重试、后台日志表据此显示「截断」与分类角标；Jev 的「精确 → Jev → 兜底」三层骨架抽成 `app/services/decision.py`，Provider 切换判定、标题任务重试判定与报错解读共用同一套编排 |
 | 1.21.0 | 2026-10-29 | 模型用途新增第四项「Agent」（`agent_usable`，**缺省 false**）：`/api/workspace/catalog` 只返回勾了该项、未禁用、且至少绑定一个启用 Provider 的模型，`default_model` 不在清单内时回退为清单第一个；`POST /tasks/{id}/runs` 同口径校验（未勾 403、未绑 Provider 400、清单为空 403 并提示联系管理员）。`agent_usable` 不参与任何历史迁移，与 `user_usable` 互不继承；管理后台模型编辑弹窗「用途」新增 Agent 项（默认不勾），模型列表的用途徽章同步显示。用户端／OCR／Chores 的可见性与校验口径不变 |
 | 1.22.0 | 2026-10-29 | 免费模型能力拆成主站 / 工作台两个开关：新增 `agent_free`（缺省 false，仅 `is_free` 为真时生效）——未勾的模型在 `/agent` 按普通模型每轮扣 1 次，勾了才不扣；新增 `agent_free_limits`（同一组窗口键），按**执行轮次**计数且只统计 `tool_id="agent"` 的行；主站 `free_limits` 计数改为排除工作台的行，两个池子互不占用（避免分钟级窗口卡死多轮任务）。`/api/workspace/catalog` 的 `models` 原样带出 `is_free` / `agent_free`，管理后台模型编辑弹窗新增「Agent 免费」开关与「Agent 防滥用限额」面板 |
+| 1.23.0 | 2026-10-29 | Agent 执行策略：Provider 任务级粘住（同一家最多 3 次尝试、退避 + Retry-After，用尽才换、换家不切回；断流时同家重跑本步一次）；上下文压缩阈值 262144 tokens（去掉 9 万硬顶，保留 HEAD 与最近 N 步、中间段换确定性摘要、用户补充要求全文保留，压缩后 1.25 倍兜底）；轮 token 预算改为「未命中缓存的输入 + 输出」（默认 2,000,000），使用日志仍按原始 prompt/completion/cached 记录；步骤详情新增 `provider_id` / `attempts` / `cached_tokens`；新增 `POST /api/workspace/tasks/{id}/compact` 与 `kind="compaction"` 步骤；Agent 设置新增 `context_budget` / `keep_tail_steps` / `provider_attempts` / `retry_wait_cap_seconds` / `switch_compaction_ratio` |
 
 ---
 
@@ -1410,6 +1411,24 @@ openrouter/deepseek/deepseek-chat
 `free_limits` 也把这类行排除在外 —— 两边互不消耗。超限返回 429「免费模型在 Agent 工作台每小时
 最多执行 N 轮」。`catalog` 的 `models` 原样带出 `is_free` / `agent_free`，工作台模型选择器据此
 显示「免费」或「主站免费」。
+
+**Provider 粘性与重试：** 每一轮记一个首选 Provider（任务级继承，新任务按优先级重选）。
+调用链把它排在最前，失败后**先在同一家重试**（默认 3 次尝试、1s/4s 退避；`Retry-After`
+≤60s 按它等待，超过则不再等），用尽才换下一家；401/403/404 立即换家（重试改不了配置），
+上下文超限/内容审核/413 既不重试也不换家。换家后本任务**不再自动切回**（切回等于再废一次
+缓存），切换记录进 `run.snapshot.switches`。断流（已收到部分内容后报错）时，若内容 < 2000 字符、
+时间与预算允许且属瞬态故障，会在同一家**重跑本步一次**（prompt 未变，缓存全部命中）。
+
+**上下文压缩：** 估算上下文超过 `context_budget`（默认 262144 tokens）时，在下一步之前压缩：
+保留 `messages[0:2]`（system + 任务上下文）逐字节不变、保留最近 `keep_tail_steps` 步原文、
+保留全部用户补充要求，把中间段换成确定性摘要（工具名/参数/返回大小/版本号，不含模型生成的
+自由文本）。压缩后仍超过 1.25 倍阈值才报错。改配置（工具表变化）与用户手动「压缩上下文」
+也会触发一次。压缩本身记一条 `kind="compaction"` 的步骤（含 before/after/丢弃单元数）。
+
+**用量口径：** 轮次 `tokens` 是**预算消耗**＝未命中缓存的输入 + 输出；每一步的
+`details.usage` 保留上游原始 `prompt_tokens` / `completion_tokens`，`details.cached_tokens`
+为命中的前缀 tokens（`null` = 上游未上报）。使用日志在轮次结束按真实用量写
+`prompt_tokens` / `completion_tokens` / `cached_tokens`，`total_tokens = prompt + completion`。
 
 ### 16.2 任务
 
@@ -1440,6 +1459,7 @@ openrouter/deepseek/deepseek-chat
 |------|------|------|
 | POST | `/api/workspace/tasks/{id}/runs` | 创建执行轮次；`request_key` 幂等 |
 | POST | `/api/workspace/tasks/{id}/stop` | 立即停止当前轮次；返回 `{received, status, run?}`，`received=false` 表示没有可停止的轮次 |
+| POST | `/api/workspace/tasks/{id}/compact` | 给当前轮次挂一次「立即压缩上下文」：执行器在下一步开头压缩（没有执行中的轮次返回 409） |
 | POST | `/api/workspace/tasks/{id}/notes` | 补充要求，或 `apply_config=true` 在下一步应用新配置 |
 | GET | `/api/workspace/tasks/{id}/events?after=` | 增量事件（`run` / `entry` / `note` / `version` / `adopt` / `material` / `config` / `title`）；**不含大段正文**。`note` 载荷含 `run_id`，客户端据此把补充要求挂到对应回合 |
 | GET | `/api/workspace/tasks/{id}/entries` | 步骤元数据列表（按创建时间），用于恢复对话与轨迹；不含正文 |

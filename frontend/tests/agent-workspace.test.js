@@ -167,13 +167,14 @@ test("run usage grows during a model call and never dips before settling", async
     ]),
   };
   const run = { id: "r1", status: "running", tokens: 3000 };
-  // 已结算 3000，加上进行中调用的上下文 1000 与已收到输出 200；已结束的调用不再重复计入。
-  assert.equal(proto.runTokens.call(fake, run), 4200);
+  // 预算只算「未命中缓存 + 输出」：进行中的调用只加已收到的输出（200），
+  // 上下文大小另外展示，不能当成计费 token 加进来。
+  assert.equal(proto.runTokens.call(fake, run), 3200);
   fake.entries.set("b", { ...fake.entries.get("b"), details: { context_tokens: 1000, live_tokens: 700 } });
-  assert.equal(proto.runTokens.call(fake, run), 4700);
+  assert.equal(proto.runTokens.call(fake, run), 3700);
   // 调用已完成、结算事件还没到：不回落。
   fake.entries.set("b", { ...fake.entries.get("b"), status: "done" });
-  assert.equal(proto.runTokens.call(fake, run), 4700);
+  assert.equal(proto.runTokens.call(fake, run), 3700);
   // 结算到达，轮次结束后显示结算值。
   assert.equal(proto.runTokens.call(fake, { ...run, status: "completed", tokens: 4650 }), 4650);
   assert.equal(fake.tokenFloor.size, 0);

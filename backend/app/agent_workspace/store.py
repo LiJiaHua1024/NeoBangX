@@ -92,6 +92,12 @@ def _run_row(row):
     value = {"id": row["id"], "status": row["status"], "mode": row["mode"], "step": row["step"],
              "tokens": row["tokens"], "error": row["error"], "created_at": row["created_at"].isoformat(),
              "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None}
+    usage = row["usage"]
+    if usage:
+        try:
+            value["usage"] = decode(usage)
+        except (TypeError, ValueError):
+            pass
     if row["mode"] in INSTRUCTION_MODES:
         value["instruction"] = row["instruction"] or ""
         value["base_version"] = row["base_version"] or ""
@@ -115,6 +121,7 @@ def task_detail(owner, task_id):
             Run.id, Run.status, Run.mode, Run.step, Run.tokens, Run.error, Run.created_at, Run.finished_at,
             func.json_extract(Run.snapshot, "$.instruction").label("instruction"),
             func.json_extract(Run.snapshot, "$.base_version").label("base_version"),
+            func.json_extract(Run.snapshot, "$.usage").label("usage"),
         ).where(Run.task_id == task_id).order_by(Run.created_at)).mappings()]
         # 对话恢复需要补充要求；过程正文仍不进入任务详情。
         value["notes"] = [{"id": r.id, "run_id": r.run_id, "text": r.text,
@@ -177,8 +184,15 @@ def create_run(owner, task_id, key, mode, instruction, base_version, snapshot, p
                     UsageLog.created_at >= utcnow()-timedelta(seconds=seconds), _counted_status_clause()))
                 if used >= limit:
                     raise HTTPException(429, f"免费模型在 Agent 工作台{label}最多执行 {limit} 轮，请稍后再试")
+        # 任务级 Provider 粘性：沿用上一轮实际成功的那一家，缓存和行为都不重开一局。
+        last_run = db.scalar(select(Run).where(Run.task_id == task_id).order_by(Run.created_at.desc()).limit(1))
+        preferred = ""
+        if last_run is not None:
+            last_snapshot = decode(last_run.snapshot)
+            preferred = last_snapshot.get("provider") or last_snapshot.get("preferred_provider") or ""
         snapshot = {**snapshot, "config": decode(task.config), "revision": task.revision,
-                    "instruction": instruction, "base_version": base_version}
+                    "instruction": instruction, "base_version": base_version,
+                    "preferred_provider": preferred}
         if base_version:
             version = db.get(Version, base_version)
             if not version or version.task_id != task_id:
@@ -415,6 +429,17 @@ def heartbeat(run_id):
         return stop
 
 
+def take_compact_request(run_id):
+    """消费一次「立即压缩上下文」的请求；没有请求时返回 False。"""
+    with SessionLocal() as db:
+        row = db.get(Run, run_id)
+        if not row or not row.compact_requested:
+            return False
+        row.compact_requested = False
+        db.commit()
+        return True
+
+
 def stop_requested(run_id):
     """只读检查停止标记，用于覆盖「接口已提交、运行任务还没注册」的窗口。"""
     with SessionLocal() as db:
@@ -466,14 +491,28 @@ def recover_runs():
         finish_run(run_id, "stopped", "已按停止请求结束")
 
 
-def _settle_log(db, run_id, status, error, *, units=None, tokens=None, created_at=None):
-    """把本轮在主站使用日志里的记录改成终态。`units`/`tokens` 为 None 时保持原值。"""
+def _settle_log(db, run_id, status, error, *, units=None, tokens=None, created_at=None, usage=None):
+    """把本轮在主站使用日志里的记录改成终态。
+
+    `units`/`tokens` 为 None 时保持原值；`usage` 是原始 prompt/completion/cached
+    （预算口径是"未命中 + 输出"，日志要能看出真实用量与缓存命中，两者分开记）。
+    """
     log = db.scalar(select(UsageLog).where(UsageLog.request_id == run_id, UsageLog.tool_id == AGENT_TOOL_ID))
     if not log:
         return
     log.status = "error" if status == "failed" else "cancelled" if status == "stopped" else "success"
     log.error_message = error[:500]
-    if tokens is not None:
+    if usage:
+        prompt = int(usage.get("prompt") or 0)
+        completion = int(usage.get("completion") or 0)
+        cached = int(usage.get("cached") or 0)
+        if prompt or completion:
+            log.prompt_tokens = prompt
+            log.completion_tokens = completion
+            log.total_tokens = prompt + completion
+            # 只有上游真上报过命中才写；没上报时保持 NULL（"没上报"≠"没命中"）
+            log.cached_tokens = cached if usage.get("cached_reported") else None
+    elif tokens is not None:
         log.total_tokens = tokens
     if units is not None:
         log.units = units
@@ -503,7 +542,7 @@ def finish_run(run_id, status, error=""):
         if task is None:
             # 任务被单独清理（级联未生效的老库）：同样只收尾计费记录。
             _settle_log(db, run_id, status, error, units=1 if row.charged else 0,
-                        tokens=row.tokens, created_at=row.created_at)
+                        tokens=row.tokens, created_at=row.created_at, usage=decode(row.snapshot).get("usage"))
             db.commit()
             return
         task.status, task.active_run, task.updated_at = status, "", utcnow()
@@ -530,7 +569,7 @@ def finish_run(run_id, status, error=""):
             entry.details = encode(details)
             event(db, task.id, "entry", entry_dict(entry))
         _settle_log(db, run_id, status, error, units=1 if row.charged else 0,
-                    tokens=row.tokens, created_at=row.created_at)
+                    tokens=row.tokens, created_at=row.created_at, usage=decode(row.snapshot).get("usage"))
         event(db, task.id, "run", run_dict(row))
         db.commit()
 

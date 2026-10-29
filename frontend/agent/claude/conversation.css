@@ -1038,3 +1038,13 @@
   color: var(--ink-4);
   font-variant-numeric: tabular-nums;
 }
+
+/* 上下文压缩：一行细提示，说明这一步把上下文从多少压到了多少 */
+.compaction-step {
+  margin: 10px 0 2px;
+}
+.compaction-line {
+  font-size: 0.78rem;
+  color: var(--ink-4);
+  font-variant-numeric: tabular-nums;
+}

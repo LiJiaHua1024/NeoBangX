@@ -140,6 +140,15 @@ def _retry_after_seconds(exc: BaseException) -> Optional[float]:
     return value
 
 
+def retry_after_seconds(exc: BaseException) -> Optional[float]:
+    """上游给的 Retry-After 秒数（取不到返回 None）。
+
+    公开给 Agent 适配层复用：它需要在同一家 Provider 上等待重试，
+    等待时长必须尊重上游的限速提示，而不是自己拍一个延迟。
+    """
+    return _retry_after_seconds(exc)
+
+
 def _count_breaker_skipped(providers: list[dict]) -> int:
     """链里当前被熔断（OPEN、将沉底）的家数。"""
     return sum(

@@ -620,6 +620,16 @@ export class Conversation {
     }
     if (entry.kind === "tool") return this.renderTool(entry);
     if (entry.kind === "review") return this.renderReview(entry);
+    if (entry.kind === "compaction") {
+      // 压缩只留一行提示：它不产生内容，也不该和正文抢视觉重量。
+      const el = document.createElement("div");
+      el.className = "assistant compaction-step";
+      el.dataset.entry = entry.id;
+      const line = document.createElement("div");
+      line.className = "compaction-line";
+      el.append(line);
+      return { kind: "compaction", el, line };
+    }
     return null;
   }
 
@@ -662,6 +672,12 @@ export class Conversation {
       this.updateReview(state, entry);
     } else if (state.kind === "writer") {
       if (entry.status !== "running") this.finishTurn(turn);
+    } else if (state.kind === "compaction") {
+      const before = Number(details.before) || 0;
+      const after = Number(details.after) || 0;
+      const kept = Number(details.kept_units) || 0;
+      state.line.textContent = `已压缩上下文：${nf.format(before)} → ${nf.format(after)} tokens · 保留最近 ${kept} 步`;
+      this.finishTurn(turn);
     }
     if (details.error && state.kind !== "tool") {
       this.renderError(state, details.error, entry);
@@ -1388,7 +1404,9 @@ export class Conversation {
     for (const entry of this.entries.values()) {
       if (entry.run_id !== run.id || entry.status !== "running") continue;
       const details = entry.details || {};
-      live += (Number(details.context_tokens) || 0) + (Number(details.live_tokens) || 0);
+      // 只加已收到的输出：输入侧大部分会命中前缀缓存，按未命中口径计入预算，
+      // 还没结算前把它算进去会让"用量"虚高。
+      live += Number(details.live_tokens) || 0;
     }
     const shown = Math.max(live, this.tokenFloor.get(run.id) || 0);
     this.tokenFloor.set(run.id, shown);
@@ -1397,7 +1415,19 @@ export class Conversation {
 
   usageMarkup(run) {
     const tokens = this.runTokens(run);
-    return `${tokens ? `${icon("terminal")}<span>${nf.format(tokens)} tok</span>` : ""}<span class="turn-time">${timeOf(run.finished_at || run.created_at)}</span>`;
+    const cached = Number(run?.usage?.cached) || 0;
+    const cache = cached
+      ? `<span title="输入侧命中前缀缓存的 token（按缓存价计费，不占本轮预算）">· 缓存 ${nf.format(cached)}</span>`
+      : "";
+    // 上下文大小单独显示：命中缓存的输入不算进预算，混在一个数字里会看不懂
+    const running = [...this.entries.values()].find(
+      (entry) => entry.run_id === run?.id && entry.status === "running",
+    );
+    const context = Number(running?.details?.context_tokens) || 0;
+    const ctx = context
+      ? `<span title="本次调用的上下文大小（其中大部分通常命中前缀缓存）">· 上下文 ${nf.format(context)}</span>`
+      : "";
+    return `${tokens ? `${icon("terminal")}<span>${nf.format(tokens)} tok</span>` : ""}${cache}${ctx}<span class="turn-time">${timeOf(run.finished_at || run.created_at)}</span>`;
   }
 
   /** 只换用量文字，不重建操作按钮，执行中频繁刷新也不打断悬停和焦点。 */
