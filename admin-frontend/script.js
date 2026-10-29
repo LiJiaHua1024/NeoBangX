@@ -850,14 +850,14 @@ function adminApp() {
     get agentToolHint() {
       const tool = (this.agentTools || []).find((t) => t.name === this.agentForm.mcp_tool);
       if (tool && tool.description) return tool.description;
-      if (this.agentForm.mcp_tool) return "已保存的工具；重新测试连接可读取最新描述与参数定义";
-      return this.agentTools.length ? "从连接结果里选一个用于网页搜索" : "先「测试连接并读取工具」，成功后才能选择";
+      if (this.agentForm.mcp_tool) return "已保存；重新测试连接可更新工具信息。";
+      return this.agentTools.length ? "从测试结果中选择用于网页搜索的工具。" : "先测试连接并读取工具，成功后才能选择。";
     },
     get agentTokenHint() {
-      if (this.agentForm.mcp_token) return "保存后替换为这里填写的令牌";
+      if (this.agentForm.mcp_token) return "保存后使用这里填写的令牌。";
       return this.agentHasToken
-        ? "已保存令牌 · 留空保留，填新值替换"
-        : "尚未设置 · 无鉴权服务可留空";
+        ? "已保存；留空保持不变，填写则替换。"
+        : "尚未设置；不需要鉴权的服务可以留空。";
     },
     get agentSchemaText() {
       const tool = (this.agentTools || []).find((t) => t.name === this.agentForm.mcp_tool);
@@ -1020,7 +1020,7 @@ function adminApp() {
       return (
         {
           dashboard: "查看整体使用情况与快捷入口",
-          agent: "管理执行预算与网页搜索 MCP，用户端只需开启搜索开关",
+          agent: "配置 Agent 工作台的执行预算与网页搜索。",
           analytics: "像顶级 LLM API 后台一样看开销大头、趋势与性能瓶颈",
           codes: "生成、启用/禁用/删除使用码，查看额度",
           logs: "查看每次工具调用的详细记录",
@@ -2782,10 +2782,7 @@ function adminApp() {
     agentEntryLabel(entry) {
       if (!entry) return "";
       if (entry.kind === "tool") return this.agentKindMeta(entry).name;
-      if (entry.kind === "compaction") {
-        const reason = { manual: "手动", "frame-break": "配置变更", cold: "冷启动换家", pressure: "超阈值" }[entry.details?.reason];
-        return reason ? `压缩上下文（${reason}）` : "压缩上下文";
-      }
+      if (entry.kind === "compaction") return "压缩上下文";
       return entry.label || this.agentKindMeta(entry).name;
     },
 
@@ -2830,8 +2827,8 @@ function adminApp() {
     },
 
     agentBudgetHint() {
-      if (!this.agentRun?.run?.limits?.max_tokens) return "本轮未设 token 预算";
-      return `计费口径 · 已用 ${this.agentBudgetPercent().toFixed(1)}%`;
+      if (!this.agentRun?.run?.limits?.max_tokens) return "";
+      return `已使用 ${this.agentBudgetPercent().toFixed(1)}%`;
     },
 
     agentCachedText() {
@@ -2842,9 +2839,8 @@ function adminApp() {
 
     agentCachedHint() {
       const usage = this.agentRun?.run?.usage || {};
-      if (!usage.cached_reported) return "上游未回传命中信息，预算按未命中计";
-      if (!usage.prompt) return "本轮没有输入";
-      return `占输入 ${((usage.cached / usage.prompt) * 100).toFixed(1)}% · 计费只算未命中`;
+      if (!usage.cached_reported || !usage.prompt) return "";
+      return `占输入 ${((usage.cached / usage.prompt) * 100).toFixed(1)}%`;
     },
 
     agentCoverMeta() {
@@ -2912,25 +2908,22 @@ function adminApp() {
       const details = entry.details || {};
       const facts = [
         { label: "状态", value: this.agentEntryStatusLabel(entry) },
-        { label: "相对本轮", value: this.agentEntryTime(entry) },
+        { label: "开始后", value: this.agentEntryTime(entry) },
       ];
-      if (details.provider_id) {
-        facts.push({ label: "Provider", value: details.provider_id,
-          hint: (details.attempts || 0) > 1 ? `同家试了 ${details.attempts} 次` : "" });
-      }
+      if (details.provider_id) facts.push({ label: "Provider", value: details.provider_id });
       const usage = details.usage || {};
       const cached = details.cached_tokens;
       const reportedPrompt = Number(usage.prompt_tokens);
       // 上下文估算与上游上报相同时只留一条，避免「12,000 / 12,000」看起来像两个指标
       if (details.context_tokens != null && (!reportedPrompt || Number(details.context_tokens) !== reportedPrompt)) {
-        facts.push({ label: "本次上下文", value: `${this.fmtNum(details.context_tokens)} tok` });
+        facts.push({ label: "上下文", value: `${this.fmtNum(details.context_tokens)} tok` });
       }
       if (usage.prompt_tokens != null) {
         facts.push({
-          label: "上报输入", value: `${this.fmtNum(usage.prompt_tokens)} tok`,
+          label: "输入", value: `${this.fmtNum(usage.prompt_tokens)} tok`,
           hint: cached != null
             ? `命中 ${this.fmtNum(cached)} · ${((cached / Math.max(1, usage.prompt_tokens)) * 100).toFixed(1)}%`
-            : "缓存未上报，按未命中计",
+            : "",
         });
       }
       if (usage.completion_tokens != null) {
@@ -2941,10 +2934,12 @@ function adminApp() {
         facts.push({ label: "错误分类", value: this.errorCodeLabel(details.error_code) || details.error_code });
       }
       if (entry.kind === "compaction") {
+        const reason = { manual: "手动", "frame-break": "配置变更", cold: "换用备用 Provider", pressure: "上下文超限" }[details.reason];
+        if (reason) facts.push({ label: "原因", value: reason });
         facts.push({ label: "压缩前", value: `${this.fmtNum(details.before)} tok` });
         facts.push({ label: "压缩后", value: `${this.fmtNum(details.after)} tok` });
-        facts.push({ label: "丢弃单元", value: `${details.dropped_units ?? "—"} 个` });
-        facts.push({ label: "保留单元", value: `${details.kept_units ?? "—"} 个`,
+        facts.push({ label: "丢弃消息", value: `${details.dropped_units ?? "—"} 组` });
+        facts.push({ label: "保留消息", value: `${details.kept_units ?? "—"} 组`,
           hint: details.kept_notes ? `含 ${details.kept_notes} 条补充要求` : "" });
         if (details.digest_chars) facts.push({ label: "摘要", value: `${this.fmtNum(details.digest_chars)} 字` });
       }
@@ -2968,18 +2963,18 @@ function adminApp() {
       const cached = details.cached_tokens;
       const facts = [];
       if (details.context_tokens != null && (!prompt || Number(details.context_tokens) !== prompt)) {
-        facts.push({ label: "本次上下文", value: `${this.fmtNum(details.context_tokens)} tok` });
+        facts.push({ label: "上下文", value: `${this.fmtNum(details.context_tokens)} tok` });
       }
-      if (usage.prompt_tokens != null) facts.push({ label: "上报输入", value: `${this.fmtNum(prompt)} tok` });
+      if (usage.prompt_tokens != null) facts.push({ label: "输入", value: `${this.fmtNum(prompt)} tok` });
       facts.push({
         label: "缓存命中", value: cached == null ? "未上报" : `${this.fmtNum(cached)} tok`,
-        hint: cached == null ? "预算按未命中计" : `命中率 ${prompt ? ((cached / prompt) * 100).toFixed(1) : "0.0"}%`,
+        hint: cached == null ? "" : `命中率 ${prompt ? ((cached / prompt) * 100).toFixed(1) : "0.0"}%`,
       });
       if (usage.completion_tokens != null) {
         facts.push({ label: "输出", value: `${this.fmtNum(usage.completion_tokens)} tok` });
       }
       if (details.budget_tokens != null) {
-        facts.push({ label: "本步后累计", value: `${this.fmtNum(details.budget_tokens)} tok`, hint: "未命中输入 + 输出" });
+        facts.push({ label: "本轮累计", value: `${this.fmtNum(details.budget_tokens)} tok` });
       }
       return facts;
     },

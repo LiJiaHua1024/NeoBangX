@@ -2577,7 +2577,6 @@ html[data-theme="sora"][data-sky="night"] .arv { --arv-warn: #e2b04a; }
 }
 .arv-budget-bar { height: 0.4rem; border-radius: 999px; background: var(--code-bg); overflow: hidden; }
 .arv-budget-bar span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
-.arv-hint-line { margin: 0.5rem 0 0; font-size: 0.68rem; line-height: 1.55; color: var(--faint); }
 
 /* ---------- 正文 ---------- */
 .arv-text-tools {
@@ -2714,9 +2713,7 @@ html[data-theme="sora"][data-sky="night"] .arv { --arv-warn: #e2b04a; }
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
   background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
-.dr-cta-text { flex: 1; min-width: 12rem; }
-.dr-cta-text strong { font-size: 0.82rem; }
-.dr-cta-text p { margin: 0.2rem 0 0; font-size: 0.72rem; line-height: 1.55; color: var(--dim); }
+.dr-cta strong { font-size: 0.82rem; }
 
 @keyframes arv-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }

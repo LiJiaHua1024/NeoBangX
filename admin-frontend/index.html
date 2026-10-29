@@ -182,7 +182,7 @@
         <div class="glass card">
           <div>
             <h2 class="card-title">工作台与执行预算</h2>
-            <p class="muted">关闭开关后用户端不再出现 Agent 入口；已保存的任务、材料与成果都保留，重新开启即可继续。</p>
+            <p class="muted">关闭后，用户端不再显示 Agent 入口，已有任务和成果会保留。</p>
           </div>
 
           <div class="switch-row mt-4">
@@ -192,7 +192,7 @@
             </label>
             <div class="switch-copy">
               <div class="switch-title">开启 Agent 工作台</div>
-              <div class="field-hint">对全部使用码生效，保存后立即生效，无需重启服务。</div>
+              <div class="field-hint">保存后立即对全部使用码生效。</div>
             </div>
           </div>
 
@@ -200,57 +200,55 @@
             <label class="field">
               <span>每轮最多步骤</span>
               <input type="number" id="agent-max-steps" x-model.number="agentForm.max_steps" min="2" max="100" step="1">
-              <span class="field-hint">一轮内的模型调用次数上限，含工具往返</span>
+              <span class="field-hint">一轮内最多执行多少步。</span>
             </label>
             <label class="field">
               <span>每轮 token 预算</span>
               <input type="number" id="agent-max-tokens" x-model.number="agentForm.max_tokens" min="4096" max="8000000" step="1">
-              <span class="field-hint">一轮的计费口径上限：只算「未命中缓存的输入 + 输出」，命中缓存的输入不占预算</span>
+              <span class="field-hint">一轮内最多消耗多少 token，命中缓存的部分不计入。</span>
             </label>
             <label class="field">
               <span>上下文压缩阈值</span>
               <input type="number" id="agent-context-budget" x-model.number="agentForm.context_budget" min="8192" max="2000000" step="1024">
-              <span class="field-hint">上下文超过它就先压缩再发；压缩后仍超 1.25 倍才报错</span>
+              <span class="field-hint">上下文超过这个值时，会先压缩再发送。</span>
             </label>
             <label class="field">
               <span>压缩后保留步数</span>
               <input type="number" id="agent-keep-tail-steps" x-model.number="agentForm.keep_tail_steps" min="1" max="20" step="1">
-              <span class="field-hint">最近的几步原样保留，更早的步骤换成机械摘要</span>
+              <span class="field-hint">保留最近几步的原文，更早的内容合并成摘要。</span>
             </label>
             <label class="field">
               <span>同一 Provider 重试次数</span>
               <input type="number" id="agent-provider-attempts" x-model.number="agentForm.provider_attempts" min="1" max="6" step="1">
-              <span class="field-hint">Agent 换家会让整段缓存作废，所以先在同一家重试，用尽才换</span>
+              <span class="field-hint">同一 Provider 最多尝试几次，用尽后再切换。</span>
             </label>
             <label class="field">
               <span>重试等待上限（秒）</span>
               <input type="number" id="agent-retry-wait-cap" x-model.number="agentForm.retry_wait_cap_seconds" min="0" max="600" step="1">
-              <span class="field-hint">上游 Retry-After 超过它就放弃等待、直接换家</span>
+              <span class="field-hint">等待重试的最长时间，超过后切换 Provider。</span>
             </label>
             <label class="field">
               <span>单次输出 token 上限</span>
               <input type="number" id="agent-output-tokens" x-model.number="agentForm.output_tokens" min="2048" max="131072" step="1">
-              <span class="field-hint">单条模型回复最多写多少 token</span>
+              <span class="field-hint">单次回复最多生成多少 token。</span>
             </label>
             <label class="field">
               <span>每轮最长秒数</span>
               <input type="number" id="agent-max-seconds" x-model.number="agentForm.max_seconds" min="60" max="7200" step="1">
-              <span class="field-hint">到点保存已有内容，等待用户继续</span>
+              <span class="field-hint">一轮最长运行时间，到时保存已有内容。</span>
             </label>
             <label class="field">
               <span>执行并发数</span>
               <input type="number" id="agent-concurrency" x-model.number="agentForm.concurrency" min="1" max="8" step="1">
-              <span class="field-hint">同时执行的轮次上限，其余排队</span>
+              <span class="field-hint">同时执行的轮次上限，超出的排队。</span>
             </label>
           </div>
-
-          <p class="field-hint mt-3">预算只约束新发起的执行轮次：已开始的轮次沿用发起时的预算；达到上限时保存已有内容并等待用户继续，不截断已有记录。</p>
         </div>
 
         <div class="glass card agent-mcp-card">
           <div>
             <h2 class="card-title">网页搜索 MCP</h2>
-            <p class="muted">管理员在这里配置真实服务。用户端只看到「网页搜索」开关；连接地址、令牌和固定参数不会发给用户或模型。</p>
+            <p class="muted">用户端只看到「网页搜索」开关，地址、令牌和固定参数不会显示给用户或模型。</p>
           </div>
 
           <div class="switch-row mt-4">
@@ -260,7 +258,7 @@
             </label>
             <div class="switch-copy">
               <div class="switch-title">对用户提供网页搜索</div>
-              <div class="field-hint">开启前必须先测试连接并选定工具，否则保存会被拦截。</div>
+              <div class="field-hint">开启网页搜索前，需要先测试连接并选择工具。</div>
             </div>
           </div>
 
@@ -268,7 +266,7 @@
             <label class="field">
               <span>MCP 地址 · Streamable HTTP</span>
               <input type="url" id="agent-mcp-url" x-model="agentForm.mcp_url" placeholder="https://your-service.example/mcp" autocomplete="off" spellcheck="false">
-              <span class="field-hint">支持 HTTP JSON / SSE 响应；不支持本地 stdio 或旧版独立 SSE 端点</span>
+              <span class="field-hint">支持 HTTP JSON 和 SSE，不支持本地 stdio。</span>
             </label>
             <label class="field">
               <span>Bearer 令牌</span>
@@ -278,7 +276,7 @@
             <label class="field">
               <span>单次请求超时（秒）</span>
               <input type="number" id="agent-mcp-timeout" x-model.number="agentForm.mcp_timeout" min="5" max="180" step="1">
-              <span class="field-hint">连接、列工具与搜索共用</span>
+              <span class="field-hint">连接、读取工具和搜索共用。</span>
             </label>
           </div>
 
@@ -289,7 +287,7 @@
             </label>
             <div class="switch-copy">
               <div class="switch-title">清除已保存的令牌</div>
-              <div class="field-hint">保存后删除已存的令牌；已经有新令牌时以新值为准，无需勾选。</div>
+              <div class="field-hint">保存后删除已存令牌；填入新令牌时无需勾选。</div>
             </div>
           </div>
 
@@ -336,19 +334,19 @@
             <pre class="payload-pre mono" x-text="agentSchemaText"></pre>
           </details>
 
-          <p class="field-hint mt-3">以上开关、地址、令牌与参数都是草稿，改完点顶栏“保存设置”统一落盘；「测试连接」「试运行搜索」用当前表单即时验证，不落盘。</p>
+          <p class="field-hint mt-3">修改后需要点顶栏「保存设置」才会生效；「测试连接」和「试运行搜索」会直接使用当前填写的内容。</p>
         </div>
 
         <div class="glass card">
           <div>
             <h2 class="card-title">试运行搜索</h2>
-            <p class="muted">用当前表单（含未保存的修改）真实调用一次搜索，确认地址、令牌、工具和参数都能用。结果不落盘，也不影响用户端。</p>
+            <p class="muted">用当前填写的内容真实搜索一次，确认地址、令牌、工具和参数可用。结果不会保存。</p>
           </div>
 
           <label class="field agent-test-field mt-4">
             <span>试搜内容</span>
             <input type="text" id="agent-test-query" x-model="agentTestQuery" placeholder="例如：高考英语 阅读理解">
-            <span class="field-hint">会原样写入上面配置的查询字段</span>
+            <span class="field-hint">会原样填入上面设置的查询字段。</span>
           </label>
 
           <div class="form-actions agent-actions">
@@ -1303,7 +1301,7 @@
                               :title="m.free_no_code ? '免费模型：不消耗次数，且无码/次数用尽也可用' : '免费模型：不消耗次数'"
                               x-text="m.is_free && m.free_no_code ? '免费 · 无码可用' : '免费'"></span>
                         <span class="badge badge-free ml-1" x-show="m.is_free && m.agent_free" x-cloak
-                              title="Agent 免费：在工作台执行不扣次数（成本由运营方承担）">Agent 免费</span>
+                              title="Agent 免费：在 Agent 工作台执行不扣次数">Agent 免费</span>
                         <template x-for="tag in modelCapabilityTags(m)" :key="'cap-' + m.id + '-' + tag">
                           <span class="badge badge-cap ml-1" x-text="tag"
                                 title="该模型的用途勾选：用户 = 用户端可选，OCR = 识别图片文字，Chores = 轻量任务，Agent = 工作台可选"></span>
@@ -1496,7 +1494,7 @@
             <label class="field">
               <span>Max Tokens</span>
               <input type="number" x-model.number="configForm.max_tokens" min="256" max="128000">
-              <span class="field-hint">推理模型的思考 token 也计入此预算，建议适当调大</span>
+              <span class="field-hint">推理模型的思考 token 也计入这个预算。</span>
             </label>
             <label class="field">
               <span>试卷全解默认并发</span>
@@ -2019,7 +2017,7 @@
                 <span>Agent</span>
               </label>
             </div>
-            <span class="field-hint">只有勾选了「用户可用」的模型会出现在用户端模型列表里；只有勾选了「Agent」的模型会出现在 Agent 工作台的模型列表里。两项互不继承，「Agent」默认不勾</span>
+            <span class="field-hint">「用户可用」决定模型是否出现在用户端，「Agent」决定是否出现在 Agent 工作台。</span>
           </div>
           <label class="field mb-3">
             <span>免费模型</span>
@@ -2030,7 +2028,7 @@
               </label>
               <span class="dim" x-text="modelForm.is_free ? '免费：调用不消耗次数，用户端显示「免费」标签' : '正常计费：每次调用消耗 1 次额度'"></span>
             </div>
-            <span class="field-hint">免费模型的调用成本由运营方承担，建议同时配置下方防滥用限额</span>
+            <span class="field-hint">免费调用不消耗用户次数。</span>
           </label>
           <div x-show="modelForm.is_free" x-cloak>
             <label class="field mb-3">
@@ -2051,9 +2049,9 @@
                   <input type="checkbox" x-model="modelForm.agent_free">
                   <span class="switch-slider"></span>
                 </label>
-                <span class="dim" x-text="modelForm.agent_free ? 'Agent 工作台执行不扣次数，成本由运营方承担' : 'Agent 工作台按轮次扣次数（主站仍免费）'"></span>
+                <span class="dim" x-text="modelForm.agent_free ? '在 Agent 工作台执行不扣次数' : '在 Agent 工作台执行时每轮扣 1 次'"></span>
               </div>
-              <span class="field-hint">Agent 一轮会跑十几次模型调用，成本远高于主站一次生成，所以不继承主站免费；只对成本可控的模型开启。不开启时该模型在工作台按普通模型扣 1 次/轮</span>
+              <span class="field-hint">开启后，该模型在 Agent 工作台执行不扣次数；关闭时每轮扣 1 次。主站免费设置不受影响。</span>
             </label>
             <div class="provider-binding-section mb-3" x-show="modelForm.agent_free" x-cloak>
               <div class="provider-binding-head" @click="agentFreeLimitsOpen = !agentFreeLimitsOpen">
@@ -2076,7 +2074,7 @@
                     </label>
                   </template>
                 </div>
-                <p class="field-hint">按执行轮次计数：一次执行 / 审阅 / 回答提问算一轮，轮内的模型调用不重复计数。只统计 Agent 工作台的轮次，与上面的主站限额分池、互不占用；建议按小时 / 每天给宽一点的数（例如每小时 30、每天 100），分钟级窗口对多轮任务太紧。</p>
+                <p class="field-hint">按执行轮次计数：一次执行、审阅或回答提问算一轮，轮内的模型调用不重复计数。只统计 Agent 工作台的轮次，与主站限额分开计算。</p>
               </div>
             </div>
             <div class="provider-binding-section mb-3">
@@ -2433,17 +2431,11 @@
             <div>
               <!-- Agent 轮次：运行全解才是主入口，这里只保留元数据与跳转 -->
               <div class="dr-cta" x-show="logDetail?.tool_id === 'agent' && logDetail?.agent_available !== false">
-                <div class="dr-cta-text">
-                  <strong>Agent 工作台轮次</strong>
-                  <p>运行全解能逐步查看模型输出、工具调用、上下文与缓存命中；这里保留日志元数据。</p>
-                </div>
+                <strong>Agent 工作台轮次</strong>
                 <button class="btn-primary" @click="openAgentRun(logDetail.id)">打开运行全解</button>
               </div>
               <div class="dr-cta dr-cta-muted" x-show="logDetail?.tool_id === 'agent' && logDetail?.agent_available === false">
-                <div class="dr-cta-text">
-                  <strong>运行记录已不存在</strong>
-                  <p>使用码删除会连带清理工作台数据，只剩这条日志元数据可看。</p>
-                </div>
+                <span class="dim">运行记录已清理，仅保留这条日志。</span>
               </div>
               <div class="meta-grid">
                 <div class="meta-item">
@@ -2589,7 +2581,7 @@
 
               <div class="payload-empty" x-show="!logPayloadParts.length" x-cloak>
                 <template x-if="logDetail?.tool_id === 'agent'">
-                  <span>Agent 轮次不写主站原始输入 / 输出；每一步的上下文与输出在「运行全解」里按需读取。</span>
+                  <span>Agent 轮次不保存原始输入 / 输出。</span>
                 </template>
                 <template x-if="logDetail?.tool_id !== 'agent'">
                   <span>本次请求未记录原始输入 / 输出（记录开关处于关闭状态）。如需查看内容，请到「日志设置」开启后重新发起请求。</span>
@@ -2943,7 +2935,7 @@
           <div class="arv-cover-loading" x-show="agentRunLoading">正在加载运行记录…</div>
 
           <div class="arv-cover-error" x-show="!agentRunLoading && agentRunError">
-            <div class="arv-cover-error-title">打不开这一轮</div>
+            <div class="arv-cover-error-title">无法加载这一轮</div>
             <p x-text="agentRunError"></p>
             <div class="arv-cover-error-actions">
               <button class="btn-ghost" @click="openAgentMeta()">查看日志元数据</button>
@@ -2955,7 +2947,7 @@
           <template x-if="!agentRunLoading && agentRun">
             <div>
               <div class="arv-cover-top">
-                <span class="arv-eyebrow" x-text="`AGENT RUN · ${agentModeLabel(agentRun.run.mode)} · ${agentRun.summary.entries} 步`"></span>
+                <span class="arv-eyebrow" x-text="`Agent 工作台 · ${agentModeLabel(agentRun.run.mode)} · ${agentRun.summary.entries} 步`"></span>
                 <span class="arv-status" :class="'is-' + agentStatusTone(agentRun.run.status)" x-text="agentRunStatusLabel()"></span>
               </div>
               <h1 class="arv-title" x-text="agentRun.task.title || '未命名任务'"></h1>
@@ -2964,7 +2956,7 @@
 
               <div class="arv-features">
                 <div class="arv-feature">
-                  <div class="arv-feature-k">步数</div>
+                  <div class="arv-feature-k">步骤</div>
                   <div class="arv-feature-v" x-text="`${agentRun.summary.entries} 步`"></div>
                   <div class="arv-feature-d" x-text="`模型 ${agentRun.summary.model_calls} · 工具 ${agentRun.summary.tool_calls} · 压缩 ${agentRun.summary.compactions}`"></div>
                 </div>
@@ -3012,7 +3004,7 @@
                   <button class="btn-ghost" @click="closeAgentRun()">退出</button>
                 </div>
               </div>
-              <div class="arv-cover-hint">← → 切换步骤 · 空格自动播放 · Esc 退出</div>
+              <div class="arv-cover-hint">按 ← → 切换步骤，空格自动播放，Esc 退出</div>
             </div>
           </template>
         </div>
@@ -3067,14 +3059,14 @@
               </template>
             </div>
             <div class="arv-usage" x-show="agentRun">
-              <div class="arv-usage-title">用量速查</div>
+              <div class="arv-usage-title">用量</div>
               <div class="arv-usage-bar" aria-hidden="true">
                 <span class="seg-cached" :style="`width:${agentUsageShare('cached')}%`"></span>
                 <span class="seg-uncached" :style="`width:${agentUsageShare('uncached')}%`"></span>
                 <span class="seg-out" :style="`width:${agentUsageShare('completion')}%`"></span>
               </div>
               <div class="arv-usage-rows">
-                <div><span>计费</span><strong x-text="`${fmtCompact(agentRun?.run?.tokens)} / ${agentRun?.run?.limits?.max_tokens ? fmtCompact(agentRun.run.limits.max_tokens) : '不限'}`"></strong></div>
+                <div><span>预算</span><strong x-text="`${fmtCompact(agentRun?.run?.tokens)} / ${agentRun?.run?.limits?.max_tokens ? fmtCompact(agentRun.run.limits.max_tokens) : '不限'}`"></strong></div>
                 <div><span>缓存命中</span><strong x-text="agentCachedText()"></strong></div>
                 <div><span>输出</span><strong x-text="`${fmtCompact(agentRun?.run?.usage?.completion)} tok`"></strong></div>
               </div>
@@ -3085,7 +3077,7 @@
             <div class="arv-empty" x-show="!agentEntries.length">
               <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-info"></use></svg>
               <div class="arv-empty-title">本轮还没有执行步骤</div>
-              <p x-text="agentRun?.run?.status === 'queued' ? '排队中，开始后这里会自动出现第一步。' : '运行已结束，但没有落下任何步骤。'"></p>
+              <p x-text="agentRun?.run?.status === 'queued' ? '排队中，开始后会显示每一步。' : '本轮没有执行步骤。'"></p>
             </div>
 
             <template x-if="agentEntry">
@@ -3102,7 +3094,7 @@
                   <h2 class="arv-detail-title" x-text="agentEntryLabel(agentEntry)"></h2>
                   <div class="arv-detail-chips">
                     <span class="arv-chip" x-show="agentEntry.details?.provider_id" x-text="`Provider ${agentEntry.details?.provider_id}`"></span>
-                    <span class="arv-chip" x-show="agentEntry.details?.attempts != null" x-text="`同家尝试 ${agentEntry.details?.attempts} 次`"></span>
+                    <span class="arv-chip" x-show="agentEntry.details?.attempts != null" x-text="`尝试 ${agentEntry.details?.attempts} 次`"></span>
                     <span class="arv-chip" x-show="agentEntry.details?.context_tokens != null" x-text="`上下文 ${fmtCompact(agentEntry.details?.context_tokens)} tok`"></span>
                     <span class="arv-chip" x-show="agentEntry.kind === 'tool'" x-text="`${fmtCompact(agentEntry.text_sizes?.output || 0)} 字结果`"></span>
                   </div>
@@ -3161,7 +3153,6 @@
                         <span class="mono" x-text="`${fmtCompact(agentRun?.run?.tokens)} / ${agentRun?.run?.limits?.max_tokens ? fmtCompact(agentRun.run.limits.max_tokens) : '不限'}`"></span>
                       </div>
                       <div class="arv-budget-bar"><span :style="`width:${agentBudgetPercent()}%`"></span></div>
-                      <p class="arv-hint-line">预算只算「未命中缓存的输入 + 输出」；命中缓存的部分按上游缓存价计，不计入这里。</p>
                     </div>
                   </div>
 
@@ -3171,7 +3162,7 @@
                       <span class="arv-text-size" x-text="agentTextSizeLabel()"></span>
                       <span class="arv-page-ctl" x-show="agentText && !agentText.full">
                         <button class="arv-mini" :disabled="agentText?.offset <= 0" @click="agentTextPage(-1)">上一页</button>
-                        <span class="arv-page-pos" x-text="`${Math.floor((agentText?.offset || 0) / (agentText?.limit || 1)) + 1} / ${Math.ceil((agentText?.total || 0) / (agentText?.limit || 1))}`"></span>
+                        <span class="arv-page-pos" x-text="`第 ${Math.floor((agentText?.offset || 0) / (agentText?.limit || 1)) + 1} / ${Math.ceil((agentText?.total || 0) / (agentText?.limit || 1))} 页`"></span>
                         <button class="arv-mini" :disabled="(agentText?.offset || 0) + (agentText?.limit || 0) >= (agentText?.total || 0)"
                                 @click="agentTextPage(1)">下一页</button>
                       </span>
@@ -3180,9 +3171,9 @@
                               @click="loadAgentText(agentText?.offset || 0)">刷新本步</button>
                       <button class="arv-mini"
                               x-show="agentText?.full && (agentText?.kind === 'review' || (agentText?.kind === 'output' && agentEntry?.kind !== 'tool'))"
-                              @click="agentRaw = !agentRaw" x-text="agentRaw ? '渲染' : '原文'"></button>
+                              @click="agentRaw = !agentRaw" x-text="agentRaw ? '预览' : '原文'"></button>
                       <button class="arv-mini" x-show="agentText?.full && (agentTab === 'input' || (agentTab === 'output' && agentEntry?.kind === 'tool'))"
-                              @click="agentPretty = !agentPretty" x-text="agentPretty ? '原文' : '美化'"></button>
+                              @click="agentPretty = !agentPretty" x-text="agentPretty ? '原文' : '格式化'"></button>
                       <button class="arv-mini" @click="copyAgentText()" :disabled="!agentText">复制</button>
                       <a class="arv-mini" :href="agentDownloadUrl()" download x-show="agentText">下载</a>
                     </div>
