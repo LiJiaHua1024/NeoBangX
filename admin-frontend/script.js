@@ -569,6 +569,17 @@ function adminApp() {
   let logDetailRequest = 0;
   let logDetailAbort = null;
   const logPayloadAborts = new Map();
+  // 运行全解的请求 / 轮询 / 自动播放句柄：不进入 Alpine 深层代理。
+  let agentRunRequest = 0;
+  let agentRunAbort = null;
+  let agentTextRequest = 0;
+  let agentTextAbort = null;
+  let agentPollTimer = null;
+  let agentPlayTimer = null;
+  // 一次 Markdown 渲染可能上万个字符：同一份正文只渲染一次（换步即失效）
+  let agentHtmlSource = null;
+  let agentHtmlValue = "";
+  let agentFocusReturn = null;
   return {
     version: "1.2.0",
     theme: "paper",
@@ -647,6 +658,21 @@ function adminApp() {
     logPayloadParts: [],
     // null = 尚未读取；决定日志页「未开启记录」提示是否展示
     payloadRecording: null,
+    // Agent 运行全解：封面 → 舞台 → 总览；正文按页懒加载，切步即丢弃
+    agentRunOpen: false,
+    agentLogId: null,
+    agentRun: null,
+    agentRunLoading: false,
+    agentRunError: "",
+    agentView: "cover",
+    agentEntryId: "",
+    agentTab: "",
+    agentTabLoading: false,
+    agentText: null,
+    agentTextError: "",
+    agentPlaying: false,
+    agentRaw: false,
+    agentPretty: true,
     purgeDays: null,
     purging: false,
     configForm: {
@@ -1029,6 +1055,35 @@ function adminApp() {
     get logsPageCount() {
       return Math.max(1, Math.ceil(this.logsTotal / this.logsPageSize));
     },
+    /* Agent 运行全解：只在这里派生展示数据，不改后端返回结构 */
+    get agentEntries() {
+      return (this.agentRun && this.agentRun.entries) || [];
+    },
+    get agentEntry() {
+      return this.agentEntries.find((entry) => entry.id === this.agentEntryId) || null;
+    },
+    get agentIndex() {
+      const index = this.agentEntries.findIndex((entry) => entry.id === this.agentEntryId);
+      return index < 0 ? 0 : index;
+    },
+    get agentRenderHtml() {
+      // 只有「完整加载的模型输出」才走 Markdown：分页的局部文本渲染出来会断在半个结构里
+      if (!this.agentText || !this.agentText.full || this.agentRaw) return "";
+      if (this.agentText.kind !== "output") return "";
+      if (agentHtmlSource === this.agentText) return agentHtmlValue;
+      agentHtmlSource = this.agentText;
+      agentHtmlValue = this.renderAiProfile(this.agentText.text);
+      return agentHtmlValue;
+    },
+    get agentReviewData() {
+      if (this.agentRaw || this.agentTab !== "review" || !this.agentText || !this.agentText.full) return null;
+      try {
+        const data = JSON.parse(this.agentText.text);
+        return data && Array.isArray(data.issues) ? data : null;
+      } catch {
+        return null;
+      }
+    },
     get defaultModelLabel() {
       const m = this.configForm.models.find((x) => x.id === this.configForm.default_model);
       if (m) return m.name || m.id;
@@ -1186,6 +1241,37 @@ function adminApp() {
         if (this.providerTestModalOpen) { this.providerTestModalOpen = false; return; }
         if (this.modelProvidersModalOpen) { this.modelProvidersModalOpen = false; return; }
         if (this.deviceModalOpen) { this.deviceModalOpen = false; }
+      });
+
+      // 运行全解的键盘操作：只在没有抽屉/弹窗压在上面时接管，
+      // 否则 Esc 会同时关掉抽屉和舞台（抽屉自己有 window.escape）。
+      window.addEventListener("keydown", (e) => {
+        if (!this.agentRunOpen || this.agentKeysBlocked()) return;
+        const tag = e.target && e.target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (e.key === "Escape") {
+          e.preventDefault();
+          this.closeAgentRun();
+          return;
+        }
+        if (this.agentView === "cover") {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            this.startAgentRun();
+          }
+          return;
+        }
+        if (this.agentView !== "stage" || e.repeat) return;
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          this.agentStep(-1);
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          this.agentStep(1);
+        } else if (e.key === " ") {
+          e.preventDefault();
+          this.toggleAgentPlay();
+        }
       });
 
       // 悠空 · 两时段天空：每分钟校准一次，回到前台时立即校准
@@ -2620,6 +2706,568 @@ function adminApp() {
       this.closeLogDetail();
       this.tab = "logs";
       this.loadLogs();
+    },
+
+    /* ============ Agent 运行全解 ============ */
+
+    /* Agent 行的默认入口是全解；运行记录已被级联清掉时退回普通元数据抽屉 */
+    openLogFor(l) {
+      if (!l) return;
+      if (l.tool_id === "agent") {
+        if (l.agent_available === false) {
+          // 运行记录已被级联清理：直接看元数据，抽屉里会说明原因，不重复弹错
+          this.openLogDetail(l.id);
+          return;
+        }
+        this.openAgentRun(l.id);
+        return;
+      }
+      this.openLogDetail(l.id);
+    },
+
+    agentModeLabel(mode) {
+      const map = { execute: "执行", continue: "继续", review: "审阅", revise: "修订", tool_test: "教学工具试运行" };
+      return map[mode] || mode || "执行";
+    },
+
+    agentRunStatusLabel() {
+      const status = this.agentRun?.run?.status;
+      const map = {
+        queued: "排队中", running: "运行中", stopping: "正在停止", completed: "已完成",
+        failed: "失败", incomplete: "未完成", stopped: "已停止", waiting: "等待补充",
+      };
+      return map[status] || status || "—";
+    },
+
+    agentFinishLabel(reason) {
+      const map = {
+        stop: "正常结束", length: "达到输出上限", max_tokens: "达到输出上限",
+        content_filter: "内容拦截", tool_calls: "继续调用工具", function_call: "继续调用工具",
+      };
+      return map[reason] || reason || "—";
+    },
+
+    agentEntryStatusLabel(entry) {
+      const map = { running: "进行中", done: "完成", incomplete: "未完成", failed: "失败",
+        interrupted: "已中断", waiting: "等待回答" };
+      return map[entry?.status] || entry?.status || "—";
+    },
+
+    agentStatusTone(status) {
+      if (status === "running") return "live";
+      if (["failed", "error"].includes(status)) return "bad";
+      if (["waiting", "incomplete", "interrupted", "stopping", "stopped"].includes(status)) return "warn";
+      if (["completed", "done", "success"].includes(status)) return "ok";
+      return "dim";
+    },
+
+    agentKindMeta(entry) {
+      const kind = entry?.kind;
+      if (kind === "compaction") return { name: "压缩上下文", icon: "compact" };
+      if (kind === "review") return { name: "审阅", icon: "review" };
+      if (kind === "tool") {
+        const map = {
+          create_document: ["生成成果", "doc"], revise_document: ["修订成果", "edit"],
+          patch_document: ["修改成果", "edit"], read_material: ["读取材料", "doc"],
+          search_material: ["检索材料", "search"], web_search: ["网页搜索", "search"],
+          check_vocabulary: ["词表检查", "review"], ask_user: ["询问", "ask"],
+        };
+        const [name, icon] = map[entry.label] || [entry.label || "工具调用", "tool"];
+        return { name, icon };
+      }
+      if (kind === "model") return { name: "模型调用", icon: "model" };
+      return { name: kind || "步骤", icon: "doc" };
+    },
+
+    agentEntryLabel(entry) {
+      if (!entry) return "";
+      if (entry.kind === "tool") return this.agentKindMeta(entry).name;
+      if (entry.kind === "compaction") {
+        const reason = { manual: "手动", "frame-break": "配置变更", cold: "冷启动换家", pressure: "超阈值" }[entry.details?.reason];
+        return reason ? `压缩上下文（${reason}）` : "压缩上下文";
+      }
+      return entry.label || this.agentKindMeta(entry).name;
+    },
+
+    agentEntryMeta(entry) {
+      if (!entry) return "";
+      const details = entry.details || {};
+      const sizes = entry.text_sizes || {};
+      if (entry.kind === "compaction") {
+        return `${this.fmtCompact(details.before)} → ${this.fmtCompact(details.after)}`;
+      }
+      if (entry.kind === "tool") return `${this.fmtCompact(sizes.output || 0)} 字`;
+      const usage = details.usage || {};
+      const total = (Number(usage.prompt_tokens) || 0) + (Number(usage.completion_tokens) || 0);
+      if (total) return `${this.fmtCompact(total)} tok`;
+      if (details.context_tokens != null) return `上下文 ${this.fmtCompact(details.context_tokens)}`;
+      return this.agentKindMeta(entry).name;
+    },
+
+    agentOffset(ms) {
+      const value = Math.max(0, Number(ms) || 0);
+      if (value < 1000) return "0.0s";
+      if (value < 60000) return `${(value / 1000).toFixed(1)}s`;
+      const seconds = Math.round(value / 1000);
+      return `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, "0")} 秒`;
+    },
+
+    agentEntryTime(entry) {
+      return `+${this.agentOffset(entry?.offset_ms)}`;
+    },
+
+    agentBudgetText() {
+      const tokens = Number(this.agentRun?.run?.tokens) || 0;
+      const limit = Number(this.agentRun?.run?.limits?.max_tokens) || 0;
+      return limit ? `${this.fmtCompact(tokens)} / ${this.fmtCompact(limit)}` : this.fmtCompact(tokens);
+    },
+
+    agentBudgetPercent() {
+      const tokens = Number(this.agentRun?.run?.tokens) || 0;
+      const limit = Number(this.agentRun?.run?.limits?.max_tokens) || 0;
+      if (!limit) return 0;
+      return Math.max(0, Math.min(100, (tokens / limit) * 100));
+    },
+
+    agentBudgetHint() {
+      if (!this.agentRun?.run?.limits?.max_tokens) return "本轮未设 token 预算";
+      return `计费口径 · 已用 ${this.agentBudgetPercent().toFixed(1)}%`;
+    },
+
+    agentCachedText() {
+      const usage = this.agentRun?.run?.usage || {};
+      if (!usage.cached_reported) return "未上报";
+      return `${this.fmtCompact(usage.cached || 0)} tok`;
+    },
+
+    agentCachedHint() {
+      const usage = this.agentRun?.run?.usage || {};
+      if (!usage.cached_reported) return "上游未回传命中信息，预算按未命中计";
+      if (!usage.prompt) return "本轮没有输入";
+      return `占输入 ${((usage.cached / usage.prompt) * 100).toFixed(1)}% · 计费只算未命中`;
+    },
+
+    agentCoverMeta() {
+      const data = this.agentRun;
+      if (!data) return "";
+      const parts = [`日志 #${data.log.id}`, `使用码 ${data.log.code || "—"}`];
+      const device = data.device;
+      if (device) parts.push(device.note || device.auto_name || device.short_code);
+      if (data.run.model) parts.push(`模型 ${data.run.model}`);
+      if (data.run.provider) parts.push(`Provider ${data.run.provider}`);
+      parts.push(this.fmtTime(data.run.created_at));
+      return parts.join(" · ");
+    },
+
+    /* 用量条：缓存命中 / 未命中输入 / 输出，三段占比按原始上报口径 */
+    agentUsageShare(kind) {
+      const usage = this.agentRun?.run?.usage || {};
+      const prompt = Number(usage.prompt) || 0;
+      const cached = Math.min(prompt, Number(usage.cached) || 0);
+      const completion = Number(usage.completion) || 0;
+      const total = Math.max(1, prompt + completion);
+      if (kind === "cached") return Math.min(100, (cached / total) * 100);
+      if (kind === "uncached") return Math.max(0, ((prompt - cached) / total) * 100);
+      return Math.min(100, (completion / total) * 100);
+    },
+
+    agentEntryTabs(entry) {
+      if (!entry) return [];
+      const sizes = entry.text_sizes || {};
+      if (entry.kind === "compaction") return ["overview"];
+      if (entry.kind === "tool") {
+        const tabs = ["overview"];
+        if (sizes.input) tabs.push("input");
+        if (sizes.output) tabs.push("output");
+        return tabs;
+      }
+      const tabs = ["overview"];
+      if (sizes.prompt) tabs.push("context");
+      if (entry.kind === "review" && sizes.review) tabs.push("review");
+      else if (sizes.output) tabs.push("output");
+      if (sizes.reasoning) tabs.push("reasoning");
+      if (entry.details?.usage || entry.details?.context_tokens != null) tabs.push("usage");
+      return tabs;
+    },
+
+    agentTabLabel(tab, entry) {
+      if (tab === "overview") return "概览";
+      if (tab === "context") return "上下文";
+      if (tab === "input") return "参数";
+      if (tab === "reasoning") return "思考";
+      if (tab === "review") return "审阅意见";
+      if (tab === "usage") return "用量";
+      if (tab === "output") {
+        return entry?.kind === "tool" ? (entry.label === "ask_user" ? "问题与回答" : "结果") : "输出";
+      }
+      return tab;
+    },
+
+    agentTextKind(tab) {
+      return { context: "prompt", input: "input", output: "output", reasoning: "reasoning", review: "review" }[tab] || "";
+    },
+
+    agentEntryFacts(entry) {
+      if (!entry) return [];
+      const details = entry.details || {};
+      const facts = [
+        { label: "状态", value: this.agentEntryStatusLabel(entry) },
+        { label: "相对本轮", value: this.agentEntryTime(entry) },
+      ];
+      if (details.provider_id) {
+        facts.push({ label: "Provider", value: details.provider_id,
+          hint: (details.attempts || 0) > 1 ? `同家试了 ${details.attempts} 次` : "" });
+      }
+      const usage = details.usage || {};
+      const cached = details.cached_tokens;
+      const reportedPrompt = Number(usage.prompt_tokens);
+      // 上下文估算与上游上报相同时只留一条，避免「12,000 / 12,000」看起来像两个指标
+      if (details.context_tokens != null && (!reportedPrompt || Number(details.context_tokens) !== reportedPrompt)) {
+        facts.push({ label: "本次上下文", value: `${this.fmtNum(details.context_tokens)} tok` });
+      }
+      if (usage.prompt_tokens != null) {
+        facts.push({
+          label: "上报输入", value: `${this.fmtNum(usage.prompt_tokens)} tok`,
+          hint: cached != null
+            ? `命中 ${this.fmtNum(cached)} · ${((cached / Math.max(1, usage.prompt_tokens)) * 100).toFixed(1)}%`
+            : "缓存未上报，按未命中计",
+        });
+      }
+      if (usage.completion_tokens != null) {
+        facts.push({ label: "输出", value: `${this.fmtNum(usage.completion_tokens)} tok` });
+      }
+      if (details.finish_reason) facts.push({ label: "结束原因", value: this.agentFinishLabel(details.finish_reason) });
+      if (details.error_code) {
+        facts.push({ label: "错误分类", value: this.errorCodeLabel(details.error_code) || details.error_code });
+      }
+      if (entry.kind === "compaction") {
+        facts.push({ label: "压缩前", value: `${this.fmtNum(details.before)} tok` });
+        facts.push({ label: "压缩后", value: `${this.fmtNum(details.after)} tok` });
+        facts.push({ label: "丢弃单元", value: `${details.dropped_units ?? "—"} 个` });
+        facts.push({ label: "保留单元", value: `${details.kept_units ?? "—"} 个`,
+          hint: details.kept_notes ? `含 ${details.kept_notes} 条补充要求` : "" });
+        if (details.digest_chars) facts.push({ label: "摘要", value: `${this.fmtNum(details.digest_chars)} 字` });
+      }
+      if (entry.kind === "tool") {
+        const sizes = entry.text_sizes || {};
+        facts.push({ label: "参数", value: `${this.fmtCompact(sizes.input || 0)} 字` });
+        facts.push({ label: "结果", value: `${this.fmtCompact(sizes.output || 0)} 字` });
+      }
+      if (entry.kind === "review") {
+        facts.push({ label: "问题数", value: `${details.issues ?? 0} 条` });
+        if (details.review_summary) facts.push({ label: "审阅摘要", value: details.review_summary });
+      }
+      return facts;
+    },
+
+    agentUsageFacts(entry) {
+      if (!entry) return [];
+      const details = entry.details || {};
+      const usage = details.usage || {};
+      const prompt = Number(usage.prompt_tokens) || 0;
+      const cached = details.cached_tokens;
+      const facts = [];
+      if (details.context_tokens != null && (!prompt || Number(details.context_tokens) !== prompt)) {
+        facts.push({ label: "本次上下文", value: `${this.fmtNum(details.context_tokens)} tok` });
+      }
+      if (usage.prompt_tokens != null) facts.push({ label: "上报输入", value: `${this.fmtNum(prompt)} tok` });
+      facts.push({
+        label: "缓存命中", value: cached == null ? "未上报" : `${this.fmtNum(cached)} tok`,
+        hint: cached == null ? "预算按未命中计" : `命中率 ${prompt ? ((cached / prompt) * 100).toFixed(1) : "0.0"}%`,
+      });
+      if (usage.completion_tokens != null) {
+        facts.push({ label: "输出", value: `${this.fmtNum(usage.completion_tokens)} tok` });
+      }
+      if (details.budget_tokens != null) {
+        facts.push({ label: "本步后累计", value: `${this.fmtNum(details.budget_tokens)} tok`, hint: "未命中输入 + 输出" });
+      }
+      return facts;
+    },
+
+    agentAnswerText(entry) {
+      const answer = entry?.details?.answer;
+      if (!answer) return "";
+      const parts = [];
+      if (Array.isArray(answer.selected) && answer.selected.length) parts.push(answer.selected.join("、"));
+      if (answer.custom) parts.push(`补充：${answer.custom}`);
+      if (answer.skipped) parts.push("已跳过");
+      return parts.join("；") || "—";
+    },
+
+    agentTextSizeLabel() {
+      if (this.agentTabLoading) return "读取中…";
+      if (!this.agentText) return "";
+      if (this.agentText.full) return `${this.fmtNum(this.agentText.total)} 字`;
+      return `已加载 ${this.fmtNum(this.agentText.text.length)} / ${this.fmtNum(this.agentText.total)} 字`;
+    },
+
+    agentTextPage(delta) {
+      if (!this.agentText) return;
+      const offset = this.agentText.offset + delta * this.agentText.limit;
+      this.loadAgentText(Math.max(0, offset));
+    },
+
+    agentPreText() {
+      const text = this.agentText?.text || "";
+      if (!text) return "";
+      const jsonish = this.agentTab === "input" || this.agentEntry?.kind === "tool";
+      if (this.agentPretty && this.agentText.full && jsonish) {
+        try {
+          return JSON.stringify(JSON.parse(text), null, 2);
+        } catch { /* 不是 JSON：原样展示 */ }
+      }
+      return text;
+    },
+
+    agentDownloadUrl() {
+      const entry = this.agentEntry;
+      const kind = this.agentTextKind(this.agentTab);
+      if (!entry || !kind || this.agentLogId == null) return "";
+      return `/api/admin/logs/${this.agentLogId}/agent-run/entries/${entry.id}/download?kind=${kind}`;
+    },
+
+    async openAgentRun(logId) {
+      if (logId == null) return;
+      this.closeLogDetail();
+      this.closeAgentRun();
+      // 关掉旧舞台可能把焦点还回去：等它完成后再记录，关闭时才能回到点击处
+      agentFocusReturn = typeof document !== "undefined" ? document.activeElement : null;
+      this.agentLogId = logId;
+      const request = ++agentRunRequest;
+      const controller = new AbortController();
+      agentRunAbort = controller;
+      this.agentRunOpen = true;
+      this.agentRunLoading = true;
+      this.agentRunError = "";
+      this.agentRun = null;
+      this.agentView = "cover";
+      try {
+        const data = await this.api(`/api/admin/logs/${logId}/agent-run`, { signal: controller.signal });
+        if (request !== agentRunRequest) return;
+        this.agentRun = data;
+        this._agentDefaultEntry();
+        this._scheduleAgentPoll();
+      } catch (e) {
+        if (request !== agentRunRequest || e.name === "AbortError") return;
+        this.agentRunError = e.message || "加载运行全解失败";
+      } finally {
+        if (request === agentRunRequest) {
+          this.agentRunLoading = false;
+          agentRunAbort = null;
+        }
+      }
+    },
+
+    closeAgentRun() {
+      agentRunRequest++;
+      if (agentRunAbort) {
+        agentRunAbort.abort();
+        agentRunAbort = null;
+      }
+      agentTextRequest++;
+      if (agentTextAbort) {
+        agentTextAbort.abort();
+        agentTextAbort = null;
+      }
+      clearTimeout(agentPollTimer);
+      clearTimeout(agentPlayTimer);
+      agentPollTimer = null;
+      agentPlayTimer = null;
+      this.agentRunOpen = false;
+      this.agentLogId = null;
+      this.agentRun = null;
+      this.agentRunLoading = false;
+      this.agentRunError = "";
+      this.agentView = "cover";
+      this.agentEntryId = "";
+      this.agentTab = "";
+      this.agentTabLoading = false;
+      this.agentText = null;
+      this.agentTextError = "";
+      this.agentPlaying = false;
+      this.agentRaw = false;
+      this.agentPretty = true;
+      agentHtmlSource = null;
+      agentHtmlValue = "";
+      if (agentFocusReturn && typeof agentFocusReturn.focus === "function") {
+        try { agentFocusReturn.focus(); } catch { /* 元素已经不在页面上 */ }
+      }
+      agentFocusReturn = null;
+    },
+
+    _agentDefaultEntry() {
+      const entries = this.agentEntries;
+      const live = ["queued", "running", "stopping"].includes(this.agentRun?.run?.status);
+      const entry = live ? entries[entries.length - 1] : entries[0];
+      this.agentEntryId = entry ? entry.id : "";
+      this.agentTab = entry ? (this.agentEntryTabs(entry)[0] || "") : "";
+    },
+
+    startAgentRun() {
+      if (!this.agentRun || this.agentView !== "cover") return;
+      this.agentView = "stage";
+      if (!this.agentEntryId && this.agentEntries.length) this._agentDefaultEntry();
+      if (this.agentEntryId) this.selectAgentEntry(this.agentEntryId);
+    },
+
+    selectAgentEntry(id) {
+      const entry = this.agentEntries.find((item) => item.id === id);
+      if (!entry) return;
+      if (this.agentEntryId !== id) {
+        this.agentRaw = false;
+        this.agentPretty = true;
+      }
+      this.agentEntryId = id;
+      const tabs = this.agentEntryTabs(entry);
+      if (!tabs.includes(this.agentTab)) this.agentTab = tabs[0] || "";
+      this.loadAgentText();
+    },
+
+    setAgentTab(tab) {
+      if (this.agentTab === tab) return;
+      this.agentTab = tab;
+      this.agentRaw = false;
+      this.agentPretty = true;
+      this.loadAgentText();
+    },
+
+    async loadAgentText(offset = 0) {
+      const entry = this.agentEntry;
+      const kind = this.agentTextKind(this.agentTab);
+      agentTextRequest++;
+      const request = agentTextRequest;
+      if (agentTextAbort) {
+        agentTextAbort.abort();
+        agentTextAbort = null;
+      }
+      this.agentText = null;
+      this.agentTextError = "";
+      this.agentTabLoading = false;
+      if (!entry || !kind || this.agentLogId == null) return;
+      const total = Number((entry.text_sizes || {})[kind] || 0);
+      if (!total) return;
+      const limit = total <= 131072 ? total : 16384;
+      const start = Math.max(0, Math.min(Number(offset) || 0, Math.max(0, total - 1)));
+      const controller = new AbortController();
+      agentTextAbort = controller;
+      this.agentTabLoading = true;
+      try {
+        const data = await this.api(
+          `/api/admin/logs/${this.agentLogId}/agent-run/entries/${entry.id}/text?kind=${kind}&offset=${start}&limit=${limit}`,
+          { signal: controller.signal },
+        );
+        if (request !== agentTextRequest) return;
+        this.agentText = {
+          kind,
+          offset: data.offset,
+          total: data.total,
+          limit: data.limit,
+          text: data.text,
+          full: data.offset === 0 && data.text.length >= data.total,
+        };
+      } catch (e) {
+        if (request !== agentTextRequest || e.name === "AbortError") return;
+        this.agentTextError = e.message || "读取正文失败";
+      } finally {
+        if (request === agentTextRequest) {
+          this.agentTabLoading = false;
+          agentTextAbort = null;
+        }
+      }
+    },
+
+    async copyAgentText() {
+      const url = this.agentDownloadUrl();
+      if (!url) return;
+      try {
+        const text = await this.api(url, { responseType: "text" });
+        await this.copyText(text);
+      } catch (e) {
+        this.toast(e.message || "复制失败", "error");
+      }
+    },
+
+    openAgentMeta() {
+      if (this.agentLogId == null) return;
+      this.openLogDetail(this.agentLogId);
+    },
+
+    agentStep(delta = 1, keepPlaying = false) {
+      const entries = this.agentEntries;
+      if (!entries.length) return;
+      if (!keepPlaying) this.stopAgentPlay();
+      const next = Math.max(0, Math.min(entries.length - 1, this.agentIndex + delta));
+      if (entries[next].id === this.agentEntryId) return;
+      this.selectAgentEntry(entries[next].id);
+    },
+
+    agentProgress() {
+      if (!this.agentEntries.length) return 0;
+      return ((this.agentIndex + 1) / this.agentEntries.length) * 100;
+    },
+
+    toggleAgentPlay() {
+      if (this.agentPlaying) {
+        this.stopAgentPlay();
+        return;
+      }
+      if (this.agentView !== "stage" || this.agentEntries.length < 2) return;
+      this.agentPlaying = true;
+      this._scheduleAgentPlay();
+    },
+
+    stopAgentPlay() {
+      this.agentPlaying = false;
+      clearTimeout(agentPlayTimer);
+      agentPlayTimer = null;
+    },
+
+    _scheduleAgentPlay() {
+      clearTimeout(agentPlayTimer);
+      if (!this.agentPlaying) return;
+      agentPlayTimer = setTimeout(() => {
+        if (!this.agentPlaying || !this.agentRunOpen) return;
+        if (this.agentIndex >= this.agentEntries.length - 1) {
+          this.stopAgentPlay();
+          return;
+        }
+        this.agentStep(1, true);
+        if (this.agentIndex >= this.agentEntries.length - 1) {
+          this.stopAgentPlay();
+          return;
+        }
+        this._scheduleAgentPlay();
+      }, 4000);
+    },
+
+    _scheduleAgentPoll() {
+      clearTimeout(agentPollTimer);
+      agentPollTimer = null;
+      const status = this.agentRun?.run?.status;
+      if (!this.agentRunOpen || !["queued", "running", "stopping"].includes(status)) return;
+      agentPollTimer = setTimeout(() => this.refreshAgentRun(), 4000);
+    },
+
+    async refreshAgentRun() {
+      const logId = this.agentLogId;
+      if (logId == null || !this.agentRunOpen) return;
+      const request = agentRunRequest;
+      try {
+        const data = await this.api(`/api/admin/logs/${logId}/agent-run`);
+        if (request !== agentRunRequest || !this.agentRunOpen) return;
+        this.agentRun = data;
+        if (!this.agentEntries.some((entry) => entry.id === this.agentEntryId)) this._agentDefaultEntry();
+        this._scheduleAgentPoll();
+      } catch {
+        if (request === agentRunRequest && this.agentRunOpen) this._scheduleAgentPoll();
+      }
+    },
+
+    agentKeysBlocked() {
+      return !!(this.logDetailOpen || this.deviceDetailOpen || this.confirmOpen || this.createOpen ||
+        this.quotaModalOpen || this.resetUsageModalOpen || this.modelModalOpen || this.providerModalOpen ||
+        this.modelProvidersModalOpen || this.providerTestModalOpen || this.deviceModalOpen ||
+        this.codeNoteModalOpen || this.ruleModalOpen);
     },
 
     /* ============ 设备指纹 ============ */

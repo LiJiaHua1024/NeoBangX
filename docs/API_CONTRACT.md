@@ -904,6 +904,7 @@ data: [DONE]
 | `ip` | 客户端 IP，反代后按 `X-Real-IP` > `X-Forwarded-For` 首跳 > 直连地址取值 |
 | `units` | 本次请求**实际扣减**的额度次数。普通工具成功/停止 = 1（免费模型限额内为 0，限额命中转按次计费为 1）；标题生成、错因分析 = 0；智能错题迁移单卡 = 该卡摊到的增量（摊分未跨过整数档位时为 0，整批累计等于整批价）。**不变量：`status=success` 必然已扣费**，不会出现「成功却记 0 次」的幽灵行 |
 | `device_id` / `fingerprint` | 浏览器设备指纹（仅用于识别共享，不做拦截依据）。`device_id` 为 `null` 表示当时无指纹（旧数据/上报失败）；`fingerprint` 为 ThumbmarkJS 全哈希冗余。列表与详情额外挂载 `device` 对象（含短码/昵称/备注/颜色/摘要），缺失时为 `null` |
+| `agent_steps` / `agent_mode` / `agent_available` | 仅 `tool_id=agent` 的行：本轮已落下的步骤数、执行模式、运行记录是否还在。`agent_available=false` 表示使用码删除后级联清掉了工作台数据，前端只能回到普通详情 |
 | `device` | 挂载的设备摘要：`{ id, fingerprint, short_code(FP-XXXX-XXXX), auto_name, display_name(备注优先), note, color, device_summary, first_seen_at, last_seen_at, seen_count }` |
 
 **设备指纹上报（仅用于识别共享，不做拦截依据）：** 前端经 ThumbmarkJS（MIT，自托管于
@@ -967,7 +968,8 @@ data: [DONE]
 默认 `include_payload=true`，`payload` 为 `null` 表示该次请求未开启原始数据记录（或记录功能当时处于关闭状态）。
 单段内容最长 60000 字，超出部分截断。`device` 为 `null` 表示当时无指纹。
 
-管理后台使用 `include_payload=false` 仅读取元数据：此时 `payload` 恒为 `null`，额外返回 `payload_sizes`（如 `{"input": 60000, "prompt": 60000, "output": 12000}`）；未记录原始数据时 `payload_sizes` 为 `null`。长度统计在数据库内完成，响应不携带原始数据全文。
+`tool_id=agent` 的日志额外返回 `agent_available`（对应 `workspace_runs` 是否还在；删除使用码会级联清理，
+此时只能看元数据）。管理后台使用 `include_payload=false` 仅读取元数据：此时 `payload` 恒为 `null`，额外返回 `payload_sizes`（如 `{"input": 60000, "prompt": 60000, "output": 12000}`）；未记录原始数据时 `payload_sizes` 为 `null`。长度统计在数据库内完成，响应不携带原始数据全文。
 
 #### GET `/api/admin/logs/{log_id}/payload/{part}`
 
@@ -976,6 +978,83 @@ data: [DONE]
 #### GET `/api/admin/logs/{log_id}/payload/{part}/download`
 
 返回该段完整记录，类型为 `text/plain; charset=utf-8`，下载文件名为 `log-{log_id}-{part}.txt`。用于主动复制全文或下载，不受分页限制。日志或原始数据不存在时返回 404；`part` 无效时返回 422。
+
+### 11.6.1 Agent 运行全解
+
+Agent 工作台的一轮执行在 `usage_logs` 里只有**一条**记录（`tool_id="agent"`，
+`request_id` 即 `workspace_runs.id`），过程细节在 `workspace_*` 表。这三个接口
+把一轮执行还原成可逐步查看的步骤序列，供管理后台的「运行全解」使用。
+
+Agent 轮次**不写**主站 `log_payloads`，所以日志详情的 `payload` 恒为 `null`；
+每一步的上下文、工具参数与输出都从 `workspace_chunks` 按需读取。
+接口只读，不提供删除 / 重跑 / 修改。
+
+#### GET `/api/admin/logs/{log_id}/agent-run`
+
+- 404：日志不存在。
+- 400：日志的 `tool_id` 不是 `agent`。
+- 404：日志存在的，但对应运行记录已被删除（删除使用码会级联清理工作台数据）。
+
+**响应（节选）：**
+
+```json
+{
+  "log": { "id": 1, "tool_id": "agent", "status": "success", "...": "同日志详情 to_dict" },
+  "device": { "id": 7, "short_code": "FP-AB12-CD34", "...": "同设备摘要" },
+  "task": { "id": "eef4450a…", "title": "高二英语·读后续写专项讲评", "goal": "…" },
+  "run": {
+    "id": "d879894a…", "mode": "execute", "status": "completed", "step": 5, "tokens": 128000,
+    "error": "", "created_at": "…", "started_at": "…", "finished_at": "…", "duration_ms": 96000,
+    "live": false, "model": "deepseek-v4", "provider": "openrouter", "preferred_provider": "deepseek",
+    "switches": [{ "from": "deepseek", "to": "openrouter", "step": 4 }],
+    "instruction": "重点讲第三段的情节推进", "base_version": { "id": "…", "title": "…", "chars": 1024 },
+    "usage": { "prompt": 182000, "cached": 141000, "completion": 12800, "cached_reported": true },
+    "limits": { "max_tokens": 2000000, "max_steps": 40, "output_tokens": 32000, "max_seconds": 3600,
+                "context_budget": 262144, "keep_tail_steps": 4 },
+    "versions": [{ "id": "…", "title": "读后续写讲评稿", "chars": 12000, "complete": true, "origin": "agent" }]
+  },
+  "summary": { "entries": 5, "model_calls": 2, "tool_calls": 1, "reviews": 1, "compactions": 1,
+               "waiting": 0, "text_chars": 51234 },
+  "entries": [
+    {
+      "id": "…", "kind": "model", "label": "执行步骤 1", "status": "done",
+      "created_at": "…", "offset_ms": 1200,
+      "details": { "usage": { "prompt_tokens": 45210, "completion_tokens": 3220 },
+                   "cached_tokens": 38000, "provider_id": "deepseek", "attempts": 1,
+                   "context_tokens": 45210, "finish_reason": "stop" },
+      "text_sizes": { "prompt": 8452, "output": 620, "reasoning": 120 }
+    }
+  ]
+}
+```
+
+**字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `run.tokens` | 本轮**计费口径**消耗（未命中缓存的输入 + 输出），不是原始 token 总数 |
+| `run.usage` | 原始上报用量；`cached_reported=false` 表示上游没回传命中信息，前端显示「未上报」而不是 0 |
+| `run.live` | `finished_at` 为空即为运行中，前端会轮询刷新 |
+| `run.switches` | Provider 切换记录 `{from,to,step}`；只在换过家时出现 |
+| `entries[].kind` | `model` / `review` / `tool` / `compaction`（步骤序列按创建时间升序） |
+| `entries[].offset_ms` | 相对本轮开始的时间偏移，前端显示为 `+12.3s` |
+| `entries[].details` | 步骤原始详情：`usage`、`provider_id`、`attempts`、`cached_tokens`、`error`、压缩统计、提问/回答等 |
+| `entries[].text_sizes` | 各类正文的字数（按 chunk 求和），决定前端显示哪些页签；正文不在这里返回 |
+
+#### GET `/api/admin/logs/{log_id}/agent-run/entries/{entry_id}/text`
+
+- `kind` 必填：`prompt` / `input` / `output` / `reasoning` / `arguments` / `review`；其它值 400。
+- `offset` 为从 0 开始的 Unicode 字符偏移；`limit` 默认 16384，服务端夹到 1–131072。
+- 日志不存在、步骤不属于该轮，返回 404；该步骤没有这类正文返回 404。
+
+```json
+{ "text": "当前页内容", "total": 8452, "offset": 0, "limit": 16384 }
+```
+
+#### GET `/api/admin/logs/{log_id}/agent-run/entries/{entry_id}/download`
+
+`kind` 同上一接口；返回该步骤该类正文的全文，`text/plain; charset=utf-8`，
+文件名 `agent-run-{log_id}-{entry_id}-{kind}.txt`。没有正文时 404。
 
 #### POST `/api/admin/logs/purge`
 
@@ -1385,6 +1464,7 @@ openrouter/deepseek/deepseek-chat
 | 1.21.0 | 2026-10-29 | 模型用途新增第四项「Agent」（`agent_usable`，**缺省 false**）：`/api/workspace/catalog` 只返回勾了该项、未禁用、且至少绑定一个启用 Provider 的模型，`default_model` 不在清单内时回退为清单第一个；`POST /tasks/{id}/runs` 同口径校验（未勾 403、未绑 Provider 400、清单为空 403 并提示联系管理员）。`agent_usable` 不参与任何历史迁移，与 `user_usable` 互不继承；管理后台模型编辑弹窗「用途」新增 Agent 项（默认不勾），模型列表的用途徽章同步显示。用户端／OCR／Chores 的可见性与校验口径不变 |
 | 1.22.0 | 2026-10-29 | 免费模型能力拆成主站 / 工作台两个开关：新增 `agent_free`（缺省 false，仅 `is_free` 为真时生效）——未勾的模型在 `/agent` 按普通模型每轮扣 1 次，勾了才不扣；新增 `agent_free_limits`（同一组窗口键），按**执行轮次**计数且只统计 `tool_id="agent"` 的行；主站 `free_limits` 计数改为排除工作台的行，两个池子互不占用（避免分钟级窗口卡死多轮任务）。`/api/workspace/catalog` 的 `models` 原样带出 `is_free` / `agent_free`，管理后台模型编辑弹窗新增「Agent 免费」开关与「Agent 防滥用限额」面板 |
 | 1.23.0 | 2026-10-29 | Agent 执行策略：Provider 任务级粘住（同一家最多 3 次尝试、退避 + Retry-After，用尽才换、换家不切回；断流时同家重跑本步一次）；上下文压缩阈值 262144 tokens（去掉 9 万硬顶，保留 HEAD 与最近 N 步、中间段换确定性摘要、用户补充要求全文保留，压缩后 1.25 倍兜底）；轮 token 预算改为「未命中缓存的输入 + 输出」（默认 2,000,000），使用日志仍按原始 prompt/completion/cached 记录；步骤详情新增 `provider_id` / `attempts` / `cached_tokens`；新增 `POST /api/workspace/tasks/{id}/compact` 与 `kind="compaction"` 步骤；Agent 设置新增 `context_budget` / `keep_tail_steps` / `provider_attempts` / `retry_wait_cap_seconds` / `switch_compaction_ratio` |
+| 1.24.0 | 2026-10-29 | 管理后台新增 **Agent 运行全解**：`GET /api/admin/logs/{log_id}/agent-run` 返回任务、预算、用量、Provider 切换、压缩与步骤列表（正文只给字数）；新增步骤正文分页 `/text` 与全文 `/download`（`prompt` / `input` / `output` / `reasoning` / `arguments` / `review`）；日志列表 Agent 行新增 `agent_steps` / `agent_mode` / `agent_available`。Agent 轮次不写主站 `log_payloads`，正文从 `workspace_chunks` 按需读取，不新增表结构 |
 
 ---
 

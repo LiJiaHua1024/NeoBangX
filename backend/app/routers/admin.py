@@ -1245,6 +1245,7 @@ def list_logs(
         rows = query.order_by(desc(UsageLog.id)).offset(offset).limit(page_size).all()
     items = [r.to_dict() for r in rows]
     _attach_step_summaries(db, items)
+    _attach_agent_summaries(db, items)
     _attach_devices(db, items)
     result = {
         "total": total,
@@ -1274,6 +1275,35 @@ def _attach_step_summaries(db: Session, items: list[dict]) -> None:
                 if value is not None:
                     item[key] = (item.get(key) or 0) + value
             item["tokens_estimated"] = bool(item.get("tokens_estimated") or row[6])
+
+
+def _attach_agent_summaries(db: Session, items: list[dict]) -> None:
+    """给 Agent 轮次的日志行挂「步数 / 模式 / 运行记录是否还在」。
+
+    列表只用来展示「· 12 步」与决定点行进全解还是回退普通详情；两步批量查询，
+    不按行懒加载。运行记录被使用码级联清掉的行 agent_available=false。
+    """
+    ids = [item["request_id"] for item in items
+           if item.get("tool_id") == "agent" and item.get("request_id")]
+    if not ids:
+        return
+    from app.agent_workspace.models import WorkspaceEntry, WorkspaceRun
+
+    steps = dict(db.execute(
+        select(WorkspaceEntry.run_id, func.count(WorkspaceEntry.id))
+        .where(WorkspaceEntry.run_id.in_(ids))
+        .group_by(WorkspaceEntry.run_id)
+    ).all())
+    modes = dict(db.execute(
+        select(WorkspaceRun.id, WorkspaceRun.mode).where(WorkspaceRun.id.in_(ids))
+    ).all())
+    for item in items:
+        if item.get("tool_id") != "agent":
+            continue
+        run_id = item.get("request_id") or ""
+        item["agent_available"] = run_id in modes
+        item["agent_steps"] = int(steps.get(run_id, 0))
+        item["agent_mode"] = modes.get(run_id, "")
 
 
 def _attach_devices(db: Session, items: list[dict]) -> None:
@@ -1323,6 +1353,11 @@ def log_detail(
         data["payload_sizes"] = dict(zip(("input", "prompt", "output"), sizes)) if sizes else None
     device = db.get(Device, row.device_id) if row.device_id else None
     data["device"] = device.to_dict() if device is not None else None
+    if row.tool_id == "agent":
+        # 详情抽屉据此决定是否给「打开运行全解」；使用码删除会级联清掉工作台数据
+        from app.agent_workspace.models import WorkspaceRun
+
+        data["agent_available"] = bool(row.request_id and db.get(WorkspaceRun, row.request_id))
     return data
 
 
@@ -1337,6 +1372,73 @@ def log_steps(log_id: int, db: Annotated[Session, Depends(get_db)], page: int = 
     query = db.query(UsageLog).filter(UsageLog.parent_log_id == log_id)
     rows = query.order_by(UsageLog.id).offset((page - 1) * page_size).limit(page_size).all()
     return {"items": [row.to_dict() for row in rows], "total": query.count(), "page": page, "page_size": page_size}
+
+
+@router.get("/logs/{log_id}/agent-run")
+def agent_run_report(log_id: int, db: Annotated[Session, Depends(get_db)]):
+    """Agent 轮次的「运行全解」：任务、预算、用量、步骤与每步正文的字数。
+
+    正文不在这里返回（完整上下文可能 1 MB）；前端点开某一步时按页取。
+    """
+    from app.agent_workspace import report
+
+    try:
+        log = report.resolve_log(db, log_id)
+    except report.ReportNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except report.ReportUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    data = report.run_report(db, log)
+    if data is None:
+        raise HTTPException(status_code=404, detail="运行记录已不存在（使用码删除会连带清理工作台数据）")
+    return data
+
+
+@router.get("/logs/{log_id}/agent-run/entries/{entry_id}/text")
+def agent_run_text(
+    log_id: int,
+    entry_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    kind: str = Query(..., description="prompt / input / output / reasoning / arguments / review"),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(16384, ge=1),
+):
+    from app.agent_workspace import report
+
+    try:
+        _log, entry = report.resolve_entry(db, log_id, entry_id)
+        data = report.text_page(db, entry, kind, offset, limit)
+    except report.ReportNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except report.ReportUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if data is None:
+        raise HTTPException(status_code=404, detail="该步骤没有这类内容")
+    return data
+
+
+@router.get("/logs/{log_id}/agent-run/entries/{entry_id}/download")
+def download_agent_run_text(
+    log_id: int,
+    entry_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    kind: str = Query(..., description="prompt / input / output / reasoning / arguments / review"),
+):
+    from app.agent_workspace import report
+
+    try:
+        _log, entry = report.resolve_entry(db, log_id, entry_id)
+        text = report.entry_text(db, entry, kind)
+    except report.ReportNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except report.ReportUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if not text:
+        raise HTTPException(status_code=404, detail="该步骤没有这类内容")
+    return PlainTextResponse(
+        text,
+        headers={"Content-Disposition": f'attachment; filename="agent-run-{log_id}-{entry_id}-{kind}.txt"'},
+    )
 
 
 @router.get("/logs/{log_id}/payload/{part}")
