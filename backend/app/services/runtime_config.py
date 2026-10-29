@@ -113,9 +113,9 @@ def visual_concurrency_for(cfg: dict, model: str) -> int:
     default = normalize_visual_concurrency(cfg.get("visual_paper_concurrency"), DEFAULT_VISUAL_CONCURRENCY)
     return normalize_visual_concurrency(entry.get("visual_paper_concurrency"), default)
 
-# 模型用途能力位：勾选列表里那三项。禁用（enabled=false）是它们的上一级开关，
-# 禁用后三项一律失效；未禁用时必须至少勾选一项。
-CAPABILITY_KEYS = ("user_usable", "ocr_usable", "chores_usable")
+# 模型用途能力位：勾选列表里那四项。禁用（enabled=false）是它们的上一级开关，
+# 禁用后四项一律失效；未禁用时必须至少勾选一项。
+CAPABILITY_KEYS = ("user_usable", "ocr_usable", "chores_usable", "agent_usable")
 # 旧的「仅 Chores」单开关写法，仅用于把老数据迁移成能力位
 LEGACY_CHORES_ONLY_KEYS = ("chores_only", "only_chores", "choresOnly")
 # OCR 最大输出 tokens 上限：整卷转录允许很长，但挡掉误填的天文数字
@@ -188,9 +188,11 @@ def _parse_flag(item: dict, *names: str, default: bool = False) -> bool:
 
 
 def parse_capabilities(item: dict) -> dict:
-    """解析模型的三个用途能力位，并把旧的「仅 Chores」开关迁移过来。
+    """解析模型的四个用途能力位，并把旧的「仅 Chores」开关迁移过来。
 
-    user_usable 用户端可选；ocr_usable 可用于图片识别；chores_usable 可用于 Chores。
+    user_usable 用户端可选；ocr_usable 可用于图片识别；chores_usable 可用于 Chores；
+    agent_usable 出现在 Agent 工作台的模型列表里。agent_usable 不参与任何历史迁移，
+    缺省一律为 False —— Agent 的模型清单必须由管理员显式勾选，不做隐式继承。
     老数据里没有任何新键时按旧行为回填：不是「仅 Chores」就能给用户用、
     任何启用模型都能做 Chores、不默认开放 OCR。
     """
@@ -199,12 +201,14 @@ def parse_capabilities(item: dict) -> dict:
             "user_usable": _parse_flag(item, "user_usable", default=True),
             "ocr_usable": _parse_flag(item, "ocr_usable", default=False),
             "chores_usable": _parse_flag(item, "chores_usable", default=True),
+            "agent_usable": _parse_flag(item, "agent_usable", default=False),
         }
     legacy_only = _parse_flag(item, *LEGACY_CHORES_ONLY_KEYS, default=False)
     return {
         "user_usable": not legacy_only,
         "ocr_usable": False,
         "chores_usable": True,
+        "agent_usable": False,
     }
 
 
@@ -357,12 +361,13 @@ def parse_models(raw: str) -> list[dict]:
     """解析模型配置。
 
     新格式：JSON 数组，每项含 id / name / description / aa_index / reasoning_effort / thinking_budget /
-    user_usable / ocr_usable / chores_usable / enabled / is_free / free_no_code / free_limits；
+    user_usable / ocr_usable / chores_usable / agent_usable / enabled / is_free / free_no_code / free_limits；
     旧格式：逗号分隔的模型 ID 字符串，自动升级为结构化条目。
     aa_index 为 AA 智能指数（0-100），前端按打击级别区间映射展示；留空 = 未评级。
     旧的 score（0-10 推荐评分）读入即丢弃、视为未评级，不再落库。
-    enabled 缺省为 True（兼容老数据）；禁用后三项用途一律不可用。
-    三项用途能力位见 parse_capabilities（旧 chores_only 会在读取时迁移）。
+    enabled 缺省为 True（兼容老数据）；禁用后四项用途一律不可用。
+    用途能力位见 parse_capabilities（旧 chores_only 会在读取时迁移）；
+    agent_usable 缺省 False，只能由管理后台显式勾选。
     is_free = 免费模型（不扣次数、用户端展示「免费」标签）；
     free_no_code 仅在 is_free 为真时生效，表示无使用码或额度用尽时也可调用；
     free_limits 为防滥用限额，0 = 不限制。
@@ -424,6 +429,7 @@ def parse_models(raw: str) -> list[dict]:
             "user_usable": True,
             "ocr_usable": False,
             "chores_usable": True,
+            "agent_usable": False,
             "enabled": True,
             "is_free": False,
             "free_no_code": False,
@@ -805,6 +811,7 @@ def resolve_llm_settings(db: Session) -> dict:
             "user_usable": True,
             "ocr_usable": False,
             "chores_usable": True,
+            "agent_usable": False,
             "enabled": True,
             "is_free": False,
             "free_no_code": False,

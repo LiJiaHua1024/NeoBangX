@@ -1,9 +1,10 @@
-"""模型用途能力位（用户可用 / 用于 OCR / 用于 Chores）的回归测试。
+"""模型用途能力位（用户可用 / 用于 OCR / 用于 Chores / Agent）的回归测试。
 
 覆盖三层：
-1. 配置解析：三个能力位的解析、旧 chores_only 的迁移路径、序列化往返；
+1. 配置解析：四个能力位的解析、旧 chores_only 的迁移路径、序列化往返；
 2. 管理端校验：未禁用模型至少要勾一项、default/chores/ocr 三个指向与能力位一致；
-3. 用户端可见性：未勾「用户可用」的模型不出现在 /api/tools/，也不进 available_model_ids。
+3. 可见性：未勾「用户可用」的模型不出现在 /api/tools/，也不进 available_model_ids；
+   未勾「Agent」的模型不出现在 `/api/workspace/catalog`，也不能在工作台开新执行。
 """
 import json
 from uuid import uuid4
@@ -33,6 +34,7 @@ TEST_PROVIDER_ID = "prov_capability_test"
 USER_MODEL = "test/cap-user"
 OCR_MODEL = "test/cap-ocr"
 CHORES_MODEL = "test/cap-chores"
+AGENT_MODEL = "test/cap-agent"
 
 
 def _model_entry(model_id, **extra):
@@ -99,6 +101,9 @@ def test_parse_capabilities_migrates_legacy_chores_only():
         assert parsed[model_id]["chores_usable"] is True
 
     assert parsed["legacy-alias"]["user_usable"] is False  # 别名同样识别
+    # Agent 不做迁移：任何老数据都不自动开放工作台
+    for model_id, model in parsed.items():
+        assert model["agent_usable"] is False, model_id
 
 
 def test_parse_capabilities_explicit_wins_and_roundtrips():
@@ -106,34 +111,41 @@ def test_parse_capabilities_explicit_wins_and_roundtrips():
     raw = json.dumps([
         {"id": "ocr-only", "user_usable": False, "ocr_usable": True, "chores_usable": False},
         {"id": "all-off", "user_usable": False, "ocr_usable": False, "chores_usable": False},
+        {"id": "agent-only", "user_usable": False, "ocr_usable": False, "chores_usable": False,
+         "agent_usable": True},
     ], ensure_ascii=False)
     parsed = {m["id"]: m for m in parse_models(raw)}
 
     assert parsed["ocr-only"]["ocr_usable"] is True
     assert parsed["ocr-only"]["user_usable"] is False
     assert parsed["ocr-only"]["chores_usable"] is False
+    assert parsed["ocr-only"]["agent_usable"] is False  # 缺键不继承任何其他用途
+    assert parsed["agent-only"]["agent_usable"] is True
     assert not has_any_capability(parsed["all-off"])
     assert has_any_capability(parsed["ocr-only"])
+    assert has_any_capability(parsed["agent-only"])
 
     serialized = serialize_models(list(parsed.values()))
     assert "chores_only" not in serialized
     reparsed = {m["id"]: m for m in parse_models(serialized)}
     assert reparsed["ocr-only"] == parsed["ocr-only"]
+    assert reparsed["agent-only"] == parsed["agent-only"]
 
 
 def test_parse_capabilities_comma_format_defaults():
-    """旧逗号分隔格式补上默认能力位：用户可用 + Chores。"""
+    """旧逗号分隔格式补上默认能力位：用户可用 + Chores，不默认开放 OCR 与 Agent。"""
     parsed = parse_models("a,b")
-    assert [(m["user_usable"], m["ocr_usable"], m["chores_usable"]) for m in parsed] == [
-        (True, False, True),
-        (True, False, True),
+    assert [(m["user_usable"], m["ocr_usable"], m["chores_usable"], m["agent_usable"]) for m in parsed] == [
+        (True, False, True, False),
+        (True, False, True, False),
     ]
 
 
 def test_parse_capabilities_partial_keys_use_defaults():
-    """只提交部分能力位时，其余按默认值补齐（后台总是三项都发，这里兜住手工调用）。"""
+    """只提交部分能力位时，其余按默认值补齐（后台总是四项都发，这里兜住手工调用）。"""
     caps = parse_capabilities({"user_usable": False})
-    assert caps == {"user_usable": False, "ocr_usable": False, "chores_usable": True}
+    assert caps == {"user_usable": False, "ocr_usable": False, "chores_usable": True,
+                    "agent_usable": False}
 
 
 # ---------------- 用户端可见性 ----------------
@@ -248,7 +260,7 @@ def test_admin_rejects_losing_capability_still_pointed_at(models_config):
 
 
 def test_admin_accepts_ocr_only_model_and_roundtrips(models_config):
-    """仅 OCR 模型（用户端不可见）可以保存，并在配置读回时保持三个能力位。"""
+    """仅 OCR 模型（用户端不可见）可以保存，并在配置读回时保持能力位。"""
     from app.admin_main import app as admin_app
 
     models_config([_model_entry(USER_MODEL)], default_model=USER_MODEL)
@@ -269,6 +281,7 @@ def test_admin_accepts_ocr_only_model_and_roundtrips(models_config):
     assert returned[OCR_MODEL]["ocr_usable"] is True
     assert returned[OCR_MODEL]["user_usable"] is False
     assert returned[OCR_MODEL]["chores_usable"] is False
+    assert returned[OCR_MODEL]["agent_usable"] is False  # 没勾就不出现
     assert config["ocr_model"] == OCR_MODEL
     assert config["ocr_max_tokens"] == "12000"
 
@@ -279,6 +292,44 @@ def test_admin_accepts_ocr_only_model_and_roundtrips(models_config):
         assert cfg["ocr_max_tokens"] == 12000
     finally:
         db.close()
+
+
+def test_agent_capability_drives_workspace_catalog_only(models_config, workspace_code):
+    """仅 Agent 模型（用户端不可见）能保存，且只出现在工作台清单里，不进用户端清单。"""
+    from app.admin_main import app as admin_app
+
+    models_config(
+        [
+            _model_entry(USER_MODEL, user_usable=True, ocr_usable=False, chores_usable=True,
+                         agent_usable=False),
+            _model_entry(AGENT_MODEL, user_usable=False, ocr_usable=False, chores_usable=False,
+                         agent_usable=True),
+        ],
+        default_model=USER_MODEL,
+    )
+    response = TestClient(admin_app).put("/api/admin/config", json={
+        "models": [
+            {"id": USER_MODEL, "user_usable": True, "ocr_usable": False, "chores_usable": True,
+             "agent_usable": False},
+            {"id": AGENT_MODEL, "name": "Agent 专用", "user_usable": False,
+             "ocr_usable": False, "chores_usable": False, "agent_usable": True},
+        ],
+    })
+    assert response.status_code == 200, response.text
+
+    returned = {m["id"]: m for m in
+                TestClient(admin_app).get("/api/admin/config").json()["config"]["models"]}
+    assert returned[AGENT_MODEL]["agent_usable"] is True
+
+    # 用户端：只有勾了「用户可用」的
+    assert [m["id"] for m in TestClient(app).get("/api/tools/").json()["models"]] == [USER_MODEL]
+
+    # 工作台：只有勾了「Agent」的
+    _owner, token = workspace_code("AGENT-CAP-", quota=5)
+    catalog = TestClient(app, headers={"Authorization": "Bearer " + token}).get(
+        "/api/workspace/catalog").json()
+    assert [m["id"] for m in catalog["models"]] == [AGENT_MODEL]
+    assert catalog["default_model"] == AGENT_MODEL
 
 
 def test_resolve_llm_settings_ocr_model_falls_back_on_dirty_data(models_config):

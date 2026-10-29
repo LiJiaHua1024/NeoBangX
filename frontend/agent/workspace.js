@@ -2028,6 +2028,8 @@ async function openEntry(id, kind) {
 
 /* 模型目录只在 boot 拉一次会让后台改配置后一直用旧列表：切任务时顺手刷新（最多 60 秒一次）。 */
 let catalogModelsAt = 0;
+// 空清单说明管理员还没给任何模型勾「Agent」用途：提示一次即可，别每次轮询都弹。
+let emptyModelsWarned = false;
 async function refreshCatalogModels() {
   if (!state.catalog || Date.now() - catalogModelsAt < 60000) return;
   catalogModelsAt = Date.now();
@@ -2035,6 +2037,10 @@ async function refreshCatalogModels() {
     const catalog = await api("/catalog");
     state.catalog.models = catalog.models;
     state.catalog.default_model = catalog.default_model;
+    if (!catalog.models.length && !emptyModelsWarned) {
+      emptyModelsWarned = true;
+      toast("还没有模型勾选「Agent」用途，请联系管理员在模型管理里开启", "error");
+    }
     modelPicker.setModels(catalog.models, state.task?.config.model || $("#model").value);
     renderTemplateOptions();
     updateStatus();

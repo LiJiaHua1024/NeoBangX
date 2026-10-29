@@ -1279,7 +1279,7 @@
                               x-text="m.is_free && m.free_no_code ? '免费 · 无码可用' : '免费'"></span>
                         <template x-for="tag in modelCapabilityTags(m)" :key="'cap-' + m.id + '-' + tag">
                           <span class="badge badge-cap ml-1" x-text="tag"
-                                title="该模型的用途勾选：用户 = 用户端可选，OCR = 识别图片文字，Chores = 轻量任务"></span>
+                                title="该模型的用途勾选：用户 = 用户端可选，OCR = 识别图片文字，Chores = 轻量任务，Agent = 工作台可选"></span>
                         </template>
                         <span class="badge badge-disabled ml-1" x-show="m.enabled === false">已禁用</span>
                       </div>
@@ -1964,13 +1964,13 @@
                 <input type="checkbox" x-model="modelForm.enabled">
                 <span class="switch-slider"></span>
               </label>
-              <span class="dim" x-text="modelForm.enabled !== false ? '启用中' : '已禁用：用户端、OCR、Chores 全不可用'"></span>
+              <span class="dim" x-text="modelForm.enabled !== false ? '启用中' : '已禁用：用户端、OCR、Chores、Agent 全不可用'"></span>
             </div>
-            <span class="field-hint">启用是用途勾选的上一级开关；关闭后下方三项不再生效</span>
+            <span class="field-hint">启用是用途勾选的上一级开关；关闭后下方四项不再生效</span>
           </label>
           <div class="field mb-3" x-show="modelForm.enabled !== false" x-cloak>
             <span>用途（至少勾选一项）</span>
-            <div class="rule-tool-options" :class="{ 'cap-missing': !modelForm.user_usable && !modelForm.ocr_usable && !modelForm.chores_usable }">
+            <div class="rule-tool-options" :class="{ 'cap-missing': !modelForm.user_usable && !modelForm.ocr_usable && !modelForm.chores_usable && !modelForm.agent_usable }">
               <label class="rule-tool-option" :class="{ on: modelForm.user_usable }"
                      title="出现在 8000 用户端的模型列表里，用户可以直接选它">
                 <input type="checkbox" x-model="modelForm.user_usable">
@@ -1986,8 +1986,13 @@
                 <input type="checkbox" x-model="modelForm.chores_usable">
                 <span>用于 Chores</span>
               </label>
+              <label class="rule-tool-option" :class="{ on: modelForm.agent_usable }"
+                     title="出现在 Agent 工作台的模型选择器里，用户可以用它执行任务">
+                <input type="checkbox" x-model="modelForm.agent_usable">
+                <span>Agent</span>
+              </label>
             </div>
-            <span class="field-hint">只有勾选了「用户可用」的模型会出现在用户端模型列表里</span>
+            <span class="field-hint">只有勾选了「用户可用」的模型会出现在用户端模型列表里；只有勾选了「Agent」的模型会出现在 Agent 工作台的模型列表里。两项互不继承，「Agent」默认不勾</span>
           </div>
           <label class="field mb-3">
             <span>免费模型</span>

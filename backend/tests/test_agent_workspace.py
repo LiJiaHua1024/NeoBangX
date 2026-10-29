@@ -524,9 +524,10 @@ def test_generation_does_not_retry_reasoning_only_limit(identity, monkeypatch, p
 
 def test_backend_worker_finishes_after_request_client_closes(identity, monkeypatch):
     t = task(identity)
-    cfg = {'models': [{'id': 'test', 'enabled': True, 'user_usable': True}], 'default_model': 'test'}
+    cfg = {'models': [{'id': 'test', 'enabled': True, 'agent_usable': True}],
+           'providers': [{'id': 'prov-test', 'name': '测试 Provider', 'enabled': True, 'api_key': 'k'}],
+           'model_provider_map': {'test': ['prov-test']}, 'default_model': 'test'}
     monkeypatch.setattr(api, '_load_cfg', lambda: cfg)
-    monkeypatch.setattr(api, '_validate_model', lambda *_: None)
     monkeypatch.setattr(api, 'official_templates', lambda: [])
     monkeypatch.setattr(runner, '_load_cfg', lambda: cfg)
     app = FastAPI()
@@ -617,9 +618,10 @@ def test_optional_goal_runs_task_prompt_and_keeps_budget_snapshot(client, identi
     t = task(identity)
     prompt = '分析所选材料的语篇结构。'
     t = store.update_task(identity[0], t['id'], 1, {**t['config'], 'goal': goal, 'prompt': prompt})
-    cfg = {'models': [{'id': 'test', 'enabled': True, 'user_usable': True}], 'default_model': 'test'}
+    cfg = {'models': [{'id': 'test', 'enabled': True, 'agent_usable': True}],
+           'providers': [{'id': 'prov-test', 'name': '测试 Provider', 'enabled': True, 'api_key': 'k'}],
+           'model_provider_map': {'test': ['prov-test']}, 'default_model': 'test'}
     monkeypatch.setattr(api, '_load_cfg', lambda: cfg)
-    monkeypatch.setattr(api, '_validate_model', lambda *_: None)
     monkeypatch.setattr(api, 'official_templates', lambda: [])
     monkeypatch.setattr(api, 'load_settings', lambda: WorkspaceSettings(output_tokens=65536))
     monkeypatch.setattr(runner, '_load_cfg', lambda: cfg)
@@ -700,9 +702,10 @@ def test_answer_question_starts_continuation_and_marks_entry_done(client, identi
                 'options': [{'label': 'A', 'description': '保留原稿'}, {'label': 'B'}],
                 'multi_select': False}})
     store.finish_run(r['id'], 'waiting')
-    cfg = {'models': [{'id': 'test', 'enabled': True, 'user_usable': True}], 'default_model': 'test'}
+    cfg = {'models': [{'id': 'test', 'enabled': True, 'agent_usable': True}],
+           'providers': [{'id': 'prov-test', 'name': '测试 Provider', 'enabled': True, 'api_key': 'k'}],
+           'model_provider_map': {'test': ['prov-test']}, 'default_model': 'test'}
     monkeypatch.setattr(api, '_load_cfg', lambda: cfg)
-    monkeypatch.setattr(api, '_validate_model', lambda *_: None)
     monkeypatch.setattr(api, 'official_templates', lambda: [])
     monkeypatch.setattr(api, 'load_settings', lambda: WorkspaceSettings())
     body = {'request_key': store.uid(), 'selected': ['A'], 'custom': '保留标题'}
@@ -790,18 +793,50 @@ def test_note_events_carry_the_run_id(client,identity):
 
 
 def test_catalog_default_model_is_always_offered(client,identity,monkeypatch):
-    """默认模型必须出现在 catalog 给的 models 里，否则新任务默认不可执行。"""
-    cfg={'models':[{'id':'a','name':'A','enabled':True,'user_usable':True},
-                   {'id':'b','name':'B','enabled':True,'user_usable':True}],
-         'available_model_ids':['a'],'default_model':'b','providers':[]}
+    """默认模型必须出现在 catalog 给的 models 里，否则新任务默认不可执行。
+
+    清单口径是「勾了 Agent 用途 + 未禁用 + 有可用 Provider」，与用户端的 user_usable 无关。
+    """
+    providers=[{'id':'p','name':'P','enabled':True,'base_url':'','api_key':'k'}]
+    cfg={'models':[{'id':'a','name':'A','enabled':True,'agent_usable':True},
+                   {'id':'b','name':'B','enabled':True,'agent_usable':True}],
+         'providers':providers,'model_provider_map':{'a':['p'],'b':['p']},'default_model':'b'}
     monkeypatch.setattr(api,'_load_cfg',lambda:cfg)
     data=client.get('/api/workspace/catalog').json()
-    assert [m['id'] for m in data['models']]==['a']
-    assert data['default_model']=='a'
-    cfg['available_model_ids']=None
-    assert client.get('/api/workspace/catalog').json()['default_model']=='b'
-    cfg['models']=[{'id':'b','name':'B','enabled':False}]
+    assert [m['id'] for m in data['models']]==['a','b']
+    assert data['default_model']=='b'
+    # 默认模型没勾 Agent：退到清单里的第一个，不把用户钉在一个不可用的模型上
+    cfg['models']=[{'id':'a','name':'A','enabled':True,'agent_usable':True},
+                   {'id':'b','name':'B','enabled':True,'agent_usable':False}]
+    assert [m['id'] for m in client.get('/api/workspace/catalog').json()['models']]==['a']
+    assert client.get('/api/workspace/catalog').json()['default_model']=='a'
+    cfg['models']=[{'id':'b','name':'B','enabled':False,'agent_usable':True}]
     assert client.get('/api/workspace/catalog').json()['default_model']==''
+
+
+def test_run_rejects_model_without_agent_capability(client,identity,monkeypatch):
+    """勾了别的用途但没勾 Agent 的模型：可以在用户端用，但不能在工作台开新执行。"""
+    t=task(identity)
+    cfg={'models':[{'id':'test','name':'Test','enabled':True,'user_usable':True,'agent_usable':False}],
+         'providers':[{'id':'p','name':'P','enabled':True,'base_url':'','api_key':'k'}],
+         'model_provider_map':{'test':['p']},'default_model':'test'}
+    monkeypatch.setattr(api,'_load_cfg',lambda:cfg)
+    response=client.post(f"/api/workspace/tasks/{t['id']}/runs",json={'request_key':store.uid()})
+    assert response.status_code==403
+    assert 'Agent' in response.json()['detail']
+
+
+def test_run_accepts_agent_only_model(client,identity,monkeypatch):
+    """只勾 Agent（用户端不可见）的模型可以在工作台开新执行。"""
+    t=task(identity)
+    cfg={'models':[{'id':'test','name':'Test','enabled':True,'user_usable':False,'agent_usable':True}],
+         'providers':[{'id':'p','name':'P','enabled':True,'base_url':'','api_key':'k'}],
+         'model_provider_map':{'test':['p']},'default_model':'test'}
+    monkeypatch.setattr(api,'_load_cfg',lambda:cfg)
+    monkeypatch.setattr(api,'official_templates',lambda:[])
+    response=client.post(f"/api/workspace/tasks/{t['id']}/runs",json={'request_key':store.uid()})
+    assert response.status_code==202,response.text
+    store.finish_run(response.json()['id'],'stopped')
 
 
 def test_events_cursor_pages_without_repeat_or_loss(client,identity):
@@ -879,9 +914,10 @@ def test_answer_rollback_when_the_answer_cannot_be_saved(client, identity, monke
         'question': '用哪一版？',
         'ask': {'question': '用哪一版？', 'options': [{'label': 'A'}], 'multi_select': False}})
     store.finish_run(r['id'], 'waiting')
-    cfg = {'models': [{'id': 'test', 'enabled': True, 'user_usable': True}], 'default_model': 'test'}
+    cfg = {'models': [{'id': 'test', 'enabled': True, 'agent_usable': True}],
+           'providers': [{'id': 'prov-test', 'name': '测试 Provider', 'enabled': True, 'api_key': 'k'}],
+           'model_provider_map': {'test': ['prov-test']}, 'default_model': 'test'}
     monkeypatch.setattr(api, '_load_cfg', lambda: cfg)
-    monkeypatch.setattr(api, '_validate_model', lambda *_: None)
     monkeypatch.setattr(api, 'official_templates', lambda: [])
     monkeypatch.setattr(api, 'load_settings', lambda: WorkspaceSettings())
     before = store.task_detail(identity[0], t['id'])

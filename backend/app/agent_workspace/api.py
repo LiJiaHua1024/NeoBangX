@@ -11,7 +11,7 @@ from sqlalchemy import select, update, func, delete
 from app.config import settings
 from app.database import SessionLocal
 from app.models import UsageCode, utcnow
-from app.routers.chat import _load_cfg, _validate_model
+from app.routers.chat import _get_providers_for_model_sync, _load_cfg
 from app.routers.tools import build_tool_groups, get_prompt_loader, _resolve_prompt_filename
 from app.services.free_access import is_free_model
 from app.services.usage_code import code_from_payload
@@ -147,12 +147,37 @@ def login(body: Login):
         return {"token": issue_token(row)}
 
 
+def _agent_models(cfg: dict) -> list[dict]:
+    """Agent 工作台的模型清单：勾了「Agent」用途、未禁用、且至少绑定一个启用的 Provider。
+
+    与用户端的口径刻意分开：用户端看 user_usable，Agent 只看 agent_usable，
+    两者互不继承 —— 管理员可以为 Agent 单独挑一组模型。
+    """
+    return [m for m in cfg.get("models") or []
+            if m.get("enabled", True) and m.get("agent_usable")
+            and _get_providers_for_model_sync(cfg, m["id"])]
+
+
+def _agent_model_entry(cfg: dict, model: str) -> dict:
+    """开新执行前校验该模型确实属于 Agent 清单，并返回它的配置项。"""
+    if not model:
+        raise HTTPException(403, "还没有任何模型勾选「Agent」用途，请联系管理员在模型管理里开启")
+    entry = find_model_entry(cfg.get("models") or [], model)
+    if entry is None:
+        raise HTTPException(400, f"模型不可用：{model}")
+    if not entry.get("enabled", True):
+        raise HTTPException(400, f"模型已禁用：{model}")
+    if not entry.get("agent_usable"):
+        raise HTTPException(403, f"模型「{entry.get('name') or model}」未勾选「Agent」用途，不能在工作台执行")
+    if not _get_providers_for_model_sync(cfg, model):
+        raise HTTPException(400, f"模型不可用：{model} 未绑定可用 Provider")
+    return entry
+
+
 @router.get("/catalog")
 def get_catalog(owner: Owner):
     cfg, policy = _load_cfg(), load_settings()
-    available = cfg.get("available_model_ids")
-    models = [m for m in cfg["models"] if m.get("enabled", True) and m.get("user_usable", True)
-              and (available is None or m["id"] in available)]
+    models = _agent_models(cfg)
     with SessionLocal() as db:
         templates = [{"id": r.id, "name": r.name, "kind": r.kind, "config": store.decode(r.config)}
                      for r in db.scalars(select(Template).where(Template.owner == owner).order_by(Template.created_at.desc()))]
@@ -313,10 +338,7 @@ def start_run(task_id: str, body: RunWrite, owner: Owner):
     if body.mode in {"review", "revise"} and not body.base_version:
         raise HTTPException(400, "请先选择要审阅或修订的成果版本")
     model = config.get("model") or cfg.get("default_model")
-    _validate_model(cfg, model)
-    entry = find_model_entry(cfg["models"], model)
-    if not entry or not entry.get("user_usable", True):
-        raise HTTPException(403, "此模型不可用于用户任务")
+    entry = _agent_model_entry(cfg, model)
     if "web_search" in config["tools"] and not search_available(policy):
         raise HTTPException(409, "网页搜索未接入，请关闭开关或联系管理员")
     templates = {t["id"]: t for t in official_templates() if t["id"] in config.get("teaching_tools", {}) or t["id"] == config.get("template_id")}

@@ -130,7 +130,7 @@ class ModelEntry(BaseModel):
     extra_body: Optional[dict] = Field(
         None, description="自定义请求体参数（透传给底层 API，如自定义 extra_body 映射）"
     )
-    # 用途能力位：三者为空表示客户端未提交（旧版后台），按下面的 chores_only 迁移
+    # 用途能力位：四者都为空表示客户端未提交（旧版后台），按下面的 chores_only 迁移
     user_usable: Optional[bool] = Field(
         None, description="用户可用：出现在 8000 用户端的模型列表中"
     )
@@ -140,10 +140,13 @@ class ModelEntry(BaseModel):
     chores_usable: Optional[bool] = Field(
         None, description="用于 Chores：可作为标题生成等轻量任务的模型"
     )
-    chores_only: bool = Field(
-        False, description="【已废弃】仅用于 Chores；新客户端请改用三项能力位"
+    agent_usable: Optional[bool] = Field(
+        None, description="Agent：出现在 Agent 工作台的模型列表里（缺省不勾选）"
     )
-    enabled: bool = Field(True, description="是否启用；禁用后用户端、OCR 与 Chores 均不可用")
+    chores_only: bool = Field(
+        False, description="【已废弃】仅用于 Chores；新客户端请改用能力位"
+    )
+    enabled: bool = Field(True, description="是否启用；禁用后用户端、OCR、Chores 与 Agent 均不可用")
     is_free: bool = Field(False, description="免费模型：调用不消耗使用码次数，用户端显示「免费」标签")
     free_no_code: bool = Field(
         False, description="无码可用：没有使用码或次数已用尽时仍可调用（仅在免费模型下生效）"

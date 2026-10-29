@@ -177,6 +177,7 @@
       "user_usable": true,
       "ocr_usable": false,
       "chores_usable": true,
+      "agent_usable": false,
       "enabled": true,
       "is_free": true,
       "free_no_code": true,
@@ -198,16 +199,19 @@
 | `user_usable` | bool | 用户可用：出现在 8000 用户端的模型列表里（缺省 true） |
 | `ocr_usable` | bool | 用于 OCR：可作为「识别图片文字」的识别模型（缺省 false） |
 | `chores_usable` | bool | 用于 Chores：可作为标题生成等轻量任务的模型（缺省 true） |
-| `enabled` | bool | 禁用后用户端、OCR 与 Chores 全不可用，是三项用途的上一级开关（缺省 true） |
+| `agent_usable` | bool | Agent：出现在 `/agent` 工作台的模型列表里（缺省 **false**，只能由管理后台显式勾选） |
+| `enabled` | bool | 禁用后用户端、OCR、Chores 与 Agent 全不可用，是四项用途的上一级开关（缺省 true） |
 | `is_free` | bool | 免费模型：限额内调用不消耗使用码次数，用户端模型列表显示「免费」标签；限额命中后持可用使用码时转按次扣减 |
 | `free_no_code` | bool | 无码可用：没有使用码或次数已用尽时仍可调用（仅在 `is_free` 为真时生效） |
 | `free_limits` | object | 防滥用限额，键为 `minute` / `hour` / `day` / `week` / `month`，0 或 -1（含负数）= 不限制 |
 
-模型用途是**三个能力位**（`user_usable` / `ocr_usable` / `chores_usable`），`enabled=false`
+模型用途是**四个能力位**（`user_usable` / `ocr_usable` / `chores_usable` / `agent_usable`），`enabled=false`
 是它们的上一级开关。历史数据里只有旧的「仅 Chores」单开关时，读取侧自动迁移为
 `user_usable=!chores_only`、`ocr_usable=false`、`chores_usable=true`；响应中不再出现
 `chores_only`。`models` 为旧版逗号分隔格式时，每个模型按上述缺省值补齐
 （用户可用 + 用于 Chores，不默认开放 OCR）。
+**`agent_usable` 不参与任何历史迁移**：缺键一律读成 false —— Agent 的模型清单只能由管理员
+显式勾选，升级后需要去「模型管理」逐个勾上「Agent」并保存（否则工作台没有可选模型）。
 
 ---
 
@@ -1085,6 +1089,7 @@ data: [DONE]
         "user_usable": true,
         "ocr_usable": false,
         "chores_usable": true,
+        "agent_usable": false,
         "enabled": true,
         "is_free": true,
         "free_no_code": true,
@@ -1120,7 +1125,7 @@ data: [DONE]
 ```
 
 `config` 中的 `models` / `tool_reasoning_rules` / `mirror_origins` 已在服务端
-从存储字符串还原为对象或数组，前端无需二次解析；模型的三项用途能力位恒存在。
+从存储字符串还原为对象或数组，前端无需二次解析；模型的四项用途能力位恒存在。
 `log_payload` 以字符串 `"true"` / `"false"` 存储；`log_retention_days` 为
 天数字符串，`"0"` 表示永久保留。`jev_api_key` 回显为脱敏值（含 `****`），
 保存时原样送回表示不修改（与 Provider Key 的约定一致）；`jev_enabled` 同为
@@ -1146,6 +1151,7 @@ data: [DONE]
       "user_usable": true,
       "ocr_usable": false,
       "chores_usable": true,
+      "agent_usable": false,
       "enabled": true
     }
   ],
@@ -1180,15 +1186,16 @@ data: [DONE]
 | `user_usable` | bool | 用户可用：出现在 8000 用户端的模型列表里 |
 | `ocr_usable` | bool | 用于 OCR：可作为「识别图片文字」的识别模型（需带视觉能力） |
 | `chores_usable` | bool | 用于 Chores：可作为标题生成等轻量任务的模型 |
-| `enabled` | bool | 禁用后用户端、OCR 与 Chores 全不可用（三项用途的上一级开关） |
+| `agent_usable` | bool | Agent：出现在 `/agent` 工作台的模型列表里；**缺省 false**，与 `user_usable` 互不继承 |
+| `enabled` | bool | 禁用后用户端、OCR、Chores 与 Agent 全不可用（四项用途的上一级开关） |
 | `is_free` | bool | 免费模型：调用不消耗次数，用户端显示「免费」标签 |
 | `free_no_code` | bool | 无码可用：无使用码或次数用尽也能调用（仅免费模型生效） |
 | `free_limits` | object | `{minute, hour, day, week, month}` 防滥用限额，0/-1 为不限制 |
-| `chores_only` | bool | **已废弃**：仅在客户端未提交三个能力位时用于迁移（等价于 `user_usable=!chores_only`、`chores_usable=true`、`ocr_usable=false`） |
+| `chores_only` | bool | **已废弃**：仅在客户端未提交能力位时用于迁移（等价于 `user_usable=!chores_only`、`chores_usable=true`、`ocr_usable=false`） |
 
 **校验规则**（不满足返回 400，文案指明是哪个模型 / 哪个指向）：
 
-- 每个**未禁用**模型必须至少勾选一项用途（`用户可用` / `用于 OCR` / `用于 Chores`）；
+- 每个**未禁用**模型必须至少勾选一项用途（`用户可用` / `用于 OCR` / `用于 Chores` / `Agent`）；
 - `default_model` 必须勾选「用户可用」且未禁用；
 - `chores_model` 必须勾选「用于 Chores」且未禁用；
 - `ocr_model` 必须勾选「用于 OCR」且未禁用（留空 = 跟随默认模型，不做校验）；
@@ -1367,6 +1374,7 @@ openrouter/deepseek/deepseek-chat
 | 1.18.0 | 2026-10-15 | 描述需求找工具：新增 `POST /api/tools/search`（无需使用码，不扣额度不写日志，`tool_search` 桶 30 次/60 秒限速）；Jev choice 单题判定（~70-500ms）映射 32 个工具并允许「以上都不合适」，未配齐/超时（上限 5s）/报错立即回退本地关键词 bigram 匹配；进程内缓存（TTL 600s、键含工具目录指纹）；新增配置键 `jev_tool_search_enabled`（缺键按开，可单独关闭搜索的 Jev 判定）；前端在侧栏与移动顶部提供「描述需求找工具」入口（输入停顿 500ms 自动搜、内容变化中断重发、查找中可见进度环、空态/兜底/不确定状态文案）；假后端打桩同形响应（`#mock` 场景 fallback/slow/error/empty） |
 | 1.19.0 | 2026-10-19 | 前端行为变化（无接口变更）：生成中断（切工具 / 回首页 / 新建题目 / 查看历史 / 关页刷新）先落盘残文再作废在途流，关页走 `pagehide` 并把停止通知用 `keepalive` 送出，从 bfcache 回来不会卡在「生成中」；历史卡片键盘可达（`role="button"` + `tabindex` + 读屏名，Enter / 空格打开、↑↓ 移动焦点） |
 | 1.20.0 | 2026-10-19 | 撞输出上限改为**所有工具**都发 `truncated`（原先只对工具 32/33 发，其余工具把半份内容当完整结果交付且没有续写入口），载荷补 `completion_tokens` 与 `finish_reason`，前端据此在结果区给「继续生成」出口、把记录标成「待补全」；`error` 事件改为「Chores 模型转写的两句话 + 机器可读分类」：新增 `advice` 与 `code` 字段，`message` 不再是固定的「生成失败，请稍后重试」，失败时先发一条 `explaining` 非终态事件让前端立刻停止显示「生成中」（新增提示词 `prompts/报错解释.md`，注册为 Chores 工作 `error_explain` 以便按模型配推理等级；Chores 不可用时按「精确判定 → Jev → 机械兜底」决定要不要再试，总时长预算 3 秒，仍失败则用机械文案兜底，同类错误走进程内缓存）；失败分类 `error_code` 与上游结束原因 `finish_reason` 随使用日志落库，前端按 `code` 收起注定失败的重试、后台日志表据此显示「截断」与分类角标；Jev 的「精确 → Jev → 兜底」三层骨架抽成 `app/services/decision.py`，Provider 切换判定、标题任务重试判定与报错解读共用同一套编排 |
+| 1.21.0 | 2026-10-29 | 模型用途新增第四项「Agent」（`agent_usable`，**缺省 false**）：`/api/workspace/catalog` 只返回勾了该项、未禁用、且至少绑定一个启用 Provider 的模型，`default_model` 不在清单内时回退为清单第一个；`POST /tasks/{id}/runs` 同口径校验（未勾 403、未绑 Provider 400、清单为空 403 并提示联系管理员）。`agent_usable` 不参与任何历史迁移，与 `user_usable` 互不继承；管理后台模型编辑弹窗「用途」新增 Agent 项（默认不勾），模型列表的用途徽章同步显示。用户端／OCR／Chores 的可见性与校验口径不变 |
 
 ---
 
@@ -1381,6 +1389,12 @@ openrouter/deepseek/deepseek-chat
 | GET | `/agent`、`/agent/tasks/{id}` | 工作台页面（服务端返回同一单页，路由由前端解析） |
 | POST | `/api/workspace/login` | 使用码换 JWT |
 | GET | `/api/workspace/catalog` | 模型、官方模板、个人模板、工具、默认配置、额度与上限 |
+
+`catalog.models` 只包含**勾选了「Agent」用途、未禁用、且至少绑定一个启用的 Provider** 的模型
+（`agent_usable=true`），与用户端的 `user_usable` 互不继承；`default_model` 落在这份清单之外时
+回退为清单第一个，清单为空则为空串。开新执行（`POST /tasks/{id}/runs`）用未勾「Agent」的模型
+返回 403，未绑定 Provider 返回 400，清单为空时的 403 文案会提示联系管理员。定稿后的清单口径见
+[5. 模型列表](#5-模型列表) 的字段说明。
 
 ### 16.2 任务
 

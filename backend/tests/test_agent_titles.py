@@ -136,11 +136,21 @@ def test_worker_executor_writes_generated_title_back(owner, monkeypatch):
     assert store.task_detail(owner, task.id)["title"] == "2024新课标I卷阅读讲评"
 
 
-def test_start_run_enqueues_title_for_first_execution(owner):
+def test_start_run_enqueues_title_for_first_execution(owner, monkeypatch):
     from app.routers.chat import _load_cfg
 
-    cfg = _load_cfg()
-    model = cfg.get("default_model") or cfg["models"][0]["id"]
+    base = _load_cfg()
+    model = base.get("default_model") or base["models"][0]["id"]
+    # 开新执行要求模型勾了「Agent」用途（缺省不勾），这里给默认模型临时补上，
+    # 并补一条 Provider 绑定 —— 这条用例测的是标题入队，不是模型清单。
+    cfg = {
+        **base,
+        "models": [{**next(m for m in base["models"] if m["id"] == model), "agent_usable": True}],
+        # 走旧单 URL 兜底分支：providers 为空但有 Key 时链里会给出兼容 Provider
+        "providers": [], "model_provider_map": {}, "model_provider_details": {},
+        "llm_api_key": "test-key", "llm_base_url": "",
+    }
+    monkeypatch.setattr(api, "_load_cfg", lambda: cfg)
     task = _task(owner, goal="整理必修一 Unit 3 的读后续写素材", model=model)
     api.start_run(task.id, api.RunWrite(request_key=store.uid(), mode="execute"), owner)
 

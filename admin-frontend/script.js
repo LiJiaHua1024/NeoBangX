@@ -900,7 +900,7 @@ function adminApp() {
     modelForm: {
       concurrency_mode: "default", visual_paper_concurrency: 3,
       id: "", name: "", description: "", aa_index: null, reasoning_effort: "", extra_body: "",
-      user_usable: true, ocr_usable: false, chores_usable: true, enabled: true,
+      user_usable: true, ocr_usable: false, chores_usable: true, agent_usable: false, enabled: true,
       is_free: false, free_no_code: false,
       free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
     },
@@ -1070,6 +1070,7 @@ function adminApp() {
       if (m.user_usable !== false) tags.push("用户");
       if (m.ocr_usable) tags.push("OCR");
       if (m.chores_usable !== false) tags.push("Chores");
+      if (m.agent_usable) tags.push("Agent");
       return tags;
     },
     get defaultModelMissing() {
@@ -2932,19 +2933,22 @@ function adminApp() {
         const data = await this.api("/api/admin/config");
         const cfg = data.config || {};
         // 能力位：老数据只有 chores_only 时按老语义回填（与后端 parse_capabilities 一致）
+        // Agent 不参与回填：缺键一律按未勾选，只能由管理员显式开启
         const capsOf = (m) => {
-          const hasCaps = m.user_usable != null || m.ocr_usable != null || m.chores_usable != null;
+          const hasCaps = m.user_usable != null || m.ocr_usable != null || m.chores_usable != null || m.agent_usable != null;
           if (hasCaps) {
             return {
               user_usable: m.user_usable !== false,
               ocr_usable: !!m.ocr_usable,
               chores_usable: m.chores_usable !== false,
+              agent_usable: !!m.agent_usable,
             };
           }
           return {
             user_usable: !m.chores_only,
             ocr_usable: false,
             chores_usable: true,
+            agent_usable: false,
           };
         };
         this.configForm = {
@@ -3071,7 +3075,7 @@ function adminApp() {
       this.modelForm = {
         id: "", name: "", description: "", aa_index: null, reasoning_effort: "", extra_body: "",
         concurrency_mode: "default", visual_paper_concurrency: this.configForm.visual_paper_concurrency,
-        user_usable: true, ocr_usable: false, chores_usable: true, enabled: true,
+        user_usable: true, ocr_usable: false, chores_usable: true, agent_usable: false, enabled: true,
         is_free: false, free_no_code: false,
         free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
       };
@@ -3095,6 +3099,7 @@ function adminApp() {
         user_usable: m.user_usable !== false,
         ocr_usable: !!m.ocr_usable,
         chores_usable: m.chores_usable !== false,
+        agent_usable: !!m.agent_usable,
         enabled: m.enabled !== false,
         is_free: !!m.is_free,
         free_no_code: !!m.is_free && !!m.free_no_code,
@@ -3163,12 +3168,13 @@ function adminApp() {
       }
       this.modelForm.aa_index = aaIndex;
       const enabled = this.modelForm.enabled !== false;
-      // 三项用途：未禁用的模型至少要勾一项，否则它在任何入口都到不了
+      // 四项用途：未禁用的模型至少要勾一项，否则它在任何入口都到不了
       const userUsable = !!this.modelForm.user_usable;
       const ocrUsable = !!this.modelForm.ocr_usable;
       const choresUsable = !!this.modelForm.chores_usable;
-      if (enabled && !userUsable && !ocrUsable && !choresUsable) {
-        this.toast("请至少勾选一项用途（用户可用 / 用于 OCR / 用于 Chores），或把该模型禁用", "error");
+      const agentUsable = !!this.modelForm.agent_usable;
+      if (enabled && !userUsable && !ocrUsable && !choresUsable && !agentUsable) {
+        this.toast("请至少勾选一项用途（用户可用 / 用于 OCR / 用于 Chores / Agent），或把该模型禁用", "error");
         return;
       }
       const isFree = !!this.modelForm.is_free;
@@ -3222,6 +3228,7 @@ function adminApp() {
         user_usable: userUsable,
         ocr_usable: ocrUsable,
         chores_usable: choresUsable,
+        agent_usable: agentUsable,
         enabled,
         is_free: isFree,
         free_no_code: freeNoCode,
@@ -3470,7 +3477,7 @@ function adminApp() {
         return;
       }
       for (const m of this.configForm.models) {
-        if (m.enabled !== false && !m.user_usable && !m.ocr_usable && !m.chores_usable) {
+        if (m.enabled !== false && !m.user_usable && !m.ocr_usable && !m.chores_usable && !m.agent_usable) {
           this.validationError(`模型「${m.name || m.id}」没有勾选任何用途，请至少勾一项或把它禁用`, "模型管理");
           return;
         }
@@ -3581,6 +3588,7 @@ function adminApp() {
             user_usable: m.user_usable !== false,
             ocr_usable: !!m.ocr_usable,
             chores_usable: m.chores_usable !== false,
+            agent_usable: !!m.agent_usable,
             enabled: m.enabled !== false,
             is_free: !!m.is_free,
             free_no_code: !!m.is_free && !!m.free_no_code,
