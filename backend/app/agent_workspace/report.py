@@ -46,6 +46,19 @@ def _json(value):
     return data if isinstance(data, dict) else {}
 
 
+def _as(value, default):
+    """json_extract 返回的是 JSON 文本；按期望的类型解析，坏数据回落到默认值。"""
+    if value is None:
+        return default
+    if isinstance(value, type(default)):
+        return value
+    try:
+        data = decode(value)
+    except (TypeError, ValueError):
+        return default
+    return data if isinstance(data, type(default)) else default
+
+
 def _iso(value):
     return value.isoformat() if value else None
 
@@ -89,14 +102,9 @@ def _base_version(db, version_id):
     return {"id": row[0], "title": row[1], "chars": int(row[2] or 0)} if row else None
 
 
-def _task_goal(task):
-    config = _json(task.config) if task is not None else {}
-    return str(config.get("goal") or "")[:4000]
-
-
-def _entries(db, run):
+def _entries(db, run_id, run_created_at):
     rows = db.scalars(
-        select(Entry).where(Entry.run_id == run.id).order_by(Entry.created_at, Entry.id)
+        select(Entry).where(Entry.run_id == run_id).order_by(Entry.created_at, Entry.id)
     ).all()
     sizes = _sizes(db, [row.id for row in rows])
     entries = []
@@ -104,7 +112,7 @@ def _entries(db, run):
                "compactions": 0, "waiting": 0, "text_chars": 0}
     for row in rows:
         details = _json(row.details)
-        offset_ms = max(0, int((row.created_at - run.created_at).total_seconds() * 1000)) if run.created_at else 0
+        offset_ms = max(0, int((row.created_at - run_created_at).total_seconds() * 1000)) if run_created_at else 0
         entry_sizes = sizes.get(row.id, {})
         summary["entries"] += 1
         summary["text_chars"] += sum(entry_sizes.values())
@@ -132,49 +140,70 @@ def _entries(db, run):
 
 
 def run_report(db, log):
-    """一条 Agent 使用日志对应的完整复盘；运行记录已被级联清掉时返回 None。"""
+    """一条 Agent 使用日志对应的完整复盘；运行记录已被级联清掉时返回 None。
+
+    快照里还塞着任务配置与官方模板（单个教学提示词可到 10 万字），
+    绝不整列读出来：只用 json_extract 取复盘需要的几个小字段。
+    """
     if not log.request_id:
         return None
-    run = db.get(Run, log.request_id)
-    if run is None:
+    row = db.execute(
+        select(
+            Run.id, Run.task_id, Run.mode, Run.status, Run.step, Run.tokens, Run.error,
+            Run.created_at, Run.started_at, Run.finished_at,
+            func.json_extract(Run.snapshot, "$.model").label("model"),
+            func.json_extract(Run.snapshot, "$.limits").label("limits"),
+            func.json_extract(Run.snapshot, "$.provider").label("provider"),
+            func.json_extract(Run.snapshot, "$.preferred_provider").label("preferred_provider"),
+            func.json_extract(Run.snapshot, "$.switches").label("switches"),
+            func.json_extract(Run.snapshot, "$.instruction").label("instruction"),
+            func.json_extract(Run.snapshot, "$.base_version").label("base_version"),
+            func.json_extract(Run.snapshot, "$.usage").label("usage"),
+        ).where(Run.id == log.request_id)
+    ).mappings().first()
+    if row is None:
         return None
-    task = db.get(Task, run.task_id)
-    snapshot = _json(run.snapshot)
-    limits = snapshot.get("limits") if isinstance(snapshot.get("limits"), dict) else {}
-    usage = snapshot.get("usage") if isinstance(snapshot.get("usage"), dict) else {}
-    switches = snapshot.get("switches") if isinstance(snapshot.get("switches"), list) else []
-    entries, summary = _entries(db, run)
+    # 任务标题与目标同样不整列读 config：教学工具提示词可能非常大。
+    task = db.execute(
+        select(Task.id, Task.title, func.json_extract(Task.config, "$.goal").label("goal"))
+        .where(Task.id == row["task_id"])
+    ).first()
+    limits = _as(row["limits"], {})
+    usage = _as(row["usage"], {})
+    switches = _as(row["switches"], [])
+    entries, summary = _entries(db, row["id"], row["created_at"])
     device = db.get(Device, log.device_id) if log.device_id else None
-    if run.finished_at is not None:
-        duration_ms = int((run.finished_at - run.created_at).total_seconds() * 1000)
+    if row["finished_at"] is not None:
+        duration_ms = int((row["finished_at"] - row["created_at"]).total_seconds() * 1000)
     else:
-        duration_ms = int((utcnow() - run.created_at).total_seconds() * 1000)
+        duration_ms = int((utcnow() - row["created_at"]).total_seconds() * 1000)
+    provider = row["provider"] or row["preferred_provider"] or ""
     return {
         "log": log.to_dict(),
         "device": device.to_dict() if device is not None else None,
         "task": {
-            "id": task.id if task is not None else "",
-            "title": task.title if task is not None else "",
-            "goal": _task_goal(task),
+            "id": task[0] if task is not None else "",
+            "title": task[1] if task is not None else "",
+            "goal": str(task[2] or "")[:4000] if task is not None else "",
         },
         "run": {
-            "id": run.id,
-            "mode": run.mode,
-            "status": run.status,
-            "step": int(run.step or 0),
-            "tokens": int(run.tokens or 0),
-            "error": run.error or "",
-            "created_at": _iso(run.created_at),
-            "started_at": _iso(run.started_at),
-            "finished_at": _iso(run.finished_at),
+            "id": row["id"],
+            "mode": row["mode"],
+            "status": row["status"],
+            "step": int(row["step"] or 0),
+            "tokens": int(row["tokens"] or 0),
+            "error": row["error"] or "",
+            "created_at": _iso(row["created_at"]),
+            "started_at": _iso(row["started_at"]),
+            "finished_at": _iso(row["finished_at"]),
             "duration_ms": max(0, duration_ms),
-            "live": run.finished_at is None,
-            "model": snapshot.get("model") or "",
-            "provider": snapshot.get("provider") or snapshot.get("preferred_provider") or "",
-            "preferred_provider": snapshot.get("preferred_provider") or "",
+            "live": row["finished_at"] is None,
+            "model": row["model"] or "",
+            "provider": provider,
+            "preferred_provider": row["preferred_provider"] or "",
             "switches": switches,
-            "instruction": snapshot.get("instruction") or "",
-            "base_version": _base_version(db, snapshot.get("base_version")),
+            "instruction": row["instruction"] or "",
+            "base_version": _base_version(db, row["base_version"]),
             "usage": {
                 "prompt": int(usage.get("prompt") or 0),
                 "cached": int(usage.get("cached") or 0),
@@ -184,7 +213,7 @@ def run_report(db, log):
             "limits": {key: limits.get(key) for key in (
                 "max_tokens", "max_steps", "output_tokens", "max_seconds",
                 "context_budget", "keep_tail_steps") if limits.get(key) is not None},
-            "versions": _run_versions(db, run.id),
+            "versions": _run_versions(db, row["id"]),
         },
         "summary": summary,
         "entries": entries,
