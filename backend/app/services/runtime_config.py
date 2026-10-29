@@ -361,7 +361,8 @@ def parse_models(raw: str) -> list[dict]:
     """解析模型配置。
 
     新格式：JSON 数组，每项含 id / name / description / aa_index / reasoning_effort / thinking_budget /
-    user_usable / ocr_usable / chores_usable / agent_usable / enabled / is_free / free_no_code / free_limits；
+    user_usable / ocr_usable / chores_usable / agent_usable / enabled /
+    is_free / free_no_code / free_limits / agent_free / agent_free_limits；
     旧格式：逗号分隔的模型 ID 字符串，自动升级为结构化条目。
     aa_index 为 AA 智能指数（0-100），前端按打击级别区间映射展示；留空 = 未评级。
     旧的 score（0-10 推荐评分）读入即丢弃、视为未评级，不再落库。
@@ -370,7 +371,9 @@ def parse_models(raw: str) -> list[dict]:
     agent_usable 缺省 False，只能由管理后台显式勾选。
     is_free = 免费模型（不扣次数、用户端展示「免费」标签）；
     free_no_code 仅在 is_free 为真时生效，表示无使用码或额度用尽时也可调用；
-    free_limits 为防滥用限额，0 = 不限制。
+    free_limits 为防滥用限额，0 = 不限制；
+    agent_free 同样只在 is_free 下生效，缺省 False —— Agent 一轮的调用量远大于主站一次
+    生成，主站免费不等于工作台免费；agent_free_limits 为它在工作台的独立限额（按轮次计）。
     """
     raw = (raw or "").strip()
     if not raw:
@@ -396,9 +399,12 @@ def parse_models(raw: str) -> list[dict]:
             if not isinstance(extra_body, dict):
                 extra_body = None
             enabled = _parse_enabled(item)
-            # 免费模型：兼容 is_free / free 两种写法；未标记免费时无码开关强制归零
+            # 免费模型：兼容 is_free / free 两种写法；未标记免费时两个子开关强制归零。
+            # agent_free 是 is_free 的子开关（Agent 一轮的模型调用量远大于主站一次生成，
+            # 所以不继承主站的免费，缺省为不免费），限额也独立一套，按执行轮次计。
             is_free = _parse_flag(item, "is_free", "free")
             free_no_code = is_free and _parse_flag(item, "free_no_code", "free_without_code")
+            agent_free = is_free and _parse_flag(item, "agent_free", "agent_free_model")
             out.append({
                 "id": model_id,
                 "name": str(item.get("name") or "").strip() or model_id,
@@ -412,7 +418,9 @@ def parse_models(raw: str) -> list[dict]:
                 "enabled": enabled,
                 "is_free": is_free,
                 "free_no_code": free_no_code,
+                "agent_free": agent_free,
                 "free_limits": parse_free_limits(item.get("free_limits")),
+                "agent_free_limits": parse_free_limits(item.get("agent_free_limits")),
             })
         return out
     # 旧版逗号分隔格式
@@ -433,7 +441,9 @@ def parse_models(raw: str) -> list[dict]:
             "enabled": True,
             "is_free": False,
             "free_no_code": False,
+            "agent_free": False,
             "free_limits": parse_free_limits(None),
+            "agent_free_limits": parse_free_limits(None),
         }
         for m in raw.split(",")
         if m.strip()
@@ -815,7 +825,9 @@ def resolve_llm_settings(db: Session) -> dict:
             "enabled": True,
             "is_free": False,
             "free_no_code": False,
+            "agent_free": False,
             "free_limits": parse_free_limits(None),
+            "agent_free_limits": parse_free_limits(None),
         }]
 
     # Chores / OCR 模型若指向已禁用模型则回退到默认（默认可用才回退，否则保留原值由上层报错，

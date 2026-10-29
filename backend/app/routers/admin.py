@@ -152,7 +152,15 @@ class ModelEntry(BaseModel):
         False, description="无码可用：没有使用码或次数已用尽时仍可调用（仅在免费模型下生效）"
     )
     free_limits: FreeLimitsEntry = Field(
-        default_factory=FreeLimitsEntry, description="免费模型的防滥用限额，0/-1 为不限制"
+        default_factory=FreeLimitsEntry, description="免费模型的防滥用限额（主站，按调用计次），0/-1 为不限制"
+    )
+    agent_free: bool = Field(
+        False,
+        description="Agent 免费：在 Agent 工作台执行不消耗使用码次数（仅在免费模型下生效，缺省不勾）",
+    )
+    agent_free_limits: FreeLimitsEntry = Field(
+        default_factory=FreeLimitsEntry,
+        description="Agent 免费模型的防滥用限额（按执行轮次计，与主站分池），0/-1 为不限制",
     )
 
 

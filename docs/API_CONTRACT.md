@@ -16,7 +16,7 @@
 - 响应格式：JSON，除非特别说明为 SSE
 - 字符编码：UTF-8
 - **认证**：除 `/api/auth/activate`、`/api/health`、`/api/config`、`/api/tools/` 外，主站接口默认需在请求头携带 `Authorization: Bearer <token>`。token 通过 `POST /api/auth/activate` 获取。
-- **免费模型与无码调用**：模型可被标记为「免费」（限额内调用不扣次数），并可额外开启「无码可用」。当所选模型同时满足两者时，`/api/chat/stream`、`/api/chat/stop`、`/api/chat/vocab/check`、`/api/chat/migration/analyze`、`/api/chat/migration/quota`、`/api/parse/file` 允许不带 token 调用（没有使用码或次数已用尽均可，等价于无码）；未满足条件时按原规则返回 401/403。免费模型的调用按使用码计数（无码时按浏览器指纹、再退回 IP），受模型级防滥用限额约束；**限额命中时若请求携带的使用码仍可用（未耗尽或无限额度），本次调用自动转为按次扣减（不返回 429）**，无码或码不可用时才 429；**生成失败（`status=error`）的调用不计入限额**，用户主动停止或中途断线（`cancelled`）照常计入。转按次计费后的调用仍计入免费限额窗口计数，因此窗口滚动前会持续按次扣减。
+- **免费模型与无码调用**：模型可被标记为「免费」（限额内调用不扣次数），并可额外开启「无码可用」。当所选模型同时满足两者时，`/api/chat/stream`、`/api/chat/stop`、`/api/chat/vocab/check`、`/api/chat/migration/analyze`、`/api/chat/migration/quota`、`/api/parse/file` 允许不带 token 调用（没有使用码或次数已用尽均可，等价于无码）；未满足条件时按原规则返回 401/403。免费模型的调用按使用码计数（无码时按浏览器指纹、再退回 IP），受模型级防滥用限额约束；**限额命中时若请求携带的使用码仍可用（未耗尽或无限额度），本次调用自动转为按次扣减（不返回 429）**，无码或码不可用时才 429；**生成失败（`status=error`）的调用不计入限额**，用户主动停止或中途断线（`cancelled`）照常计入。转按次计费后的调用仍计入免费限额窗口计数，因此窗口滚动前会持续按次扣减。**Agent 工作台的免费是独立子开关**（`agent_free`，缺省不勾）：主站免费不等于工作台免费，工作台只有勾了该项的模型才不扣次数；两边的防滥用限额也是两个池子——主站按模型调用计次，Agent 按执行轮次计次（`agent_free_limits`），互不占用。
 
 ---
 
@@ -181,7 +181,9 @@
       "enabled": true,
       "is_free": true,
       "free_no_code": true,
-      "free_limits": { "minute": 3, "hour": 30, "day": 0, "week": 0, "month": 0 }
+      "agent_free": false,
+      "free_limits": { "minute": 3, "hour": 30, "day": 0, "week": 0, "month": 0 },
+      "agent_free_limits": { "minute": 0, "hour": 30, "day": 100, "week": 0, "month": 0 }
     }
   ],
   "default_model": "openrouter/google/gemini-2.5-flash",
@@ -203,7 +205,9 @@
 | `enabled` | bool | 禁用后用户端、OCR、Chores 与 Agent 全不可用，是四项用途的上一级开关（缺省 true） |
 | `is_free` | bool | 免费模型：限额内调用不消耗使用码次数，用户端模型列表显示「免费」标签；限额命中后持可用使用码时转按次扣减 |
 | `free_no_code` | bool | 无码可用：没有使用码或次数已用尽时仍可调用（仅在 `is_free` 为真时生效） |
-| `free_limits` | object | 防滥用限额，键为 `minute` / `hour` / `day` / `week` / `month`，0 或 -1（含负数）= 不限制 |
+| `agent_free` | bool | Agent 免费：在 `/agent` 工作台执行不扣次数（仅在 `is_free` 为真时生效，**缺省 false**） |
+| `free_limits` | object | 主站防滥用限额，键为 `minute` / `hour` / `day` / `week` / `month`，0 或 -1（含负数）= 不限制；按模型调用计次 |
+| `agent_free_limits` | object | Agent 防滥用限额，同一组键；按**执行轮次**计次、只统计工作台的行，与 `free_limits` 分池 |
 
 模型用途是**四个能力位**（`user_usable` / `ocr_usable` / `chores_usable` / `agent_usable`），`enabled=false`
 是它们的上一级开关。历史数据里只有旧的「仅 Chores」单开关时，读取侧自动迁移为
@@ -1093,7 +1097,9 @@ data: [DONE]
         "enabled": true,
         "is_free": true,
         "free_no_code": true,
-        "free_limits": { "minute": 0, "hour": 0, "day": 0, "week": 0, "month": 0 }
+        "agent_free": false,
+        "free_limits": { "minute": 0, "hour": 0, "day": 0, "week": 0, "month": 0 },
+        "agent_free_limits": { "minute": 0, "hour": 0, "day": 0, "week": 0, "month": 0 }
       }
     ],
     "chores_model": "",
@@ -1190,7 +1196,9 @@ data: [DONE]
 | `enabled` | bool | 禁用后用户端、OCR、Chores 与 Agent 全不可用（四项用途的上一级开关） |
 | `is_free` | bool | 免费模型：调用不消耗次数，用户端显示「免费」标签 |
 | `free_no_code` | bool | 无码可用：无使用码或次数用尽也能调用（仅免费模型生效） |
-| `free_limits` | object | `{minute, hour, day, week, month}` 防滥用限额，0/-1 为不限制 |
+| `agent_free` | bool | Agent 免费：在工作台执行不扣次数（仅免费模型生效，缺省 `false`） |
+| `free_limits` | object | 主站防滥用限额 `{minute, hour, day, week, month}`，0/-1 为不限制；按模型调用计次 |
+| `agent_free_limits` | object | Agent 防滥用限额（同键），按执行轮次计次、与主站分池 |
 | `chores_only` | bool | **已废弃**：仅在客户端未提交能力位时用于迁移（等价于 `user_usable=!chores_only`、`chores_usable=true`、`ocr_usable=false`） |
 
 **校验规则**（不满足返回 400，文案指明是哪个模型 / 哪个指向）：
@@ -1375,6 +1383,7 @@ openrouter/deepseek/deepseek-chat
 | 1.19.0 | 2026-10-19 | 前端行为变化（无接口变更）：生成中断（切工具 / 回首页 / 新建题目 / 查看历史 / 关页刷新）先落盘残文再作废在途流，关页走 `pagehide` 并把停止通知用 `keepalive` 送出，从 bfcache 回来不会卡在「生成中」；历史卡片键盘可达（`role="button"` + `tabindex` + 读屏名，Enter / 空格打开、↑↓ 移动焦点） |
 | 1.20.0 | 2026-10-19 | 撞输出上限改为**所有工具**都发 `truncated`（原先只对工具 32/33 发，其余工具把半份内容当完整结果交付且没有续写入口），载荷补 `completion_tokens` 与 `finish_reason`，前端据此在结果区给「继续生成」出口、把记录标成「待补全」；`error` 事件改为「Chores 模型转写的两句话 + 机器可读分类」：新增 `advice` 与 `code` 字段，`message` 不再是固定的「生成失败，请稍后重试」，失败时先发一条 `explaining` 非终态事件让前端立刻停止显示「生成中」（新增提示词 `prompts/报错解释.md`，注册为 Chores 工作 `error_explain` 以便按模型配推理等级；Chores 不可用时按「精确判定 → Jev → 机械兜底」决定要不要再试，总时长预算 3 秒，仍失败则用机械文案兜底，同类错误走进程内缓存）；失败分类 `error_code` 与上游结束原因 `finish_reason` 随使用日志落库，前端按 `code` 收起注定失败的重试、后台日志表据此显示「截断」与分类角标；Jev 的「精确 → Jev → 兜底」三层骨架抽成 `app/services/decision.py`，Provider 切换判定、标题任务重试判定与报错解读共用同一套编排 |
 | 1.21.0 | 2026-10-29 | 模型用途新增第四项「Agent」（`agent_usable`，**缺省 false**）：`/api/workspace/catalog` 只返回勾了该项、未禁用、且至少绑定一个启用 Provider 的模型，`default_model` 不在清单内时回退为清单第一个；`POST /tasks/{id}/runs` 同口径校验（未勾 403、未绑 Provider 400、清单为空 403 并提示联系管理员）。`agent_usable` 不参与任何历史迁移，与 `user_usable` 互不继承；管理后台模型编辑弹窗「用途」新增 Agent 项（默认不勾），模型列表的用途徽章同步显示。用户端／OCR／Chores 的可见性与校验口径不变 |
+| 1.22.0 | 2026-10-29 | 免费模型能力拆成主站 / 工作台两个开关：新增 `agent_free`（缺省 false，仅 `is_free` 为真时生效）——未勾的模型在 `/agent` 按普通模型每轮扣 1 次，勾了才不扣；新增 `agent_free_limits`（同一组窗口键），按**执行轮次**计数且只统计 `tool_id="agent"` 的行；主站 `free_limits` 计数改为排除工作台的行，两个池子互不占用（避免分钟级窗口卡死多轮任务）。`/api/workspace/catalog` 的 `models` 原样带出 `is_free` / `agent_free`，管理后台模型编辑弹窗新增「Agent 免费」开关与「Agent 防滥用限额」面板 |
 
 ---
 
@@ -1395,6 +1404,12 @@ openrouter/deepseek/deepseek-chat
 回退为清单第一个，清单为空则为空串。开新执行（`POST /tasks/{id}/runs`）用未勾「Agent」的模型
 返回 403，未绑定 Provider 返回 400，清单为空时的 403 文案会提示联系管理员。定稿后的清单口径见
 [5. 模型列表](#5-模型列表) 的字段说明。
+
+**计费与限额：** 一轮（执行 / 审阅 / 修订 / 工具试运行）预扣 1 次，只有勾了 `agent_free` 的
+模型不扣；`agent_free_limits` 按轮次计次且只统计 `tool_id="agent"` 的使用日志行，主站的
+`free_limits` 也把这类行排除在外 —— 两边互不消耗。超限返回 429「免费模型在 Agent 工作台每小时
+最多执行 N 轮」。`catalog` 的 `models` 原样带出 `is_free` / `agent_free`，工作台模型选择器据此
+显示「免费」或「主站免费」。
 
 ### 16.2 任务
 

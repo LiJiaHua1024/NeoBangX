@@ -901,10 +901,12 @@ function adminApp() {
       concurrency_mode: "default", visual_paper_concurrency: 3,
       id: "", name: "", description: "", aa_index: null, reasoning_effort: "", extra_body: "",
       user_usable: true, ocr_usable: false, chores_usable: true, agent_usable: false, enabled: true,
-      is_free: false, free_no_code: false,
+      is_free: false, free_no_code: false, agent_free: false,
       free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
+      agent_free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
     },
     freeLimitsOpen: false,
+    agentFreeLimitsOpen: false,
     freeLimitKeys: [
       { key: "minute", label: "每分钟" },
       { key: "hour", label: "每小时" },
@@ -2966,12 +2968,20 @@ function adminApp() {
                 enabled: m.enabled !== false,
                 is_free: !!m.is_free,
                 free_no_code: !!m.is_free && !!m.free_no_code,
+                agent_free: !!m.is_free && !!m.agent_free,
                 free_limits: {
                   minute: Number(m.free_limits && m.free_limits.minute) || 0,
                   hour: Number(m.free_limits && m.free_limits.hour) || 0,
                   day: Number(m.free_limits && m.free_limits.day) || 0,
                   week: Number(m.free_limits && m.free_limits.week) || 0,
                   month: Number(m.free_limits && m.free_limits.month) || 0,
+                },
+                agent_free_limits: {
+                  minute: Number(m.agent_free_limits && m.agent_free_limits.minute) || 0,
+                  hour: Number(m.agent_free_limits && m.agent_free_limits.hour) || 0,
+                  day: Number(m.agent_free_limits && m.agent_free_limits.day) || 0,
+                  week: Number(m.agent_free_limits && m.agent_free_limits.week) || 0,
+                  month: Number(m.agent_free_limits && m.agent_free_limits.month) || 0,
                 },
               }))
             : [],
@@ -3076,10 +3086,12 @@ function adminApp() {
         id: "", name: "", description: "", aa_index: null, reasoning_effort: "", extra_body: "",
         concurrency_mode: "default", visual_paper_concurrency: this.configForm.visual_paper_concurrency,
         user_usable: true, ocr_usable: false, chores_usable: true, agent_usable: false, enabled: true,
-        is_free: false, free_no_code: false,
+        is_free: false, free_no_code: false, agent_free: false,
         free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
+        agent_free_limits: { minute: 0, hour: 0, day: 0, week: 0, month: 0 },
       };
       this.freeLimitsOpen = false;
+      this.agentFreeLimitsOpen = false;
       this.modelModalOpen = true;
     },
 
@@ -3103,6 +3115,14 @@ function adminApp() {
         enabled: m.enabled !== false,
         is_free: !!m.is_free,
         free_no_code: !!m.is_free && !!m.free_no_code,
+        agent_free: !!m.is_free && !!m.agent_free,
+        agent_free_limits: {
+          minute: Number(m.agent_free_limits && m.agent_free_limits.minute) || 0,
+          hour: Number(m.agent_free_limits && m.agent_free_limits.hour) || 0,
+          day: Number(m.agent_free_limits && m.agent_free_limits.day) || 0,
+          week: Number(m.agent_free_limits && m.agent_free_limits.week) || 0,
+          month: Number(m.agent_free_limits && m.agent_free_limits.month) || 0,
+        },
         free_limits: {
           minute: Number(m.free_limits && m.free_limits.minute) || 0,
           hour: Number(m.free_limits && m.free_limits.hour) || 0,
@@ -3112,6 +3132,7 @@ function adminApp() {
         },
       };
       this.freeLimitsOpen = false;
+      this.agentFreeLimitsOpen = false;
       this.modelModalOpen = true;
     },
 
@@ -3124,14 +3145,22 @@ function adminApp() {
 
     /* 折叠头摘要：把已配置的限额列成一句话，未配置则提示当前不限制 */
     freeLimitsSummary() {
-      const limits = (this.modelForm && this.modelForm.free_limits) || {};
+      return this.freeLimitsSummaryOf("free_limits", "次");
+    },
+
+    agentFreeLimitsSummary() {
+      return this.freeLimitsSummaryOf("agent_free_limits", "轮");
+    },
+
+    freeLimitsSummaryOf(key, unit) {
+      const limits = (this.modelForm && this.modelForm[key]) || {};
       const parts = this.freeLimitKeys
         .map((item) => {
           const n = this.normalizeFreeLimit(limits[item.key]);
-          return n > 0 ? `${item.label} ${n} 次` : "";
+          return n > 0 ? `${item.label} ${n} ${unit}` : "";
         })
         .filter(Boolean);
-      return parts.length ? `当前限制：${parts.join(" · ")}` : "当前不限制调用频次";
+      return parts.length ? `当前限制：${parts.join(" · ")}` : "当前不限制";
     },
 
     async saveModelModal() {
@@ -3178,12 +3207,18 @@ function adminApp() {
         return;
       }
       const isFree = !!this.modelForm.is_free;
-      // 无码可用只在免费模型下有意义；限额未填/0/-1 一律归零（= 不限制）
+      // 无码可用 / Agent 免费都是免费模型的子开关；限额未填/0/-1 一律归零（= 不限制）
       const freeNoCode = isFree && !!this.modelForm.free_no_code;
+      const agentFree = isFree && !!this.modelForm.agent_free;
       const rawLimits = this.modelForm.free_limits || {};
       const freeLimits = {};
       for (const item of this.freeLimitKeys) {
         freeLimits[item.key] = this.normalizeFreeLimit(rawLimits[item.key]);
+      }
+      const rawAgentLimits = this.modelForm.agent_free_limits || {};
+      const agentFreeLimits = {};
+      for (const item of this.freeLimitKeys) {
+        agentFreeLimits[item.key] = this.normalizeFreeLimit(rawAgentLimits[item.key]);
       }
       const editingOldId = this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
       const targetId = id;
@@ -3232,7 +3267,9 @@ function adminApp() {
         enabled,
         is_free: isFree,
         free_no_code: freeNoCode,
+        agent_free: agentFree,
         free_limits: freeLimits,
+        agent_free_limits: agentFreeLimits,
       };
       const oldId =
         this.modelModalIndex !== null ? this.configForm.models[this.modelModalIndex].id : null;
@@ -3592,12 +3629,20 @@ function adminApp() {
             enabled: m.enabled !== false,
             is_free: !!m.is_free,
             free_no_code: !!m.is_free && !!m.free_no_code,
+            agent_free: !!m.is_free && !!m.agent_free,
             free_limits: {
               minute: this.normalizeFreeLimit(m.free_limits && m.free_limits.minute),
               hour: this.normalizeFreeLimit(m.free_limits && m.free_limits.hour),
               day: this.normalizeFreeLimit(m.free_limits && m.free_limits.day),
               week: this.normalizeFreeLimit(m.free_limits && m.free_limits.week),
               month: this.normalizeFreeLimit(m.free_limits && m.free_limits.month),
+            },
+            agent_free_limits: {
+              minute: this.normalizeFreeLimit(m.agent_free_limits && m.agent_free_limits.minute),
+              hour: this.normalizeFreeLimit(m.agent_free_limits && m.agent_free_limits.hour),
+              day: this.normalizeFreeLimit(m.agent_free_limits && m.agent_free_limits.day),
+              week: this.normalizeFreeLimit(m.agent_free_limits && m.agent_free_limits.week),
+              month: this.normalizeFreeLimit(m.agent_free_limits && m.agent_free_limits.month),
             },
           })),
         };

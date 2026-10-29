@@ -80,8 +80,9 @@ def test_idempotent_run_atomic_charge_and_refund(identity):
 
 
 def test_free_limit_reserved_in_database(identity):
+    """Agent 的免费限额按轮次计：轮次一创建就落日志行，所以并发也刷不穿。"""
     t=task(identity);snap={'model':'test'}
-    entry={'is_free':True,'free_limits':{'minute':1}}
+    entry={'is_free':True,'agent_free':True,'agent_free_limits':{'minute':1}}
     r=store.create_run(identity[0],t['id'],store.uid(),'execute','','',snap,False,entry)
     store.finish_run(r['id'],'completed')
     with pytest.raises(HTTPException) as e:store.create_run(identity[0],t['id'],store.uid(),'execute','','',snap,False,entry)

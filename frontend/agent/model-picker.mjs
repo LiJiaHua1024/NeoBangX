@@ -1,6 +1,6 @@
 /**
  * Claude's model picker — flat rows with the workspace's own model copy,
- * its AA strike rating and its free / no-code tags. The card shell, row
+ * its AA strike rating and its Agent pricing tags. The card shell, row
  * rhythm, hover, accent check, keyboard and 250ms growth are ported from
  * dsh-claude-style@1e7acc5b (features/model/model-picker.ts, rows.ts,
  * shared/popover.css); the vendor logos and upstream description table are
@@ -158,10 +158,9 @@ export function createModelPicker({ trigger, popover, label, onSelect }) {
       name.className = "model-row-name";
       name.textContent = String(model.name || model.id);
       line.appendChild(name);
-      if (model.is_free) line.appendChild(tag("免费", "free"));
-      if (model.is_free && model.free_no_code) {
-        line.appendChild(tag("免码", "nocode"));
-      }
+      // 工作台只看 agent_free：主站免费的模型在这里可能按轮次计费，标出来免得用户误解。
+      if (model.agent_free) line.appendChild(tag("免费", "free"));
+      else if (model.is_free) line.appendChild(tag("主站免费", "nocode"));
       const rating = ratingFor(model);
       if (rating !== null) {
         const badge = document.createElement("span");

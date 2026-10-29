@@ -50,6 +50,9 @@ _inflight: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 # 超过阈值时扫一遍把全部过期的键删掉（不影响任何仍在 TTL 内的在途计数）。
 _MAX_INFLIGHT_KEYS = 4096
 
+# Agent 工作台在使用日志里的工具 ID：它的免费限额与主站分成两个池子，计数时互不占用
+AGENT_TOOL_ID = "agent"
+
 
 def is_free_model(entry: dict | None) -> bool:
     """该模型是否被标记为免费（调用不扣次数）。"""
@@ -59,6 +62,20 @@ def is_free_model(entry: dict | None) -> bool:
 def is_free_open(entry: dict | None) -> bool:
     """免费且允许无码调用（无使用码 / 次数用尽时仍可用）。"""
     return bool(entry and entry.get("is_free") and entry.get("free_no_code"))
+
+
+def is_agent_free(entry: dict | None) -> bool:
+    """该模型在 Agent 工作台是否免费（执行不扣使用码次数）。
+
+    `agent_free` 是 `is_free` 的子开关，缺省 False：工作台一轮会跑十几次模型调用，
+    主站免费不代表工作台也免费，必须由管理员显式开启。
+    """
+    return bool(entry and entry.get("is_free") and entry.get("agent_free"))
+
+
+def agent_free_limits_of(entry: dict | None) -> dict[str, int]:
+    """Agent 免费模型的防滥用限额（按执行轮次计），0 = 不限制。"""
+    return parse_free_limits((entry or {}).get("agent_free_limits"))
 
 
 def free_limits_of(entry: dict | None) -> dict[str, int]:
@@ -164,6 +181,9 @@ def register_free_use(*, entry: dict, identity: str) -> Callable[[], None]:
                 .filter(
                     UsageLog.created_at >= since,
                     UsageLog.model == model_id,
+                    # 主站与 Agent 的免费额度分池：工作台按轮次计数、额度另配，
+                    # 不能让 Agent 的轮次吃掉主站这一小时/这一天的免费次数。
+                    UsageLog.tool_id != AGENT_TOOL_ID,
                     _identity_filter(identity),
                     _counted_status_clause(),
                 )

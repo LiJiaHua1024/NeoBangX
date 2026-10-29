@@ -8,6 +8,7 @@ from sqlalchemy import select, update, func, or_
 
 from app.database import SessionLocal
 from app.models import UsageCode, UsageLog, utcnow
+from app.services.free_access import AGENT_TOOL_ID
 from .models import (WorkspaceTask as Task, WorkspaceRun as Run, WorkspaceEntry as Entry,
                      WorkspaceChunk as Chunk, WorkspaceEvent as Event, WorkspaceMaterial as Material,
                      WorkspaceVersion as Version, WorkspaceNote as Note)
@@ -160,16 +161,22 @@ def create_run(owner, task_id, key, mode, instruction, base_version, snapshot, p
         if active_count >= 2:
             raise HTTPException(429, "同时最多执行两个任务")
         if not paid:
-            from app.services.free_access import FREE_LIMIT_WINDOWS, free_limits_of, _counted_status_clause
-            for window, limit in free_limits_of(model_entry).items():
+            # Agent 免费模型用自己的一套限额：按「执行轮次」计数，且只统计工作台的行。
+            # 主站的 free_limits 按模型调用计次、窗口更紧（常有分钟级），直接套过来会让
+            # 一次正常的多轮任务几乎每步都撞 429；两个池子分开后主站额度也不会被轮次吃掉。
+            from app.services.free_access import (
+                FREE_LIMIT_WINDOWS, _counted_status_clause, agent_free_limits_of,
+            )
+            for window, limit in agent_free_limits_of(model_entry).items():
                 if not limit:
                     continue
                 label, seconds = FREE_LIMIT_WINDOWS[window]
                 used = db.scalar(select(func.count()).select_from(UsageLog).where(
                     UsageLog.code_id == owner, UsageLog.model == snapshot["model"],
+                    UsageLog.tool_id == AGENT_TOOL_ID,
                     UsageLog.created_at >= utcnow()-timedelta(seconds=seconds), _counted_status_clause()))
                 if used >= limit:
-                    raise HTTPException(429, f"免费模型{label}最多调用 {limit} 次，请稍后再试")
+                    raise HTTPException(429, f"免费模型在 Agent 工作台{label}最多执行 {limit} 轮，请稍后再试")
         snapshot = {**snapshot, "config": decode(task.config), "revision": task.revision,
                     "instruction": instruction, "base_version": base_version}
         if base_version:
@@ -186,7 +193,7 @@ def create_run(owner, task_id, key, mode, instruction, base_version, snapshot, p
         db.add(run)
         code = db.get(UsageCode, owner)
         # 预留限额与入队在同一事务中，跨进程/重启均不能绕过。
-        db.add(UsageLog(code_id=owner, code=code.code, tool_id="agent", tool_name="Agent 工作台",
+        db.add(UsageLog(code_id=owner, code=code.code, tool_id=AGENT_TOOL_ID, tool_name="Agent 工作台",
                         model=snapshot["model"], request_id=run.id, status="running", units=1 if paid else 0,
                         counts_for_free_limit=not paid))
         task.active_run, task.status, task.updated_at = run.id, "queued", utcnow()
@@ -461,7 +468,7 @@ def recover_runs():
 
 def _settle_log(db, run_id, status, error, *, units=None, tokens=None, created_at=None):
     """把本轮在主站使用日志里的记录改成终态。`units`/`tokens` 为 None 时保持原值。"""
-    log = db.scalar(select(UsageLog).where(UsageLog.request_id == run_id, UsageLog.tool_id == "agent"))
+    log = db.scalar(select(UsageLog).where(UsageLog.request_id == run_id, UsageLog.tool_id == AGENT_TOOL_ID))
     if not log:
         return
     log.status = "error" if status == "failed" else "cancelled" if status == "stopped" else "success"

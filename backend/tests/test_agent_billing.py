@@ -23,13 +23,13 @@ SNAPSHOT = {
 }
 
 
-def _task(owner: int) -> str:
+def _task(owner: int, model: str = "test") -> str:
     with SessionLocal() as db:
         row = WorkspaceTask(
             id=store.uid(),
             owner=owner,
             title="计费测试",
-            config=store.encode(api.TaskConfig(goal="根据材料分析", model="test", review=False).model_dump()),
+            config=store.encode(api.TaskConfig(goal="根据材料分析", model=model, review=False).model_dump()),
         )
         db.add(row)
         db.commit()
@@ -194,3 +194,83 @@ def test_incomplete_run_with_steps_keeps_the_charge(workspace_code):
         db.commit()
     store.finish_run(run_id, "incomplete")
     assert _used(owner) == 1, "已经跑过步骤的轮次不退"
+
+
+# ---------------- 免费模型与 Agent 免费 ----------------
+
+def _cfg(model: str, **entry) -> dict:
+    """只够开新执行的一份配置：模型要勾 Agent、要有启用的 Provider。"""
+    return {
+        "models": [{"id": model, "name": model, "enabled": True, "agent_usable": True, **entry}],
+        "providers": [{"id": "p_bill", "name": "计费测试 Provider", "enabled": True,
+                       "base_url": "", "api_key": "k"}],
+        "model_provider_map": {model: ["p_bill"]},
+        "default_model": model,
+    }
+
+
+@pytest.fixture
+def quiet_titles(monkeypatch):
+    """开新执行会顺手排一个标题任务；这些用例只关心计费，别让标题链路掺进来。"""
+    monkeypatch.setattr(api.titles, "enqueue_agent_title", lambda *args, **kwargs: None)
+
+
+def test_main_site_free_model_is_charged_in_agent(workspace_code, monkeypatch, quiet_titles):
+    """主站免费不等于工作台免费：没勾 agent_free 时，一轮仍扣 1 次。"""
+    owner, _ = workspace_code("BILL-", quota=5)
+    monkeypatch.setattr(api, "_load_cfg", lambda: _cfg("free/model", is_free=True))
+    task_id = _task(owner, model="free/model")
+
+    run_id = api.start_run(task_id, api.RunWrite(request_key=store.uid(), mode="execute"), owner)["id"]
+
+    assert _used(owner) == 1
+    assert _log_units(run_id) == 1
+
+
+def test_agent_free_model_does_not_charge(workspace_code, monkeypatch, quiet_titles):
+    owner, _ = workspace_code("BILL-", quota=5)
+    monkeypatch.setattr(api, "_load_cfg", lambda: _cfg("free/model", is_free=True, agent_free=True))
+    task_id = _task(owner, model="free/model")
+
+    run_id = api.start_run(task_id, api.RunWrite(request_key=store.uid(), mode="execute"), owner)["id"]
+
+    assert _used(owner) == 0
+    assert _log_units(run_id) == 0
+
+
+def test_agent_free_limits_count_runs_not_main_site_calls(workspace_code, monkeypatch, quiet_titles):
+    """Agent 限额按轮次计、与主站分池：主站那一套分钟级限额既不吃轮次，也不被轮次吃掉。"""
+    from app.services.free_access import register_free_use
+
+    owner, _ = workspace_code("BILL-", quota=5)
+    entry = _cfg("free/model", is_free=True, agent_free=True,
+                 free_limits={"minute": 1}, agent_free_limits={"hour": 1})
+    monkeypatch.setattr(api, "_load_cfg", lambda: entry)
+    first = _task(owner, model="free/model")
+    api.start_run(first, api.RunWrite(request_key=store.uid(), mode="execute"), owner)
+
+    # 主站限额 1 次/分钟：这一轮不能算进主站的窗口（否则这里会 429）
+    release = register_free_use(entry=entry["models"][0], identity=f"code:{owner}")
+    release()
+
+    # Agent 限额 1 轮/小时：第二轮要被拦下，且文案说清是 Agent 的限额
+    second = _task(owner, model="free/model")
+    with pytest.raises(HTTPException) as exc:
+        api.start_run(second, api.RunWrite(request_key=store.uid(), mode="execute"), owner)
+    assert exc.value.status_code == 429
+    assert "Agent" in str(exc.value.detail)
+
+
+def test_agent_run_does_not_consume_main_site_free_limit(workspace_code, monkeypatch, quiet_titles):
+    """反过来也要成立：工作台的轮次不进主站的免费次数窗口。"""
+    from app.services.free_access import register_free_use
+
+    owner, _ = workspace_code("BILL-", quota=5)
+    entry = _cfg("free/model", is_free=True, agent_free=True, free_limits={"minute": 1})
+    monkeypatch.setattr(api, "_load_cfg", lambda: entry)
+    task_id = _task(owner, model="free/model")
+    api.start_run(task_id, api.RunWrite(request_key=store.uid(), mode="execute"), owner)
+
+    # 主站窗口还能正常放行（若 Agent 行被算进来，这里会 429）
+    release = register_free_use(entry=entry["models"][0], identity=f"code:{owner}")
+    release()

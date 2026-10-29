@@ -1277,6 +1277,8 @@
                         <span class="badge badge-free ml-1" x-show="m.is_free"
                               :title="m.free_no_code ? '免费模型：不消耗次数，且无码/次数用尽也可用' : '免费模型：不消耗次数'"
                               x-text="m.is_free && m.free_no_code ? '免费 · 无码可用' : '免费'"></span>
+                        <span class="badge badge-free ml-1" x-show="m.is_free && m.agent_free" x-cloak
+                              title="Agent 免费：在工作台执行不扣次数（成本由运营方承担）">Agent 免费</span>
                         <template x-for="tag in modelCapabilityTags(m)" :key="'cap-' + m.id + '-' + tag">
                           <span class="badge badge-cap ml-1" x-text="tag"
                                 title="该模型的用途勾选：用户 = 用户端可选，OCR = 识别图片文字，Chores = 轻量任务，Agent = 工作台可选"></span>
@@ -2017,6 +2019,41 @@
               </div>
               <span class="field-hint">开启后，未输入使用码或额度已耗尽的用户也能使用该免费模型；关闭则必须有可用使用码</span>
             </label>
+            <label class="field mb-3">
+              <span>Agent 免费</span>
+              <div class="switch-row" style="align-items:center">
+                <label class="switch">
+                  <input type="checkbox" x-model="modelForm.agent_free">
+                  <span class="switch-slider"></span>
+                </label>
+                <span class="dim" x-text="modelForm.agent_free ? 'Agent 工作台执行不扣次数，成本由运营方承担' : 'Agent 工作台按轮次扣次数（主站仍免费）'"></span>
+              </div>
+              <span class="field-hint">Agent 一轮会跑十几次模型调用，成本远高于主站一次生成，所以不继承主站免费；只对成本可控的模型开启。不开启时该模型在工作台按普通模型扣 1 次/轮</span>
+            </label>
+            <div class="provider-binding-section mb-3" x-show="modelForm.agent_free" x-cloak>
+              <div class="provider-binding-head" @click="agentFreeLimitsOpen = !agentFreeLimitsOpen">
+                <div>
+                  <div class="provider-binding-title">
+                    Agent 防滥用限额
+                    <span class="dim">— 0 或 -1 表示不限制</span>
+                  </div>
+                  <div class="field-hint" x-text="agentFreeLimitsSummary()"></div>
+                </div>
+                <span class="chev" :style="agentFreeLimitsOpen ? 'transform:rotate(180deg)' : ''">▼</span>
+              </div>
+              <div x-show="agentFreeLimitsOpen" x-transition style="margin-top:0.6rem">
+                <div class="free-limit-grid">
+                  <template x-for="item in freeLimitKeys" :key="'agent-' + item.key">
+                    <label class="field">
+                      <span x-text="item.label"></span>
+                      <input type="number" min="-1" step="1" placeholder="0（不限制）"
+                             x-model.number="modelForm.agent_free_limits[item.key]">
+                    </label>
+                  </template>
+                </div>
+                <p class="field-hint">按执行轮次计数：一次执行 / 审阅 / 回答提问算一轮，轮内的模型调用不重复计数。只统计 Agent 工作台的轮次，与上面的主站限额分池、互不占用；建议按小时 / 每天给宽一点的数（例如每小时 30、每天 100），分钟级窗口对多轮任务太紧。</p>
+              </div>
+            </div>
             <div class="provider-binding-section mb-3">
               <div class="provider-binding-head" @click="freeLimitsOpen = !freeLimitsOpen">
                 <div>
@@ -2038,7 +2075,7 @@
                     </label>
                   </template>
                 </div>
-                <p class="field-hint">按模型调用次数计数（智能错题迁移按卡片逐张计入，10 张卡片即 10 次）。主体为使用码，未登录用户按浏览器指纹（缺失时按 IP）。超出后返回「请求过于频繁」，请调大限额或稍后再试。</p>
+                <p class="field-hint">按模型调用次数计数（智能错题迁移按卡片逐张计入，10 张卡片即 10 次）。主体为使用码，未登录用户按浏览器指纹（缺失时按 IP）。超出后返回「请求过于频繁」，请调大限额或稍后再试。Agent 工作台的轮次不计入这里。</p>
               </div>
             </div>
           </div>

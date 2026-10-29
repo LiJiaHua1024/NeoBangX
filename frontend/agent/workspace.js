@@ -2951,7 +2951,7 @@ async function openPolicy() {
         <p>当前剩余额度：${catalog.user.is_unlimited ? "无限" : catalog.user.remaining} 次</p>
         <p>单轮上限：${catalog.limits.steps} 步、${catalog.limits.tokens.toLocaleString()} tokens、${Math.round(catalog.limits.seconds / 60)} 分钟。到达上限会保存已有内容，可继续新一轮。</p>
         <p>${esc(catalog.retention)}</p>
-        <p>免费模型仍遵守管理员设置的调用频率限制。</p>
+        <p>勾了「Agent 免费」的模型不扣次数，但仍受管理员设置的 Agent 限额（按执行轮次计）；只勾了主站免费的模型在这里按轮次计费。</p>
       </div>`,
     );
   } catch (e) {

@@ -13,7 +13,7 @@ from app.database import SessionLocal
 from app.models import UsageCode, utcnow
 from app.routers.chat import _get_providers_for_model_sync, _load_cfg
 from app.routers.tools import build_tool_groups, get_prompt_loader, _resolve_prompt_filename
-from app.services.free_access import is_free_model
+from app.services.free_access import is_agent_free
 from app.services.usage_code import code_from_payload
 from app.services.runtime_config import find_model_entry
 from . import runner, store, titles
@@ -192,7 +192,7 @@ def get_catalog(owner: Owner):
             "official_templates": official_templates(), "templates": templates, "tools": catalog(),
             "defaults": TaskConfig().model_dump(), "user": user,
             "limits": {"steps": policy.max_steps, "tokens": policy.max_tokens, "seconds": policy.max_seconds},
-            "billing": "每次执行或独立审阅预扣 1 次；没有产出成果的失败或停止会退回，已产出成果则按次计费；免费模型不扣次数。",
+            "billing": "每次执行或独立审阅预扣 1 次；没有产出成果的失败或停止会退回，已产出成果则按次计费；勾了「Agent 免费」的模型不扣次数（仅主站免费的模型在工作台仍按轮次计费）。",
             "retention": "任务、材料和过程保留至主动删除；使用相同使用码的设备可以访问。"}
 
 
@@ -345,7 +345,7 @@ def start_run(task_id: str, body: RunWrite, owner: Owner):
     snapshot = {"model": model, "limits": policy.model_dump(include={"max_steps", "max_tokens", "output_tokens", "max_seconds"}),
                 "templates": templates, "base_adopted": task["adopted_version"], "expected_revision": task["revision"],
                 "teaching_tool": body.teaching_tool}
-    run = store.create_run(owner, task_id, body.request_key, body.mode, body.instruction, body.base_version, snapshot, not is_free_model(entry), entry)
+    run = store.create_run(owner, task_id, body.request_key, body.mode, body.instruction, body.base_version, snapshot, not is_agent_free(entry), entry)
     # 用户第一次开始工作时就命名，不等待执行结束；只入队一次，失败不影响开始。
     if body.mode == "execute" and not task["runs"]:
         titles.enqueue_agent_title(owner, task_id, instruction=body.instruction,

@@ -21,9 +21,10 @@ from app.models import UsageCode, UsageLog
 from app.routers import chat as chat_router
 from app.routers import tools as tools_router
 from app.services.free_access import (
-    identity_key,
+    is_agent_free,
     is_free_model,
     is_free_open,
+    identity_key,
     register_free_use,
 )
 from app.services.prompt_loader import PromptLoader
@@ -162,25 +163,33 @@ def _post_stream(client, model=None, **headers):
 
 def test_parse_models_free_fields_and_roundtrip():
     parsed = parse_models(json.dumps([
-        {"id": "a", "is_free": True, "free_no_code": True,
-         "free_limits": {"minute": 3, "month": 100}},
+        {"id": "a", "is_free": True, "free_no_code": True, "agent_free": True,
+         "free_limits": {"minute": 3, "month": 100},
+         "agent_free_limits": {"hour": 20, "day": 60}},
         {"id": "b", "free": "true", "free_without_code": "on"},   # 兼容别名
         {"id": "c", "free_no_code": True},                        # 未标免费 → 无码开关归零
         {"id": "d", "is_free": True, "free_limits": {"minute": -1, "hour": "x", "day": 2.9}},
         {"id": "e", "free_limits": {"week": 7}},                  # 限额可独立于免费开关保存
+        {"id": "f", "agent_free": True},                          # 未标免费 → Agent 免费归零
     ], ensure_ascii=False))
     by_id = {m["id"]: m for m in parsed}
 
     assert by_id["a"]["is_free"] and by_id["a"]["free_no_code"]
     assert by_id["a"]["free_limits"] == {"minute": 3, "hour": 0, "day": 0, "week": 0, "month": 100}
+    # Agent 免费与主站免费是两个开关，限额也各存一份
+    assert by_id["a"]["agent_free"] is True
+    assert by_id["a"]["agent_free_limits"] == {"minute": 0, "hour": 20, "day": 60, "week": 0, "month": 0}
     assert by_id["b"]["is_free"] and by_id["b"]["free_no_code"]
+    assert by_id["b"]["agent_free"] is False                  # 缺省不继承主站免费
     assert by_id["c"]["is_free"] is False and by_id["c"]["free_no_code"] is False
     assert by_id["d"]["free_limits"] == {"minute": 0, "hour": 0, "day": 2, "week": 0, "month": 0}
     assert by_id["e"]["is_free"] is False and by_id["e"]["free_limits"]["week"] == 7
+    assert by_id["f"]["is_free"] is False and by_id["f"]["agent_free"] is False
     # 序列化往返必须保留新字段，否则保存配置时会被静默剔除
     assert json.loads(serialize_models(parsed)) == parsed
     # 旧逗号格式与空配置：默认都不是免费模型
     assert [m["is_free"] for m in parse_models("m1,m2")] == [False, False]
+    assert [m["agent_free"] for m in parse_models("m1,m2")] == [False, False]
     assert parse_models("") == []
 
 
@@ -198,6 +207,15 @@ def test_is_free_open_requires_both_flags():
     assert is_free_open({"is_free": True, "free_no_code": False}) is False
     assert is_free_open({"is_free": True, "free_no_code": True}) is True
     assert is_free_open(None) is False
+
+
+def test_is_agent_free_requires_opt_in():
+    """主站免费不等于工作台免费：agent_free 缺省 false，且必须在 is_free 下生效。"""
+    assert is_agent_free({"is_free": True}) is False
+    assert is_agent_free({"is_free": True, "agent_free": False}) is False
+    assert is_agent_free({"is_free": True, "agent_free": True}) is True
+    assert is_agent_free({"is_free": False, "agent_free": True}) is False
+    assert is_agent_free(None) is False
 
 
 def test_limit_blocks_then_release_restores_slot():
