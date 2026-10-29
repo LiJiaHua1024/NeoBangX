@@ -190,6 +190,20 @@ test("加载成功后保存按钮恢复可用", async () => {
   assert.equal(calls, 1);
 });
 
+test("token 预算不设范围，默认 200 万和更大的值都能提交", () => {
+  const { app } = setup();
+  app.agentLoaded = true;
+  app.agentForm = {
+    enabled: true, max_steps: 24, max_tokens: 2000000, output_tokens: 16384, max_seconds: 1800,
+    concurrency: 2, context_budget: 262144, keep_tail_steps: 4, provider_attempts: 3,
+    retry_wait_cap_seconds: 60, mcp_enabled: false, mcp_url: "", mcp_token: "", clear_token: false,
+    mcp_tool: "", mcp_query_field: "query", mcp_arguments: "{}", mcp_timeout: 45,
+  };
+  assert.equal(app.agentPayload().max_tokens, 2000000);
+  app.agentForm.max_tokens = 50000000;
+  assert.equal(app.agentPayload().max_tokens, 50000000);
+});
+
 test("保存 Agent 配置用 PATCH，避免整文档替换", async () => {
   const { app, requests } = setup();
   app.agentLoaded = true;

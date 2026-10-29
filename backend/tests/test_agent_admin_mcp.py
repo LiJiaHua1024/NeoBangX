@@ -26,6 +26,12 @@ def _body(**overrides):
     return base.model_copy(update=overrides)
 
 
+def test_token_budget_has_no_upper_bound():
+    assert WorkspaceSettings(max_tokens=2_000_000).max_tokens == 2_000_000
+    assert WorkspaceSettings(max_tokens=50_000_000).max_tokens == 50_000_000
+    assert admin.patch_settings({"max_tokens": 50_000_000})["max_tokens"] == 50_000_000
+
+
 def test_saved_token_is_not_sent_to_a_different_host():
     save_settings(WorkspaceSettings(mcp_url="https://mcp.example.com/sse", mcp_token="SECRET-TOKEN"))
     with pytest.raises(HTTPException) as exc:

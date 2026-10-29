@@ -4412,7 +4412,6 @@ function adminApp() {
       }
       const ranges = {
         max_steps: [2, 100, "每轮最多步骤"],
-        max_tokens: [4096, 1500000, "每轮 token 预算"],
         output_tokens: [2048, 131072, "单次输出 token 上限"],
         max_seconds: [60, 7200, "每轮最长秒数"],
         concurrency: [1, 8, "执行并发数"],
@@ -4423,6 +4422,12 @@ function adminApp() {
         mcp_timeout: [5, 180, "单次请求超时"],
       };
       const numbers = {};
+      // 预算不设范围：不同模型思考量差别很大，管理员自己定
+      if (this.agentForm.max_tokens != null && this.agentForm.max_tokens !== "") {
+        const budget = Number(this.agentForm.max_tokens);
+        if (!Number.isInteger(budget)) throw new Error("每轮 token 预算必须是整数");
+        numbers.max_tokens = budget;
+      }
       for (const [key, [min, max, label]] of Object.entries(ranges)) {
         // 老配置可能没有新加的口径字段：不传就让后端保持原值，别用 NaN 拦下保存
         if (this.agentForm[key] == null || this.agentForm[key] === "") continue;
