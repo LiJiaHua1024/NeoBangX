@@ -247,8 +247,8 @@
 
         <div class="glass card agent-mcp-card">
           <div>
-            <h2 class="card-title">网页搜索 MCP</h2>
-            <p class="muted">用户端只看到「网页搜索」开关，地址、令牌和固定参数不会显示给用户或模型。</p>
+            <h2 class="card-title">AnySearch 网页搜索</h2>
+            <p class="muted">用户端只看到「网页搜索」开关，地址与令牌不会显示给用户或模型。</p>
           </div>
 
           <div class="switch-row mt-4">
@@ -258,15 +258,15 @@
             </label>
             <div class="switch-copy">
               <div class="switch-title">对用户提供网页搜索</div>
-              <div class="field-hint">开启网页搜索前，需要先测试连接并选择工具。</div>
+              <div class="field-hint">开启前先测试连接；AnySearch 的检索工具会随这个开关一起提供给模型。</div>
             </div>
           </div>
 
           <div class="agent-mcp-conn mt-4">
             <label class="field">
               <span>MCP 地址 · Streamable HTTP</span>
-              <input type="url" id="agent-mcp-url" x-model="agentForm.mcp_url" placeholder="https://your-service.example/mcp" autocomplete="off" spellcheck="false">
-              <span class="field-hint">支持 HTTP JSON 和 SSE，不支持本地 stdio。</span>
+              <input type="url" id="agent-mcp-url" x-model="agentForm.mcp_url" placeholder="https://api.anysearch.com/mcp" autocomplete="off" spellcheck="false">
+              <span class="field-hint">AnySearch 填 https://api.anysearch.com/mcp；支持 HTTP JSON 和 SSE，不支持本地 stdio。</span>
             </label>
             <label class="field">
               <span>Bearer 令牌</span>
@@ -294,45 +294,10 @@
           <div class="form-actions agent-actions">
             <button type="button" class="btn-ghost" id="agent-connect" @click="connectAgentMcp()" :disabled="agentConnecting"
                     x-text="agentConnecting ? '连接中…' : '测试连接并读取工具'"></button>
-            <span class="field-hint" x-show="agentTools.length" x-text="`已发现 ${agentTools.length} 个工具，选定后保存生效`"></span>
+            <span class="field-hint" x-show="agentDiscovered.length" x-text="`已发现 ${agentDiscovered.length} 个工具`"></span>
           </div>
 
-          <div class="agent-inline-fields mt-4">
-            <div class="field agent-field-tool">
-              <span>搜索工具</span>
-              <div class="custom-select" @click.outside="agentToolMenuOpen = false">
-                <button type="button" class="custom-select-trigger" id="agent-tool-trigger" :class="{ open: agentToolMenuOpen }"
-                        :disabled="!agentTools.length" aria-label="搜索工具"
-                        @click="agentToolMenuOpen = !agentToolMenuOpen">
-                  <span class="truncate" x-text="agentToolLabel"></span>
-                  <span class="chev">▼</span>
-                </button>
-                <div class="custom-select-menu" id="agent-tool-menu" x-show="agentToolMenuOpen" x-cloak>
-                  <template x-for="tool in agentTools" :key="'agent-tool-' + tool.name">
-                    <button type="button" class="custom-select-item" :class="{ on: agentForm.mcp_tool === tool.name }"
-                            @click="selectAgentTool(tool.name)" x-text="tool.name"></button>
-                  </template>
-                </div>
-              </div>
-              <span class="field-hint" x-text="agentToolHint"></span>
-            </div>
-            <label class="field">
-              <span>查询文本对应的参数字段</span>
-              <input type="text" id="agent-mcp-query-field" x-model="agentForm.mcp_query_field" placeholder="query" spellcheck="false">
-              <span class="field-hint">用户的搜索问题写进工具的哪个参数</span>
-            </label>
-          </div>
-
-          <label class="field mt-4">
-            <span>固定参数（JSON 对象）</span>
-            <textarea id="agent-mcp-arguments" class="agent-json-input" x-model="agentForm.mcp_arguments" rows="4" spellcheck="false" placeholder='{"max_results": 5}'></textarea>
-            <span class="field-hint">和查询字段一起提交给工具；必须是 JSON 对象，例如 {"max_results": 5}</span>
-          </label>
-
-          <details class="payload-block mt-4" x-show="agentSchemaText">
-            <summary><span class="payload-title">所选工具的参数定义</span></summary>
-            <pre class="payload-pre mono" x-text="agentSchemaText"></pre>
-          </details>
+          <p class="field-hint mt-3" id="agent-tools-status" x-text="agentToolsStatus"></p>
 
           <p class="field-hint mt-3">修改后需要点顶栏「保存设置」才会生效；「测试连接」和「试运行搜索」会直接使用当前填写的内容。</p>
         </div>
@@ -340,20 +305,20 @@
         <div class="glass card">
           <div>
             <h2 class="card-title">试运行搜索</h2>
-            <p class="muted">用当前填写的内容真实搜索一次，确认地址、令牌、工具和参数可用。结果不会保存。</p>
+            <p class="muted">用当前填写的内容真实搜索一次，确认地址、令牌与检索可用。结果不会保存。</p>
           </div>
 
           <label class="field agent-test-field mt-4">
             <span>试搜内容</span>
             <input type="text" id="agent-test-query" x-model="agentTestQuery" placeholder="例如：高考英语 阅读理解">
-            <span class="field-hint">会原样填入上面设置的查询字段。</span>
+            <span class="field-hint">按模型看到的 web_search 参数发一次真实检索。</span>
           </label>
 
           <div class="form-actions agent-actions">
             <button type="button" class="btn-ghost" id="agent-search" @click="testAgentSearch()"
                     :disabled="agentSearching || !agentTestQuery.trim()"
                     x-text="agentSearching ? '搜索中…' : '试运行搜索'"></button>
-            <span class="field-hint" x-show="agentSearchOutput">以下是搜索服务返回的原始内容</span>
+            <span class="field-hint" x-show="agentSearchOutput">以下是模型会看到的归一化结果</span>
           </div>
 
           <div class="agent-result" x-show="agentSearchOutput" x-cloak>

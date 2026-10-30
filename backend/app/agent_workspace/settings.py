@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from app.database import SessionLocal
 from app.models import AppConfig
+from .anysearch import REQUIRED
 
 KEY = "agent_workspace_settings"
 # 旧默认值：256K 压缩阈值下连一次调用都装不下，读取时按新口径抬到 2M
@@ -31,10 +32,9 @@ class WorkspaceSettings(BaseModel):
     mcp_enabled: bool = False
     mcp_url: str = Field("", max_length=2048)
     mcp_token: str = Field("", max_length=4096)
-    mcp_tool: str = Field("", max_length=200)
-    mcp_query_field: str = Field("query", max_length=100)
-    mcp_arguments: dict = Field(default_factory=dict)
-    mcp_schema: dict = Field(default_factory=dict)
+    # 连接时发现的服务端工具名，既是"已验证"凭据，也是可用性判断依据；
+    # 具体给模型什么工具、参数怎么翻译，由 anysearch.py 固定。
+    mcp_tools: list[str] = Field(default_factory=list, max_length=50)
     mcp_timeout: int = Field(45, ge=5, le=180)
 
     @field_validator("mcp_url")
@@ -46,6 +46,20 @@ class WorkspaceSettings(BaseModel):
             if u.scheme not in {"https", "http"} or not u.hostname or u.username or u.password or u.fragment:
                 raise ValueError("MCP 地址须为完整 HTTP(S) 地址，不包含用户名、密码或片段")
         return value
+
+    @field_validator("mcp_tools")
+    @classmethod
+    def check_tools(cls, value):
+        seen = []
+        for item in value:
+            name = str(item or "").strip()
+            if not name:
+                continue
+            if len(name) > 200:
+                raise ValueError("工具名过长")
+            if name not in seen:
+                seen.append(name)
+        return seen
 
 
 def load_settings() -> WorkspaceSettings:
@@ -83,4 +97,6 @@ def admin_settings(data=None):
 
 def search_available(data=None):
     data = data or load_settings()
-    return bool(data.mcp_enabled and data.mcp_url and data.mcp_tool and data.mcp_schema)
+    # 四个工具缺一个就当作未接入：宁可让管理员看到"未接入"，也不要在运行时
+    # 让模型拿到一个必然失败的 web_extract。
+    return bool(data.mcp_enabled and data.mcp_url and REQUIRED <= set(data.mcp_tools))

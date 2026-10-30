@@ -789,10 +789,8 @@ function adminApp() {
       mcp_url: "",
       mcp_token: "",
       clear_token: false,
-      mcp_tool: "",
-      mcp_query_field: "query",
-      // 固定参数以 JSON 文本编辑，提交时才解析：边打字边报错没法用
-      mcp_arguments: "{}",
+      // 连接时发现的服务端工具名；保存后就是"已接入"的凭据
+      mcp_tools: [],
       mcp_timeout: 45,
     },
     // agent 页同样走草稿：快照对比算脏，顶栏保存/重置统一落盘
@@ -833,41 +831,38 @@ function adminApp() {
         return true;
       }
     },
-    // 连接后发现的工具列表；加载已保存配置时只还原选中的那一个（带 schema，没有描述）
-    agentTools: [],
-    agentSavedSchema: {},
+    // 最近一次「测试连接」读到的工具名，以及由服务端推导的提供/缺失情况
+    agentDiscovered: [],
+    agentProvided: [],
+    agentMissing: [],
+    // 工具目录是对着哪个地址验证的：改了地址必须先重测，否则保存的是旧服务的目录
+    agentVerifiedUrl: "",
     agentHasToken: false,
     agentSaving: false,
     agentConnecting: false,
     agentSearching: false,
-    agentToolMenuOpen: false,
     agentTestQuery: "高考英语 阅读理解",
     agentSearchOutput: "",
-    get agentToolLabel() {
-      if (this.agentForm.mcp_tool) return this.agentForm.mcp_tool;
-      return this.agentTools.length ? "请选择工具" : "先测试连接";
-    },
-    get agentToolHint() {
-      const tool = (this.agentTools || []).find((t) => t.name === this.agentForm.mcp_tool);
-      if (tool && tool.description) return tool.description;
-      if (this.agentForm.mcp_tool) return "已保存；重新测试连接可更新工具信息。";
-      return this.agentTools.length ? "从测试结果中选择用于网页搜索的工具。" : "先测试连接并读取工具，成功后才能选择。";
-    },
     get agentTokenHint() {
       if (this.agentForm.mcp_token) return "保存后使用这里填写的令牌。";
       return this.agentHasToken
         ? "已保存；留空保持不变，填写则替换。"
         : "尚未设置；不需要鉴权的服务可以留空。";
     },
-    get agentSchemaText() {
-      const tool = (this.agentTools || []).find((t) => t.name === this.agentForm.mcp_tool);
-      const schema = (tool && tool.inputSchema) || this.agentSavedSchema || {};
-      if (!schema || !Object.keys(schema).length) return "";
-      try {
-        return JSON.stringify(schema, null, 2);
-      } catch {
-        return "";
+    get agentToolsStatus() {
+      if (!this.agentForm.mcp_url) return "先填 AnySearch 的 MCP 地址与令牌，再测试连接。";
+      const saved = Array.isArray(this.agentForm.mcp_tools) ? this.agentForm.mcp_tools : [];
+      if (!saved.length && !this.agentDiscovered.length) {
+        return "先测试连接并读取工具；四个检索工具齐全后才能开启网页搜索。";
       }
+      if ((this.agentMissing || []).length) {
+        return `缺少 AnySearch 工具：${this.agentMissing.join("、")}。请重新测试连接并确认地址。`;
+      }
+      const names = (this.agentProvided || []).filter(Boolean);
+      if (names.length === 4) {
+        return `将提供 4 个联网工具：${names.join("、")}；score 是质量反馈，不提供给模型。`;
+      }
+      return "先测试连接，确认四个检索工具都在。";
     },
     // 多 Provider 聚合
     providers: [],
@@ -4398,18 +4393,8 @@ function adminApp() {
         this.agentSnapshot = "";
       }
     },
-    /* 表单 → 提交体。固定参数在这里解析并校验；工具 schema 取当前选中工具的定义，
-       避免保存一份和工具对不上的旧 schema（后端开启网页搜索时要校验两者相容） */
+    /* 表单 → 提交体。工具目录随测试连接一起提交；缺哪个由服务端再校验一次。 */
     agentPayload() {
-      let args;
-      try {
-        args = JSON.parse(this.agentForm.mcp_arguments || "{}");
-      } catch {
-        throw new Error('固定参数必须是合法 JSON，例如 {"max_results": 5}');
-      }
-      if (!args || typeof args !== "object" || Array.isArray(args)) {
-        throw new Error("固定参数必须是 JSON 对象，不能是数组或 null");
-      }
       const ranges = {
         max_steps: [2, 100, "每轮最多步骤"],
         output_tokens: [2048, 131072, "单次输出 token 上限"],
@@ -4437,7 +4422,6 @@ function adminApp() {
         }
         numbers[key] = value;
       }
-      const tool = (this.agentTools || []).find((t) => t.name === this.agentForm.mcp_tool);
       return {
         ...numbers,
         enabled: !!this.agentForm.enabled,
@@ -4445,17 +4429,13 @@ function adminApp() {
         mcp_url: String(this.agentForm.mcp_url || "").trim(),
         mcp_token: String(this.agentForm.mcp_token || ""),
         clear_token: !!this.agentForm.clear_token,
-        mcp_tool: this.agentForm.mcp_tool || "",
-        mcp_query_field: String(this.agentForm.mcp_query_field || "").trim() || "query",
-        mcp_arguments: args,
-        mcp_schema: (tool && tool.inputSchema) || this.agentSavedSchema || {},
+        mcp_tools: Array.isArray(this.agentForm.mcp_tools) ? [...this.agentForm.mcp_tools] : [],
       };
     },
     async loadAgent() {
       try {
         const data = await this.api("/api/admin/agent");
         this.agentHasToken = !!data.has_token;
-        const args = data.mcp_arguments;
         this.agentForm = {
           enabled: data.enabled !== false,
           max_steps: data.max_steps ?? 24,
@@ -4472,16 +4452,15 @@ function adminApp() {
           // 令牌只写不读：接口不回传明文，输入框永远从空开始
           mcp_token: "",
           clear_token: false,
-          mcp_tool: data.mcp_tool || "",
-          mcp_query_field: data.mcp_query_field || "query",
-          mcp_arguments: JSON.stringify(args && typeof args === "object" && !Array.isArray(args) ? args : {}, null, 2),
+          mcp_tools: Array.isArray(data.mcp_tools) ? [...data.mcp_tools] : [],
           mcp_timeout: data.mcp_timeout ?? 45,
         };
-        this.agentSavedSchema = data.mcp_schema && typeof data.mcp_schema === "object" ? data.mcp_schema : {};
-        // 已保存的配置只还原选中工具（带 schema，没有描述）；要读描述就再测一次连接
-        this.agentTools = data.mcp_tool
-          ? [{ name: data.mcp_tool, description: "", inputSchema: this.agentSavedSchema }]
-          : [];
+        // 已保存的目录直接标明提供/缺失；描述要再测一次连接才有，界面不展示。
+        this.agentDiscovered = [];
+        this.agentProvided = Array.isArray(data.mcp_provided) ? data.mcp_provided : [];
+        this.agentMissing = Array.isArray(data.mcp_missing) ? data.mcp_missing : [];
+        // 已保存的目录只能证明它对着保存时那个地址验证过。
+        this.agentVerifiedUrl = this.agentForm.mcp_tools.length ? this.agentForm.mcp_url.trim() : "";
         this.snapshotAgent();
         this.agentLoaded = true;
       } catch (e) {
@@ -4521,9 +4500,13 @@ function adminApp() {
         this.toast(e.message, "error");
         return;
       }
-      // 后端同样会拦，这里先给一句人话：开启搜索前必须有一条能用的工具配置
-      if (body.mcp_enabled && (!body.mcp_url || !body.mcp_tool || !Object.keys(body.mcp_schema || {}).length)) {
-        this.toast("请先测试连接、选择搜索工具，再开启网页搜索", "error");
+      // 后端同样会拦，这里先给一句人话：开启搜索前四个工具必须都在
+      if (body.mcp_enabled && (!body.mcp_url || !body.mcp_tools.length || (this.agentMissing || []).length)) {
+        this.toast("请先测试连接，确认 AnySearch 的四个检索工具都在，再开启网页搜索", "error");
+        return;
+      }
+      if (body.mcp_enabled && body.mcp_url !== this.agentVerifiedUrl) {
+        this.toast("MCP 地址改过了，请重新测试连接后再保存", "error");
         return;
       }
       this.agentSaving = true;
@@ -4555,32 +4538,21 @@ function adminApp() {
       this.agentConnecting = true;
       try {
         const data = await this.api("/api/admin/agent/connect", { method: "POST", body: JSON.stringify(body) });
-        this.agentTools = Array.isArray(data.tools) ? data.tools : [];
-        // 换了服务后原来的工具可能不存在：选中项不在新列表里就落到第一个
-        if (!this.agentTools.some((t) => t.name === this.agentForm.mcp_tool)) {
-          this.agentForm.mcp_tool = this.agentTools[0] ? this.agentTools[0].name : "";
-        }
-        this.toast(`连接成功，发现 ${this.agentTools.length} 个工具；选定后点顶栏“保存设置”生效`);
+        const tools = Array.isArray(data.tools) ? data.tools : [];
+        this.agentDiscovered = tools.map((tool) => tool && tool.name).filter(Boolean);
+        this.agentProvided = Array.isArray(data.provided) ? data.provided : [];
+        this.agentMissing = Array.isArray(data.missing) ? data.missing : [];
+        // 连接成功即视为"这个服务暴露了这些工具"，保存时按这份目录校验
+        this.agentForm.mcp_tools = [...this.agentDiscovered];
+        this.agentVerifiedUrl = body.mcp_url;
+        const tail = this.agentMissing.length
+          ? `；缺少 ${this.agentMissing.join("、")}，无法开启`
+          : "；四个检索工具齐全，保存后生效";
+        this.toast(`连接成功，发现 ${this.agentDiscovered.length} 个工具${tail}`);
       } catch (e) {
         this.toast(e.message || "MCP 连接失败", "error");
       } finally {
         this.agentConnecting = false;
-      }
-    },
-    selectAgentTool(name) {
-      this.agentForm.mcp_tool = name;
-      this.agentToolMenuOpen = false;
-    },
-    /* 试搜返回的是 tools/call 的原始结果：纯文本内容直接铺开比看一串 JSON 好读，
-       带非文本块（图片等）时退回完整 JSON，免得丢掉结构 */
-    formatMcpResult(data) {
-      const content = data && Array.isArray(data.content) ? data.content : [];
-      const texts = content.filter((c) => c && typeof c.text === "string");
-      if (content.length && texts.length === content.length) return texts.map((c) => c.text).join("\n\n");
-      try {
-        return JSON.stringify(data, null, 2);
-      } catch {
-        return String(data);
       }
     },
     async testAgentSearch() {
@@ -4597,8 +4569,8 @@ function adminApp() {
         this.toast(e.message, "error");
         return;
       }
-      if (!body.mcp_url || !body.mcp_tool) {
-        this.toast("请先测试连接并选择搜索工具", "error");
+      if (!body.mcp_url) {
+        this.toast("请先填写 MCP 地址", "error");
         return;
       }
       this.agentSearching = true;
@@ -4607,7 +4579,8 @@ function adminApp() {
           method: "POST",
           body: JSON.stringify({ settings: body, query }),
         });
-        this.agentSearchOutput = this.formatMcpResult(data);
+        // 展示的就是模型将看到的归一化结构，便于对照体积与字段
+        this.agentSearchOutput = JSON.stringify(data, null, 2);
         this.toast("搜索成功；当前表单尚未保存");
       } catch (e) {
         this.toast(e.message || "搜索失败", "error");

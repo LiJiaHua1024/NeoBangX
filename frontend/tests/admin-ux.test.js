@@ -104,14 +104,15 @@ test("Agent 配置是后台的第二个页签，控件与其它配置页签同�
     HTML.indexOf("<!-- 概览 -->")
   );
   assert.ok(section.length > 0, "没找到 Agent 页签的模板");
-  for (const cls of ["glass card", "switch-slider", "field", "custom-select-trigger", "payload-block"]) {
+  for (const cls of ["glass card", "switch-slider", "field", "field-hint"]) {
     assert.ok(section.includes(`class="${cls}`) || section.includes(` ${cls}`), `缺统一控件 ${cls}`);
   }
-  assert.ok(!/<select\b/.test(section), "下拉要用自绘的 .custom-select，不用原生 select");
+  assert.ok(!/<select\b/.test(section), "控件要用自绘组件，不用原生 select");
   assert.ok(!/style="/.test(section), "排版走样式表里的布局类，不写行内样式");
-  for (const id of ["agent-mcp-url", "agent-mcp-token", "agent-tool-trigger", "agent-search"]) {
+  for (const id of ["agent-mcp-url", "agent-mcp-token", "agent-tools-status", "agent-search"]) {
     assert.ok(section.includes(`id="${id}"`), `缺可操作锚点 #${id}`);
   }
+  assert.ok(/AnySearch/.test(section), "标题要写明是 AnySearch，填地址时不用猜");
 });
 
 test("配置校验失败会把视线带到出问题的那张卡片", () => {
@@ -180,7 +181,7 @@ test("加载成功后保存按钮恢复可用", async () => {
   let calls = 0;
   app.api = () => {
     calls += 1;
-    return Promise.resolve({ enabled: true, max_steps: 24, concurrency: 2, mcp_arguments: {} });
+    return Promise.resolve({ enabled: true, max_steps: 24, concurrency: 2, mcp_tools: [] });
   };
   await app.loadAgent();
   assert.equal(app.agentLoaded, true);
@@ -197,7 +198,7 @@ test("token 预算不设范围，默认 200 万和更大的值都能提交", () 
     enabled: true, max_steps: 24, max_tokens: 2000000, output_tokens: 16384, max_seconds: 1800,
     concurrency: 2, context_budget: 262144, keep_tail_steps: 4, provider_attempts: 3,
     retry_wait_cap_seconds: 60, mcp_enabled: false, mcp_url: "", mcp_token: "", clear_token: false,
-    mcp_tool: "", mcp_query_field: "query", mcp_arguments: "{}", mcp_timeout: 45,
+    mcp_tools: [], mcp_timeout: 45,
   };
   assert.equal(app.agentPayload().max_tokens, 2000000);
   app.agentForm.max_tokens = 50000000;
@@ -210,7 +211,7 @@ test("保存 Agent 配置用 PATCH，避免整文档替换", async () => {
   app.agentForm = {
     enabled: false, max_steps: 24, max_tokens: 250000, output_tokens: 16384, max_seconds: 1800,
     concurrency: 2, mcp_enabled: false, mcp_url: "", mcp_token: "", clear_token: false,
-    mcp_tool: "", mcp_query_field: "query", mcp_arguments: "{}", mcp_timeout: 45,
+    mcp_tools: [], mcp_timeout: 45,
   };
   let settled = false;
   const pending = app.saveAgent().finally(() => {
@@ -224,4 +225,74 @@ test("保存 Agent 配置用 PATCH，避免整文档替换", async () => {
   const save = requests.find((r) => r.url === "/api/admin/agent" && r.options?.method);
   assert(save, "没有发出保存请求");
   assert.equal(save.options.method, "PATCH");
+});
+
+test("测试连接后把发现目录写进表单，缺工具时明确提示", async () => {
+  const { app, requests, errors } = setup();
+  app.agentForm = {
+    enabled: true, max_steps: 24, max_tokens: 2000000, output_tokens: 16384, max_seconds: 1800,
+    concurrency: 2, context_budget: 262144, keep_tail_steps: 4, provider_attempts: 3,
+    retry_wait_cap_seconds: 60, mcp_enabled: false, mcp_url: "https://api.anysearch.com/mcp",
+    mcp_token: "", clear_token: false, mcp_tools: [], mcp_timeout: 45,
+  };
+  const pending = app.connectAgentMcp();
+  requests[0].resolve({
+    tools: [{ name: "search" }, { name: "batch_search" }],
+    provided: ["web_search", "web_batch_search"],
+    missing: ["web_extract", "web_sub_domains"],
+  });
+  await pending;
+  assert.deepEqual([...app.agentForm.mcp_tools], ["search", "batch_search"], "目录要保存下来");
+  assert.deepEqual([...app.agentMissing], ["web_extract", "web_sub_domains"]);
+  assert.match(errors.join(" "), /缺少 web_extract/);
+  assert.match(app.agentToolsStatus, /缺少 AnySearch 工具/);
+});
+
+test("四个工具齐全时状态写明提供哪些能力、score 不提供", () => {
+  const { app } = setup();
+  app.agentForm = { mcp_url: "https://api.anysearch.com/mcp",
+    mcp_tools: ["search", "batch_search", "extract", "get_sub_domains", "score"] };
+  app.agentMissing = [];
+  app.agentProvided = ["web_search", "web_batch_search", "web_extract", "web_sub_domains"];
+  const text = app.agentToolsStatus;
+  for (const name of ["web_search", "web_batch_search", "web_extract", "web_sub_domains"]) {
+    assert.ok(text.includes(name), `状态里要有 ${name}`);
+  }
+  assert.match(text, /score/);
+});
+
+test("缺少检索工具时保存 Agent 配置不发请求", async () => {
+  const { app, errors } = setup();
+  app.agentLoaded = true;
+  app.agentMissing = ["web_extract"];
+  app.agentForm = {
+    enabled: true, max_steps: 24, max_tokens: 2000000, output_tokens: 16384, max_seconds: 1800,
+    concurrency: 2, context_budget: 262144, keep_tail_steps: 4, provider_attempts: 3,
+    retry_wait_cap_seconds: 60, mcp_enabled: true, mcp_url: "https://api.anysearch.com/mcp",
+    mcp_token: "", clear_token: false, mcp_tools: ["search"], mcp_timeout: 45,
+  };
+  let calls = 0;
+  app.api = () => { calls += 1; return Promise.resolve({}); };
+  await app.saveAgent();
+  assert.equal(calls, 0, "不能把缺工具的配置写到服务端");
+  assert.match(errors.join(" "), /四个检索工具/);
+});
+
+test("改了 MCP 地址但没重新测试连接时不能保存", async () => {
+  const { app, errors } = setup();
+  app.agentLoaded = true;
+  app.agentVerifiedUrl = "https://api.anysearch.com/mcp";
+  app.agentMissing = [];
+  app.agentForm = {
+    enabled: true, max_steps: 24, max_tokens: 2000000, output_tokens: 16384, max_seconds: 1800,
+    concurrency: 2, context_budget: 262144, keep_tail_steps: 4, provider_attempts: 3,
+    retry_wait_cap_seconds: 60, mcp_enabled: true, mcp_url: "https://other.example/mcp",
+    mcp_token: "", clear_token: false,
+    mcp_tools: ["search", "batch_search", "extract", "get_sub_domains"], mcp_timeout: 45,
+  };
+  let calls = 0;
+  app.api = () => { calls += 1; return Promise.resolve({}); };
+  await app.saveAgent();
+  assert.equal(calls, 0, "旧目录不能配新地址保存");
+  assert.match(errors.join(" "), /重新测试连接/);
 });

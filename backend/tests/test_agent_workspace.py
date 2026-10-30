@@ -14,7 +14,7 @@ from app.database import SessionLocal
 from app.models import UsageCode, UsageLog, utcnow
 from app.agent_workspace import api, store, tools, mcp, runner, llm
 from app.agent_workspace.models import WorkspaceRun, WorkspaceEntry, WorkspaceTask
-from app.agent_workspace.settings import WorkspaceSettings
+from app.agent_workspace.settings import WorkspaceSettings, save_settings
 
 
 @pytest.fixture
@@ -986,3 +986,57 @@ def test_entries_endpoint_pages_through_every_step(client,identity):
     assert pages==3 and len(seen)==len(set(seen))==1200
     assert client.get(f"/api/workspace/tasks/{t['id']}/entries?limit=1").json()['has_more'] is True
     store.finish_run(r['id'],'stopped')
+
+
+def test_web_tools_need_the_whole_anysearch_set(identity):
+    """网页搜索是一个开关配四个工具；缺任何一个都按"未接入"处理。"""
+    t = task(identity, tools=["material_search", "web_search"])
+    try:
+        for settings in (
+            WorkspaceSettings(mcp_url="https://api.anysearch.com/mcp",
+                              mcp_tools=["search", "batch_search", "extract", "get_sub_domains"]),
+            WorkspaceSettings(mcp_enabled=True, mcp_url="https://api.anysearch.com/mcp",
+                              mcp_tools=["search", "batch_search", "extract"]),
+        ):
+            save_settings(settings)
+            names = {item['function']['name'] for item in tools.tool_schemas(t['config'])}
+            assert "web_search" not in names and "web_extract" not in names
+        save_settings(WorkspaceSettings(mcp_enabled=True, mcp_url="https://api.anysearch.com/mcp",
+                                        mcp_tools=["search", "batch_search", "extract", "get_sub_domains"]))
+        names = {item['function']['name'] for item in tools.tool_schemas(t['config'])}
+        assert {"web_search", "web_batch_search", "web_extract", "web_sub_domains"} <= names
+        assert "score" not in names
+    finally:
+        save_settings(WorkspaceSettings())
+
+
+def test_web_search_tool_call_goes_through_the_adapter(identity, monkeypatch):
+    from app.agent_workspace import anysearch
+
+    t = task(identity, tools=["web_search"])
+    r = run(identity, t)
+    save_settings(WorkspaceSettings(mcp_enabled=True, mcp_url="https://api.anysearch.com/mcp",
+                                    mcp_tools=["search", "batch_search", "extract", "get_sub_domains"]))
+    seen = []
+
+    async def fake(cfg, name, args):
+        seen.append((name, args))
+        return {"results": [{"title": "t", "url": "https://example.com", "snippet": "s"}],
+                "count": 1, "truncated": False}
+
+    monkeypatch.setattr(anysearch, "call", fake)
+    monkeypatch.setattr(runner, '_load_cfg', lambda: {})
+
+    async def execute():
+        obj = runner.Runner(r['id'])
+        await obj.load()
+        return await obj.tool_call({'id': 'web1', 'function': {
+            'name': 'web_search', 'arguments': json.dumps({'query': '读后续写'})}})
+
+    try:
+        result = asyncio.run(execute())
+        assert seen == [("web_search", {"query": "读后续写"})]
+        assert result["count"] == 1 and result["results"][0]["url"] == "https://example.com"
+    finally:
+        save_settings(WorkspaceSettings())
+        store.finish_run(r['id'], 'completed')

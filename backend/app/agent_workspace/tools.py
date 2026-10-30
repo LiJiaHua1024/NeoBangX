@@ -11,7 +11,7 @@ from app.database import SessionLocal
 from app.services.vocab_check import check_over_words
 from .models import WorkspaceMaterial as Material, WorkspaceVersion as Version
 from .settings import load_settings, search_available
-from . import mcp
+from . import anysearch
 
 
 def schema(name, description, properties, required):
@@ -29,7 +29,7 @@ CATALOG = [
     {"id": "material_search", "name": "材料检索", "description": "在本任务材料中查找原文和定位依据", "available": True},
     {"id": "regex", "name": "正则查找", "description": "按正则匹配题号、句子和格式", "available": True},
     {"id": "vocabulary", "name": "词表检查", "description": "对照现有课标词表检查文本", "available": True},
-    {"id": "web_search", "name": "网页搜索", "description": "使用管理员配置的搜索服务，查询会发送到该服务", "available": False},
+    {"id": "web_search", "name": "网页搜索", "description": "联网搜索与网页读取；查询词和链接会发送到搜索服务", "available": False},
     {"id": "question_bank", "name": "高考试题库", "description": "尚未接入题库", "available": False},
 ]
 
@@ -72,7 +72,9 @@ def tool_schemas(config):
     if "vocabulary" in enabled:
         tools.append(schema("check_vocabulary", "对照课标词表进行客观检查，返回超标词与统计。", {"text": STRING}, ["text"]))
     if "web_search" in enabled and search_available():
-        tools.append(schema("web_search", "搜索公开网页并返回来源。仅发送必要查询词，不上传整份私人材料。无结果不能编造来源。", {"query": STRING}, ["query"]))
+        # 一个开关放整套工具：检索、并行检索、读正文、分类目录。
+        for name, (description, properties, required) in anysearch.SPECS.items():
+            tools.append(schema(name, description, properties, required))
     return tools
 
 
@@ -189,11 +191,11 @@ async def execute_readonly(task_id, config, name, args):
         return await asyncio.to_thread(search_materials, rows, args["query"], args.get("regex", False), args.get("offset", 0))
     if name == "check_vocabulary":
         return await asyncio.to_thread(check_over_words, args["text"])
-    if name == "web_search":
+    if name in anysearch.TOOLS:
         cfg = await asyncio.to_thread(load_settings)
         if not search_available(cfg):
             raise ValueError("网页搜索尚未配置或已被管理员关闭")
-        return await mcp.search(cfg, args["query"])
+        return await anysearch.call(cfg, name, args)
     raise ValueError("工具不可用")
 
 

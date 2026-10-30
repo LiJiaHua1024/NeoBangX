@@ -37,6 +37,12 @@ class MCPProtocolError(MCPError):
     kind = "protocol"
 
 
+class MCPToolError(MCPConfigError):
+    """工具本身拒绝了这次调用（参数不对、链接不可读）：改参数或换输入能解决。"""
+
+    kind = "tool"
+
+
 class MCPClient:
     def __init__(self, cfg, transport=None):
         self.cfg = cfg
@@ -166,21 +172,12 @@ async def connection(cfg, transport=None):
         await client.close()
 
 
-async def search(cfg, query: str):
-    from jsonschema import validate, ValidationError
-
-    arguments = {**cfg.mcp_arguments, cfg.mcp_query_field: query}
-    try:
-        validate(arguments, cfg.mcp_schema)
-    except ValidationError as exc:
-        raise MCPConfigError("网页搜索参数与 MCP 工具不匹配，请管理员检查查询字段和固定参数") from exc
+async def call_tool(cfg, name: str, arguments: dict):
+    """调用一个 MCP 工具并返回原始结果；isError 由调用方按业务语义处理。"""
     try:
         async with connection(cfg) as client:
-            result = await client.rpc("tools/call", {"name": cfg.mcp_tool, "arguments": arguments})
+            return await client.rpc("tools/call", {"name": name, "arguments": arguments})
     except MCPError:
         raise
     except Exception:
         raise MCPTransportError("搜索服务连接失败或超时，请稍后重试或联系管理员") from None
-    if result.get("isError"):
-        raise MCPProtocolError("搜索服务返回工具错误，本次未获得有效搜索结果")
-    return result

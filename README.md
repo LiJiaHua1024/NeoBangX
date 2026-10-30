@@ -300,6 +300,15 @@ docker-compose up --build -d
 | 同一 Provider 重试次数 | 3 | 先在同一家重试，用尽才换家（换家会让整段上下文缓存作废） |
 | 重试等待上限 | 60 | 上游 `Retry-After` 超过它就不再等，直接换家 |
 
+**网页搜索（AnySearch）**：管理后台 Agent 页只需要 MCP 地址
+（`https://api.anysearch.com/mcp`）和 Bearer 令牌，点「测试连接并读取工具」确认
+`search` / `batch_search` / `extract` / `get_sub_domains` 都在，保存后打开开关即可。
+用户端只有一个「网页搜索」开关，模型拿到的是
+`web_search` / `web_batch_search` / `web_extract` / `web_sub_domains` 四个工具；
+`score`（检索质量反馈）不提供给模型。查询词和要读取的链接会发往搜索服务，
+材料原文不会自动上传；搜索结果按每条 800 字归一化后再进上下文，需要全文由模型
+再调一次网页读取。四个工具缺一个就按“未接入”处理，需要重新测试连接。
+
 Agent 的 Provider 是**任务级粘住**的：选定后一直用它，失败先在同一家重试（1s/4s 退避），只有这家彻底不行才换，换了之后本任务不再自动切回。压缩只切「HEAD 之后」的中间段：system 与任务上下文逐字节不动，所以那段最大的前缀缓存不会被压缩打掉；摘要由消息与工具调用机械生成，同样的输入永远得到同样的字节。
 
 `LLM_BASE_URL` / `LLM_API_KEY` / `CHORES_BASE_URL` / `CHORES_API_KEY` 这几个旧键

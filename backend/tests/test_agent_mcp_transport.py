@@ -79,7 +79,7 @@ def test_sse_reply_is_parsed_from_streamed_chunks():
     assert asyncio.run(run()) == {"ok": True}
 
 
-def test_transport_and_config_errors_are_distinguishable():
+def test_transport_errors_are_distinguishable():
     def handler(request):
         raise httpx.ConnectError("boom")
 
@@ -93,12 +93,33 @@ def test_transport_and_config_errors_are_distinguishable():
     with pytest.raises(httpx.ConnectError):
         asyncio.run(run())
 
-    # search() 把网络失败归成 transport；参数不匹配归成 config。
-    # 固定参数里缺一个必填项：属于配置问题，不是网络问题。
-    cfg = _cfg(mcp_tool="search", mcp_query_field="q",
-               mcp_schema={"type": "object",
-                           "properties": {"q": {"type": "string"}, "needed": {"type": "integer"}},
-                           "required": ["needed"]})
-    with pytest.raises(mcp.MCPConfigError) as config_error:
-        asyncio.run(mcp.search(cfg, ""))
-    assert config_error.value.kind == "config"
+
+def test_call_tool_maps_unknown_failures_to_transport(monkeypatch):
+    class Broken:
+        async def __aenter__(self):
+            raise httpx.ConnectError("boom")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(mcp, "connection", lambda cfg: Broken())
+    with pytest.raises(mcp.MCPTransportError) as exc:
+        asyncio.run(mcp.call_tool(_cfg(), "search", {"query": "x"}))
+    assert exc.value.kind == "transport"
+
+
+def test_call_tool_hands_tool_errors_back_to_the_caller(monkeypatch):
+    class Broken:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def rpc(self, method, params):
+            return {"isError": True, "content": [{"type": "text", "text": "bad url"}]}
+
+    monkeypatch.setattr(mcp, "connection", lambda cfg: Broken())
+    result = asyncio.run(mcp.call_tool(_cfg(), "extract", {"url": "https://x"}))
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == "bad url"

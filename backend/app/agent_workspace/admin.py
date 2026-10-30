@@ -1,13 +1,12 @@
 """仅由独立的内网管理服务挂载。"""
-import asyncio
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, ValidationError
-from jsonschema import Draft202012Validator
 
+from . import anysearch
 from .settings import WorkspaceSettings, load_settings, save_settings, admin_settings
-from .mcp import connection, search, MCPConfigError, MCPError
+from .mcp import connection, MCPConfigError, MCPError
 
 router = APIRouter(prefix="/api/admin/agent", tags=["admin-agent"])
 
@@ -31,18 +30,20 @@ def resolved(body):
 
 @router.get("")
 def get_settings():
-    return admin_settings()
+    data = admin_settings()
+    # 由已保存的工具目录推导，界面上不用再存一份映射。
+    data["mcp_provided"], data["mcp_missing"] = anysearch.provided(data.get("mcp_tools") or [])
+    return data
 
 
 def _validate_and_save(cfg):
     if cfg.mcp_enabled:
-        if not cfg.mcp_url or not cfg.mcp_tool or not cfg.mcp_schema:
-            raise HTTPException(422, "请先测试连接、选择搜索工具，再开启网页搜索")
-        try:
-            Draft202012Validator.check_schema(cfg.mcp_schema)
-            Draft202012Validator(cfg.mcp_schema).validate({**cfg.mcp_arguments, cfg.mcp_query_field: "测试查询"})
-        except Exception:
-            raise HTTPException(422, "查询字段或固定参数不符合所选工具的输入格式") from None
+        if not cfg.mcp_url:
+            raise HTTPException(422, "请先填写 AnySearch 的 MCP 地址")
+        _, missing = anysearch.provided(cfg.mcp_tools)
+        if missing:
+            raise HTTPException(422, "网页搜索需要 AnySearch 的 search、batch_search、extract、get_sub_domains；"
+                                     f"当前缺少：{'、'.join(missing)}。请重新测试连接后再保存")
     return save_settings(cfg)
 
 
@@ -87,8 +88,10 @@ async def connect(body: SettingsWrite):
     try:
         async with connection(cfg) as client:
             items = await client.list_tools()
-        return {"tools": [{"name": t["name"], "description": t.get("description", ""),
-                           "inputSchema": t.get("inputSchema", {})} for t in items]}
+        tools = [{"name": t["name"], "description": t.get("description", ""),
+                  "inputSchema": t.get("inputSchema", {})} for t in items]
+        provided, missing = anysearch.provided([item["name"] for item in tools])
+        return {"tools": tools, "provided": provided, "missing": missing}
     except Exception as exc:
         # 不透传 HTTP 客户端异常中的 URL/凭据。
         # 配置类错误是管理员自己填的，用 422 让他知道改哪里；其余是连接/协议问题。
@@ -104,7 +107,13 @@ class SearchTest(BaseModel):
 @router.post("/search")
 async def test_search(body: SearchTest):
     try:
-        return await search(resolved(body.settings), body.query)
-    except Exception as exc:
-        status = 422 if isinstance(exc, MCPConfigError) else 502
-        raise HTTPException(status, str(exc) if isinstance(exc, MCPError) else "搜索失败，请检查配置与服务状态") from None
+        return await anysearch.call(resolved(body.settings), "web_search", {"query": body.query})
+    except MCPConfigError as exc:
+        # 含 MCPToolError 与参数校验的 ValueError：改配置/改输入能解决。
+        raise HTTPException(422, str(exc)) from None
+    except MCPError:
+        raise HTTPException(502, "搜索失败，请检查配置与服务状态") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except Exception:
+        raise HTTPException(502, "搜索失败，请检查配置与服务状态") from None
