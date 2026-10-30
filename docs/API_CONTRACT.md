@@ -979,11 +979,11 @@ data: [DONE]
 
 返回该段完整记录，类型为 `text/plain; charset=utf-8`，下载文件名为 `log-{log_id}-{part}.txt`。用于主动复制全文或下载，不受分页限制。日志或原始数据不存在时返回 404；`part` 无效时返回 422。
 
-### 11.6.1 Agent 运行全解
+### 11.6.1 Agent 运行记录
 
 Agent 工作台的一轮执行在 `usage_logs` 里只有**一条**记录（`tool_id="agent"`，
 `request_id` 即 `workspace_runs.id`），过程细节在 `workspace_*` 表。这三个接口
-把一轮执行还原成可逐步查看的步骤序列，供管理后台的「运行全解」使用。
+把一轮执行还原成可逐条检查的日志，供管理后台的「运行记录」使用。
 
 Agent 轮次**不写**主站 `log_payloads`，所以日志详情的 `payload` 恒为 `null`；
 每一步的上下文、工具参数与输出都从 `workspace_chunks` 按需读取。
@@ -1003,25 +1003,42 @@ Agent 轮次**不写**主站 `log_payloads`，所以日志详情的 `payload` �
   "device": { "id": 7, "short_code": "FP-AB12-CD34", "...": "同设备摘要" },
   "task": { "id": "eef4450a…", "title": "高二英语·读后续写专项讲评", "goal": "…" },
   "run": {
-    "id": "d879894a…", "mode": "execute", "status": "completed", "step": 5, "tokens": 128000,
-    "error": "", "created_at": "…", "started_at": "…", "finished_at": "…", "duration_ms": 96000,
-    "live": false, "model": "deepseek-v4", "provider": "openrouter", "preferred_provider": "deepseek",
-    "switches": [{ "from": "deepseek", "to": "openrouter", "step": 4 }],
+    "id": "d879894a…", "mode": "execute", "status": "incomplete", "step": 5, "tokens": 128000,
+    "error": "达到本轮时长上限，已收到的内容已保存",
+    "created_at": "…", "started_at": "…", "finished_at": "…", "duration_ms": 195000, "queued_ms": 2500,
+    "live": false, "charged": true, "request_key": "demo-run-key-001",
+    "model": "deepseek-v4", "provider": "openrouter", "preferred_provider": "deepseek",
+    "switches": [{ "from": "deepseek", "to": "openrouter", "step": 3 }],
     "instruction": "重点讲第三段的情节推进", "base_version": { "id": "…", "title": "…", "chars": 1024 },
     "usage": { "prompt": 182000, "cached": 141000, "completion": 12800, "cached_reported": true },
     "limits": { "max_tokens": 2000000, "max_steps": 40, "output_tokens": 32000, "max_seconds": 3600,
-                "context_budget": 262144, "keep_tail_steps": 4 },
+                "context_budget": 262144, "keep_tail_steps": 4, "provider_attempts": 3,
+                "retry_wait_cap_seconds": 60, "switch_compaction_ratio": 0.5 },
+    "config": { "tools": ["material_search", "regex"], "review": true, "auto_improve": false,
+                "review_rounds": 1, "materials": 2, "teaching_tool": "t1",
+                "revision": 3, "review_rounds_used": 0 },
+    "template_names": { "t1": "读后续写讲评" },
     "versions": [{ "id": "…", "title": "读后续写讲评稿", "chars": 12000, "complete": true, "origin": "agent" }]
   },
   "summary": { "entries": 5, "model_calls": 2, "tool_calls": 1, "reviews": 1, "compactions": 1,
-               "waiting": 0, "text_chars": 51234 },
+               "waiting": 0, "problems": 1, "max_context_tokens": 96400, "switches": 1,
+               "text_chars": 51234 },
   "entries": [
     {
-      "id": "…", "kind": "model", "label": "执行步骤 1", "status": "done",
-      "created_at": "…", "offset_ms": 1200,
-      "details": { "usage": { "prompt_tokens": 45210, "completion_tokens": 3220 },
-                   "cached_tokens": 38000, "provider_id": "deepseek", "attempts": 1,
-                   "context_tokens": 45210, "finish_reason": "stop" },
+      "id": "…", "key": "demo-8f2c1a4b", "kind": "model", "label": "执行步骤 1", "status": "done",
+      "created_at": "…", "offset_ms": 1200, "duration_ms": 8200, "duration_estimated": false,
+      "details": { "usage": { "prompt_tokens": 48210, "completion_tokens": 910 },
+                   "cached_tokens": 41200, "provider_id": "deepseek", "attempts": 2,
+                   "context_tokens": 48210, "finish_reason": "stop",
+                   "first_token_ms": 1180, "budget_tokens": 10920, "output_tokens": 16384,
+                   "role": "agent", "message_count": 5, "tool_count": 4,
+                   "attempt_log": [
+                     { "provider": "deepseek", "provider_name": "深度求索", "attempt": 1,
+                       "outcome": "retry", "status": 503, "error_code": "provider_busy",
+                       "error": "upstream unavailable", "wait_ms": 4000, "elapsed_ms": 620 },
+                     { "provider": "deepseek", "provider_name": "深度求索", "attempt": 2,
+                       "outcome": "success", "elapsed_ms": 8200 }
+                   ] },
       "text_sizes": { "prompt": 8452, "output": 620, "reasoning": 120 }
     }
   ]
@@ -1034,12 +1051,29 @@ Agent 轮次**不写**主站 `log_payloads`，所以日志详情的 `payload` �
 |------|------|
 | `run.tokens` | 本轮**计费口径**消耗（未命中缓存的输入 + 输出），不是原始 token 总数 |
 | `run.usage` | 原始上报用量；`cached_reported=false` 表示上游没回传命中信息，前端显示「未上报」而不是 0 |
+| `run.duration_ms` | 从创建到结束的墙钟耗时；运行中的轮次按「现在」计算 |
+| `run.queued_ms` | 排队等待（`started_at − created_at`）；尚未开始为 `null` |
 | `run.live` | `finished_at` 为空即为运行中，前端会轮询刷新 |
+| `run.charged` / `run.request_key` | 本轮是否扣减使用码次数；创建执行时的幂等键（排查重复执行） |
 | `run.switches` | Provider 切换记录 `{from,to,step}`；只在换过家时出现 |
+| `run.config` | 任务配置摘要：启用的工具、审阅开关、材料数量、教学工具、配置版本、已用审阅轮数 |
+| `run.template_names` | 本轮启用的官方模板名；旧轮次的快照没有这个键时为空对象 |
+| `run.limits` | 本轮生效的限制；旧轮次缺少的键不会出现 |
+| `summary.problems` | `failed` / `interrupted` / `incomplete` 步骤数 |
+| `summary.max_context_tokens` | 各步骤 `context_tokens` 的峰值 |
 | `entries[].kind` | `model` / `review` / `tool` / `compaction`（步骤序列按创建时间升序） |
 | `entries[].offset_ms` | 相对本轮开始的时间偏移，前端显示为 `+12.3s` |
+| `entries[].key` | 步骤幂等键；重放 / 沿用旧步骤时靠它定位 |
+| `entries[].duration_ms` | 条目从创建到收尾的墙钟毫秒（工具步骤包含其内部写作调用） |
+| `entries[].duration_estimated` | `true` 表示该步骤是旧轮次，没有记录耗时，按「下一条开始时间」估算 |
 | `entries[].details` | 步骤原始详情：`usage`、`provider_id`、`attempts`、`cached_tokens`、`error`、压缩统计、提问/回答等 |
+| `entries[].details.attempt_log` | Provider 尝试链：`outcome` 为 `retry` / `switch` / `success` / `partial` / `error`，附带 `status` / `error_code` / `wait_ms` / `elapsed_ms`；最多 12 条 |
+| `entries[].details.first_token_ms` | 成功那次尝试的首字延迟；没有收到任何增量时为 `null` |
+| `entries[].details.message_count` / `tool_count` | 这次调用发出的消息条数与工具表大小 |
 | `entries[].text_sizes` | 各类正文的字数（按 chunk 求和），决定前端显示哪些页签；正文不在这里返回 |
+
+> 旧轮次没有 `duration_ms` / `first_token_ms` / `attempt_log` / `template_names` 等字段时按缺省值返回，
+> 前端显示「—」或「约 x」，不需要迁移历史数据。
 
 #### GET `/api/admin/logs/{log_id}/agent-run/entries/{entry_id}/text`
 
@@ -1465,6 +1499,7 @@ openrouter/deepseek/deepseek-chat
 | 1.22.0 | 2026-10-29 | 免费模型能力拆成主站 / 工作台两个开关：新增 `agent_free`（缺省 false，仅 `is_free` 为真时生效）——未勾的模型在 `/agent` 按普通模型每轮扣 1 次，勾了才不扣；新增 `agent_free_limits`（同一组窗口键），按**执行轮次**计数且只统计 `tool_id="agent"` 的行；主站 `free_limits` 计数改为排除工作台的行，两个池子互不占用（避免分钟级窗口卡死多轮任务）。`/api/workspace/catalog` 的 `models` 原样带出 `is_free` / `agent_free`，管理后台模型编辑弹窗新增「Agent 免费」开关与「Agent 防滥用限额」面板 |
 | 1.23.0 | 2026-10-29 | Agent 执行策略：Provider 任务级粘住（同一家最多 3 次尝试、退避 + Retry-After，用尽才换、换家不切回；断流时同家重跑本步一次）；上下文压缩阈值 262144 tokens（去掉 9 万硬顶，保留 HEAD 与最近 N 步、中间段换确定性摘要、用户补充要求全文保留，压缩后 1.25 倍兜底）；轮 token 预算改为「未命中缓存的输入 + 输出」（默认 2,000,000），使用日志仍按原始 prompt/completion/cached 记录；步骤详情新增 `provider_id` / `attempts` / `cached_tokens`；新增 `POST /api/workspace/tasks/{id}/compact` 与 `kind="compaction"` 步骤；Agent 设置新增 `context_budget` / `keep_tail_steps` / `provider_attempts` / `retry_wait_cap_seconds` / `switch_compaction_ratio` |
 | 1.24.0 | 2026-10-29 | 管理后台新增 **Agent 运行全解**：`GET /api/admin/logs/{log_id}/agent-run` 返回任务、预算、用量、Provider 切换、压缩与步骤列表（正文只给字数）；新增步骤正文分页 `/text` 与全文 `/download`（`prompt` / `input` / `output` / `reasoning` / `arguments` / `review`）；日志列表 Agent 行新增 `agent_steps` / `agent_mode` / `agent_available`。Agent 轮次不写主站 `log_payloads`，正文从 `workspace_chunks` 按需读取，不新增表结构 |
+| 1.25.0 | 2026-10-30 | Agent 日志改为 **运行记录**（原「运行全解」，接口路径不变）：`run` 新增 `queued_ms` / `charged` / `request_key` / `config`（工具、审阅、材料数、教学工具、配置版本）/ `template_names`，`limits` 补齐 `provider_attempts` / `retry_wait_cap_seconds` / `switch_compaction_ratio`；`summary` 新增 `problems` / `max_context_tokens` / `switches`；`entries[]` 新增 `key` / `duration_ms` / `duration_estimated`（旧轮次按下一步开始时间估算）；步骤详情新增 `first_token_ms` / `message_count` / `tool_count` / `attempt_log`（Provider 尝试链：retry / switch / success / partial / error）。步骤收尾时记录墙钟耗时，模型调用记录首字延迟与尝试链；快照新增 `template_names`。管理后台改为日志式检查器（步骤列表 + 详情 / 运行信息），不再有封面与自动播放 |
 
 ---
 

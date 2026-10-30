@@ -1040,3 +1040,34 @@ def test_web_search_tool_call_goes_through_the_adapter(identity, monkeypatch):
     finally:
         save_settings(WorkspaceSettings())
         store.finish_run(r['id'], 'completed')
+
+
+def test_model_call_persists_replay_telemetry(identity, monkeypatch):
+    """首字延迟、尝试链、消息/工具数都写进步骤详情：管理后台复盘靠这些字段。"""
+    t = task(identity)
+    r = run(identity, t)
+    monkeypatch.setattr(runner, '_load_cfg', lambda: {})
+
+    async def model(cfg, name, messages, schemas, budget, emit, **kwargs):
+        await emit('output', '完成')
+        return llm.ModelResult(content='完成', finish_reason='stop', first_token_ms=420,
+                               attempt_log=[{'provider': 'prov-a', 'attempt': 1,
+                                             'outcome': 'success', 'elapsed_ms': 900}])
+
+    async def execute():
+        obj = runner.Runner(r['id'], model)
+        await obj.load()
+        _result, entry_id = await obj.call('执行步骤 1', obj.messages)
+        return entry_id
+
+    try:
+        entry_id = asyncio.run(execute())
+        with SessionLocal() as db:
+            details = json.loads(db.get(WorkspaceEntry, entry_id).details)
+        assert details['first_token_ms'] == 420
+        assert details['attempt_log'][0]['provider'] == 'prov-a'
+        assert details['message_count'] >= 2
+        assert details['tool_count'] == 0
+        assert details['duration_ms'] >= 0
+    finally:
+        store.finish_run(r['id'], 'stopped')

@@ -5,6 +5,7 @@
 """
 import json
 import uuid
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +13,7 @@ from sqlalchemy import select
 
 from app.admin_main import app as admin_app
 from app.agent_workspace import api, store
-from app.agent_workspace.models import WorkspaceTask
+from app.agent_workspace.models import WorkspaceEntry, WorkspaceRun, WorkspaceTask
 from app.database import SessionLocal
 from app.models import UsageCode, UsageLog
 
@@ -40,12 +41,15 @@ def _run(identity, task, *, finish=True, key=None):
     snapshot = {
         "model": "test-model",
         "limits": {"max_steps": 8, "max_tokens": 2000000, "output_tokens": 16000,
-                   "max_seconds": 600, "context_budget": 262144, "keep_tail_steps": 4},
+                   "max_seconds": 600, "context_budget": 262144, "keep_tail_steps": 4,
+                   "provider_attempts": 3, "retry_wait_cap_seconds": 60,
+                   "switch_compaction_ratio": 0.5},
         "provider": "prov-a",
         "preferred_provider": "prov-a",
         "switches": [{"from": "prov-a", "to": "prov-b", "step": 2}],
         "usage": {"prompt": 5000, "cached": 3000, "completion": 700, "cached_reported": True},
         "instruction": "重点讲第三题",
+        "template_names": {"t1": "全解"},
     }
     run = store.create_run(identity[0], task["id"], key or f"run-{uuid.uuid4().hex[:12]}",
                            "execute", "重点讲第三题", "", snapshot, True)
@@ -77,6 +81,12 @@ def _model_entry(task, run, *, prompt="", output="", reasoning="", details=None)
         "usage": {"prompt_tokens": 5000, "completion_tokens": 700},
         "cached_tokens": 1200, "provider_id": "prov-b", "attempts": 2,
         "context_tokens": 5000, "finish_reason": "stop",
+        "first_token_ms": 900, "message_count": 5, "tool_count": 3,
+        "attempt_log": [
+            {"provider": "prov-a", "attempt": 1, "outcome": "retry",
+             "status": 502, "error_code": "provider_busy", "wait_ms": 1000},
+            {"provider": "prov-b", "attempt": 2, "outcome": "success", "elapsed_ms": 8200},
+        ],
     })
     return entry["id"]
 
@@ -143,15 +153,41 @@ def test_agent_run_report_shape(admin, identity):
     assert kinds == ["model", "tool", "compaction", "review"]
     offsets = [entry["offset_ms"] for entry in data["entries"]]
     assert offsets == sorted(offsets)
-    assert data["summary"] == {"entries": 4, "model_calls": 1, "tool_calls": 1, "reviews": 1,
-                               "compactions": 1, "waiting": 0, "text_chars": sum(
-                                   sum(entry["text_sizes"].values()) for entry in data["entries"])}
+    summary = data["summary"]
+    assert summary["entries"] == 4
+    assert summary["model_calls"] == 1
+    assert summary["tool_calls"] == 1
+    assert summary["reviews"] == 1
+    assert summary["compactions"] == 1
+    assert summary["waiting"] == 0
+    assert summary["problems"] == 0
+    assert summary["max_context_tokens"] == 5000
+    assert summary["switches"] == 1
+    assert summary["text_chars"] == sum(sum(entry["text_sizes"].values()) for entry in data["entries"])
+
+    # 复盘用的其余快照字段：限制、任务配置摘要、模板名、扣费与幂等键。
+    assert data["run"]["charged"] is True
+    assert data["run"]["request_key"]
+    assert data["run"]["queued_ms"] is None
+    assert data["run"]["limits"]["provider_attempts"] == 3
+    assert data["run"]["limits"]["switch_compaction_ratio"] == 0.5
+    assert data["run"]["config"] == {
+        "tools": ["material_search", "regex", "vocabulary"], "review": True,
+        "auto_improve": False, "review_rounds": 1, "materials": 0,
+        "teaching_tool": "", "revision": 1, "review_rounds_used": 0,
+    }
+    assert data["run"]["template_names"] == {"t1": "全解"}
 
     model = data["entries"][0]
     assert model["text_sizes"]["prompt"] == len(prompt)
     assert model["text_sizes"]["output"] == len(text)
     assert model["details"]["provider_id"] == "prov-b"
     assert model["details"]["cached_tokens"] == 1200
+    assert model["details"]["first_token_ms"] == 900
+    assert [item["outcome"] for item in model["details"]["attempt_log"]] == ["retry", "success"]
+    assert model["duration_ms"] >= 0
+    assert model["duration_estimated"] is False
+    assert model["key"]
     assert data["entries"][1]["text_sizes"]["input"] == len('{"material_id":"m1"}')
     assert data["entries"][2]["details"]["before"] == 48000
 
@@ -262,3 +298,51 @@ def test_log_list_attaches_agent_summary(admin, identity):
     assert gone["agent_steps"] == 0
     gone_detail = admin.get(f"/api/admin/logs/{gone['id']}?include_payload=false")
     assert gone_detail.json()["agent_available"] is False
+
+
+def test_entry_duration_is_estimated_for_old_rows(admin, identity):
+    """新条目记录真实耗时；旧条目没有该字段时按「下一条开始」估算并标注。"""
+    task, run, log_id, model_id, _prompt, _text = _seed(identity)
+    with SessionLocal() as db:
+        row = db.get(WorkspaceEntry, model_id)
+        details = store.decode(row.details)
+        details.pop("duration_ms", None)
+        row.details = store.encode(details)
+        db.commit()
+    data = admin.get(f"/api/admin/logs/{log_id}/agent-run").json()
+    model = next(entry for entry in data["entries"] if entry["id"] == model_id)
+    assert model["duration_estimated"] is True
+    assert model["duration_ms"] >= 0
+    assert data["entries"][1]["duration_estimated"] is False
+
+
+def test_report_counts_problem_steps_and_old_snapshot(admin, identity):
+    """失败/中断步骤计入 problems；旧快照缺字段时按空值降级，不报错。"""
+    task, run, log_id, _model_id, _prompt, _text = _seed(identity)
+    entry = store.start_entry(task["id"], run["id"], store.uid(), "model", "执行步骤 9")
+    store.append_chunks(entry["id"], {"output": "半截"})
+    store.finish_entry(entry["id"], "failed", {"error": "凭证无效", "error_code": "model_auth"})
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRun, run["id"])
+        # 模拟升级前的快照：只有模型与限制，没有 usage / switches / 配置摘要。
+        row.snapshot = store.encode({"model": "test-model", "limits": {}})
+        db.commit()
+    data = admin.get(f"/api/admin/logs/{log_id}/agent-run").json()
+    assert data["summary"]["problems"] == 1
+    assert data["run"]["usage"] == {"prompt": 0, "cached": 0, "completion": 0,
+                                    "cached_reported": False}
+    assert data["run"]["switches"] == []
+    assert data["run"]["config"]["tools"] == []
+    assert data["run"]["config"]["review"] is False
+    assert data["run"]["limits"] == {}
+    assert data["run"]["template_names"] == {}
+
+
+def test_report_queued_ms(admin, identity):
+    task, run, log_id, _m, _p, _text = _seed(identity)
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRun, run["id"])
+        row.started_at = row.created_at + timedelta(milliseconds=2500)
+        db.commit()
+    data = admin.get(f"/api/admin/logs/{log_id}/agent-run").json()
+    assert data["run"]["queued_ms"] == 2500

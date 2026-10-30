@@ -1280,7 +1280,7 @@ def _attach_step_summaries(db: Session, items: list[dict]) -> None:
 def _attach_agent_summaries(db: Session, items: list[dict]) -> None:
     """给 Agent 轮次的日志行挂「步数 / 模式 / 运行记录是否还在」。
 
-    列表只用来展示「· 12 步」与决定点行进全解还是回退普通详情；两步批量查询，
+    列表只用来展示「· 12 步」与决定点行进运行记录还是回退普通详情；两步批量查询，
     不按行懒加载。运行记录被使用码级联清掉的行 agent_available=false。
     """
     ids = [item["request_id"] for item in items
@@ -1354,7 +1354,7 @@ def log_detail(
     device = db.get(Device, row.device_id) if row.device_id else None
     data["device"] = device.to_dict() if device is not None else None
     if row.tool_id == "agent":
-        # 详情抽屉据此决定是否给「打开运行全解」；使用码删除会级联清掉工作台数据
+        # 详情抽屉据此决定是否给「打开运行记录」；使用码删除会级联清掉工作台数据
         from app.agent_workspace.models import WorkspaceRun
 
         data["agent_available"] = bool(row.request_id and db.get(WorkspaceRun, row.request_id))
@@ -1376,7 +1376,7 @@ def log_steps(log_id: int, db: Annotated[Session, Depends(get_db)], page: int = 
 
 @router.get("/logs/{log_id}/agent-run")
 def agent_run_report(log_id: int, db: Annotated[Session, Depends(get_db)]):
-    """Agent 轮次的「运行全解」：任务、预算、用量、步骤与每步正文的字数。
+    """Agent 轮次的「运行记录」：任务、预算、用量、限制、步骤与每步正文的字数。
 
     正文不在这里返回（完整上下文可能 1 MB）；前端点开某一步时按页取。
     """

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from litellm import acompletion
 
 from app.routers.chat import _build_llm
+from app.services.error_explain import classify_failure, sanitize_error_text
 from app.services.llm import (extract_cache_hit_tokens, extract_reasoning_from_delta,
                               is_reasoning_param_error, strip_reasoning_kwargs)
 from app.services import provider_health
@@ -57,6 +58,9 @@ class ModelResult:
     attempts: int = 0
     # 上游上报的输入侧缓存命中 tokens（None = 没上报，不等于没命中）
     cached_tokens: int | None = None
+    # 复盘遥测：成功那次尝试的首字延迟，以及跨尝试的失败/重试/换家链路。
+    first_token_ms: int | None = None
+    attempt_log: list = field(default_factory=list)
 
 
 class ResponseError(ValueError):
@@ -178,13 +182,34 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
     model_settings = find_model_entry(cfg.get("models", []), model) or {}
     options = {"reasoning_effort": model_settings.get("reasoning_effort"),
                "extra_body": model_settings.get("extra_body"), "response_format": response_format}
+    # 管理后台的复盘只需要一小段链路：哪一家、第几次、什么错、等了多久、跑了多久。
+    journal: list[dict] = []
+
+    def note(provider_id, provider_name, attempt, outcome, elapsed, exc=None, wait_ms=None):
+        if len(journal) >= 12:
+            return
+        item = {"provider": provider_id, "provider_name": provider_name,
+                "attempt": attempt + 1, "outcome": outcome, "elapsed_ms": int(elapsed * 1000)}
+        if exc is not None:
+            item["error_code"] = exc.code if isinstance(exc, ResponseError) else classify_failure(exc=exc)
+            status = _status_code(exc)
+            if status:
+                item["status"] = status
+            item["error"] = sanitize_error_text(str(exc), 200)
+        if wait_ms is not None:
+            item["wait_ms"] = int(wait_ms)
+        journal.append(item)
+
     for index, provider in enumerate(providers):
         provider_id = _provider_id(provider)
+        provider_name = str((provider or {}).get("name") or "").strip()
         if provider_id and not provider_health.claim_attempt(provider_id):
             # HALF_OPEN 的探测名额已被并发请求占用：跳过这一家，别一起打过去。
             continue
         attempt = 0
         while True:
+            attempt_started = time.monotonic()
+            first_token_at = None
             if provider is None:
                 kwargs = llm._build_kwargs(model, messages, None, None, max_tokens, stream=True,
                                            **options)
@@ -224,10 +249,14 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
                         reasoning = extract_reasoning_from_delta(delta)
                         if reasoning:
                             received = True
+                            if first_token_at is None:
+                                first_token_at = time.monotonic()
                             await emit("reasoning", reasoning)
                         text = get(delta, "content") or ""
                         if text:
                             received = True
+                            if first_token_at is None:
+                                first_token_at = time.monotonic()
                             result.content += text
                             await emit("output", text)
                         for raw in get(delta, "tool_calls", []) or []:
@@ -249,6 +278,8 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
                             call["function"]["arguments"] += arguments
                             if arguments:
                                 received = True
+                                if first_token_at is None:
+                                    first_token_at = time.monotonic()
                                 await emit("arguments", arguments)
                     reason = get(choice, "finish_reason")
                     if reason:
@@ -266,22 +297,32 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
                     llm._settle_success(provider)
                 result.provider_id = provider_id
                 result.attempts = attempt + 1
+                if first_token_at is not None:
+                    result.first_token_ms = int((first_token_at - attempt_started) * 1000)
+                note(provider_id, provider_name, attempt, "success", time.monotonic() - attempt_started)
+                result.attempt_log = list(journal)
                 return result
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 last_error = exc
+                elapsed = time.monotonic() - attempt_started
                 if received or ended:
                     # 已经吐过东西：同一家的重试会重复输出，换家会拼接两家内容，
                     # 都不行。把半截结果交回去，由执行器决定怎么继续。
                     result.calls = [calls[i] for i in sorted(calls)]
                     result.provider_id = provider_id
                     result.attempts = attempt + 1
+                    if first_token_at is not None:
+                        result.first_token_ms = int((first_token_at - attempt_started) * 1000)
+                    note(provider_id, provider_name, attempt, "partial", elapsed, exc=exc)
+                    result.attempt_log = list(journal)
                     if provider is not None:
                         llm._settle_failure(provider, exc)
                     raise PartialResponseError(result, exc) from exc
                 delay = _same_provider_delay(exc, attempt, attempts, retry_wait_cap, deadline)
                 if delay is not None:
+                    note(provider_id, provider_name, attempt, "retry", elapsed, exc=exc, wait_ms=delay * 1000)
                     attempt += 1
                     log.warning(
                         "Agent 模型调用失败，同一 Provider 重试 %d/%d：provider=%s，%.1fs 后重试：%s",
@@ -292,13 +333,23 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
                 if provider is not None:
                     llm._settle_failure(provider, exc)
                 if index < len(providers) - 1 and is_retryable(exc):
+                    note(provider_id, provider_name, attempt, "switch", elapsed, exc=exc)
                     log.warning("Agent 换用下一家 Provider：%s 失败，原因：%s", provider_id, exc)
                     break
+                note(provider_id, provider_name, attempt, "error", elapsed, exc=exc)
+                try:
+                    exc.attempt_log = list(journal)
+                except Exception:
+                    pass
                 raise
             finally:
                 await _close_stream(stream)
     if last_error is not None:
         # 保留原始异常类型：error_details 才能把超时、断连、鉴权失败分开，
         # 也才不会被一律记成"模型服务调用失败"。
+        try:
+            last_error.attempt_log = list(journal)
+        except Exception:
+            pass
         raise last_error
     raise RuntimeError("所有模型连接均不可用，请稍后重试")

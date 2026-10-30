@@ -1091,7 +1091,7 @@
                   </td>
                   <td class="actions" data-label="操作">
                     <button class="link-btn" x-show="l.tool_id === 'agent' && l.agent_available !== false"
-                            @click.stop="openAgentRun(l.id)">全解</button>
+                            @click.stop="openAgentRun(l.id)" title="运行记录">运行</button>
                     <button class="link-btn" @click.stop="openLogDetail(l.id)">详情</button>
                   </td>
                 </tr>
@@ -2394,10 +2394,10 @@
         <div class="drawer-body">
           <template x-if="logDetail">
             <div>
-              <!-- Agent 轮次：运行全解才是主入口，这里只保留元数据与跳转 -->
+              <!-- Agent 轮次：运行记录才是主入口，这里只保留元数据与跳转 -->
               <div class="dr-cta" x-show="logDetail?.tool_id === 'agent' && logDetail?.agent_available !== false">
                 <strong>Agent 工作台轮次</strong>
-                <button class="btn-primary" @click="openAgentRun(logDetail.id)">打开运行全解</button>
+                <button class="btn-primary" @click="openAgentRun(logDetail.id)">打开运行记录</button>
               </div>
               <div class="dr-cta dr-cta-muted" x-show="logDetail?.tool_id === 'agent' && logDetail?.agent_available === false">
                 <span class="dim">运行记录已清理，仅保留这条日志。</span>
@@ -2865,17 +2865,14 @@
       </div>
     </div>
 
-    <!-- Agent 运行全解：只读复盘舞台（封面 → 步骤目录 / 步骤详解 → 总览） -->
+    <!-- Agent 运行记录：日志式检查器（步骤列表 + 步骤详情 / 运行信息） -->
     <svg class="arv-sprite" aria-hidden="true" focusable="false">
-      <symbol id="arv-i-play" viewBox="0 0 24 24"><path d="M8 5.2v13.6L19 12 8 5.2Z" fill="currentColor" stroke="none"/></symbol>
-      <symbol id="arv-i-pause" viewBox="0 0 24 24"><rect x="7" y="5.5" width="3.4" height="13" rx="1.2" fill="currentColor" stroke="none"/><rect x="13.6" y="5.5" width="3.4" height="13" rx="1.2" fill="currentColor" stroke="none"/></symbol>
-      <symbol id="arv-i-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></symbol>
-      <symbol id="arv-i-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></symbol>
-      <symbol id="arv-i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/></symbol>
       <symbol id="arv-i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+      <symbol id="arv-i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 3.5v4h-4"/></symbol>
+      <symbol id="arv-i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></symbol>
+      <symbol id="arv-i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></symbol>
       <symbol id="arv-i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11.5" height="11.5" rx="2"/><path d="M5.5 15h-1a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1H14a1 1 0 0 1 1 1v1"/></symbol>
       <symbol id="arv-i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5V15M7.5 10.5 12 15l4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>
-      <symbol id="arv-i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 3.5v4h-4"/></symbol>
       <symbol id="arv-i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></symbol>
       <symbol id="arv-i-model" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.9 8.6 19 10.5l-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9L12 3.5Z"/><path d="m18.5 15.5.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2Z"/></symbol>
       <symbol id="arv-i-tool" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 21 15-15-3-3L3 18l3 3Z"/><path d="m14 7 3 3"/></symbol>
@@ -2885,164 +2882,293 @@
       <symbol id="arv-i-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2Z"/><path d="M14 2v6h6"/><path d="M10 13h4M10 17h4M8 9h1"/></symbol>
       <symbol id="arv-i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16v4Z"/><path d="m14.5 5.5 4 4"/></symbol>
       <symbol id="arv-i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/></symbol>
-      <symbol id="arv-i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></symbol>
       <symbol id="arv-i-route" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></symbol>
     </svg>
 
-    <div class="arv" x-show="agentRunOpen" x-cloak role="dialog" aria-modal="true"
-         :aria-label="agentRun ? ('Agent 运行全解：' + (agentRun.task.title || '未命名任务')) : 'Agent 运行全解'">
+    <div class="arv" x-show="agentRunOpen" x-cloak role="dialog" aria-modal="true" tabindex="-1" x-ref="agentViewer"
+         :aria-label="agentRun ? ('Agent 运行记录：' + (agentRun?.task?.title || '未命名任务')) : 'Agent 运行记录'">
 
-      <!-- 封面 -->
-      <div class="arv-cover" x-show="agentView === 'cover'">
-        <div class="arv-cover-glow" aria-hidden="true"></div>
-        <button class="arv-close" @click="closeAgentRun()" title="关闭（Esc）" aria-label="关闭运行全解">×</button>
-        <div class="arv-cover-inner">
-          <div class="arv-cover-loading" x-show="agentRunLoading">正在加载运行记录…</div>
-
-          <div class="arv-cover-error" x-show="!agentRunLoading && agentRunError">
-            <div class="arv-cover-error-title">无法加载这一轮</div>
-            <p x-text="agentRunError"></p>
-            <div class="arv-cover-error-actions">
-              <button class="btn-ghost" @click="openAgentMeta()">查看日志元数据</button>
-              <button class="btn-ghost" @click="openAgentRun(agentLogId)">重试</button>
-              <button class="btn-ghost" @click="closeAgentRun()">关闭</button>
-            </div>
+      <header class="arv-head">
+        <div class="arv-head-main">
+          <div class="arv-eyebrow">
+            <span>Agent 运行记录</span>
+            <span class="mono" x-show="agentRun" x-text="agentRun ? '#' + agentRun.log.id : ''"></span>
+            <span class="arv-status" x-show="agentRun" :class="'is-' + agentStatusTone(agentRun?.run?.status)"
+                  x-text="agentRunStatusLabel()"></span>
           </div>
+          <h1 class="arv-task" x-text="agentRun?.task?.title || '未命名任务'"></h1>
+          <div class="arv-sub" x-text="agentRun ? agentRunMeta() : (agentRunLoading ? '正在加载…' : '')"></div>
+        </div>
+        <div class="arv-head-actions">
+          <button class="arv-btn" @click="refreshAgentRun(true)" :disabled="agentRefreshing || agentRunLoading || !agentRun">
+            <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-refresh"></use></svg>
+            <span x-text="agentRefreshing ? '刷新中…' : '刷新'"></span>
+          </button>
+          <button class="arv-btn" x-show="agentRun && agentEntries.length"
+                  @click="setAgentPane(agentPane === 'run' ? 'step' : 'run')">
+            <svg class="arv-ic" aria-hidden="true"><use :href="agentPane === 'run' ? '#arv-i-list' : '#arv-i-info'"></use></svg>
+            <span x-text="agentPane === 'run' ? '返回步骤' : '运行信息'"></span>
+          </button>
+          <button class="arv-icon-btn" @click="openAgentMeta()" :disabled="agentLogId == null"
+                  title="日志元数据" aria-label="日志元数据">
+            <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-info"></use></svg>
+          </button>
+          <button class="arv-icon-btn" @click="closeAgentRun()" title="关闭（Esc）" aria-label="关闭运行记录">
+            <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-x"></use></svg>
+          </button>
+        </div>
+      </header>
 
-          <template x-if="!agentRunLoading && agentRun">
-            <div>
-              <div class="arv-cover-top">
-                <span class="arv-eyebrow" x-text="`Agent 工作台 · ${agentModeLabel(agentRun.run.mode)} · ${agentRun.summary.entries} 步`"></span>
-                <span class="arv-status" :class="'is-' + agentStatusTone(agentRun.run.status)" x-text="agentRunStatusLabel()"></span>
-              </div>
-              <h1 class="arv-title" x-text="agentRun.task.title || '未命名任务'"></h1>
-              <p class="arv-sub" x-text="agentRun.run.instruction || agentRun.task.goal || '本轮没有补充要求'"></p>
-              <div class="arv-cover-rule" aria-hidden="true"></div>
-
-              <div class="arv-features">
-                <div class="arv-feature">
-                  <div class="arv-feature-k">步骤</div>
-                  <div class="arv-feature-v" x-text="`${agentRun.summary.entries} 步`"></div>
-                  <div class="arv-feature-d" x-text="`模型 ${agentRun.summary.model_calls} · 工具 ${agentRun.summary.tool_calls} · 压缩 ${agentRun.summary.compactions}`"></div>
-                </div>
-                <div class="arv-feature">
-                  <div class="arv-feature-k">预算</div>
-                  <div class="arv-feature-v" x-text="agentBudgetText()"></div>
-                  <div class="arv-feature-d" x-text="agentBudgetHint()"></div>
-                </div>
-                <div class="arv-feature">
-                  <div class="arv-feature-k">输入缓存</div>
-                  <div class="arv-feature-v" x-text="agentCachedText()"></div>
-                  <div class="arv-feature-d" x-text="agentCachedHint()"></div>
-                </div>
-                <div class="arv-feature">
-                  <div class="arv-feature-k">耗时</div>
-                  <div class="arv-feature-v" x-text="fmtDuration(agentRun.run.duration_ms)"></div>
-                  <div class="arv-feature-d" x-text="agentRun.run.live ? '仍在运行' : `开始于 ${fmtTime(agentRun.run.created_at)}`"></div>
-                </div>
-              </div>
-
-              <div class="arv-cover-extras" x-show="agentRun.run.switches.length || agentRun.run.versions.length">
-                <div class="arv-cover-extra" x-show="agentRun.run.switches.length">
-                  <span class="arv-extra-title"><svg class="arv-ic" aria-hidden="true"><use href="#arv-i-route"></use></svg>Provider 切换</span>
-                  <template x-for="(item, index) in agentRun.run.switches" :key="'sw-' + index">
-                    <span class="arv-chip" x-text="`第 ${item.step} 步 ${item.from} → ${item.to}`"></span>
-                  </template>
-                </div>
-                <div class="arv-cover-extra" x-show="agentRun.run.versions.length">
-                  <span class="arv-extra-title"><svg class="arv-ic" aria-hidden="true"><use href="#arv-i-doc"></use></svg>本轮产出</span>
-                  <template x-for="version in agentRun.run.versions" :key="version.id">
-                    <span class="arv-chip" x-text="`${version.title || '成果'}（${fmtCompact(version.chars)} 字${version.complete ? '' : ' · 未完成'}）`"></span>
-                  </template>
-                </div>
-              </div>
-
-              <div class="arv-cover-meta" x-text="agentCoverMeta()"></div>
-
-              <div class="arv-cover-actions">
-                <button class="btn-primary arv-start" @click="startAgentRun()">
-                  <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-play"></use></svg>
-                  <span>开始复盘</span>
-                </button>
-                <div class="arv-cover-sub">
-                  <button class="btn-ghost" @click="openAgentMeta()">元数据</button>
-                  <button class="btn-ghost" @click="closeAgentRun()">退出</button>
-                </div>
-              </div>
-              <div class="arv-cover-hint">按 ← → 切换步骤，空格自动播放，Esc 退出</div>
-            </div>
-          </template>
+      <div class="arv-stats" x-show="agentRun">
+        <div class="arv-stat">
+          <span class="arv-stat-k">耗时</span>
+          <strong class="arv-stat-v" x-text="fmtDuration(agentRun?.run?.duration_ms)"></strong>
+          <span class="arv-stat-d" x-text="agentRun?.run?.finished_at
+            ? `${agentClock(agentRun?.run?.started_at || agentRun?.run?.created_at)} → ${agentClock(agentRun?.run?.finished_at)}`
+            : '仍在运行'"></span>
+        </div>
+        <div class="arv-stat">
+          <span class="arv-stat-k">步骤</span>
+          <strong class="arv-stat-v" x-text="`${agentEntries.length} 步`"></strong>
+          <span class="arv-stat-d" x-text="`模型 ${agentRun?.summary?.model_calls ?? 0} · 工具 ${agentRun?.summary?.tool_calls ?? 0}`"></span>
+        </div>
+        <div class="arv-stat">
+          <span class="arv-stat-k">预算</span>
+          <strong class="arv-stat-v" x-text="agentBudgetText()"></strong>
+          <span class="arv-stat-d" x-text="agentBudgetHint()"></span>
+        </div>
+        <div class="arv-stat">
+          <span class="arv-stat-k">缓存命中</span>
+          <strong class="arv-stat-v" x-text="agentCachedRateText()"></strong>
+          <span class="arv-stat-d" x-text="agentCacheSub()"></span>
+        </div>
+        <div class="arv-stat">
+          <span class="arv-stat-k">输出</span>
+          <strong class="arv-stat-v" x-text="`${fmtCompact(agentRun?.run?.usage?.completion)} tok`"></strong>
+          <span class="arv-stat-d" x-text="agentRun?.summary?.max_context_tokens
+            ? `上下文最高 ${fmtCompact(agentRun.summary.max_context_tokens)} tok` : ''"></span>
+        </div>
+        <div class="arv-stat">
+          <span class="arv-stat-k">模型</span>
+          <strong class="arv-stat-v arv-stat-model" x-text="agentRun?.run?.model || '—'"></strong>
+          <span class="arv-stat-d" x-text="agentModelSub()"></span>
         </div>
       </div>
 
-      <!-- 舞台 -->
-      <div class="arv-stage" x-show="agentView === 'stage'">
-        <header class="arv-top">
-          <div class="arv-top-title">
-            <div class="arv-top-name" x-text="agentRun?.task?.title || '未命名任务'"></div>
-            <div class="arv-top-sub">
-              <span x-text="agentModeLabel(agentRun?.run?.mode)"></span>
-              <span class="arv-sep">·</span>
-              <span x-text="`第 ${agentIndex + 1} / ${agentEntries.length} 步`"></span>
-              <span class="arv-status" :class="'is-' + agentStatusTone(agentRun?.run?.status)" x-text="agentRunStatusLabel()"></span>
-            </div>
-          </div>
-          <div class="arv-top-actions">
-            <button class="arv-icon-btn" @click="stopAgentPlay(); agentView = 'overview'" title="总览" aria-label="总览">
-              <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-grid"></use></svg>
-            </button>
-            <button class="arv-icon-btn" @click="openAgentMeta()" title="日志元数据" aria-label="日志元数据">
-              <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-info"></use></svg>
-            </button>
-            <button class="arv-icon-btn" @click="closeAgentRun()" title="退出（Esc）" aria-label="退出运行全解">
-              <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-x"></use></svg>
-            </button>
-          </div>
-        </header>
+      <div class="arv-alert arv-alert-bar" x-show="agentRun && (agentRun?.run?.error || agentRun?.log?.error_message)">
+        <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-alert"></use></svg>
+        <div>
+          <strong x-text="agentRunAlertTitle()"></strong>
+          <p x-text="agentRun?.run?.error || agentRun?.log?.error_message || ''"></p>
+        </div>
+        <button class="arv-mini" x-show="agentPane !== 'run'" @click="setAgentPane('run')">运行信息</button>
+      </div>
 
-        <div class="arv-split">
-          <nav class="arv-outline" aria-label="步骤目录">
-            <div class="arv-outline-head">
-              <span>步骤目录</span>
-              <span class="arv-dim" x-text="`${agentEntries.length} 步`"></span>
-            </div>
-            <div class="arv-outline-list">
-              <template x-for="(entry, index) in agentEntries" :key="entry.id">
-                <button class="arv-step" :class="{ on: entry.id === agentEntryId }"
-                        @click="selectAgentEntry(entry.id)"
-                        :aria-current="entry.id === agentEntryId ? 'true' : 'false'">
-                  <span class="arv-step-no" x-text="String(index + 1).padStart(2, '0')"></span>
-                  <span class="arv-step-ic" :class="'k-' + entry.kind">
-                    <svg class="arv-ic" aria-hidden="true"><use :href="'#arv-i-' + agentKindMeta(entry).icon"></use></svg>
-                  </span>
-                  <span class="arv-step-body">
-                    <span class="arv-step-label" x-text="agentEntryLabel(entry)"></span>
-                    <span class="arv-step-meta" x-text="agentEntryMeta(entry)"></span>
-                  </span>
-                  <span class="arv-step-state" :class="'is-' + agentStatusTone(entry.status)" aria-hidden="true"></span>
+      <div class="arv-body" x-show="agentRun">
+        <aside class="arv-steps" aria-label="步骤列表">
+          <div class="arv-filters">
+            <label class="arv-search">
+              <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-search"></use></svg>
+              <input type="search" x-model="agentQuery" @input="agentQueryChanged()"
+                     placeholder="筛选步骤" aria-label="筛选步骤">
+            </label>
+            <div class="arv-chips" role="group" aria-label="按类型筛选">
+              <template x-for="item in agentFilterChips()" :key="item.id">
+                <button class="arv-chip-btn" :class="{ on: agentFilter === item.id }"
+                        @click="setAgentFilter(item.id)"
+                        :aria-pressed="agentFilter === item.id ? 'true' : 'false'">
+                  <span x-text="item.label"></span>
+                  <span class="arv-chip-count" x-text="item.count"></span>
                 </button>
               </template>
             </div>
-            <div class="arv-usage" x-show="agentRun">
-              <div class="arv-usage-title">用量</div>
+          </div>
+
+          <div class="arv-step-list">
+            <template x-for="entry in agentVisibleEntries" :key="entry.id">
+              <button class="arv-step" :class="{ on: entry.id === agentEntryId }" :data-entry="entry.id"
+                      @click="setAgentPane('step'); selectAgentEntry(entry.id)"
+                      :aria-current="entry.id === agentEntryId ? 'true' : 'false'">
+                <span class="arv-step-no" x-text="String(agentEntries.indexOf(entry) + 1).padStart(2, '0')"></span>
+                <span class="arv-step-ic" :class="'k-' + entry.kind">
+                  <svg class="arv-ic" aria-hidden="true"><use :href="'#arv-i-' + agentKindMeta(entry).icon"></use></svg>
+                </span>
+                <span class="arv-step-body">
+                  <span class="arv-step-label" x-text="agentEntryLabel(entry)"></span>
+                  <span class="arv-step-meta" x-text="agentStepSecondary(entry)"></span>
+                </span>
+                <span class="arv-step-right">
+                  <span class="arv-step-time mono" x-text="agentStepDuration(entry)"></span>
+                  <span class="arv-step-state" :class="'is-' + agentStatusTone(entry.status)" aria-hidden="true"></span>
+                </span>
+              </button>
+            </template>
+          </div>
+
+          <div class="arv-empty arv-empty-inline" x-show="!agentVisibleEntries.length">
+            <span x-text="agentEntries.length ? '没有匹配的步骤' : '本轮还没有执行步骤'"></span>
+          </div>
+        </aside>
+
+        <section class="arv-pane">
+          <!-- 运行信息：这一轮的完整元数据与逐步用量 -->
+          <div class="arv-runinfo" x-show="agentPane === 'run'">
+            <div class="arv-section">
+              <div class="arv-section-title">基础信息</div>
+              <div class="arv-facts">
+                <template x-for="row in agentRunBasics()" :key="row.label">
+                  <div class="arv-fact" :class="{ 'is-wide': row.wide }">
+                    <span x-text="row.label"></span>
+                    <strong :class="{ mono: row.mono }" x-text="row.value"></strong>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div class="arv-section">
+              <div class="arv-section-title">Provider</div>
+              <div class="arv-facts">
+                <div class="arv-fact"><span>实际 Provider</span><strong class="mono" x-text="agentRun?.run?.provider || '—'"></strong></div>
+                <div class="arv-fact"><span>首选 Provider</span><strong class="mono" x-text="agentRun?.run?.preferred_provider || '—'"></strong></div>
+                <div class="arv-fact"><span>同家尝试上限</span><strong x-text="agentRun?.run?.limits?.provider_attempts != null ? `${agentRun.run.limits.provider_attempts} 次` : '—'"></strong></div>
+                <div class="arv-fact"><span>重试等待上限</span><strong x-text="agentRun?.run?.limits?.retry_wait_cap_seconds != null ? `${agentRun.run.limits.retry_wait_cap_seconds} 秒` : '—'"></strong></div>
+              </div>
+              <div class="arv-switch-list" x-show="agentRun?.run?.switches?.length">
+                <template x-for="(item, index) in agentRun?.run?.switches || []" :key="'sw-' + index">
+                  <div class="arv-switch">
+                    <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-route"></use></svg>
+                    <span x-text="`第 ${item.step} 步 · ${item.from} → ${item.to}`"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div class="arv-section">
+              <div class="arv-section-title">用量</div>
+              <div class="arv-facts">
+                <div class="arv-fact">
+                  <span>预算</span>
+                  <strong x-text="agentBudgetText()"></strong>
+                  <em x-text="agentBudgetHint()"></em>
+                </div>
+                <div class="arv-fact"><span>输入</span><strong x-text="`${fmtNum(agentRun?.run?.usage?.prompt)} tok`"></strong></div>
+                <div class="arv-fact">
+                  <span>缓存命中</span>
+                  <strong x-text="agentCachedText()"></strong>
+                  <em x-text="agentCacheSub()"></em>
+                </div>
+                <div class="arv-fact"><span>输出</span><strong x-text="`${fmtNum(agentRun?.run?.usage?.completion)} tok`"></strong></div>
+                <div class="arv-fact"><span>步骤正文</span><strong x-text="`${fmtNum(agentRun?.summary?.text_chars)} 字`"></strong></div>
+              </div>
               <div class="arv-usage-bar" aria-hidden="true">
                 <span class="seg-cached" :style="`width:${agentUsageShare('cached')}%`"></span>
                 <span class="seg-uncached" :style="`width:${agentUsageShare('uncached')}%`"></span>
                 <span class="seg-out" :style="`width:${agentUsageShare('completion')}%`"></span>
               </div>
-              <div class="arv-usage-rows">
-                <div><span>预算</span><strong x-text="`${fmtCompact(agentRun?.run?.tokens)} / ${agentRun?.run?.limits?.max_tokens ? fmtCompact(agentRun.run.limits.max_tokens) : '不限'}`"></strong></div>
-                <div><span>缓存命中</span><strong x-text="agentCachedText()"></strong></div>
-                <div><span>输出</span><strong x-text="`${fmtCompact(agentRun?.run?.usage?.completion)} tok`"></strong></div>
+              <div class="arv-budget">
+                <div class="arv-budget-head">
+                  <span>本轮预算</span>
+                  <span class="mono" x-text="agentBudgetText()"></span>
+                </div>
+                <div class="arv-budget-bar"><span :style="`width:${agentBudgetPercent()}%`"></span></div>
               </div>
             </div>
-          </nav>
 
-          <section class="arv-detail">
-            <div class="arv-empty" x-show="!agentEntries.length">
-              <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-info"></use></svg>
-              <div class="arv-empty-title">本轮还没有执行步骤</div>
-              <p x-text="agentRun?.run?.status === 'queued' ? '排队中，开始后会显示每一步。' : '本轮没有执行步骤。'"></p>
+            <div class="arv-section">
+              <div class="arv-section-title">限制</div>
+              <div class="arv-facts">
+                <template x-for="row in agentLimitRows()" :key="row.label">
+                  <div class="arv-fact">
+                    <span x-text="row.label"></span>
+                    <strong x-text="row.value"></strong>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div class="arv-section">
+              <div class="arv-section-title">步骤用量</div>
+              <div class="arv-table-wrap">
+                <table class="arv-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">#</th>
+                      <th scope="col">类型</th>
+                      <th scope="col">状态</th>
+                      <th scope="col" class="num">耗时</th>
+                      <th scope="col" class="num">上下文</th>
+                      <th scope="col" class="num">输入</th>
+                      <th scope="col" class="num">缓存</th>
+                      <th scope="col" class="num">输出</th>
+                      <th scope="col">备注</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="row in agentUsageRows()" :key="row.id">
+                      <tr :class="{ on: row.id === agentEntryId }"
+                          @click="setAgentPane('step'); selectAgentEntry(row.id)">
+                        <td class="mono" x-text="String(row.index).padStart(2, '0')"></td>
+                        <td x-text="row.kind"></td>
+                        <td><span class="arv-status" :class="'is-' + row.tone" x-text="row.status"></span></td>
+                        <td class="num mono" x-text="row.duration"></td>
+                        <td class="num mono" x-text="row.context"></td>
+                        <td class="num mono" x-text="row.prompt"></td>
+                        <td class="num mono" x-text="row.cached"></td>
+                        <td class="num mono" x-text="row.completion"></td>
+                        <td class="arv-table-note" x-text="row.note"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="arv-section">
+              <div class="arv-section-title">任务配置</div>
+              <div class="arv-facts">
+                <template x-for="row in agentConfigRows()" :key="row.label">
+                  <div class="arv-fact" :class="{ 'is-wide': row.wide }">
+                    <span x-text="row.label"></span>
+                    <strong x-text="row.value"></strong>
+                  </div>
+                </template>
+              </div>
+              <div class="arv-note" x-show="agentRun?.run?.instruction">
+                <span>本轮要求</span>
+                <p x-text="agentRun?.run?.instruction || ''"></p>
+              </div>
+              <div class="arv-note" x-show="agentRun?.task?.goal">
+                <span>任务目标</span>
+                <p x-text="agentRun?.task?.goal || ''"></p>
+              </div>
+            </div>
+
+            <div class="arv-section">
+              <div class="arv-section-title">本轮产出</div>
+              <div class="arv-versions" x-show="agentRun?.run?.versions?.length">
+                <template x-for="version in agentRun?.run?.versions || []" :key="version.id">
+                  <div class="arv-version">
+                    <span class="arv-version-title" x-text="version.title || '成果'"></span>
+                    <span class="arv-muted" x-text="`${fmtCompact(version.chars)} 字${version.complete ? '' : ' · 未完成'}`"></span>
+                  </div>
+                </template>
+              </div>
+              <p class="arv-muted" x-show="!agentRun?.run?.versions?.length">本轮没有产出。</p>
+            </div>
+
+            <div class="arv-actions-line">
+              <button class="arv-btn" @click="copyAgentRunMeta()">
+                <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-copy"></use></svg>
+                <span>复制运行元数据</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 步骤详情 -->
+          <div class="arv-detail" x-show="agentPane === 'step'">
+            <div class="arv-empty" x-show="!agentEntry">
+              <div class="arv-empty-title" x-text="agentEntries.length ? '没有匹配的步骤' : '本轮还没有执行步骤'"></div>
+              <p x-show="!agentEntries.length" x-text="agentEmptyHint()"></p>
             </div>
 
             <template x-if="agentEntry">
@@ -3053,15 +3179,27 @@
                       <svg class="arv-ic" aria-hidden="true"><use :href="'#arv-i-' + agentKindMeta(agentEntry).icon"></use></svg>
                       <span x-text="agentKindMeta(agentEntry).name"></span>
                     </span>
-                    <span class="arv-status" :class="'is-' + agentStatusTone(agentEntry.status)" x-text="agentEntryStatusLabel(agentEntry)"></span>
-                    <span class="arv-dim" x-text="`${agentEntryTime(agentEntry)} · 第 ${agentIndex + 1} 步`"></span>
+                    <span class="arv-status" :class="'is-' + agentStatusTone(agentEntry.status)"
+                          x-text="agentEntryStatusLabel(agentEntry)"></span>
+                    <span class="arv-dim mono" x-text="`#${String(agentIndex + 1).padStart(2, '0')}`"></span>
+                    <span class="arv-dim" x-text="agentEntryTime(agentEntry)"></span>
+                    <span class="arv-dim" x-text="agentStepDuration(agentEntry)"></span>
+                    <span class="arv-flex"></span>
+                    <button class="arv-mini" @click="copyAgentEntryMeta()">复制本步元数据</button>
                   </div>
                   <h2 class="arv-detail-title" x-text="agentEntryLabel(agentEntry)"></h2>
                   <div class="arv-detail-chips">
-                    <span class="arv-chip" x-show="agentEntry.details?.provider_id" x-text="`Provider ${agentEntry.details?.provider_id}`"></span>
-                    <span class="arv-chip" x-show="agentEntry.details?.attempts != null" x-text="`尝试 ${agentEntry.details?.attempts} 次`"></span>
-                    <span class="arv-chip" x-show="agentEntry.details?.context_tokens != null" x-text="`上下文 ${fmtCompact(agentEntry.details?.context_tokens)} tok`"></span>
-                    <span class="arv-chip" x-show="agentEntry.kind === 'tool'" x-text="`${fmtCompact(agentEntry.text_sizes?.output || 0)} 字结果`"></span>
+                    <span class="arv-chip" x-show="agentEntry.details?.model" x-text="agentEntry.details?.model"></span>
+                    <span class="arv-chip" x-show="agentEntry.details?.provider_id"
+                          x-text="`Provider ${agentEntry.details?.provider_id}`"></span>
+                    <span class="arv-chip" x-show="agentEntry.details?.attempts != null"
+                          x-text="`尝试 ${agentEntry.details?.attempts} 次`"></span>
+                    <span class="arv-chip" x-show="agentEntry.details?.first_token_ms != null"
+                          x-text="`首字 ${fmtDuration(agentEntry.details?.first_token_ms)}`"></span>
+                    <span class="arv-chip" x-show="agentEntry.details?.context_tokens != null"
+                          x-text="`上下文 ${fmtCompact(agentEntry.details?.context_tokens)} tok`"></span>
+                    <span class="arv-chip is-bad" x-show="agentEntry.details?.error_code"
+                          x-text="agentErrorLabel(agentEntry.details?.error_code)"></span>
                   </div>
                 </header>
 
@@ -3076,21 +3214,36 @@
                   <!-- 概览 -->
                   <div x-show="agentTab === 'overview'">
                     <div class="arv-facts">
-                      <template x-for="fact in agentEntryFacts(agentEntry)" :key="fact.label + fact.value">
-                        <div class="arv-fact">
+                      <template x-for="fact in agentEntryFacts(agentEntry)" :key="fact.label">
+                        <div class="arv-fact" :class="{ 'is-wide': fact.wide }">
                           <span x-text="fact.label"></span>
-                          <strong x-text="fact.value"></strong>
+                          <strong :class="{ mono: fact.mono }" x-text="fact.value"></strong>
                           <em x-show="fact.hint" x-text="fact.hint"></em>
                         </div>
                       </template>
                     </div>
+
                     <div class="arv-alert" x-show="agentEntry.details?.error">
                       <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-alert"></use></svg>
                       <div>
-                        <strong x-text="agentEntry.details?.error_code ? errorCodeLabel(agentEntry.details.error_code) : '错误信息'"></strong>
+                        <strong x-text="agentEntry.details?.error_code ? agentErrorLabel(agentEntry.details.error_code) : '错误信息'"></strong>
                         <p x-text="agentEntry.details?.error"></p>
                       </div>
                     </div>
+
+                    <div class="arv-attempts" x-show="agentAttemptRows(agentEntry).length">
+                      <div class="arv-block-title">Provider 尝试</div>
+                      <template x-for="item in agentAttemptRows(agentEntry)" :key="item.key">
+                        <div class="arv-attempt">
+                          <div class="arv-attempt-head">
+                            <span x-text="item.head"></span>
+                            <span class="arv-muted mono" x-show="item.elapsed" x-text="item.elapsed"></span>
+                          </div>
+                          <p class="arv-attempt-error" x-show="item.error" x-text="item.error"></p>
+                        </div>
+                      </template>
+                    </div>
+
                     <div class="arv-ask" x-show="agentEntry.label === 'ask_user' && agentEntry.details?.question">
                       <div class="arv-ask-title">向用户的提问</div>
                       <p x-text="agentEntry.details?.question"></p>
@@ -3115,7 +3268,7 @@
                     <div class="arv-budget">
                       <div class="arv-budget-head">
                         <span>本轮预算</span>
-                        <span class="mono" x-text="`${fmtCompact(agentRun?.run?.tokens)} / ${agentRun?.run?.limits?.max_tokens ? fmtCompact(agentRun.run.limits.max_tokens) : '不限'}`"></span>
+                        <span class="mono" x-text="agentBudgetText()"></span>
                       </div>
                       <div class="arv-budget-bar"><span :style="`width:${agentBudgetPercent()}%`"></span></div>
                     </div>
@@ -3137,7 +3290,7 @@
                       <button class="arv-mini"
                               x-show="agentText?.full && (agentText?.kind === 'review' || (agentText?.kind === 'output' && agentEntry?.kind !== 'tool'))"
                               @click="agentRaw = !agentRaw" x-text="agentRaw ? '预览' : '原文'"></button>
-                      <button class="arv-mini" x-show="agentText?.full && (agentTab === 'input' || (agentTab === 'output' && agentEntry?.kind === 'tool'))"
+                      <button class="arv-mini" x-show="agentText?.full && (agentTab === 'input' || agentTab === 'context' || (agentTab === 'output' && agentEntry?.kind === 'tool'))"
                               @click="agentPretty = !agentPretty" x-text="agentPretty ? '原文' : '格式化'"></button>
                       <button class="arv-mini" @click="copyAgentText()" :disabled="!agentText">复制</button>
                       <a class="arv-mini" :href="agentDownloadUrl()" download x-show="agentText">下载</a>
@@ -3189,64 +3342,23 @@
                 </div>
               </div>
             </template>
-          </section>
-        </div>
-
-        <footer class="arv-dock" x-show="agentEntries.length">
-          <button class="arv-dock-btn" @click="agentStep(-1)" :disabled="agentIndex <= 0" title="上一步（←）" aria-label="上一步">
-            <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-left"></use></svg>
-          </button>
-          <button class="arv-dock-btn arv-dock-play" @click="toggleAgentPlay()" :disabled="agentEntries.length < 2"
-                  :title="agentPlaying ? '暂停（空格）' : '自动播放（空格）'"
-                  :aria-label="agentPlaying ? '暂停自动播放' : '自动播放'">
-            <svg class="arv-ic" aria-hidden="true"><use :href="agentPlaying ? '#arv-i-pause' : '#arv-i-play'"></use></svg>
-          </button>
-          <div class="arv-dock-pos" x-text="`第 ${agentIndex + 1} / ${agentEntries.length} 步`"></div>
-          <div class="arv-progress" aria-hidden="true"><span :style="`width:${agentProgress()}%`"></span></div>
-          <button class="arv-dock-btn" @click="agentStep(1)" :disabled="agentIndex >= agentEntries.length - 1" title="下一步（→）" aria-label="下一步">
-            <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-right"></use></svg>
-          </button>
-        </footer>
+          </div>
+        </section>
       </div>
 
-      <!-- 总览 -->
-      <div class="arv-overview" x-show="agentView === 'overview'">
-        <header class="arv-top">
-          <div class="arv-top-title">
-            <div class="arv-top-name">步骤总览</div>
-            <div class="arv-top-sub">
-              <span x-text="agentRun?.task?.title || '未命名任务'"></span>
-              <span class="arv-sep">·</span>
-              <span x-text="`${agentEntries.length} 步`"></span>
-            </div>
-          </div>
-          <div class="arv-top-actions">
-            <button class="arv-icon-btn" @click="agentView = 'stage'" title="返回舞台" aria-label="返回舞台">
-              <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-left"></use></svg>
-            </button>
-            <button class="arv-icon-btn" @click="closeAgentRun()" title="退出（Esc）" aria-label="退出运行全解">
-              <svg class="arv-ic" aria-hidden="true"><use href="#arv-i-x"></use></svg>
-            </button>
-          </div>
-        </header>
-        <div class="arv-cards">
-          <template x-for="(entry, index) in agentEntries" :key="'card-' + entry.id">
-            <button class="arv-card" :class="{ on: entry.id === agentEntryId }"
-                    @click="selectAgentEntry(entry.id); agentView = 'stage'">
-              <span class="arv-card-top">
-                <span class="arv-card-no" x-text="String(index + 1).padStart(2, '0')"></span>
-                <span class="arv-kind" :class="'k-' + entry.kind">
-                  <svg class="arv-ic" aria-hidden="true"><use :href="'#arv-i-' + agentKindMeta(entry).icon"></use></svg>
-                  <span x-text="agentKindMeta(entry).name"></span>
-                </span>
-                <span class="arv-step-state" :class="'is-' + agentStatusTone(entry.status)" aria-hidden="true"></span>
-              </span>
-              <span class="arv-card-label" x-text="agentEntryLabel(entry)"></span>
-              <span class="arv-card-meta" x-text="`${agentEntryMeta(entry)} · ${agentEntryTime(entry)}`"></span>
-            </button>
-          </template>
+      <div class="arv-state" x-show="agentRunLoading">
+        <span class="ai-spinner" aria-hidden="true"></span>
+        <span>正在加载运行记录…</span>
+      </div>
+
+      <div class="arv-state arv-state-error" x-show="!agentRunLoading && agentRunError">
+        <div class="arv-empty-title">无法加载运行记录</div>
+        <p x-text="agentRunError"></p>
+        <div class="arv-state-actions">
+          <button class="btn-primary" @click="openAgentRun(agentLogId)">重试</button>
+          <button class="btn-ghost" @click="openAgentMeta()">日志元数据</button>
+          <button class="btn-ghost" @click="closeAgentRun()">关闭</button>
         </div>
-        <div class="arv-empty" x-show="!agentEntries.length">本轮还没有执行步骤。</div>
       </div>
     </div>
 

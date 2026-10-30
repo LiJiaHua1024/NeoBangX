@@ -317,6 +317,16 @@ class Runner:
         self.partial_retries += 1
         return True
 
+    @staticmethod
+    def _telemetry(result, messages, schemas):
+        """复盘用的调用遥测：只存小字段，正文仍在 chunks 里。"""
+        details = {"message_count": len(messages), "tool_count": len(schemas or [])}
+        if result.first_token_ms is not None:
+            details["first_token_ms"] = result.first_token_ms
+        if result.attempt_log:
+            details["attempt_log"] = result.attempt_log
+        return details
+
     async def call(self, label, messages, schemas=None, review=False, role="agent", source="", retry=False):
         """role 区分调度与写作者：写作者的正文进成果，对话只显示进度；source 把同一次写作的续写归到一起。
 
@@ -361,7 +371,8 @@ class Runner:
             self._note_provider(result.provider_id)
             details = {"usage": result.usage, "finish_reason": result.finish_reason,
                        "provider_id": result.provider_id, "attempts": result.attempts,
-                       "cached_tokens": result.cached_tokens, "budget_tokens": self.tokens}
+                       "cached_tokens": result.cached_tokens, "budget_tokens": self.tokens,
+                       **self._telemetry(result, messages, schemas)}
             limited = result.finish_reason in {"length", "max_tokens"}
             if limited:
                 details.update(error_code="output_limit", error=f"模型达到本次输出上限（请求额度 {output_limit:,} tokens），已收到的内容已保存")
@@ -387,8 +398,12 @@ class Runner:
                 # 其余按可继续的中断处理，让用户能接着跑。
                 status = "failed" if details["error_code"] in {
                     "empty_response", "model_finish_error", "model_auth", "model_not_found"} else "interrupted"
+                attempt_log = getattr(exc, "attempt_log", None)
+                if attempt_log:
+                    details["attempt_log"] = attempt_log
                 if isinstance(exc, llm.PartialResponseError):
-                    details.update(provider_id=exc.result.provider_id, attempts=exc.result.attempts)
+                    details.update(provider_id=exc.result.provider_id, attempts=exc.result.attempts,
+                                   **self._telemetry(exc.result, messages, schemas))
             await asyncio.to_thread(store.finish_entry, entry["id"], status, details)
             raise
         finally:

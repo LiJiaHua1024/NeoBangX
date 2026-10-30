@@ -151,3 +151,66 @@ def test_cached_tokens_are_reported_from_usage(monkeypatch):
     assert result.cached_tokens == 80
     assert result.usage["prompt_tokens"] == 100
     assert result.usage["completion_tokens"] == 5
+
+
+def test_attempt_log_explains_retry_then_switch(monkeypatch):
+    """复盘要能看出：哪家、第几次、什么错、等多久；这里验证链路顺序与分类。"""
+    _router(monkeypatch)
+    calls: list[str] = []
+
+    async def stream(**kwargs):
+        base = _base(kwargs)
+        calls.append(base)
+        if base == "http://p1":
+            raise _gateway_error()
+        return _ok_stream()
+
+    monkeypatch.setattr(llm, "acompletion", stream)
+    result = asyncio.run(llm.complete({}, "test", [], [], 128, AsyncMock(), attempts=3))
+
+    assert result.provider_id == "prov_2"
+    assert [item["outcome"] for item in result.attempt_log] == ["retry", "retry", "switch", "success"]
+    assert [item["provider"] for item in result.attempt_log] == ["prov_1", "prov_1", "prov_1", "prov_2"]
+    assert result.attempt_log[0]["status"] == 502
+    assert result.attempt_log[0]["error_code"] == "provider_busy"
+    assert result.attempt_log[0]["wait_ms"] >= 0  # 测试里退避被压成 0
+    assert result.attempt_log[-1]["provider"] == "prov_2"
+
+
+def test_auth_failure_logs_switch_not_retry(monkeypatch):
+    _router(monkeypatch)
+
+    async def stream(**kwargs):
+        if _base(kwargs) == "http://p1":
+            raise litellm_exceptions.AuthenticationError(message="bad key", llm_provider="openai", model="test")
+        return _ok_stream()
+
+    monkeypatch.setattr(llm, "acompletion", stream)
+    result = asyncio.run(llm.complete({}, "test", [], [], 128, AsyncMock(), attempts=3))
+    assert [item["outcome"] for item in result.attempt_log] == ["switch", "success"]
+    assert result.attempt_log[0]["error_code"] == "provider_auth"
+
+
+def test_success_reports_first_token_latency(monkeypatch):
+    _router(monkeypatch)
+
+    async def stream(**kwargs):
+        return _ok_stream()
+
+    monkeypatch.setattr(llm, "acompletion", stream)
+    result = asyncio.run(llm.complete({}, "test", [], [], 128, AsyncMock()))
+    assert result.first_token_ms is not None
+    assert result.first_token_ms >= 0
+
+
+def test_failure_carries_attempt_log_for_the_runner(monkeypatch):
+    """最终失败时异常上也带链路：执行器把它写进步骤详情，复盘才有据可查。"""
+    _router(monkeypatch)
+
+    async def stream(**kwargs):
+        raise _gateway_error()
+
+    monkeypatch.setattr(llm, "acompletion", stream)
+    with pytest.raises(litellm_exceptions.BadGatewayError) as caught:
+        asyncio.run(llm.complete({}, "test", [], [], 128, AsyncMock(), attempts=1))
+    assert [item["outcome"] for item in caught.value.attempt_log] == ["switch", "error"]

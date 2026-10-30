@@ -1,11 +1,13 @@
-"""管理后台「Agent 运行全解」：把一轮执行还原成可逐步播放的步骤序列。
+"""管理后台「Agent 运行记录」：把一轮执行还原成可逐条检查的日志。
 
-只读、无副作用，供管理端日志详情调用。两点刻意的取舍：
+只读、无副作用，供管理端日志详情调用。三点刻意的取舍：
 
 - 不返回 run.snapshot 全文（里面还有任务配置与官方模板，体积大且与本次复盘无关），
-  只挑模型、预算、Provider、用量这些能解释「这一轮怎么跑的」字段。
+  只挑模型、预算、Provider、限制、任务配置摘要这些能解释「这一轮怎么跑的」字段。
 - 正文（尤其是每一步完整上下文，可达 1 MB）不塞进报告，按页从
   workspace_chunks 读：管理页面只渲染当前页，切步即丢弃。
+- 旧轮次没有逐条耗时（duration_ms 是后来才记的），按「下一条开始时间」估算并标注，
+  不让老数据在页面上显示成 0 秒。
 """
 from __future__ import annotations
 
@@ -59,6 +61,20 @@ def _as(value, default):
     return data if isinstance(data, type(default)) else default
 
 
+def _as_bool(value, default=False):
+    """SQLite 的 JSON1 把 true/false 读成 1/0，不能按字符串解析。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    try:
+        return bool(decode(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _iso(value):
     return value.isoformat() if value else None
 
@@ -102,20 +118,35 @@ def _base_version(db, version_id):
     return {"id": row[0], "title": row[1], "chars": int(row[2] or 0)} if row else None
 
 
-def _entries(db, run_id, run_created_at):
+def _entries(db, run_id, run_created_at, run_end):
     rows = db.scalars(
         select(Entry).where(Entry.run_id == run_id).order_by(Entry.created_at, Entry.id)
     ).all()
     sizes = _sizes(db, [row.id for row in rows])
+    offsets = [max(0, int((row.created_at - run_created_at).total_seconds() * 1000)) if run_created_at else 0
+               for row in rows]
+    end_ms = max(0, int((run_end - run_created_at).total_seconds() * 1000)) if (run_created_at and run_end) else 0
     entries = []
     summary = {"entries": 0, "model_calls": 0, "tool_calls": 0, "reviews": 0,
-               "compactions": 0, "waiting": 0, "text_chars": 0}
-    for row in rows:
+               "compactions": 0, "waiting": 0, "problems": 0, "text_chars": 0,
+               "max_context_tokens": 0}
+    for index, row in enumerate(rows):
         details = _json(row.details)
-        offset_ms = max(0, int((row.created_at - run_created_at).total_seconds() * 1000)) if run_created_at else 0
+        offset_ms = offsets[index]
+        recorded = details.get("duration_ms")
+        estimated = not isinstance(recorded, (int, float)) or isinstance(recorded, bool) or recorded < 0
+        if estimated:
+            # 旧轮次没有逐条耗时：用下一条的开始时间兜底，最后一条用本轮结束时间。
+            finished_at = offsets[index + 1] if index + 1 < len(offsets) else end_ms
+            duration_ms = max(0, int(finished_at) - offset_ms)
+        else:
+            duration_ms = int(recorded)
         entry_sizes = sizes.get(row.id, {})
         summary["entries"] += 1
         summary["text_chars"] += sum(entry_sizes.values())
+        context_tokens = details.get("context_tokens")
+        if isinstance(context_tokens, (int, float)) and context_tokens > summary["max_context_tokens"]:
+            summary["max_context_tokens"] = int(context_tokens)
         if row.kind == "model":
             summary["model_calls"] += 1
         elif row.kind == "review":
@@ -126,13 +157,18 @@ def _entries(db, run_id, run_created_at):
             summary["compactions"] += 1
         if row.status == "waiting":
             summary["waiting"] += 1
+        if row.status in {"failed", "interrupted", "incomplete"}:
+            summary["problems"] += 1
         entries.append({
             "id": row.id,
+            "key": row.key,
             "kind": row.kind,
             "label": row.label,
             "status": row.status,
             "created_at": _iso(row.created_at),
             "offset_ms": offset_ms,
+            "duration_ms": duration_ms,
+            "duration_estimated": estimated,
             "details": details,
             "text_sizes": entry_sizes,
         })
@@ -150,7 +186,7 @@ def run_report(db, log):
     row = db.execute(
         select(
             Run.id, Run.task_id, Run.mode, Run.status, Run.step, Run.tokens, Run.error,
-            Run.created_at, Run.started_at, Run.finished_at,
+            Run.created_at, Run.started_at, Run.finished_at, Run.charged, Run.request_key,
             func.json_extract(Run.snapshot, "$.model").label("model"),
             func.json_extract(Run.snapshot, "$.limits").label("limits"),
             func.json_extract(Run.snapshot, "$.provider").label("provider"),
@@ -159,6 +195,15 @@ def run_report(db, log):
             func.json_extract(Run.snapshot, "$.instruction").label("instruction"),
             func.json_extract(Run.snapshot, "$.base_version").label("base_version"),
             func.json_extract(Run.snapshot, "$.usage").label("usage"),
+            func.json_extract(Run.snapshot, "$.config.tools").label("config_tools"),
+            func.json_extract(Run.snapshot, "$.config.review").label("config_review"),
+            func.json_extract(Run.snapshot, "$.config.auto_improve").label("config_auto_improve"),
+            func.json_extract(Run.snapshot, "$.config.review_rounds").label("config_review_rounds"),
+            func.json_extract(Run.snapshot, "$.config.materials").label("config_materials"),
+            func.json_extract(Run.snapshot, "$.teaching_tool").label("teaching_tool"),
+            func.json_extract(Run.snapshot, "$.revision").label("revision"),
+            func.json_extract(Run.snapshot, "$.review_state").label("review_state"),
+            func.json_extract(Run.snapshot, "$.template_names").label("template_names"),
         ).where(Run.id == log.request_id)
     ).mappings().first()
     if row is None:
@@ -171,12 +216,16 @@ def run_report(db, log):
     limits = _as(row["limits"], {})
     usage = _as(row["usage"], {})
     switches = _as(row["switches"], [])
-    entries, summary = _entries(db, row["id"], row["created_at"])
+    template_names = _as(row["template_names"], {})
+    review_state = _as(row["review_state"], {})
+    run_end = row["finished_at"] or utcnow()
+    entries, summary = _entries(db, row["id"], row["created_at"], run_end)
+    summary["switches"] = len(switches)
     device = db.get(Device, log.device_id) if log.device_id else None
-    if row["finished_at"] is not None:
-        duration_ms = int((row["finished_at"] - row["created_at"]).total_seconds() * 1000)
-    else:
-        duration_ms = int((utcnow() - row["created_at"]).total_seconds() * 1000)
+    duration_ms = int((run_end - row["created_at"]).total_seconds() * 1000)
+    queued_ms = None
+    if row["started_at"] is not None:
+        queued_ms = max(0, int((row["started_at"] - row["created_at"]).total_seconds() * 1000))
     provider = row["provider"] or row["preferred_provider"] or ""
     return {
         "log": log.to_dict(),
@@ -197,7 +246,10 @@ def run_report(db, log):
             "started_at": _iso(row["started_at"]),
             "finished_at": _iso(row["finished_at"]),
             "duration_ms": max(0, duration_ms),
+            "queued_ms": queued_ms,
             "live": row["finished_at"] is None,
+            "charged": bool(row["charged"]),
+            "request_key": row["request_key"] or "",
             "model": row["model"] or "",
             "provider": provider,
             "preferred_provider": row["preferred_provider"] or "",
@@ -212,7 +264,19 @@ def run_report(db, log):
             },
             "limits": {key: limits.get(key) for key in (
                 "max_tokens", "max_steps", "output_tokens", "max_seconds",
-                "context_budget", "keep_tail_steps") if limits.get(key) is not None},
+                "context_budget", "keep_tail_steps", "provider_attempts",
+                "retry_wait_cap_seconds", "switch_compaction_ratio") if limits.get(key) is not None},
+            "config": {
+                "tools": [str(item) for item in _as(row["config_tools"], []) if item],
+                "review": _as_bool(row["config_review"]),
+                "auto_improve": _as_bool(row["config_auto_improve"]),
+                "review_rounds": int(_as(row["config_review_rounds"], 0) or 0),
+                "materials": len(_as(row["config_materials"], [])),
+                "teaching_tool": row["teaching_tool"] or "",
+                "revision": int(_as(row["revision"], 0) or 0),
+                "review_rounds_used": int(review_state.get("rounds") or 0) if isinstance(review_state, dict) else 0,
+            },
+            "template_names": {str(key): str(value) for key, value in template_names.items()} if isinstance(template_names, dict) else {},
             "versions": _run_versions(db, row["id"]),
         },
         "summary": summary,

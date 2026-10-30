@@ -345,7 +345,8 @@ def start_run(task_id: str, body: RunWrite, owner: Owner):
     snapshot = {"model": model, "limits": policy.model_dump(include={
         "max_steps", "max_tokens", "output_tokens", "max_seconds", "context_budget",
         "keep_tail_steps", "provider_attempts", "retry_wait_cap_seconds", "switch_compaction_ratio"}),
-                "templates": templates, "base_adopted": task["adopted_version"], "expected_revision": task["revision"],
+                "templates": templates, "template_names": {key: (value.get("name") or key) for key, value in templates.items()},
+                "base_adopted": task["adopted_version"], "expected_revision": task["revision"],
                 "teaching_tool": body.teaching_tool}
     run = store.create_run(owner, task_id, body.request_key, body.mode, body.instruction, body.base_version, snapshot, not is_agent_free(entry), entry)
     # 用户第一次开始工作时就命名，不等待执行结束；只入队一次，失败不影响开始。

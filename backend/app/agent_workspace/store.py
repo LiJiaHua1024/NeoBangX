@@ -238,6 +238,17 @@ def start_entry(task_id, run_id, key, kind, label, details=None):
         return entry_dict(row)
 
 
+def _stamp_duration(row, details):
+    """条目从创建到收尾的墙钟毫秒，供管理后台看每一步实际跑了多久。"""
+    try:
+        elapsed = (utcnow() - row.created_at).total_seconds() * 1000
+    except (TypeError, AttributeError):
+        return details
+    if elapsed >= 0:
+        details["duration_ms"] = int(elapsed)
+    return details
+
+
 def append_chunks(entry_id, parts, extra=None):
     with SessionLocal() as db:
         row = db.get(Entry, entry_id)
@@ -260,7 +271,8 @@ def finish_entry(entry_id, status="done", details=None):
     with SessionLocal() as db:
         row = db.get(Entry, entry_id)
         row.status = status
-        row.details = encode({**decode(row.details), **(details or {})})
+        merged = _stamp_duration(row, {**decode(row.details), **(details or {})})
+        row.details = encode(merged)
         event(db, row.task_id, "entry", entry_dict(row))
         db.commit()
 
@@ -276,7 +288,7 @@ def finish_tool(entry_id, result):
             db.add(Chunk(entry_id=entry_id, kind="output", content=full[offset:offset+4096]))
         details = decode(row.details)
         details.setdefault("chars", {})["output"] = len(full)
-        row.details, row.status = encode(details), "done"
+        row.details, row.status = encode(_stamp_duration(row, details)), "done"
         event(db, row.task_id, "entry", entry_dict(row))
         db.commit()
 
@@ -299,7 +311,7 @@ def answer_question(entry_id, answer):
         details["answer"] = answer
         details["answered_at"] = utcnow().isoformat()
         details.setdefault("chars", {})["output"] = len(payload)
-        row.details, row.status = encode(details), "done"
+        row.details, row.status = encode(_stamp_duration(row, details)), "done"
         run.status, run.error, run.finished_at, run.lease = "completed", "", utcnow(), None
         event(db, row.task_id, "entry", entry_dict(row))
         event(db, row.task_id, "run", run_dict(run))
