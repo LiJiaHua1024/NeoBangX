@@ -293,8 +293,12 @@ class Runner:
         if previous and previous != provider_id:
             self.switches.append({"from": previous, "to": provider_id, "step": self.step})
             self.snapshot["switches"] = self.switches
+            labels = {
+                p.get("id"): str(p.get("name") or "").strip() or p.get("id")
+                for p in self.cfg.get("providers") or []
+            }
             log.warning("Agent 任务换用 Provider：%s → %s（第 %s 步），本任务不再切回",
-                        previous, provider_id, self.step)
+                        labels.get(previous, previous), labels.get(provider_id, provider_id), self.step)
         self.provider_id = provider_id
         self.snapshot["provider"] = provider_id
 

@@ -234,11 +234,9 @@ class LLMRouter:
         return model or self.default_model
 
     def _provider_label(self, provider: dict) -> str:
-        """日志里的 Provider 标识：名称优先，附上 id 便于与后台对照。"""
+        """日志里的 Provider 标识：直接显示备注名称，无名时才回退到 ID。"""
         name = (provider.get("name") or "").strip()
         pid = (provider.get("id") or "").strip()
-        if name and pid:
-            return f"{name}({pid})"
         return name or pid or "未知 Provider"
 
     def _remember_failure(self, provider: dict, exc: Exception, *, quick_retried: bool = False) -> None:
@@ -531,7 +529,7 @@ class LLMRouter:
             self.last_provider = provider
             if not provider_health.claim_attempt((provider.get("id") or "").strip()):
                 self.breaker_skipped += 1
-                logger.info("LLM chat skip: provider=%s 熔断半开探测中，本次不让探测", provider.get("id"))
+                logger.info("LLM chat skip: provider=%s 熔断半开探测中，本次不让探测", self._provider_label(provider))
                 continue
             kwargs = self._build_kwargs(
                 provider, model_id, request_messages, max_tokens, stream=False,
@@ -545,8 +543,8 @@ class LLMRouter:
                 except Exception as e:
                     if has_reasoning_params(kwargs) and is_reasoning_param_error(e):
                         logger.warning(
-                            "Provider %s (%s) 拒绝推理参数，自动剥离推理参数在当前 Provider 原地重试: %s",
-                            provider.get("id"), provider.get("name"), e,
+                            "Provider %s 拒绝推理参数，自动剥离推理参数在当前 Provider 原地重试: %s",
+                            self._provider_label(provider), e,
                         )
                         kwargs = strip_reasoning_kwargs(kwargs)
                         response = await acompletion(**kwargs)
@@ -577,7 +575,7 @@ class LLMRouter:
                     self.quick_retries += 1
                     logger.warning(
                         "LLM chat quick retry: model=%s provider=%s 失败 %.0fms，%.0fms 后同家重试: %s",
-                        model_id, provider.get("id"), attempt_elapsed * 1000, delay * 1000, e,
+                        model_id, self._provider_label(provider), attempt_elapsed * 1000, delay * 1000, e,
                     )
                     await asyncio.sleep(delay)
                     retry_kwargs = dict(kwargs)
@@ -594,7 +592,7 @@ class LLMRouter:
                         self._settle_success(provider)
                         logger.info(
                             "LLM chat quick retry recovered: model=%s provider=%s",
-                            model_id, provider.get("id"),
+                            model_id, self._provider_label(provider),
                         )
                         return strip_end_sponsor(content)
                     except Exception as retry_exc:  # noqa: BLE001
@@ -608,12 +606,12 @@ class LLMRouter:
                 # await 期间不产生任何事件，前端停留在加载态等结论）
                 if idx < len(providers) - 1 and await self._should_retry(provider_exc, provider, idx, len(providers), model_id):
                     logger.warning(
-                        "LLM chat fallback: model=%s provider=%s (%s) 失败，将尝试下一优先级: %s",
-                        model_id, provider.get("id"), provider.get("name"), provider_exc,
+                        "LLM chat fallback: model=%s provider=%s 失败，将尝试下一优先级: %s",
+                        model_id, self._provider_label(provider), provider_exc,
                     )
                     continue
                 # 不可重试或已无下一家
-                logger.error(f"LLM chat error (provider={provider.get('id')}): {provider_exc}")
+                logger.error(f"LLM chat error (provider={self._provider_label(provider)}): {provider_exc}")
                 raise provider_exc
         # 理论上不会到这里
         if last_exc:
@@ -676,7 +674,7 @@ class LLMRouter:
             self.last_provider = provider
             if not provider_health.claim_attempt((provider.get("id") or "").strip()):
                 self.breaker_skipped += 1
-                logger.info("LLM stream skip: provider=%s 熔断半开探测中，本次不让探测", provider.get("id"))
+                logger.info("LLM stream skip: provider=%s 熔断半开探测中，本次不让探测", self._provider_label(provider))
                 continue
             kwargs = self._build_kwargs(
                 provider, model_id, base_messages, max_tokens, stream=True,
@@ -700,8 +698,8 @@ class LLMRouter:
                     except Exception as e:
                         if has_reasoning_params(kwargs) and is_reasoning_param_error(e):
                             logger.warning(
-                                "Provider %s (%s) 流式建连拒绝推理参数，自动剥离推理参数在当前 Provider 原地重试: %s",
-                                provider.get("id"), provider.get("name"), e,
+                                "Provider %s 流式建连拒绝推理参数，自动剥离推理参数在当前 Provider 原地重试: %s",
+                                self._provider_label(provider), e,
                             )
                             kwargs = strip_reasoning_kwargs(kwargs)
                             response, chunks = await self._open_stream(kwargs, first_token_timeout=first_token_timeout)
@@ -760,7 +758,7 @@ class LLMRouter:
                     response = None
                     # 若已吐出首 token，则既不快重试也不 fallback，直接抛
                     if yielded_any:
-                        logger.error(f"LLM stream error after yield (provider={provider.get('id')}): {e}")
+                        logger.error(f"LLM stream error after yield (provider={self._provider_label(provider)}): {e}")
                         self._settle_failure(provider, e)
                         raise
                     provider_exc: Exception = e
@@ -776,7 +774,7 @@ class LLMRouter:
                         retry_pending = True
                         logger.warning(
                             "LLM stream quick retry: model=%s provider=%s 失败 %.0fms，%.0fms 后同家重试: %s",
-                            model_id, provider.get("id"), attempt_elapsed * 1000, delay * 1000, e,
+                            model_id, self._provider_label(provider), attempt_elapsed * 1000, delay * 1000, e,
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -794,8 +792,8 @@ class LLMRouter:
                         else:
                             reason = "unavailable"
                         logger.warning(
-                            "LLM stream fallback (%s): model=%s provider=%s (%s) 失败，切下一优先级: %s",
-                            reason, model_id, provider.get("id"), provider.get("name"), provider_exc,
+                            "LLM stream fallback (%s): model=%s provider=%s 失败，切下一优先级: %s",
+                            reason, model_id, self._provider_label(provider), provider_exc,
                         )
                         yield ("fallback", {
                             "failed_index": idx + 1,
@@ -804,7 +802,7 @@ class LLMRouter:
                             "reason": reason,
                         })
                         break
-                    logger.error(f"LLM stream error (provider={provider.get('id')}): {provider_exc}")
+                    logger.error(f"LLM stream error (provider={self._provider_label(provider)}): {provider_exc}")
                     raise provider_exc
                 finally:
                     await self._aclose_stream(response)

@@ -203,6 +203,7 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
     for index, provider in enumerate(providers):
         provider_id = _provider_id(provider)
         provider_name = str((provider or {}).get("name") or "").strip()
+        provider_label = provider_name or provider_id or "默认"
         if provider_id and not provider_health.claim_attempt(provider_id):
             # HALF_OPEN 的探测名额已被并发请求占用：跳过这一家，别一起打过去。
             continue
@@ -326,7 +327,7 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
                     attempt += 1
                     log.warning(
                         "Agent 模型调用失败，同一 Provider 重试 %d/%d：provider=%s，%.1fs 后重试：%s",
-                        attempt + 1, attempts, provider_id or "默认", delay, exc,
+                        attempt + 1, attempts, provider_label, delay, exc,
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -334,7 +335,7 @@ async def complete(cfg, model, messages, tools, max_tokens, emit, response_forma
                     llm._settle_failure(provider, exc)
                 if index < len(providers) - 1 and is_retryable(exc):
                     note(provider_id, provider_name, attempt, "switch", elapsed, exc=exc)
-                    log.warning("Agent 换用下一家 Provider：%s 失败，原因：%s", provider_id, exc)
+                    log.warning("Agent 换用下一家 Provider：%s 失败，原因：%s", provider_label, exc)
                     break
                 note(provider_id, provider_name, attempt, "error", elapsed, exc=exc)
                 try:

@@ -654,7 +654,7 @@ def _seed_providers_from_legacy_inner(db: Session) -> None:
             repaired = True
         if repaired:
             db.commit()
-            logger.info("已补齐自动迁移的 Provider %s（旧单 URL 配置曾未被读取）", prov_id)
+            logger.info("已补齐自动迁移的 Provider %s（旧单 URL 配置曾未被读取）", existing.name or prov_id)
         return
 
     # 若已存在其它 Provider，则不再自动种入
@@ -682,7 +682,7 @@ def _seed_providers_from_legacy_inner(db: Session) -> None:
     for m in models:
         db.add(LlmModelProvider(model_id=m["id"], provider_id=prov_id, priority=0, provider_model_id=m["id"]))
     db.commit()
-    logger.info("已自动迁移旧单 URL 配置为 Provider %s，绑定 %s 个模型", prov_id, len(models))
+    logger.info("已自动迁移旧单 URL 配置为 Provider %s，绑定 %s 个模型", provider_name, len(models))
 
 
 def get_config_map(db: Session) -> dict[str, str]:

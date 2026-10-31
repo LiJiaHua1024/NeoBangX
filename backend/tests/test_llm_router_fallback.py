@@ -401,7 +401,8 @@ def test_all_providers_failed_keeps_attempt_trail(monkeypatch):
     assert router.last_provider["id"] == "prov_2"
     assert len(fallbacks) == 1  # 只有切到第 2 家那一次；第 2 家失败后不再有下一家
     summary = router.failure_summary()
-    assert "通道1(prov_1)" in summary and "通道2(prov_2)" in summary
+    assert "通道1" in summary and "通道2" in summary
+    assert "prov_1" not in summary and "prov_2" not in summary
     assert "AuthenticationError" in summary and "BadGatewayError" in summary
 
 
@@ -478,7 +479,7 @@ def test_error_message_prefers_attempt_summary_over_duplicate_exception():
     message = _final_error_message(router, "error", str(auth))
 
     assert message == router.failure_summary()
-    assert "通道1(prov_1)" in message
+    assert "通道1" in message
     assert message.count("AuthenticationError") == 1
 
 
@@ -490,7 +491,7 @@ def test_error_message_keeps_business_conclusion():
     message = _final_error_message(router, "error", "模型未返回可确认的错因")
 
     assert message.startswith("模型未返回可确认的错因 ｜ ")
-    assert "通道1(prov_1)" in message
+    assert "通道1" in message
 
 
 def test_error_message_marks_successful_fallback():
@@ -656,7 +657,7 @@ def test_stream_endpoint_logs_all_provider_failures(monkeypatch):
     assert row.status == "error"
     assert row.provider_id == "prov_2"  # 最后尝试的那家
     assert row.fallback_attempts == 2
-    assert "通道1(prov_1)" in row.error_message and "通道2(prov_2)" in row.error_message
+    assert "通道1" in row.error_message and "通道2" in row.error_message
     assert "BadGatewayError" in row.error_message
 
 
