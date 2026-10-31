@@ -538,7 +538,7 @@ export class Conversation {
     meta.className = "turn-meta";
     meta.innerHTML = `<button class="meta-button" type="button"><span class="meta-time"></span>${icon("chevron-right")}</button><span class="rule"></span>`;
     meta.querySelector(".meta-button").addEventListener("click", () =>
-      this.onModeChange("trajectory"),
+      this.setMode("trajectory", { push: true }),
     );
     const body = document.createElement("div");
     body.className = "turn-body";
@@ -1379,7 +1379,7 @@ export class Conversation {
     });
     actions
       .querySelector("[data-trajectory]")
-      .addEventListener("click", () => this.onModeChange("trajectory"));
+      .addEventListener("click", () => this.setMode("trajectory", { push: true }));
     if (stoppable) {
       const stop = document.createElement("button");
       stop.type = "button";

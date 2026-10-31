@@ -692,6 +692,59 @@ test("renderActions only renders the stop button for stoppable runs", async () =
   }
 });
 
+test("查看轨迹按钮切视图，而不是只改标签高亮", async () => {
+  // 回归：两个「查看轨迹」入口曾误调 onModeChange——那只同步标签高亮、不切面板，
+  // 造成「标签默认在轨迹、实际在对话」的错位。按钮必须走真正的 setMode。
+  const { Conversation } = await import("../agent/conversation.mjs");
+  const makeButton = () => ({
+    attrs: {},
+    setAttribute(name, value) { this.attrs[name] = value; },
+    addEventListener() {},
+    innerHTML: "",
+    className: "",
+    type: "",
+    title: "",
+  });
+  global.document = { createElement: makeButton };
+  const handlers = {};
+  const node = {
+    children: [],
+    set innerHTML(value) { this._html = value; },
+    get innerHTML() { return this._html; },
+    querySelector: (selector) => ({
+      addEventListener(type, handler) { handlers[selector] = handler; },
+    }),
+    insertBefore(child) { this.children.push(child); },
+  };
+  const calls = [];
+  const ctx = {
+    runs: new Map([["r1", { id: "r1", status: "completed", created_at: "2026-01-01T00:00:00Z" }]]),
+    usageMarkup: () => "",
+    onRequestStop: () => {},
+    onModeChange: (mode) => calls.push(["onModeChange", mode]),
+    setMode: (mode, options) => calls.push(["setMode", mode, options]),
+    onError: () => {},
+  };
+  try {
+    const turn = { run: { id: "r1", status: "completed" }, actions: node };
+    Conversation.prototype.renderActions.call(ctx, turn);
+    assert.equal(typeof handlers["[data-trajectory]"], "function", "轨迹按钮要注册点击处理");
+    handlers["[data-trajectory]"]();
+    assert.deepEqual(
+      calls,
+      [["setMode", "trajectory", { push: true }]],
+      "点击轨迹按钮必须调 setMode 切面板，不得直接调 onModeChange",
+    );
+  } finally {
+    delete global.document;
+  }
+  // 轮次标题的 meta 按钮同一问题：源码里不得再出现把 onModeChange 当切换用的调用。
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(path.join(__dirname, "../agent/conversation.mjs"), "utf8");
+  assert.ok(!/onModeChange\("trajectory"\)/.test(source), "onModeChange 只能由 setMode 在切换后通知");
+});
+
 test("conversation restores every step by paging the entries endpoint", async () => {
   const { Conversation } = await import("../agent/conversation.mjs");
   const calls = [];

@@ -1614,7 +1614,11 @@ async function openTask(id, push = true, forcedTab = "") {
       app.dataset.mode = mode;
       markCurrent($$(".view-tabs [data-mode]"), (button) => button.dataset.mode === mode);
       pills.mode.sync();
-      if (mode === "trajectory") $("#activity-dot").textContent = "";
+      if (mode === "trajectory") {
+        modelPicker?.close();
+        $("#activity-dot").textContent = "";
+      }
+      syncClawd();
     },
     onRequestStop: () => stopRun().catch(error),
     toast,
