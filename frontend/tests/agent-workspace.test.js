@@ -470,6 +470,40 @@ test("creating a task leaves exactly one history entry", async () => {
   assert.match(pop, /event\.state\?\.view/, "Back 要恢复历史条目里记的视图");
 });
 
+test("任务 URL 的哈希跟着视图模式走", async () => {
+  // 轨迹（#trajectory）和工作区标签共用一个哈希槽：任何一处写哈希跟模式脱节，
+  // 刷新、切任务、重进页面就会丢轨迹，或反过来把人送回轨迹。
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const workspace = fs.readFileSync(path.join(__dirname, "../agent/workspace.js"), "utf8");
+  const open = workspace.slice(
+    workspace.indexOf("async function openTask("),
+    workspace.indexOf("function fill()"),
+  );
+  assert.match(open, /const mode = forcedTab \? "chat" :/, "新任务从对话开始，不继承上一个任务的轨迹");
+  assert.match(open, /mode === "trajectory" \? "trajectory" : tab/, "写回 URL 的哈希要跟模式走");
+  assert.match(open, /setMode\(mode, false\);/, "载入后按算好的 mode 落视图，不再从旧哈希重推");
+  const tab = workspace.slice(
+    workspace.indexOf("function setTab("),
+    workspace.indexOf("function closeMenus("),
+  );
+  assert.match(tab, /app\.dataset\.mode !== "trajectory"/, "轨迹模式下点标签不得冲掉 #trajectory");
+  const start = workspace.slice(
+    workspace.indexOf("async function start("),
+    workspace.indexOf("function syncRunCard("),
+  );
+  assert.ok(
+    !start.includes('setMode("chat", false)'),
+    "发消息切回对话必须同步 URL，否则 #trajectory 残留，重进页面又回到轨迹",
+  );
+  const conversation = fs.readFileSync(path.join(__dirname, "../agent/conversation.mjs"), "utf8");
+  assert.match(
+    conversation,
+    /else if \(url\.hash === "#trajectory"\) url\.hash = "";/,
+    "切回对话只清 #trajectory，工作区标签哈希要保留",
+  );
+});
+
 test("loading more tasks cannot append the same page twice", async () => {
   const fs = require("node:fs");
   const path = require("node:path");

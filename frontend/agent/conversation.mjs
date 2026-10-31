@@ -1617,7 +1617,9 @@ export class Conversation {
     }
     if (push && this.task) {
       const url = new URL(location.href);
-      url.hash = mode === "trajectory" ? "trajectory" : "";
+      // 与 workspace.setMode 同款：切回对话只清 #trajectory，工作区标签的哈希保留。
+      if (mode === "trajectory") url.hash = "trajectory";
+      else if (url.hash === "#trajectory") url.hash = "";
       history.replaceState(history.state, "", url);
     }
     this.onModeChange(mode);

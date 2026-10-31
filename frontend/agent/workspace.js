@@ -333,9 +333,12 @@ function setTab(tab, push = true) {
   if (isMobile()) setView("work");
   else if (!isOverlayWorkspace()) setWorkspace(true, { persist: false });
   if (push && state.task) {
-    const u = new URL(location.href);
-    u.hash = tab;
-    history.pushState({ view: app.dataset.view }, "", u);
+    // 轨迹模式下哈希槽归 #trajectory：这里写成标签会把模式冲掉，刷新就丢轨迹。
+    if (app.dataset.mode !== "trajectory") {
+      const u = new URL(location.href);
+      u.hash = tab;
+      history.pushState({ view: app.dataset.view }, "", u);
+    }
   }
 }
 function closeMenus() {
@@ -1595,7 +1598,16 @@ async function openTask(id, push = true, forcedTab = "") {
   refreshCatalogModels().catch(() => {});
   const hash = location.hash.slice(1);
   const tab = forcedTab || (TAB_IDS.has(hash) ? hash : "prompt");
-  if (push) history.pushState({ view: "work" }, "", `/agent/tasks/${id}#${tab}`);
+  // 轨迹是对话的视图模式、和工作区标签共用一个哈希槽：写回 URL 的哈希要跟着模式走，
+  // 否则 pushState 把 #trajectory 折成 #prompt，刷新和下一次切任务都会丢轨迹。
+  // 新任务（forcedTab）不继承上一个任务的哈希，从对话开始。
+  const mode = forcedTab ? "chat" : hash === "trajectory" ? "trajectory" : "chat";
+  if (push)
+    history.pushState(
+      { view: "work" },
+      "",
+      `/agent/tasks/${id}#${mode === "trajectory" ? "trajectory" : tab}`,
+    );
   fill();
   state.conversation?.destroy();
   state.conversation = new Conversation({
@@ -1624,7 +1636,7 @@ async function openTask(id, push = true, forcedTab = "") {
     toast,
   });
   await state.conversation.load(task);
-  setMode(hash === "trajectory" ? "trajectory" : "chat", false);
+  setMode(mode, false);
   setTab(tab, false);
   if (isMobile()) setView("chat", false);
   if (isNarrow()) drawer(false, { focus: false });
@@ -2092,7 +2104,9 @@ async function start(mode = "execute", instruction = "", baseVersion = "", teach
   $("#message").value = "";
   autoGrow($("#message"));
   updateDraftEmpty();
-  setMode("chat", false);
+  // 发消息强制切回对话：这次切换也要写回 URL 哈希，否则 #trajectory 残留，
+  // 刷新或切任务又把人送回轨迹。
+  setMode("chat");
   setView("chat", false);
   updateStatus();
   state.conversation?.refreshEmpty();
