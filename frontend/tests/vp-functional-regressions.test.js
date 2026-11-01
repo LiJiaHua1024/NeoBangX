@@ -45,6 +45,8 @@ B. Four
 function loadPaper(c, raw = SKELETON) {
   c.output = raw;
   c.visualPaper = { ...c.newVisualPaperState(), ...c.normalizeVisualPaper(c.parseCustomVisualPaper(raw)), frameworkRaw: raw };
+  // 夹具里的每道题只带 1 道迁移：把锁定题量一并钉死，用例才不随产品默认档位漂移
+  c.visualPaper.transferCount = 1;
   c.submittedInput = "Full original exam including the second question";
 }
 
@@ -126,6 +128,7 @@ test("切换当前分组不会改变其他题的题型或生成状态", () => {
     { id: "writing_app", questions: [writing] },
     { id: "writing_cont", questions: [legacyWriting] },
   ] };
+  c.visualPaper.transferCount = 1;  // 夹具每题 1 道迁移
   c.streaming = true;
   c.vpStage = "explain";
   for (let index = 0; index < 3; index++) {
@@ -446,6 +449,7 @@ test("完整选择、填空和写作题可完成，停止时仍保留未确认�
 
 test("七选五迁移选项池不完整时保留续写入口，七项齐全后才完成", () => {
   const c = component();
+  c.vpSettings.transferCount = 1;  // 夹具每题 1 道迁移
   const q = fullQuestion();
   q.options = Array.from("ABCDEFG", label => ({ label, text: `Option ${label}` }));
   q.transfers[0].options = q.options.slice(0, 4);

@@ -399,7 +399,8 @@ def test_two_stage_stream_and_logs():
         client = __import__("fastapi.testclient", fromlist=["TestClient"]).TestClient(app)
         resp = client.post(
             "/api/chat/stream",
-            json={"tool_id": _VISUAL_TOOL_ID, "input": "Pas one.\nQ one?\nA. one B. two"},
+            json={"tool_id": _VISUAL_TOOL_ID, "input": "Pas one.\nQ one?\nA. one B. two",
+                  "transfer_count": 1},
             headers={"X-Real-IP": "203.0.113.77", "User-Agent": "pytest-vp"},
         )
         assert resp.status_code == 200

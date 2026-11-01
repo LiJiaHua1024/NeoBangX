@@ -982,7 +982,7 @@ def test_route_partial_failure_logs_each_call_and_charges_once(api, monkeypatch)
 
     monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
     response = client.post("/api/chat/stream", json={
-        "tool_id": "13", "input": skeleton(6), "request_id": "vp-partial",
+        "tool_id": "13", "input": skeleton(6), "request_id": "vp-partial", "transfer_count": 1,
         "visual_question_nos": [str(n) for n in range(1, 7)],
     })
     assert response.status_code == 200
@@ -1038,7 +1038,7 @@ def test_route_concurrent_retries_keep_provider_and_usage_logs_separate(api, mon
 
     monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: FakeRouter())
     response = client.post("/api/chat/stream", json={
-        "tool_id": "13", "input": skeleton(3), "request_id": "vp-concurrent-logs",
+        "tool_id": "13", "input": skeleton(3), "request_id": "vp-concurrent-logs", "transfer_count": 1,
         "visual_question_nos": ["1", "2", "3"],
     })
     assert response.status_code == 200 and ("done", "[DONE]") in events(response)
@@ -1091,6 +1091,7 @@ def test_asgi_stop_and_disconnect_close_retries_and_settle_logs_once(api, monkey
 
         monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
         body = json.dumps({"tool_id": "13", "input": skeleton(3), "request_id": request_id,
+                           "transfer_count": 1,
                            "visual_question_nos": ["1", "2", "3"]}).encode()
         received = False
 
@@ -1159,6 +1160,7 @@ def test_asgi_disconnect_while_sending_closes_suspended_generator_immediately(ap
 
         monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
         body = json.dumps({"tool_id": "13", "input": skeleton(3), "request_id": "vp-send-disconnect",
+                           "transfer_count": 1,
                            "visual_question_nos": ["1", "2", "3"]}).encode()
         received = False
 
@@ -1221,6 +1223,7 @@ def test_asgi_disconnect_during_charge_does_not_double_charge_or_lose_log_units(
         monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
         monkeypatch.setattr(chat, "_charge_usage", charge)
         body = json.dumps({"tool_id": "13", "input": skeleton(3), "request_id": "vp-charge-disconnect",
+                           "transfer_count": 1,
                            "visual_question_nos": ["1", "2", "3"]}).encode()
         received = False
 
@@ -1284,6 +1287,7 @@ def test_asgi_disconnect_before_generator_starts_releases_free_reservation(api, 
     async def run():
         disconnect = asyncio.Event()
         body = json.dumps({"tool_id": "13", "input": skeleton(3), "request_id": "vp-before-start",
+                           "transfer_count": 1,
                            "visual_question_nos": ["1", "2", "3"]}).encode()
         received = False
 
@@ -1337,7 +1341,7 @@ def test_initial_framework_enters_parallel_and_keeps_order(api, monkeypatch, mar
                     yield analysis(str(n))
 
     monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake(kwargs.get("chores", False)))
-    response = client.post("/api/chat/stream", json={"tool_id": "13", "input": raw})
+    response = client.post("/api/chat/stream", json={"tool_id": "13", "input": raw, "transfer_count": 1})
     emitted = events(response)
     assert any(e == "stage" and p.get("parallel") for e, p in emitted)
     transitions = [p for e, p in emitted if e == "stage" and p.get("name") == "explain"]
@@ -1370,7 +1374,7 @@ def test_all_parallel_calls_fail_without_charging_or_counting_free_use(api, monk
 
     monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
     response = client.post("/api/chat/stream", json={
-        "tool_id": "13", "input": skeleton(6), "request_id": "vp-all-failed",
+        "tool_id": "13", "input": skeleton(6), "request_id": "vp-all-failed", "transfer_count": 1,
         "visual_question_nos": [str(n) for n in range(1, 7)],
     })
     assert any(e == "error" for e, _ in events(response))

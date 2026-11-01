@@ -55,8 +55,8 @@ class StreamPlan:
     # 试卷
     paper_questions: int = 5
     paper_done: int = 0            # 0 = 全发完；>0 = 只发这么多道完整题
-    # 每道笔试题的迁移题量（试卷工具）
-    transfer_count: int = 1
+    # 每道笔试题的迁移题量（试卷工具，与后端默认档位一致）
+    transfer_count: int = 3
     # 来源（仅用于日志/面板展示）
     source: str = "default"
 

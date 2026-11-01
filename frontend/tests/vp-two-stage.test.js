@@ -211,6 +211,7 @@ function test_continue_brief2_lists_missing_nos() {
   const c = loadComponent();
   c.visualPaper = c.newVisualPaperState();
   c.visualPaper.total = 3;
+  c.visualPaper.transferCount = 1;  // 夹具每题 1 道迁移
   c.visualPaper.groups = [
     {id: "reading", title: "A篇", intro: "", questions: [
       completedQuestion("21", "A"),
@@ -253,6 +254,7 @@ function test_vp_remaining_and_complete_use_analyzed_semantics() {
   const c = loadComponent();
   c.visualPaper = c.newVisualPaperState();
   c.visualPaper.total = 3;
+  c.visualPaper.transferCount = 1;  // 夹具每题 1 道迁移
   c.visualPaper.groups = [
     {id: "reading", title: "A篇", intro: "", questions: [
       completedQuestion("21", "A"),

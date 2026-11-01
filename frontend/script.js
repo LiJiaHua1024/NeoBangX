@@ -2371,11 +2371,12 @@ function nbx() {
     _vpEditListenersBound: false,
     _vpDragging: false,
     vpSelActive: false,
-    // 生成前的工具配置：每题迁移训练题量（1–5，默认 1）；面板仿右上角模型菜单向上弹出
-    vpSettings: { transferCount: 1 },
+    // 生成前的工具配置：每题迁移训练题量（1–5，默认 3）；面板仿右上角模型菜单向上弹出
+    vpSettings: { transferCount: 3 },
     vpSettingsOpen: false,
     VP_TRANSFER_MIN: 1,
     VP_TRANSFER_MAX: 5,
+    VP_TRANSFER_DEFAULT: 3,
 
     /* --- 智能错题迁移 --- */
     migration: null,
@@ -3927,7 +3928,7 @@ function nbx() {
       this.closeVpSettings();
     },
     vpResetSettings() {
-      this.vpSettings.transferCount = this.VP_TRANSFER_MIN;
+      this.vpSettings.transferCount = this.VP_TRANSFER_DEFAULT;
     },
     vpIsCurrent(gIdx, qIdx) {
       return this.visualPaper && this.visualPaper.currentGroupIdx === gIdx && this.visualPaper.currentQIdx === qIdx;

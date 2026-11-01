@@ -383,10 +383,10 @@ def test_prompt_loader_variable_rendering(tmp_path: Path):
     assert loader.render("demo", "材料", {"transfer_count": 3}) == (
         "量：3；输入：材料；未知名：{{unknown}}"
     )
-    # 未传值 → 回落默认 1，不把裸占位符送给模型
-    assert loader.render("demo", "材料").startswith("量：1；")
+    # 未传值 → 回落默认 3，不把裸占位符送给模型
+    assert loader.render("demo", "材料").startswith("量：3；")
     # 用户输入里的同名占位符不被二次扫描替换
-    assert loader.render("demo", "{{transfer_count}}").startswith("量：1；输入：{{transfer_count}}；")
+    assert loader.render("demo", "{{transfer_count}}").startswith("量：3；输入：{{transfer_count}}；")
 
 
 # ========== 续写轮次（input 已是 @@TAG@@ 文档再追加讲解）的合并语义 ==========

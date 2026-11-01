@@ -377,7 +377,7 @@ def build_resume(brief: dict) -> str:
     last_no = _as_int(brief.get("last_no"), _as_int(brief.get("done"), 0))
     if total <= 0:
         total = last_no + 3
-    transfers = _as_int(brief.get("transfer_count"), 1) or 1
+    transfers = _as_int(brief.get("transfer_count"), 3) or 3
     next_no = last_no + 1
     used = set()
     for ref in brief.get("used_refs") or []:

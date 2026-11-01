@@ -55,7 +55,7 @@ from app.services.migration import (
     parse_error_causes,
 )
 from app.services.model_capabilities import supports_reasoning
-from app.services.prompt_loader import PromptLoader
+from app.services.prompt_loader import TRANSFER_COUNT_DEFAULT, PromptLoader
 from app.services.provider_config import get_model_provider_map, get_providers_for_model
 from app.services.rate_limit import enforce_rate_limit
 from app.services.request_log import (
@@ -111,6 +111,8 @@ VISUAL_PAPER_TOOL_ID = "13"
 VISUAL_FRAMEWORK_PROMPT = "试卷可视化全解框架"
 VISUAL_EXPLAIN_PROMPT = "试卷可视化全解精讲"
 VISUAL_FRAMEWORK_TOOL_NAME = "试卷可视化全解·框架"
+# 每题迁移题量未显式传值时的默认档位（前端滑杆初始值同此）
+VISUAL_TRANSFER_DEFAULT = TRANSFER_COUNT_DEFAULT
 
 
 def _load_cfg() -> dict:
@@ -668,7 +670,7 @@ class ChatRequest(BaseModel):
     batch_size: Optional[int] = Field(None, ge=1, description="批次内错因卡片总数")
     batch_index: Optional[int] = Field(None, ge=0, description="当前错因在批次中的序号")
     transfer_count: Optional[int] = Field(
-        None, ge=1, le=5, description="试卷可视化全解：每道笔试题的迁移训练题量（默认 1）"
+        None, ge=1, le=5, description=f"试卷可视化全解：每道笔试题的迁移训练题量（默认 {VISUAL_TRANSFER_DEFAULT}）"
     )
     visual_question_nos: Optional[list[Annotated[str, StringConstraints(pattern=r"^\d{1,3}$")]]] = Field(
         None, max_length=1000, description="工具 13 骨架续写：只补全这些题号（省略或空列表均表示全量）"
@@ -745,7 +747,7 @@ class ChatPreviewRequest(BaseModel):
     tool_id: str = Field(..., max_length=64)
     input: str = Field(..., min_length=1, max_length=50000)
     transfer_count: Optional[int] = Field(
-        None, ge=1, le=5, description="试卷可视化全解：每道笔试题的迁移训练题量（默认 1）"
+        None, ge=1, le=5, description=f"试卷可视化全解：每道笔试题的迁移训练题量（默认 {VISUAL_TRANSFER_DEFAULT}）"
     )
     source_lang: Optional[str] = Field(
         None, max_length=32, description="翻译（工具 33）：源语言名，auto 表示自动检测"
@@ -1251,7 +1253,9 @@ async def chat_stream(
         if req.tool_id != VISUAL_PAPER_TOOL_ID or req.continue_from or not looks_like_tag_document(req.input):
             raise HTTPException(status_code=400, detail="待补全题号仅适用于试卷骨架续写")
         try:
-            visual_jobs = plan_explanations(req.input, loader, req.transfer_count or 1, req.visual_question_nos)
+            visual_jobs = plan_explanations(
+                req.input, loader, req.transfer_count or VISUAL_TRANSFER_DEFAULT, req.visual_question_nos
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not visual_jobs:
@@ -1607,7 +1611,9 @@ async def chat_stream(
                         prompt = base_prompt
                         framework_usable = False
                     else:
-                        planned = plan_explanations(applier.skeleton_text, loader, req.transfer_count or 1)
+                        planned = plan_explanations(
+                            applier.skeleton_text, loader, req.transfer_count or VISUAL_TRANSFER_DEFAULT
+                        )
                         if planned and continue_messages is None:
                             explain_jobs = planned
                 else:
@@ -1664,7 +1670,7 @@ async def chat_stream(
 
                 parallel_stream = stream_explanations(
                     explain_jobs, build_llm=build_explain_llm, stop_event=stop_event,
-                    transfer_count=req.transfer_count or 1,
+                    transfer_count=req.transfer_count or VISUAL_TRANSFER_DEFAULT,
                     concurrency=visual_concurrency_for(cfg, model_used),
                     stream_kwargs={"model": model_used, "reasoning_effort": reasoning_effort,
                                    "extra_body": extra_body, "response_format": None},

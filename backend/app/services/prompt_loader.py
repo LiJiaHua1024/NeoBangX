@@ -8,10 +8,14 @@ logger = logging.getLogger(__name__)
 
 # 模板占位符：{{user_input}}、{{transfer_count}} 等
 _PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
+# 试卷可视化全解「每题迁移题量」的默认值：模板里写了 {{transfer_count}} 而调用方没给时用这个数，
+# 与请求模型的回落值（routers/chat.py）和前端滑杆的初始值保持一致。
+TRANSFER_COUNT_DEFAULT = 3
+
 # 未显式传值的占位符回落值：Prompt 里写了 {{x}} 但调用方没给时也不会把占位符漏给模型
 DEFAULT_VARIABLES = {
     "user_input": "",
-    "transfer_count": "1",
+    "transfer_count": str(TRANSFER_COUNT_DEFAULT),
     # 翻译工具的语言对：续写/重试路径若漏传，也要有一个说得过去的目标语言
     "source_lang": "auto",
     "target_lang": "简体中文",
