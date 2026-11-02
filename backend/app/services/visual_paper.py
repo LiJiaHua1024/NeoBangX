@@ -817,7 +817,11 @@ def parse_custom_visual_paper(raw: str) -> dict | None:
     # 这些字段只可能属于刚提交的那道题，这里兜底并回，否则整段丢失。
     # 走「重开合并」的既有路径：以已提交题为种子建草稿，再把 current_q 里攒到的
     # 非空字段并上去，最后 commit 会原地更新那道题。
-    if current_q is not None and last_committed["q"] is not None:
+    # 必须确认 current_q 就是「刚提交的那道题」的重开草稿：@@Q@@ 已经把下一题开出来时，
+    # 这段残文属于那道没写完的新题，并进上一题会把它的题干/选项/答案/易错点整段盖掉
+    # （题号还是旧的），新题则整题消失——截断越靠近题首，被污染的就是越完整的一题。
+    if (current_q is not None and last_committed["q"] is not None
+            and current_q.get("_committed") is last_committed["q"]):
         reopened = _draft_from_committed(last_committed["q"])
         reopened["_committed"] = last_committed["q"]
         _merge_stray_fields(reopened, current_q)

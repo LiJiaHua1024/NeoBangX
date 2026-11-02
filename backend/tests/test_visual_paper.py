@@ -517,6 +517,40 @@ def test_stray_fields_after_early_endq_reopened_into_committed_question():
     assert q["transfers"][0]["passage"] == "Stray transfer."
 
 
+def test_stray_fields_after_early_endq_at_stream_end_still_merged():
+    """提前 END_Q 后的补充字段若正好撞上流结束（没有第二个 END_Q 来触发并回），
+    收尾兜底要照样并回刚提交的那道题，不能整段丢失。"""
+    doc = _SKELETON + (
+        "@@Q@@ 24\n@@QTYPE@@ choice\n@@STEM@@\nRecent activities?\n@@OPTIONS@@\nA. x\nB. y\n@@END_Q@@\n"
+        "@@ANSWER@@\nA\n@@EVIDENCE@@\nPara 2: evidence.\n"
+    )
+    qs = parse_custom_visual_paper(doc)["groups"][0]["questions"]
+    assert [q["no"] for q in qs] == ["24"]
+    assert qs[0]["stem"] == "Recent activities?"
+    assert qs[0]["answer"] == "A"
+    assert qs[0]["reference"]["evidence"] == "Para 2: evidence."
+
+
+def test_truncated_next_question_never_overwrites_committed_question():
+    """流断在下一题题首之后：这道没写完的题整题丢弃，绝不能把它的题干/答案/依据
+    并进上一题（题号还是上一题的，内容却换成了下一题的，且新题整题消失）。"""
+    raw = _paper(
+        "@@GROUP@@ reading|阅读理解 B篇|细节定位\n"
+        + _def("P1", "Shared passage text.")
+        + _ref_question(21, "P1")
+        + _ref_question(22, "P1")
+        + "@@Q@@ 23\n@@QTYPE@@ choice\n@@STEM@@\nTruncated stem 23?\n"
+          "@@ANSWER@@\nC\n@@EVIDENCE@@\ntruncated evidence\n"
+    )
+    qs = _questions(raw)
+    assert [q["no"] for q in qs] == ["21", "22"], "残题不得被并入上一题或自行提交"
+    assert [q["stem"] for q in qs] == ["Stem 21?", "Stem 22?"]
+    assert [q["answer"] for q in qs] == ["A", "A"]
+    assert [q["reference"]["evidence"] for q in qs] == ["P1 evidence", "P1 evidence"]
+    assert [q["reference"]["reason"] for q in qs] == ["理由 21", "理由 22"]
+    assert [p["title"] for p in qs[1]["pitfalls"]] == ["手法22"]
+
+
 def test_cross_group_question_reopen_with_key_merges_into_original_group():
     """多分组试卷附带 @@KEY@@ 时，阶段二或续写对前面分组题目的讲解必须并入原分组，
     不得作为新题错误追加在最后一个分组中。"""
