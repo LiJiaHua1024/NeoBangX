@@ -239,3 +239,87 @@ async def test_service_stream_strips_sponsor(monkeypatch):
         if isinstance(item, str)
     ]
     assert "".join(texts) == strip_end_sponsor(SAMPLE)
+
+
+# ---- 续写完成标记：ContinueDoneFilter ----
+
+from app.services.output_guard import ContinueDoneFilter  # noqa: E402
+
+
+def _run_sentinel_filter(chunks):
+    """跑一遍过滤器，返回 (吐出的正文, 是否命中完成标记)。"""
+    guard = ContinueDoneFilter()
+    out = "".join(guard.feed(chunk) for chunk in chunks) + guard.flush()
+    return out, guard.hit
+
+
+def test_continue_done_filter_passes_normal_text_immediately():
+    """普通续写正文零延迟直通（尤其中文），不因为过滤器而憋着不发。"""
+    guard = ContinueDoneFilter()
+    assert guard.feed("接下来是第二段") == "接下来是第二段"
+    assert guard.hit is False
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        ["@@", "CONTINUE_", "DONE@@"],
+        ["@@CONTINUE_DONE@@"],
+        ["```\n", "@@CONTINUE", "-DONE", "@@\n```\n"],
+        ["**continue-done**"],
+        ["（@@CONTINUE DONE@@）"],
+    ],
+)
+def test_continue_done_filter_eats_marker(chunks):
+    """标记本体（含跨帧、代码围栏、括号、大小写与分隔符漂移）不能漏进正文。"""
+    out, hit = _run_sentinel_filter(chunks)
+    assert out == ""
+    assert hit is True
+
+
+def test_continue_done_filter_strips_marker_after_text():
+    """模型先说一句「已完整」再回标记时，标记要被剥掉、正文照常保留（同一帧、跨帧都要对）。"""
+    out, hit = _run_sentinel_filter(["文档已完整。\n\n@@CONTINUE", "_DONE@@\n"])
+    assert out == "文档已完整。"
+    assert hit is True
+    out, hit = _run_sentinel_filter(["文档已完整。@@CONTINUE_DONE@@\n```"])
+    assert out == "文档已完整。"
+    assert hit is True
+
+
+def test_continue_done_filter_keeps_text_written_after_marker():
+    """标记后面又写了正文（违反约定）：标记吃掉，正文照常放行，绝不整段吞掉。"""
+    out, hit = _run_sentinel_filter(["@@CONTINUE_DONE@@ and then text"])
+    assert out == "and then text"
+    assert hit is True
+
+
+def test_continue_done_filter_keeps_short_ascii_content():
+    """短正文（如 "C" / "CONT"）不能被当成标记前缀吞掉。"""
+    assert _run_sentinel_filter(["C"]) == ("C", False)
+    assert _run_sentinel_filter(["CONT"]) == ("CONT", False)
+
+
+def test_continue_done_filter_eats_truncated_marker():
+    """流断在半截标记上（"@@CONTINU"）：宁可吞掉，也不要把标记残片拼进成品。"""
+    out, hit = _run_sentinel_filter(["@@CONTINU"])
+    assert out == ""
+    assert hit is True
+
+
+def test_sponsor_filter_handover_carries_tail_candidate():
+    """中途断流交接：上一条流扣住的赞助块候选要带进续写，广告才拦得住。"""
+    old = EndSponsorFilter()
+    assert old.feed("正文\n\n--") == ""          # 候选被扣住
+    carried = old.handover()
+    assert old._buf == ""                        # 旧过滤器不再持有，避免重复吐
+    # 续写补完候选 → 整段广告（含此前扣住的正文尾巴）被识别并丢掉
+    assert carried.feed("- \nSponsored by X\n") == "正文\n"
+
+
+def test_sponsor_filter_handover_resets_dropping_state():
+    """已经命中整段广告（进入丢弃态）时，续写的新正文不能被继续吞掉。"""
+    old = EndSponsorFilter()
+    assert old.feed("正文\n\n---\nSponsored by X\n") == "正文\n"
+    carried = old.handover()
+    assert carried.feed("续写的新正文") == "续写的新正文"

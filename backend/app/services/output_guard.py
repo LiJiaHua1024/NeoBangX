@@ -1,4 +1,4 @@
-"""剥掉上游渠道在正文结尾追加的赞助 / 广告块。
+"""流式正文里两类「约定标记」的过滤器：结尾赞助块、续写完成标记。
 
 背景
 ----
@@ -26,6 +26,14 @@
 才把这一小段扣住不发，其余正常文本逐 token 零延迟直通；一旦完整命中就进入
 丢弃态，之后到流结束都不再吐。这样既能在广告上屏前拦住它，又不改变正常响应
 的流式时序（现有测试断言「首个产出就是原文片段」不受影响）。
+
+续写完成标记（`ContinueDoneFilter`）
+------------------------------------
+`prompts/继续生成.md` 约定：残文其实已经写完时，模型只回一行
+``@@CONTINUE_DONE@@``。用户手点「继续生成」时前端会把这行剥掉；但路由层在
+中途断流后**自动**续写时前端并不知道这是一次续写，所以必须由后端吃掉它，
+否则会拼进成品文档。识别刻意放宽（`@`/`＠` 数量、大小写、空格/下划线/连字符、
+代码围栏与括号包裹），与前端 `CONTINUE_DONE_SRC` 同义。
 """
 
 from __future__ import annotations
@@ -145,3 +153,136 @@ class EndSponsorFilter:
         out = strip_end_sponsor(self._buf)
         self._buf = ""
         return out
+
+    def handover(self) -> "EndSponsorFilter":
+        """中途断流续写时的交接：把还没输出的尾部候选带到下一条流。
+
+        断点可能正好落在赞助块候选中间（如 ``"\\n--\\nSpons"``）。这一段属于
+        已经生成的正文，但过滤器还不敢吐：若续写的开头把它补成完整的赞助块，
+        应当整段丢掉；若补成普通正文，应当原样吐出。丢掉缓冲会让「Spons」和
+        续写的「ored by …」各自成段，反而把广告漏到用户眼前。
+
+        已经进入丢弃态（整段赞助块命中，说明正文已自然收尾）时交接一个空过滤器：
+        之后的内容是续写新写的正文，不该被上一条流的丢弃态吞掉。
+        """
+        nxt = EndSponsorFilter()
+        if not self._dropping:
+            nxt._buf = self._buf
+        self._buf = ""
+        return nxt
+
+
+# ---- 续写完成标记 ----
+
+# 标记本体允许前后带分隔符 / 代码围栏 / 括号：模型对定界符的写法会漂移，
+# 实测 `@@CONTINUE_DONE@@`、`**CONTINUE-DONE**`、```\n@@continue_done@@\n```
+# 都出现过，严格匹配必漏。与前端 CONTINUE_DONE_SRC 的口径保持一致。
+_CONTINUE_DONE_WRAP = "`*~_@＠\\s\\[\\]【】()（）<>《》\"'"
+_CONTINUE_DONE_RE = re.compile(
+    rf"[{_CONTINUE_DONE_WRAP}]*CONTINUE[\s_\-]*DONE[{_CONTINUE_DONE_WRAP}]*",
+    re.IGNORECASE,
+)
+# 为了判断「尾部是否可能是标记前缀」，允许出现在候选里的字符（其余字符一出现
+# 就说明这是普通正文，立刻放行）。字母数字另由 isalnum() 覆盖。
+_MARKER_PUNCT = frozenset("`*~_@＠-[]【】()（）<>《》\"' \t\r\n")
+_MARKER_WORD = "CONTINUEDONE"
+# 候选最多扣住多少个字符：正常标记远小于它，超长的一律当正文放行。
+_MAX_SENTINEL_HOLD = 64
+
+
+def _sentinel_tail_len(buf: str) -> int:
+    """buf 尾部「可能是完成标记前缀」的长度；0 表示不像标记，可以整段放行。"""
+    n = len(buf)
+    if not n:
+        return 0
+    for start in range(max(0, n - _MAX_SENTINEL_HOLD), n):
+        suffix = buf[start:]
+        if any(ch not in _MARKER_PUNCT and not ch.isalnum() for ch in suffix):
+            continue
+        core = "".join(ch for ch in suffix.upper() if ch.isalnum())
+        if core:
+            if len(core) > len(_MARKER_WORD) or not _MARKER_WORD.startswith(core):
+                continue
+        return n - start
+    return 0
+
+
+class ContinueDoneFilter:
+    """续写流里的「其实已经写完」标记过滤器。
+
+    只在自动续写的尝试里用。普通续写正文逐 token 零延迟直通：只有尾部看起来
+    像标记前缀时才扣住（最多 `_MAX_SENTINEL_HOLD` 字符，下一次 feed 就放行）。
+    命中完整标记后 `hit` 置位，调用方据此判断「残文已完整、这次续写没有内容」；
+    标记之后只剩围栏 / 空白这类格式残留时继续扣着，见到真正文才放行。
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._released = False
+        self.hit = False
+
+    @staticmethod
+    def _is_noise(text: str) -> bool:
+        """整段是否只是围栏 / 括号 / 空白（标记后面的格式残留）。"""
+        return bool(text) and all(ch in _MARKER_PUNCT for ch in text)
+
+    def feed(self, chunk: str) -> str:
+        """喂入一个数据块，返回本次可以安全输出的文本（可能为空串）。"""
+        if self._released:
+            return chunk
+        self._buf += chunk or ""
+        head = ""
+        if not self.hit:
+            match = _CONTINUE_DONE_RE.search(self._buf)
+            if match is None:
+                # 只扣住「可能是标记前缀」的尾巴：普通正文（尤其中文）零延迟直通，
+                # 标记写在正文后面（模型偶尔会先说一句「已完整」）也能照样剥掉
+                tail = _sentinel_tail_len(self._buf)
+                if tail:
+                    out = self._buf[:-tail]
+                    self._buf = self._buf[-tail:]
+                else:
+                    out = self._buf
+                    self._buf = ""
+                return out
+            # 标记本体吃掉，它前面的正文照常吐出；后面的围栏/换行留给下面判定
+            self.hit = True
+            head = self._buf[: match.start()]
+            self._buf = self._buf[match.end():]
+        if not self._buf:
+            return head
+        if self._is_noise(self._buf):
+            if len(self._buf) > _MAX_SENTINEL_HOLD:
+                # 异常长的「格式残留」：不再扣，原样放行（宁可多几个符号也不吞正文）
+                out = head + self._buf
+                self._buf = ""
+                self._released = True
+                return out
+            return head
+        # 标记之后出现了真正的正文：模型违反了「只回标记」的约定，内容照常吐出
+        out = head + self._buf
+        self._buf = ""
+        self._released = True
+        return out
+
+    def flush(self) -> str:
+        """流结束时收尾：整段就是标记（或它的截断前缀）则吞掉，否则吐出残留正文。"""
+        buf, self._buf = self._buf, ""
+        self._released = True
+        if self.hit:
+            return "" if self._is_noise(buf) else buf
+        if not buf:
+            return ""
+        if _CONTINUE_DONE_RE.fullmatch(buf.strip()):
+            self.hit = True
+            return ""
+        if self._is_noise(buf):
+            return ""
+        # 整段都可能是标记的不完整前缀（如断在 "@@CONTINU"）：当已完整处理，
+        # 别把半截标记泄漏进正文。至少要认出 6 个标记字符才算数——否则续写只吐出
+        # 一个 "C" / "CO" 这类正常短正文也会被当成标记吞掉。
+        core = "".join(ch for ch in buf.upper() if ch.isalnum())
+        if len(core) >= 6 and _MARKER_WORD.startswith(core) and _sentinel_tail_len(buf) == len(buf):
+            self.hit = True
+            return ""
+        return _CONTINUE_DONE_RE.sub("", buf)

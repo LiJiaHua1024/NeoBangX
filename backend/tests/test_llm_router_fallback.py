@@ -216,14 +216,14 @@ def test_legacy_service_closes_upstream_on_generator_close(monkeypatch):
     asyncio.run(run())
 
 
-def _run_stream(router, stop_event=None):
+def _run_stream(router, stop_event=None, continue_prompt=None):
     """跑一遍流式调用，返回 (正文, 推理, 切换事件, 异常)。"""
 
     async def _run():
         texts, reasonings, fallbacks, error = [], [], [], None
         try:
             async for item in router.chat_stream_with_stop(
-                user_prompt="你好", stop_event=stop_event
+                user_prompt="你好", stop_event=stop_event, continue_prompt=continue_prompt
             ):
                 if isinstance(item, tuple):
                     if item[0] == "reasoning":
@@ -368,8 +368,11 @@ def test_stream_does_not_switch_on_context_window_error(monkeypatch):
     assert router.provider_used is None
 
 
-def test_stream_does_not_switch_after_first_content(monkeypatch):
-    """已经吐过正文再失败：不切换（避免用户看到两家内容拼接），错误直接上抛。"""
+CONTINUE_PROMPT = "上面那条 assistant 消息写到一半被打断了，从断点接着往下写，不要重复。"
+
+
+def test_stream_without_continue_prompt_still_raises_after_first_content(monkeypatch):
+    """没有续写指令（提示词文件缺失 / 老调用方）：保持旧行为，已吐正文后直接抛。"""
     fake = _install(monkeypatch, [
         _Stream([_Chunk("半")], error=_gateway_error()),
         _Stream([_Chunk("不该到这")]),
@@ -382,6 +385,167 @@ def test_stream_does_not_switch_after_first_content(monkeypatch):
     assert isinstance(error, litellm_exceptions.BadGatewayError)
     assert fallbacks == []
     assert len(fake.calls) == 1
+    assert router.midstream_resumes == 0
+
+
+def test_stream_continues_after_first_content(monkeypatch):
+    """已吐正文后断流：带残文同家续写，输出连续、无事件、日志留痕。"""
+    fake = _install(monkeypatch, [
+        _Stream([_Chunk("半")], error=_gateway_error()),
+        _Stream([_Chunk("后半")]),
+    ])
+    router = _router(count=2)
+
+    texts, _, fallbacks, error = _run_stream(router, continue_prompt=CONTINUE_PROMPT)
+
+    assert texts == ["半", "后半"]
+    assert error is None
+    assert fallbacks == []
+    assert router.midstream_resumes == 1
+    assert router.provider_used["id"] == "prov_1"
+    assert router.last_resume_error.startswith("litellm.BadGatewayError")
+    # 续写消息：原 prompt → 残文（assistant）→ 续写指令
+    sent = fake.calls[1]["messages"]
+    assert sent[0] == {"role": "user", "content": "你好"}
+    assert sent[1] == {"role": "assistant", "content": "半"}
+    assert sent[2] == {"role": "user", "content": CONTINUE_PROMPT}
+
+
+def test_stream_continues_on_next_provider_after_same_provider_breaks(monkeypatch):
+    """同一家只续写一次：再断就静默带残文换下一家，绝不再发 fallback 事件。"""
+    _install(monkeypatch, [
+        _Stream([_Chunk("甲")], error=_gateway_error()),
+        _Stream([_Chunk("乙")], error=_gateway_error()),
+        _Stream([_Chunk("丙")]),
+    ])
+    router = _router(count=2)
+
+    texts, _, fallbacks, error = _run_stream(router, continue_prompt=CONTINUE_PROMPT)
+
+    assert texts == ["甲", "乙", "丙"]
+    assert error is None
+    assert fallbacks == []
+    assert router.midstream_resumes == 2
+    assert router.attempts == 2
+    assert router.provider_used["id"] == "prov_2"
+
+
+def test_stream_continue_done_sentinel_is_not_leaked(monkeypatch):
+    """续写只回「其实已经写完」标记：标记不能拼进成品，且按成功收尾。"""
+    _install(monkeypatch, [
+        _Stream([_Chunk("半")], error=_gateway_error()),
+        _Stream([_Chunk("@@CONTINUE"), _Chunk("_DONE@@")]),
+    ])
+    router = _router(count=1)
+
+    texts, _, _, error = _run_stream(router, continue_prompt=CONTINUE_PROMPT)
+
+    assert texts == ["半"]
+    assert error is None
+
+
+def test_stream_does_not_continue_on_context_window_error(monkeypatch):
+    """上下文超限换谁都一样：不续写，直接把错误交给上层。"""
+    _install(monkeypatch, [
+        _Stream([_Chunk("半")], error=_context_window_error()),
+        _Stream([_Chunk("不该到这")]),
+    ])
+    router = _router(count=2)
+
+    texts, _, _, error = _run_stream(router, continue_prompt=CONTINUE_PROMPT)
+
+    assert texts == ["半"]
+    assert isinstance(error, litellm_exceptions.ContextWindowExceededError)
+    assert router.midstream_resumes == 0
+
+
+def test_stream_does_not_continue_on_midstream_client_error(monkeypatch):
+    """中途 4xx（429 除外）：litellm 的策略就是直接抛，自动续写也跟随。"""
+    bad = litellm_exceptions.BadRequestError(
+        message="invalid request", llm_provider="openai", model="test-model"
+    )
+    _install(monkeypatch, [
+        _Stream([_Chunk("半")], error=bad),
+        _Stream([_Chunk("不该到这")]),
+    ])
+    router = _router(count=2)
+
+    texts, _, _, error = _run_stream(router, continue_prompt=CONTINUE_PROMPT)
+
+    assert texts == ["半"]
+    assert isinstance(error, litellm_exceptions.BadRequestError)
+    assert router.midstream_resumes == 0
+
+
+def test_stream_continue_empty_response_moves_to_next_provider(monkeypatch):
+    """续写一个字都没吐：算该家这次续写失效，换下一家接着续，不把半篇当成功。"""
+    _install(monkeypatch, [
+        _Stream([_Chunk("半")], error=_gateway_error()),
+        _Stream([]),
+        _Stream([_Chunk("收尾")]),
+    ])
+    router = _router(count=2)
+
+    texts, _, fallbacks, error = _run_stream(router, continue_prompt=CONTINUE_PROMPT)
+
+    assert texts == ["半", "收尾"]
+    assert error is None
+    assert fallbacks == []
+    assert router.midstream_resumes == 2
+    assert router.provider_used["id"] == "prov_2"
+
+
+def test_stream_continue_respects_stop_event(monkeypatch):
+    """用户已经停了：不再发起续写请求。"""
+    stop_event = anyio.Event()
+
+    class _BreakAfterStop(_Stream):
+        async def _gen(self):
+            yield _Chunk("半")
+            stop_event.set()
+            raise _gateway_error()
+
+    fake = _install(monkeypatch, [_BreakAfterStop([_Chunk("半")]), _Stream([_Chunk("不该到这")])])
+    router = _router(count=2)
+
+    texts, _, _, error = _run_stream(
+        router, stop_event=stop_event, continue_prompt=CONTINUE_PROMPT
+    )
+
+    assert texts == ["半"]
+    assert isinstance(error, litellm_exceptions.BadGatewayError)
+    assert router.midstream_resumes == 0
+    assert len(fake.calls) == 1
+
+
+def test_stream_continue_has_a_global_cap(monkeypatch):
+    """续写次数用尽后把错误交回上层，不无限重打上游。"""
+    script = [_Stream([_Chunk("x")], error=_gateway_error()) for _ in range(6)]
+    fake = _install(monkeypatch, script)
+    router = _router(count=3)
+    router.max_midstream_resumes = 1
+
+    texts, _, _, error = _run_stream(router, continue_prompt=CONTINUE_PROMPT)
+
+    # 原请求 + 1 次续写请求；第二次断流时上限已到，直接抛
+    assert texts == ["x", "x"]
+    assert len(fake.calls) == 2
+    assert isinstance(error, litellm_exceptions.BadGatewayError)
+    assert router.midstream_resumes == 1
+
+
+def test_stream_continue_carries_sponsor_tail(monkeypatch):
+    """断点落在赞助块候选中间：候选要带进续写，广告别漏到正文里。"""
+    _install(monkeypatch, [
+        _Stream([_Chunk("正文"), _Chunk("\n\n--")], error=_gateway_error()),
+        _Stream([_Chunk("- \nSponsored by X\n")]),
+    ])
+    router = _router(count=1)
+
+    texts, _, _, error = _run_stream(router, continue_prompt=CONTINUE_PROMPT)
+
+    assert error is None
+    assert "".join(texts) == "正文\n"
 
 
 # ---- 4. 全链失败时的日志归属 ----
@@ -659,6 +823,49 @@ def test_stream_endpoint_logs_all_provider_failures(monkeypatch):
     assert row.fallback_attempts == 2
     assert "通道1" in row.error_message and "通道2" in row.error_message
     assert "BadGatewayError" in row.error_message
+
+
+def test_stream_endpoint_silently_continues_after_midstream_break(monkeypatch):
+    """中途断流：SSE 里只有连续正文，没有 fallback / error，日志留一条续写尾注。"""
+    from fastapi.testclient import TestClient
+
+    from app import deps
+    from app.main import app
+    from app.routers import chat as chat_router
+
+    _install(monkeypatch, [
+        _Stream([_Chunk("前半")], error=_gateway_error()),
+        _Stream([_Chunk("后半")]),
+    ])
+    router = _router(count=2)
+    monkeypatch.setattr(chat_router, "_build_llm", lambda *_args, **_kwargs: router)
+    app.dependency_overrides[deps.get_code_context] = lambda: deps.CodeContext(
+        code=_active_code(), reason=""
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/chat/stream",
+            json={
+                "tool_id": TEST_TOOL_ID,
+                "input": "你好",
+                "request_id": "midstream_continue_endpoint_case",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "event: fallback" not in response.text
+    assert "event: error" not in response.text
+    assert "event: explaining" not in response.text
+    assert "event: done" in response.text
+    assert '"前半"' in response.text and '"后半"' in response.text
+
+    row = _wait_usage_log("midstream_continue_endpoint_case")
+    assert row is not None
+    assert row.status == "success"
+    assert row.fallback_attempts == 1        # 只试了一家：续写不算换家
+    assert row.error_message.startswith("中途断流续写×1")
 
 
 def test_build_kwargs_direct_passthrough():

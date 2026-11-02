@@ -263,7 +263,9 @@ uv run uvicorn app.main:app --port 8000
 
 把 `FIRST_TOKEN_TIMEOUT` 调小（如 3 秒）缩短等待。然后正常用前端：应看到「备用通道切换 1/3 → 2/3」面板，管理后台的使用日志里能看到逐家失败摘要与最终命中的那家——这条链路以前只能靠真烧钱复现。
 
-上游场景：`happy` / `slow` / `long` / `reasoning` / `paper` / `migration` / `timeout` / `error` / `empty` / `mid-error`。默认从路径取，也支持 `X-Mock-Scenario` 头和模型名包含场景名。
+上游场景：`happy` / `slow` / `long` / `reasoning` / `paper` / `migration` / `timeout` / `error` / `empty` / `mid-error` / `mid-abort`。默认从路径取，也支持 `X-Mock-Scenario` 头和模型名包含场景名。
+
+`mid-error` 是「发完几帧就干净结束、不发 `[DONE]`」，OpenAI 客户端只会当作流正常收尾，**不会抛异常**；要测「已经吐出正文后上游报错」，用 `mid-abort`：它在第 `fault_at` 帧后发一帧 `data: {"error": …}`，SDK 据此抛错，litellm 归一成 `MidStreamFallbackError`。给同一个模型配 `/v1/mid-abort`（首选）+ `/v1/happy`（备用），前端应看到正文连续、没有错误卡，使用日志里多一条「中途断流续写×N」尾注。
 
 ---
 

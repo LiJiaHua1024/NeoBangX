@@ -482,6 +482,10 @@ async def stream_explanations(jobs, *, build_llm, stop_event, transfer_count, st
                     if previous_provider and providers and len(providers) > 1:
                         providers_override = sorted(providers, key=lambda p: p.get("id") == previous_provider)
                     call["providers"] = [p.get("id") for p in (providers_override or providers or [])]
+                    # 中途断流由路由层带着残文自动续写（stream_kwargs 里的 continue_prompt），
+                    # 对这里是透明的：题块解析器看到的是同一条连续文本，跨尝试的状态
+                    # （QuestionBlocks 的 buffer/no/lines）本来就保留。续写也救不回来时
+                    # 才轮到下面的按题重试——那才是「丢弃这题、从头重写」。
                     async with aclosing(llm.chat_stream_with_stop(
                         user_prompt=call["prompt"], stop_event=stop_event, usage_out=call["usage"],
                         providers_override=providers_override, **stream_kwargs,

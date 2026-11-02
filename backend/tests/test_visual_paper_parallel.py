@@ -1601,3 +1601,87 @@ def test_incomplete_framework_discarded_on_client_disconnect(api, monkeypatch):
 
 
 
+
+
+def test_midstream_break_is_continued_within_one_call(monkeypatch):
+    """路由层带残文续写对并行精讲透明：半截题块在一次调用内补完，不触发按题重试。"""
+    from litellm import exceptions as litellm_exceptions
+
+    from app.services import llm_router as router_module
+    from app.services.llm_router import LLMRouter
+
+    class _Delta:
+        def __init__(self, content=None):
+            self.content = content
+
+    class _Choice:
+        def __init__(self, delta):
+            self.delta = delta
+            self.finish_reason = None
+
+    class _Chunk:
+        def __init__(self, content=None):
+            self.choices = [_Choice(_Delta(content))] if content is not None else []
+            self.usage = None
+
+    class _Stream:
+        def __init__(self, chunks, error=None):
+            self._chunks = list(chunks)
+            self._error = error
+
+        async def _gen(self):
+            for chunk in self._chunks:
+                yield chunk
+            if self._error is not None:
+                raise self._error
+
+        def __aiter__(self):
+            return self._gen()
+
+        async def aclose(self):
+            pass
+
+    body = analysis("1") + analysis("2")
+    cut = len(body) // 2
+    calls = []
+
+    async def fake_acompletion(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _Stream(
+                [_Chunk(body[:20])],
+                error=litellm_exceptions.BadGatewayError(
+                    message="bad gateway", llm_provider="openai", model="test-model"
+                ),
+            )
+        return _Stream([_Chunk(body[20:cut]), _Chunk(body[cut:])])
+
+    monkeypatch.setattr(router_module, "acompletion", fake_acompletion)
+
+    def build_llm():
+        providers = [{
+            "id": "prov_1", "name": "通道1", "base_url": "", "api_key": "test-key",
+            "enabled": True, "provider_model_id": "test-model",
+        }]
+        return LLMRouter(
+            providers_for_model=providers, default_model="test-model",
+            max_tokens=512, timeout=10, first_token_timeout=5, fast_fail_ms=0,
+        )
+
+    async def run():
+        jobs = plan_explanations(skeleton(2), LOADER, 1)
+        attempts = []
+        async for event, payload in stream_explanations(
+            jobs, build_llm=build_llm, stop_event=asyncio.Event(), transfer_count=1,
+            stream_kwargs={"continue_prompt": "从断点接着写，不要重复"}, concurrency=1, retry_delay=0,
+        ):
+            if event == "visual_task":
+                attempts.append(payload["attempt"])
+        return jobs, attempts
+
+    jobs, attempts = asyncio.run(run())
+
+    assert len(calls) == 2                       # 原请求 + 1 次续写请求，没有按题重跑
+    assert sorted(jobs[0].completed) == ["1", "2"]
+    assert jobs[0].state == "done"
+    assert max(attempts) == 1

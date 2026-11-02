@@ -11,6 +11,9 @@ provider 配置示例（管理后台 → 模型与线路，或最省事的 backe
 
 测 fallback 链时配三家，优先级从高到低：/v1/timeout（挂住）→ /v1/error（500）
 → /v1/happy（正常）。首块超时用 FIRST_TOKEN_TIMEOUT=3 缩短等待。
+
+测「中途断流自动续写」时，首选配 /v1/mid-abort（出几帧后发 error 帧）、备用配
+/v1/happy：预期正文连续、无错误卡，使用日志带「中途断流续写」尾注。
 """
 
 from __future__ import annotations
@@ -41,6 +44,10 @@ _UPSTREAM_SCENARIOS = {
     "error": {"http_status": 500},
     "empty": {"content": "empty"},
     "mid-error": {"content": "generic", "fault": "truncate", "fault_at": 8, "chunk_chars": 6},
+    # 出几帧后发一帧 SSE error：openai SDK 会据此抛错 → litellm 归一成
+    # MidStreamFallbackError，正是真实网关中途报错（或连接被掐）的形态。
+    # 与 mid-error（干净截断、不抛异常）区分开：后者复现不了「已开流后失败」。
+    "mid-abort": {"content": "generic", "fault": "abort", "fault_at": 8, "chunk_chars": 6},
 }
 
 
@@ -108,6 +115,16 @@ async def _stream(request: Request, scenario: str, body: dict) -> Any:
             yield f"data: {_chunk(model, {'content': piece})}\n\n"
             if plan.fault == "truncate" and index >= int(plan.fault_at or 0):
                 # 不发 [DONE] 就结束：真实后端会把它当成「已出正文后失败」
+                return
+            if plan.fault == "abort" and index >= int(plan.fault_at or 0):
+                # 中途报错帧：openai SDK 检测到 data.error 会抛 APIError，litellm 再把它
+                # 归一成 MidStreamFallbackError（带已生成内容），后端据此走中途续写。
+                yield (
+                    "data: "
+                    + json.dumps({"error": {"message": "假上游中途报错", "type": "server_error"}},
+                                 ensure_ascii=False)
+                    + "\n\n"
+                )
                 return
         usage = {
             "prompt_tokens": max(1, len(json.dumps(body.get("messages") or [], ensure_ascii=False)) // 4),

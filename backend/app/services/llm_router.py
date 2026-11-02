@@ -30,7 +30,7 @@ from app.services.llm import (
     is_reasoning_param_error,
     strip_reasoning_kwargs,
 )
-from app.services.output_guard import EndSponsorFilter, strip_end_sponsor
+from app.services.output_guard import ContinueDoneFilter, EndSponsorFilter, strip_end_sponsor
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,14 @@ DEFAULT_QUICK_RETRY_TIMEOUT = 10.0
 # 整条 fallback 链的首块总预算：从第一家开始计时，同时约束后续家的等待，
 # 全链最坏总等待接近它而不是每家各等满 first_token_timeout
 DEFAULT_TOTAL_FIRST_TOKEN_BUDGET = 45.0
+
+# ---- 中途断流续写 ----
+# 已经吐出正文后上游中断（litellm 的 MidStreamFallbackError 或其它传输类异常）：
+# 不能从头重来（用户会看到两份内容），只能带着残文续写。同一家最多续写一次
+# （多数断流是一次抖动，同家续写命中前缀缓存、文风连续），仍失败就静默换下一家
+# 继续续写；全链用尽才把错误交给上层（并行按题重试 / 单流错误卡）。
+# 这是安全上限，正常一两次就结束；0 表示关闭（回到「已开流后直接抛错」的老行为）。
+MAX_MIDSTREAM_RESUMES = 4
 
 # Retry-After 超过这个秒数就放弃快重试、直接切下一家：等 30 秒不如让后面的家
 # 顶上；便宜家的恢复交给熔断器的 HALF_OPEN 探测，不在单次请求里干等。
@@ -149,6 +157,23 @@ def retry_after_seconds(exc: BaseException) -> Optional[float]:
     return _retry_after_seconds(exc)
 
 
+def _is_client_status_error(exc: BaseException) -> bool:
+    """是否带 4xx 客户端错误状态码（408/429 这类瞬态除外）。
+
+    litellm 对 4xx 的中途错误策略是「直接抛、不 fallback」（见
+    `CustomStreamWrapper._handle_stream_fallback_error`）。自动续写跟随这套语义：
+    参数 / 权限 / 内容审核类错误，再续写一次也一样失败，没必要多烧一次调用。
+    """
+    status = getattr(exc, "status_code", None)
+    if not isinstance(status, int):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    try:
+        code = int(status)
+    except (TypeError, ValueError):
+        return False
+    return 400 <= code < 500 and code not in (408, 429)
+
+
 def _count_breaker_skipped(providers: list[dict]) -> int:
     """链里当前被熔断（OPEN、将沉底）的家数。"""
     return sum(
@@ -193,6 +218,7 @@ class LLMRouter:
         fast_fail_ms: float = DEFAULT_FAST_FAIL_MS,
         quick_retry_timeout: float = DEFAULT_QUICK_RETRY_TIMEOUT,
         total_first_token_budget: float = DEFAULT_TOTAL_FIRST_TOKEN_BUDGET,
+        max_midstream_resumes: int = MAX_MIDSTREAM_RESUMES,
     ):
         self.providers = list(providers_for_model or [])
         self.default_model = default_model
@@ -212,6 +238,14 @@ class LLMRouter:
         self.quick_retry_timeout = _non_negative(quick_retry_timeout, DEFAULT_QUICK_RETRY_TIMEOUT)
         # total_first_token_budget <= 0 表示不限总预算
         self.total_first_token_budget = _non_negative(total_first_token_budget, DEFAULT_TOTAL_FIRST_TOKEN_BUDGET)
+        # 中途断流续写：<= 0 表示关闭（已开流后失败直接抛错，与旧行为一致）
+        try:
+            self.max_midstream_resumes = max(0, int(max_midstream_resumes))
+        except (TypeError, ValueError):
+            self.max_midstream_resumes = MAX_MIDSTREAM_RESUMES
+        # 本请求已续写次数与最后一次续写前的错误摘要（使用日志的可观测性）
+        self.midstream_resumes: int = 0
+        self.last_resume_error: str = ""
         self.provider_used: Optional[dict] = None
         # 最后尝试的那家：全链失败时用它给日志归属（provider_used 只在成功时赋值）
         self.last_provider: Optional[dict] = None
@@ -351,6 +385,58 @@ class LLMRouter:
         if retry_after is not None:
             return retry_after if retry_after <= _RETRY_AFTER_MAX_WAIT else None
         return self.quick_retry_delay_ms / 1000.0 * random.uniform(0.5, 1.5)
+
+    def _may_continue(
+        self,
+        exc: Exception,
+        streamed_parts: list[str],
+        resume_prompt: Optional[str],
+        stop_event: Optional[asyncio.Event],
+    ) -> bool:
+        """这次「已经开流后」的失败能否带残文续写。
+
+        只要还能续写就不该从头重来；这里只挡住「续写没有意义、或没有条件」的情形：
+        没有续写指令 / 没有残文 / 已停止 / 本次续写次数用尽 / 4xx 客户端错误 /
+        不可重试的错误（上下文超限、内容审核——换谁都一样）。
+
+        判定只用同步启发式，不走 Jev：此刻除了续写就是失败，没有需要裁决的模糊
+        分支，而 Jev 的一次往返只会让断点停留得更久。
+        """
+        if not resume_prompt or self.max_midstream_resumes <= 0:
+            return False
+        if self.midstream_resumes >= self.max_midstream_resumes:
+            return False
+        if not "".join(streamed_parts).strip():
+            return False
+        if stop_event is not None and stop_event.is_set():
+            return False
+        if _is_client_status_error(exc):
+            return False
+        return is_retryable(exc)
+
+    def _resume_delay(self, exc: BaseException) -> float:
+        """续写前的短暂等待：避开「断了立刻重打」，同时尊重上游的 Retry-After。"""
+        retry_after = _retry_after_seconds(exc)
+        if retry_after is not None:
+            # 等太久不如直接换下一家（与快重试同一取舍）
+            return retry_after if retry_after <= _RETRY_AFTER_MAX_WAIT else 0.0
+        if self.quick_retry_delay_ms <= 0:
+            return 0.0
+        return self.quick_retry_delay_ms / 1000.0 * random.uniform(0.5, 1.5)
+
+    @staticmethod
+    def _continue_messages(base_messages: list[dict], partial: str, continue_prompt: str) -> list[dict]:
+        """续写请求的消息序列：原消息 → 残文（assistant）→ 续写指令。
+
+        与 `chat.py::_continue_messages` 同形：首条消息逐字节不变，供应商侧的前缀
+        缓存仍然命中；残文以 assistant 身份出现，模型才知道那是「自己已经写出来的」，
+        而不是用户给的素材。
+        """
+        return [
+            *base_messages,
+            {"role": "assistant", "content": partial},
+            {"role": "user", "content": continue_prompt},
+        ]
 
     async def _should_retry(self, exc: Exception, provider: dict, idx: int, total: int, model_id: str = "") -> bool:
         """该失败是否值得切下一家：Jev 优先判定，不可用立刻回退启发式。
@@ -633,6 +719,7 @@ class LLMRouter:
         usage_out: Optional[dict] = None,
         response_format: Optional[dict] = None,
         providers_override: Optional[list[dict]] = None,
+        continue_prompt: Optional[str] = None,
     ) -> AsyncGenerator[str | tuple[str, str] | tuple[str, dict], None]:
         """聚合路由的流式调用。
 
@@ -640,6 +727,9 @@ class LLMRouter:
         旧做法是就地改 self.providers——那是一个共享列表，多个 worker 并发持有同一
         个 router 实例时会互相干扰，分片日志的 provider 归属也会记成最后写入者。
         改为传局部顺序，不动共享状态。
+
+        continue_prompt：中途断流后的续写指令（`继续生成.md` / `<工具>续写.md` 的正文）。
+        不传（或提示词文件缺失）时不允许续写，已开流后失败照旧抛错。
 
         产出三类值：
         - 正文：plain str
@@ -650,6 +740,15 @@ class LLMRouter:
         fallback 语义：首个正文 token 前的失败才切下一家；纯推理片段不计入
         yielded_any，避免「只吐了思考就被误判为已开流」。首块等待受
         first_token_timeout 限制，超时按该家失效处理。
+
+        中途断流续写：已经吐过正文后上游中断（litellm 的 MidStreamFallbackError
+        或其它传输类异常）时不再直接抛错——把已生成的正文当成 assistant 消息、
+        末尾挂上 continue_prompt 再要一次，续写内容无缝拼在原正文之后。同一家最多
+        续写一次（命中前缀缓存、文风连续），仍失败就静默换下一家继续续写；全链用尽
+        或不可续写（上下文超限 / 内容审核 / 4xx / 没有续写指令 / 没有残文）时才抛
+        原异常，交给上层（并行按题重试、单流错误卡 + 继续生成入口）。
+        已经开流后**绝不**再发 `fallback` 事件：前端收到它会把派生器从零重跑，
+        已上屏的内容会再推一遍。
         """
         if not self.providers:
             raise RuntimeError("该模型未绑定任何可用 Provider")
@@ -663,151 +762,219 @@ class LLMRouter:
                 base_messages.append({"role": "system", "content": system_prompt})
             base_messages.append({"role": "user", "content": user_prompt})
 
+        resume_prompt = (continue_prompt or "").strip() or None
+
+        # ---- 请求级状态：跨 Provider、跨续写尝试都要保留 ----
+        self.midstream_resumes = 0
+        self.last_resume_error = ""
+        streamed_parts: list[str] = []   # 已生成正文原文（含被赞助块过滤器扣住的尾巴）
+        emitted = False                  # 是否已向调用方吐过正文
+        messages_for_attempt = base_messages
+        continuation = False             # 当前是否处于「带残文续写」模式
+        guard = EndSponsorFilter()
+        usage_model = model_id
+        attempted = False
         last_exc: Optional[Exception] = None
         self._chain_started = monotonic()
         # providers_override（并发执行器「避开上一家」的局部顺序）作为基底，
         # 熔断 OPEN 中的仍然沉底：两套语义同时保留
         providers = self._ordered_providers(providers_override or None)
         quick_retried: set[str] = set()
-        for idx, provider in enumerate(providers):
-            self.attempts = idx + 1
-            self.last_provider = provider
-            if not provider_health.claim_attempt((provider.get("id") or "").strip()):
-                self.breaker_skipped += 1
-                logger.info("LLM stream skip: provider=%s 熔断半开探测中，本次不让探测", self._provider_label(provider))
-                continue
-            kwargs = self._build_kwargs(
-                provider, model_id, base_messages, max_tokens, stream=True,
-                reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
-                extra_body=extra_body, response_format=response_format,
-            )
-            # 每家最多快重试一次：retry_pending 标记当前这轮是快重试建连
-            retry_pending = False
-            while True:
-                yielded_any = False
-                streamed_parts: list[str] = []
-                # 结尾赞助块过滤器：按尝试各自新建，快重试/fallback 时自动重置
-                guard = EndSponsorFilter()
-                response: object | None = None
-                # 首块等待按总预算与快重试收紧，见 _effective_first_token_timeout
-                first_token_timeout = self._effective_first_token_timeout(quick=retry_pending)
-                attempt_started = monotonic()
-                try:
-                    try:
-                        response, chunks = await self._open_stream(kwargs, first_token_timeout=first_token_timeout)
-                    except Exception as e:
-                        if has_reasoning_params(kwargs) and is_reasoning_param_error(e):
-                            logger.warning(
-                                "Provider %s 流式建连拒绝推理参数，自动剥离推理参数在当前 Provider 原地重试: %s",
-                                self._provider_label(provider), e,
-                            )
-                            kwargs = strip_reasoning_kwargs(kwargs)
-                            response, chunks = await self._open_stream(kwargs, first_token_timeout=first_token_timeout)
-                        else:
-                            raise
-
-                    if chunks is not None:
-                        async for chunk in chunks:
-                            if stop_event and stop_event.is_set():
-                                logger.info("LLM stream stopped by stop_event")
-                                break
-                            if not getattr(chunk, "choices", None):
-                                if usage_out is not None and getattr(chunk, "usage", None):
-                                    extract_usage(chunk.usage, usage_out)
-                                continue
-                            if usage_out is not None and getattr(chunk.choices[0], "finish_reason", None):
-                                usage_out["finish_reason"] = chunk.choices[0].finish_reason
-                            delta = chunk.choices[0].delta
-                            if delta is None:
-                                continue
-                            reasoning = extract_reasoning_from_delta(delta)
-                            if reasoning:
-                                yield ("reasoning", reasoning)
-                            content = getattr(delta, "content", None)
-                            if isinstance(delta, dict):
-                                content = delta.get("content", content)
-                            if content:
-                                # 用量估算仍用原文（更接近计费），只对吐给调用方的正文过滤
-                                streamed_parts.append(content)
-                                filtered = guard.feed(content)
-                                if filtered:
-                                    yielded_any = True
-                                    yield filtered
-                    # 收尾：吐掉被过滤器扣住的残留（普通结尾照常输出，赞助块整段丢弃）
-                    tail = guard.flush()
-                    if tail:
-                        yielded_any = True
-                        yield tail
-                    # 流结束：用户停止按正常收尾；否则要求至少产出过正文，
-                    # 空响应（上游既没报错也没给正文）算该家失效，交给下面的 fallback 逻辑
-                    stopped = bool(stop_event and stop_event.is_set())
-                    if not yielded_any and not stopped:
-                        raise EmptyResponseError(
-                            f"{self._provider_label(provider)} 未返回任何正文"
-                        )
-                    if usage_out is not None:
-                        estimate_missing_usage(base_messages, "".join(streamed_parts), kwargs["model"], usage_out)
-                    self._settle_success(provider)
-                    return
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    self._last_error = e
-                    attempt_elapsed = monotonic() - attempt_started
-                    await self._aclose_stream(response)
-                    response = None
-                    # 若已吐出首 token，则既不快重试也不 fallback，直接抛
-                    if yielded_any:
-                        logger.error(f"LLM stream error after yield (provider={self._provider_label(provider)}): {e}")
-                        self._settle_failure(provider, e)
-                        raise
-                    provider_exc: Exception = e
-                    # 快重试：失败得快且确定瞬态，同家再建连一次（每家每次调用最多一次）。
-                    # 快重试期间不 yield 任何事件（含 fallback 通知），前端停留在加载态等结论。
-                    delay = self._plan_quick_retry(
-                        e, provider, attempt_elapsed=attempt_elapsed,
-                        attempt_timeout=first_token_timeout, quick_retried=quick_retried,
+        resumed_providers: set[str] = set()
+        try:
+            for idx, provider in enumerate(providers):
+                self.attempts = idx + 1
+                self.last_provider = provider
+                if not provider_health.claim_attempt((provider.get("id") or "").strip()):
+                    self.breaker_skipped += 1
+                    logger.info("LLM stream skip: provider=%s 熔断半开探测中，本次不让探测", self._provider_label(provider))
+                    continue
+                # messages 可能在续写时变化，所以每次尝试前再写回 kwargs
+                kwargs = self._build_kwargs(
+                    provider, model_id, messages_for_attempt, max_tokens, stream=True,
+                    reasoning_effort=reasoning_effort, thinking_budget=thinking_budget,
+                    extra_body=extra_body, response_format=response_format,
+                )
+                usage_model = kwargs["model"]
+                # 每家最多快重试一次：retry_pending 标记当前这轮是快重试建连
+                retry_pending = False
+                while True:
+                    yielded_this_attempt = False
+                    # 续写的「其实已经写完」标记：只有续写尝试才需要剥
+                    sentinel = ContinueDoneFilter() if continuation else None
+                    response: object | None = None
+                    if not continuation:
+                        # 从头重来的尝试：上一条流（若有）的残文与过滤器尾巴都不能带进来
+                        streamed_parts.clear()
+                        guard = EndSponsorFilter()
+                    # 首块等待：首尝试按总预算与快重试收紧；续写直接给满——长文档
+                    # 跑到中途时整链首块预算早已耗尽，按预算算只会给 5 秒地板
+                    first_token_timeout = (
+                        self.first_token_timeout if continuation
+                        else self._effective_first_token_timeout(quick=retry_pending)
                     )
-                    if delay is not None and not retry_pending:
-                        quick_retried.add(self._retry_key(provider))
-                        self.quick_retries += 1
-                        retry_pending = True
-                        logger.warning(
-                            "LLM stream quick retry: model=%s provider=%s 失败 %.0fms，%.0fms 后同家重试: %s",
-                            model_id, self._provider_label(provider), attempt_elapsed * 1000, delay * 1000, e,
+                    attempt_started = monotonic()
+                    try:
+                        attempted = True
+                        kwargs["messages"] = messages_for_attempt
+                        try:
+                            response, chunks = await self._open_stream(kwargs, first_token_timeout=first_token_timeout)
+                        except Exception as e:
+                            if has_reasoning_params(kwargs) and is_reasoning_param_error(e):
+                                logger.warning(
+                                    "Provider %s 流式建连拒绝推理参数，自动剥离推理参数在当前 Provider 原地重试: %s",
+                                    self._provider_label(provider), e,
+                                )
+                                kwargs = strip_reasoning_kwargs(kwargs)
+                                kwargs["messages"] = messages_for_attempt
+                                response, chunks = await self._open_stream(kwargs, first_token_timeout=first_token_timeout)
+                            else:
+                                raise
+
+                        if chunks is not None:
+                            async for chunk in chunks:
+                                if stop_event and stop_event.is_set():
+                                    logger.info("LLM stream stopped by stop_event")
+                                    break
+                                if not getattr(chunk, "choices", None):
+                                    if usage_out is not None and getattr(chunk, "usage", None):
+                                        extract_usage(chunk.usage, usage_out)
+                                    continue
+                                if usage_out is not None and getattr(chunk.choices[0], "finish_reason", None):
+                                    usage_out["finish_reason"] = chunk.choices[0].finish_reason
+                                delta = chunk.choices[0].delta
+                                if delta is None:
+                                    continue
+                                reasoning = extract_reasoning_from_delta(delta)
+                                if reasoning:
+                                    yield ("reasoning", reasoning)
+                                content = getattr(delta, "content", None)
+                                if isinstance(delta, dict):
+                                    content = delta.get("content", content)
+                                if content:
+                                    # 用量估算仍用原文（更接近计费），只对吐给调用方的正文过滤
+                                    streamed_parts.append(content)
+                                    filtered = sentinel.feed(content) if sentinel is not None else content
+                                    filtered = guard.feed(filtered) if filtered else ""
+                                    if filtered:
+                                        yielded_this_attempt = True
+                                        emitted = True
+                                        yield filtered
+                        # 收尾：先冲续写标记过滤器，再冲赞助块过滤器（续写时后者可能带着上一条流的尾巴）
+                        end_tail = sentinel.flush() if sentinel is not None else ""
+                        tail = guard.feed(end_tail) + guard.flush()
+                        if tail:
+                            yielded_this_attempt = True
+                            emitted = True
+                            yield tail
+                        # 流结束：用户停止按正常收尾；续写只回了「已完整」标记也算正常收尾；
+                        # 否则要求至少产出过正文，空响应算该家失效，交给下面的失败处理
+                        stopped = bool(stop_event and stop_event.is_set())
+                        if not yielded_this_attempt and not stopped:
+                            if sentinel is not None and sentinel.hit:
+                                logger.info(
+                                    "LLM stream 续写确认残文已完整（%s），不再补写",
+                                    self._provider_label(provider),
+                                )
+                                self._settle_success(provider)
+                                return
+                            raise EmptyResponseError(
+                                f"{self._provider_label(provider)} 未返回任何正文"
+                            )
+                        self._settle_success(provider)
+                        return
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self._last_error = e
+                        attempt_elapsed = monotonic() - attempt_started
+                        await self._aclose_stream(response)
+                        response = None
+                        provider_exc: Exception = e
+                        # 已经开流：绝不从头重来（用户会看到两份内容），只能带残文续写
+                        if emitted:
+                            if self._may_continue(e, streamed_parts, resume_prompt, stop_event):
+                                delay = self._resume_delay(e)
+                                if delay > 0:
+                                    await asyncio.sleep(delay)
+                                self.midstream_resumes += 1
+                                self.last_resume_error = " ".join(str(e).split())[:_MAX_ATTEMPT_ERROR_CHARS]
+                                messages_for_attempt = self._continue_messages(
+                                    base_messages, "".join(streamed_parts), resume_prompt
+                                )
+                                continuation = True
+                                guard = guard.handover()
+                                key = self._retry_key(provider)
+                                if key not in resumed_providers:
+                                    resumed_providers.add(key)
+                                    retry_pending = False
+                                    logger.warning(
+                                        "LLM stream 中途断流，同家带残文续写（第 %d 次）: model=%s provider=%s: %s",
+                                        self.midstream_resumes, model_id, self._provider_label(provider), e,
+                                    )
+                                    continue
+                                # 该家续写名额已用：静默换下一家继续续写（不发 fallback 事件）
+                                logger.warning(
+                                    "LLM stream 续写仍失败，静默换下一优先级继续续写: model=%s provider=%s: %s",
+                                    model_id, self._provider_label(provider), e,
+                                )
+                                last_exc = provider_exc
+                                self._remember_failure(provider, provider_exc, quick_retried=retry_pending)
+                                self._settle_failure(provider, provider_exc)
+                                break
+                            logger.error(f"LLM stream error after yield (provider={self._provider_label(provider)}): {e}")
+                            last_exc = provider_exc
+                            self._remember_failure(provider, provider_exc, quick_retried=retry_pending)
+                            self._settle_failure(provider, provider_exc)
+                            raise
+                        # 本尝试一个字都没吐：原有的「快重试 → 切下一家」逻辑
+                        delay = self._plan_quick_retry(
+                            e, provider, attempt_elapsed=attempt_elapsed,
+                            attempt_timeout=first_token_timeout, quick_retried=quick_retried,
                         )
-                        await asyncio.sleep(delay)
-                        continue
-                    # 该家最终被放弃：快重试的两次失败合并记一次，再计入熔断记忆
-                    last_exc = provider_exc
-                    self._remember_failure(provider, provider_exc, quick_retried=retry_pending)
-                    self._settle_failure(provider, provider_exc)
-                    # 首 token 前失败且可重试且有下一家，则 fallback
-                    # （Jev 判定期间不 yield，前端停留在加载/切换进度态等结论）
-                    if idx < len(providers) - 1 and await self._should_retry(provider_exc, provider, idx, len(providers), model_id):
-                        if isinstance(provider_exc, EmptyResponseError):
-                            reason = "empty"
-                        elif _is_timeout_error(provider_exc):
-                            reason = "timeout"
-                        else:
-                            reason = "unavailable"
-                        logger.warning(
-                            "LLM stream fallback (%s): model=%s provider=%s 失败，切下一优先级: %s",
-                            reason, model_id, self._provider_label(provider), provider_exc,
-                        )
-                        yield ("fallback", {
-                            "failed_index": idx + 1,
-                            "total": len(providers),
-                            "next_index": idx + 2,
-                            "reason": reason,
-                        })
-                        break
-                    logger.error(f"LLM stream error (provider={self._provider_label(provider)}): {provider_exc}")
-                    raise provider_exc
-                finally:
-                    await self._aclose_stream(response)
-                    if usage_out is not None and (yielded_any or idx == len(providers) - 1 or (stop_event and stop_event.is_set())):
-                        estimate_missing_usage(base_messages, "".join(streamed_parts), kwargs["model"], usage_out)
+                        if delay is not None and not retry_pending:
+                            quick_retried.add(self._retry_key(provider))
+                            self.quick_retries += 1
+                            retry_pending = True
+                            logger.warning(
+                                "LLM stream quick retry: model=%s provider=%s 失败 %.0fms，%.0fms 后同家重试: %s",
+                                model_id, self._provider_label(provider), attempt_elapsed * 1000, delay * 1000, e,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        # 该家最终被放弃：快重试的两次失败合并记一次，再计入熔断记忆
+                        last_exc = provider_exc
+                        self._remember_failure(provider, provider_exc, quick_retried=retry_pending)
+                        self._settle_failure(provider, provider_exc)
+                        # 首 token 前失败且可重试且有下一家，则 fallback
+                        # （Jev 判定期间不 yield，前端停留在加载/切换进度态等结论）
+                        if idx < len(providers) - 1 and await self._should_retry(provider_exc, provider, idx, len(providers), model_id):
+                            if isinstance(provider_exc, EmptyResponseError):
+                                reason = "empty"
+                            elif _is_timeout_error(provider_exc):
+                                reason = "timeout"
+                            else:
+                                reason = "unavailable"
+                            logger.warning(
+                                "LLM stream fallback (%s): model=%s provider=%s 失败，切下一优先级: %s",
+                                reason, model_id, self._provider_label(provider), provider_exc,
+                            )
+                            yield ("fallback", {
+                                "failed_index": idx + 1,
+                                "total": len(providers),
+                                "next_index": idx + 2,
+                                "reason": reason,
+                            })
+                            break
+                        logger.error(f"LLM stream error (provider={self._provider_label(provider)}): {provider_exc}")
+                        raise provider_exc
+                    finally:
+                        await self._aclose_stream(response)
+        finally:
+            # 中途停止 / 断开 / 异常时收不到末尾 usage 分块，用实际流出的全文估算。
+            # 放在整条链的最外层：续写尝试不该用半截正文抢先估一个偏小的数。
+            if usage_out is not None and attempted:
+                estimate_missing_usage(messages_for_attempt, "".join(streamed_parts), usage_model, usage_out)
         if last_exc:
             raise last_exc
         raise RuntimeError("LLM stream 无可用 Provider")

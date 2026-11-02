@@ -113,6 +113,15 @@ VISUAL_EXPLAIN_PROMPT = "试卷可视化全解精讲"
 VISUAL_FRAMEWORK_TOOL_NAME = "试卷可视化全解·框架"
 # 每题迁移题量未显式传值时的默认档位（前端滑杆初始值同此）
 VISUAL_TRANSFER_DEFAULT = TRANSFER_COUNT_DEFAULT
+# 精讲阶段的续写约束：精讲提示词假定材料末尾带【续写指令】工单，通用续写指令
+# 会让模型照单重发 @@TOTAL@@/@@GROUP@@，文档底部因此长出重复空分组。
+# 用户手点「继续生成」与路由层的中途断流自动续写共用这一段，避免两处文案漂移。
+VISUAL_EXPLAIN_CONTINUE_SUFFIX = (
+    "\n\n另外：这是已标注好的试卷骨架，语篇/题干/选项已定稿。"
+    "不要输出 @@TOTAL@@、@@PAPER@@、@@NOTICE@@、@@GROUP@@、@@GROUP_INTRO@@、"
+    "@@PASSAGE_DEF@@、@@STEM@@、@@OPTIONS@@、@@KEY@@ 等结构行，"
+    "只为还没有讲解的笔试题补写讲解字段；已生成过讲解的题不要重复输出。"
+)
 
 
 def _load_cfg() -> dict:
@@ -575,19 +584,32 @@ def _final_error_message(llm, status: str, base: str) -> str:
     - 逐家失败摘要里已含最终抛出的异常，所以有摘要时以摘要为准，不再重复拼接；
     - 但若调用方另有业务侧结论（如「模型未返回可确认的错因」），它比摘要更贴切，
       拼在前面一起记，避免被逐家摘要盖掉；
-    - 成功但发生过备用切换的也留一条尾注，便于后台发现长期不健康的那家。
+    - 成功但发生过备用切换的也留一条尾注，便于后台发现长期不健康的那家；
+    - 中途断流后自动续写过的同样留尾注：用户看到的是连续正文，日志里必须能查到
+      这次请求其实断过一次，否则「某些请求莫名很慢」永远找不到原因。
     """
     if not isinstance(llm, LLMRouter):
         return base
     summary = llm.failure_summary()
-    if not summary:
-        return base
+    resume_note = ""
+    if getattr(llm, "midstream_resumes", 0):
+        last = getattr(llm, "last_resume_error", "") or ""
+        resume_note = f"中途断流续写×{llm.midstream_resumes}" + (f"（{last}）" if last else "")
     if status == STATUS_SUCCESS:
-        return f"备用切换：{summary}"
-    last_error = llm.attempt_errors[-1][1] if llm.attempt_errors else ""
-    if base and last_error and base[:60] not in last_error:
-        return f"{base} ｜ {summary}"
-    return summary
+        notes = [f"备用切换：{summary}"] if summary else []
+        if resume_note:
+            notes.append(resume_note)
+        return "；".join(notes) if notes else base
+    if summary:
+        message = summary
+        last_error = llm.attempt_errors[-1][1] if llm.attempt_errors else ""
+        if base and last_error and base[:60] not in last_error:
+            message = f"{base} ｜ {summary}"
+    else:
+        message = base
+    if resume_note and message:
+        return f"{message}；{resume_note}"
+    return message or resume_note
 
 
 def _log_llm_call(
@@ -1312,13 +1334,14 @@ async def chat_stream(
         if req.tool_id == VISUAL_PAPER_TOOL_ID and prompt_filename == VISUAL_EXPLAIN_PROMPT:
             continue_messages[-1] = {
                 "role": "user",
-                "content": continue_messages[-1]["content"] + (
-                    "\n\n另外：这是已标注好的试卷骨架，语篇/题干/选项已定稿。"
-                    "不要输出 @@TOTAL@@、@@PAPER@@、@@NOTICE@@、@@GROUP@@、@@GROUP_INTRO@@、"
-                    "@@PASSAGE_DEF@@、@@STEM@@、@@OPTIONS@@、@@KEY@@ 等结构行，"
-                    "只为还没有讲解的笔试题补写讲解字段；已生成过讲解的题不要重复输出。"
-                ),
+                "content": continue_messages[-1]["content"] + VISUAL_EXPLAIN_CONTINUE_SUFFIX,
             }
+
+    # 中途断流续写指令：与用户手点「继续生成」同一份提示词（工具专属覆盖优先）。
+    # 提示词缺失时为空串 —— 路由层据此关掉自动续写，退回「已开流后直接报错」，
+    # 绝不用别的文案凑数（那会把半篇内容引到错误的续写形状上）。
+    # 精讲阶段要不要追加结构约束，取决于生成时实际用的是哪份提示词，见 event_generator。
+    shared_continue_prompt = _load_continue_prompt(loader, req.tool_id) or ""
 
     # 配置读取走短会话 + 线程池：不随 SSE 流占住连接池会话，也不阻塞事件循环
     cfg = await asyncio.to_thread(_load_cfg)
@@ -1517,6 +1540,18 @@ async def chat_stream(
         parallel_stream = None
         visual_fw_stream = None
         normal_stream = None
+        # 当前生成用的是不是「精讲」提示词：只有它才需要追加结构约束的续写指令。
+        # 两阶段里框架成功后会切成精讲提示词，所以这个标记要在跑的过程中更新。
+        explain_prompt_active = prompt_filename == VISUAL_EXPLAIN_PROMPT
+
+        def _resume_prompt() -> Optional[str]:
+            """中途断流自动续写用的指令；空串/None 表示本次不自动续写。"""
+            if not shared_continue_prompt:
+                return None
+            if req.tool_id == VISUAL_PAPER_TOOL_ID and explain_prompt_active:
+                return shared_continue_prompt + VISUAL_EXPLAIN_CONTINUE_SUFFIX
+            return shared_continue_prompt
+
         try:
             if visual_framework_prompt is not None and visual_framework_model is not None:
                 # 阶段一：Chores 模型在原卷上插标，applier 派生出 @@TAG@@ 骨架逐段推给前端，
@@ -1537,6 +1572,8 @@ async def chat_stream(
                         response_format=None,
                         reasoning_effort=visual_fw_reasoning_effort,
                         extra_body=visual_fw_extra_body,
+                        # 中途断流的自动续写：框架阶段用的是插标提示词，不加精讲结构约束
+                        continue_prompt=shared_continue_prompt or None,
                     )
                     async for item in visual_fw_stream:
                         if isinstance(item, tuple) and item and item[0] == "fallback":
@@ -1611,6 +1648,8 @@ async def chat_stream(
                         prompt = base_prompt
                         framework_usable = False
                     else:
+                        # 接下来写讲解：中途断流的续写指令要带上骨架专用约束
+                        explain_prompt_active = True
                         planned = plan_explanations(
                             applier.skeleton_text, loader, req.transfer_count or VISUAL_TRANSFER_DEFAULT
                         )
@@ -1673,7 +1712,9 @@ async def chat_stream(
                     transfer_count=req.transfer_count or VISUAL_TRANSFER_DEFAULT,
                     concurrency=visual_concurrency_for(cfg, model_used),
                     stream_kwargs={"model": model_used, "reasoning_effort": reasoning_effort,
-                                   "extra_body": extra_body, "response_format": None},
+                                   "extra_body": extra_body, "response_format": None,
+                                   # 中途断流：精讲是按题块写的，续写救得回来就省掉整题重跑
+                                   "continue_prompt": _resume_prompt()},
                 )
                 async with aclosing(parallel_stream):
                     async for event, payload in parallel_stream:
@@ -1705,6 +1746,8 @@ async def chat_stream(
                     extra_body=extra_body,
                     usage_out=usage,
                     response_format=visual_response_format,
+                    # 中途断流自动续写：同一份指令，精讲阶段额外带结构约束
+                    continue_prompt=_resume_prompt(),
                 )) as upstream:
                     async for item in upstream:
                         yield item
