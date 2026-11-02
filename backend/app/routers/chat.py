@@ -120,12 +120,22 @@ VISUAL_FRAMEWORK_TOOL_NAME = "试卷可视化全解·框架"
 VISUAL_TRANSFER_DEFAULT = TRANSFER_COUNT_DEFAULT
 # 精讲阶段的续写约束：精讲提示词假定材料末尾带【续写指令】工单，通用续写指令
 # 会让模型照单重发 @@TOTAL@@/@@GROUP@@，文档底部因此长出重复空分组。
-# 用户手点「继续生成」与路由层的中途断流自动续写共用这一段，避免两处文案漂移。
+# 用户手点「继续生成」（不重发残文）用这一段；路由层自动续写用下面的 RESUME 版。
 VISUAL_EXPLAIN_CONTINUE_SUFFIX = (
     "\n\n另外：这是已标注好的试卷骨架，语篇/题干/选项已定稿。"
     "不要输出 @@TOTAL@@、@@PAPER@@、@@NOTICE@@、@@GROUP@@、@@GROUP_INTRO@@、"
     "@@PASSAGE_DEF@@、@@STEM@@、@@OPTIONS@@、@@KEY@@ 等结构行，"
     "只为还没有讲解的笔试题补写讲解字段；已生成过讲解的题不要重复输出。"
+)
+# 自动续写（断流或撞上限）时残文已经作为 assistant 消息回传，模型看到的可能是
+# 半道题、半个字段。此时不能再说「只为还没有讲解的题补写」——它会把当前这题
+# 当成「已经写过」而跳过。这里的措辞专门指向「补完正在写的这一题」。
+VISUAL_EXPLAIN_RESUME_SUFFIX = (
+    "\n\n另外：上面这条 assistant 消息是已标注好的试卷骨架讲解，写到一半被打断了。"
+    "从断点接着补完当前这一题/这个字段，不要跳过当前题；不要输出 "
+    "@@TOTAL@@、@@PAPER@@、@@NOTICE@@、@@GROUP@@、@@GROUP_INTRO@@、"
+    "@@PASSAGE_DEF@@、@@STEM@@、@@OPTIONS@@、@@KEY@@ 等结构行；"
+    "已经完整写完的题不要重复输出。"
 )
 
 
@@ -1610,7 +1620,7 @@ async def chat_stream(
             if not shared_continue_prompt:
                 return None
             if req.tool_id == VISUAL_PAPER_TOOL_ID and explain_prompt_active:
-                return shared_continue_prompt + VISUAL_EXPLAIN_CONTINUE_SUFFIX
+                return shared_continue_prompt + VISUAL_EXPLAIN_RESUME_SUFFIX
             return shared_continue_prompt
 
         try:

@@ -965,3 +965,15 @@ def test_output_cap_recognizes_max_tokens_finish_reason():
     assert _hit_output_cap({"finish_reason": "max_tokens"}, 100)
     assert _hit_output_cap({"finish_reason": "length"}, 100)
     assert not _hit_output_cap({"finish_reason": "stop"}, 100)
+
+
+def test_auto_resume_suffix_targets_the_current_question():
+    """自动续写会重发残文：不能再对模型说「只为还没有讲解的题补写」。"""
+    from app.routers.chat import (
+        VISUAL_EXPLAIN_CONTINUE_SUFFIX,
+        VISUAL_EXPLAIN_RESUME_SUFFIX,
+    )
+
+    assert "只为还没有讲解的笔试题补写讲解字段" in VISUAL_EXPLAIN_CONTINUE_SUFFIX
+    assert "不要跳过当前题" in VISUAL_EXPLAIN_RESUME_SUFFIX
+    assert "只为还没有讲解的笔试题补写讲解字段" not in VISUAL_EXPLAIN_RESUME_SUFFIX
