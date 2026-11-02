@@ -438,6 +438,12 @@ def test_two_stage_stream_and_logs():
     assert fw_row.request_id.endswith("_fw")
     assert fw_row.units == 0
     assert fw_row.status == "success"
+    # 生成方式与框架校验结论必须落库：串行/并行不再只能靠 Prompt 尺寸反推
+    parent_meta = json.loads(main_row.step_meta)
+    assert parent_meta["mode"] == "parallel" and parent_meta["concurrency"] >= 1
+    assert parent_meta["framework"]["questions"] == 1
+    fw_meta = json.loads(fw_row.step_meta)
+    assert fw_meta["ok"] is True and fw_meta["stats"]["questions"] == 1
     # 原始数据分离：主记录输出 = 骨架+讲解合并文档、输入 = 用户原文；
     # 阶段一输出 = Chores 模型的插标指令原文、渲染提示词里是带行号的原卷
     main_payload = payloads[main_row.id]
@@ -887,7 +893,66 @@ def test_partial_framework_falls_back_to_original_paper(monkeypatch, failure):
     assert resp.status_code == 200
     assert "[DONE]" in resp.text
     stages = [json.loads(block.split("data: ", 1)[1]) for block in resp.text.replace("\r\n", "\n").split("\n\n") if block.startswith("event: stage\n")]
-    assert stages[-1] == {"name": "explain", "framework": False, "reset": True,
-                          "fallback": "single", "stopped": False}
+    stage = stages[-1]
+    assert stage["name"] == "explain" and stage["framework"] is False
+    assert stage["reset"] is True and stage["fallback"] == "single" and stage["parallel"] is False
+    # 回退原因必须随 stage 下发，且按失败类型区分
+    expected = {"anchor": "framework_low_quality", "truncated": "framework_truncated",
+                "error": "framework_error"}[failure]
+    assert stage["degrade"]["code"] == expected, stage["degrade"]
+    assert stage["degrade"]["detail"]
     assert _RAW_PAPER in captured["prompt"]
     assert "结构骨架" not in captured["prompt"].split("<material>")[0]
+    # 父日志的 step_meta 也要写 mode/degrade：后台不必再靠 Prompt 尺寸猜串行
+    from app.models import UsageLog
+    with SessionLocal() as db:
+        row = (db.query(UsageLog)
+               .filter(UsageLog.code_id == code.id, UsageLog.tool_name == "试卷可视化全解")
+               .order_by(UsageLog.id.desc()).first())
+    assert row is not None and row.step_meta
+    parent_meta = json.loads(row.step_meta)
+    assert parent_meta["mode"] == "single" and parent_meta["concurrency"] == 0
+    assert parent_meta["degrade"]["code"] == expected
+
+
+def test_range_only_paper_is_not_rejected_for_missing_applied_marks():
+    """区间 Q 只记一条 applied 却派生多题：不能再用 applied>=questions 判低质。"""
+    paper = (
+        "语法填空\n阅读下面短文。\n"
+        "A grammar passage with blanks __56__ __57__ __58__ __59__ __60__.\n"
+        "参考答案\n56 a"
+    )
+    marks = (
+        "@@TOTAL@@ 5\n@@PAPER@@ 语法专项\n"
+        "@@MARK GROUP grammar|语法填空@@ 语法填空\n"
+        "@@MARK PASSAGE P1@@ A grammar passage\n"
+        "@@MARK Q 56-60@@ A grammar passage\n"
+        "@@MARK KEY@@ 参考答案\n"
+    )
+    text, applier = _run(paper, marks)
+    assert applier.stats.questions == 5
+    assert applier.stats.structure_errors == 0
+    assert applier.stats.ok, applier.stats.as_dict()
+    data = parse_custom_visual_paper(text)
+    assert [q["no"] for g in data["groups"] for q in g["questions"]] == [
+        "56", "57", "58", "59", "60",
+    ]
+
+
+def test_empty_passage_region_clears_the_dangling_ref():
+    """PASSAGE 与直接 Q 同锚：不发 DEF 就必须清引用，否则后续题 passageUnresolved。"""
+    paper = "Passage text here.\n21. What is it?\nA. One B. Two\n参考答案\n21 A"
+    marks = (
+        "@@TOTAL@@ 1\n@@PAPER@@ T\n"
+        "@@MARK GROUP reading|阅读@@ Passage text\n"
+        "@@MARK PASSAGE P1@@ 21. What is it?\n"
+        "@@MARK Q 21@@ 21. What is it?\n"
+        "@@MARK OPTIONS@@ A. One\n"
+        "@@MARK KEY@@ 参考答案\n"
+    )
+    text, applier = _run(paper, marks)
+    assert applier.stats.ok
+    data = parse_custom_visual_paper(text)
+    q = data["groups"][0]["questions"][0]
+    assert not q.get("passageUnresolved")
+    assert q.get("passageRef") in {"", None}

@@ -9,7 +9,8 @@ import pytest
 from app.services.prompt_loader import PromptLoader
 from app.services.visual_paper import parse_custom_visual_paper
 from app.services.visual_paper_parallel import (
-    PARALLELISM, QuestionBlocks, plan_explanations, question_complete, question_missing, stream_explanations,
+    PARALLELISM, QuestionBlocks, plan_explanations, plan_explanations_with_reason, question_complete,
+    question_missing, stream_explanations,
 )
 
 LOADER = PromptLoader(Path(__file__).resolve().parents[2] / "prompts")
@@ -1453,7 +1454,12 @@ def test_legacy_continuation_preserves_work_order_without_rebuilding_framework(a
     response = client.post("/api/chat/stream", json={"tool_id": "13", "input": "Original paper\n\n" + brief})
     emitted = events(response)
     assert ("done", "[DONE]") in emitted
-    assert not any(e in {"stage", "visual_task"} for e, _ in emitted)
+    # 旧工单续写仍走单流，但现在会明确发一条 explain stage 说明原因
+    stages = [payload for event, payload in emitted if event == "stage"]
+    assert len(stages) == 1 and stages[0]["name"] == "explain"
+    assert stages[0]["parallel"] is False
+    assert stages[0]["degrade"]["code"] == "continuation_no_nos"
+    assert not any(e == "visual_task" for e, _ in emitted)
     assert len(prompts) == len(charges) == len(logs) == 1
     assert brief in prompts[0]
 
@@ -1685,3 +1691,104 @@ def test_midstream_break_is_continued_within_one_call(monkeypatch):
     assert sorted(jobs[0].completed) == ["1", "2"]
     assert jobs[0].state == "done"
     assert max(attempts) == 1
+
+
+def test_plan_reports_partial_selection_instead_of_dropping_everything():
+    """缺语篇的题退出并行，健康题照常规划；原因随结果返回，不再静默 []。"""
+    raw = (
+        "@@TOTAL@@ 2\n@@PAPER@@ Test\n"
+        "@@GROUP@@ reading|Reading|\n"
+        "@@PASSAGE_DEF@@ P1\nShared passage.\n"
+        "@@Q@@ 1\n@@PASSAGE_REF@@ P1\n@@STEM@@\nOne\n@@END_Q@@\n"
+        "@@Q@@ 2\n@@PASSAGE_REF@@ P404\n@@STEM@@\nTwo\n@@END_Q@@\n"
+    )
+    outcome = plan_explanations_with_reason(raw, LOADER, 1, ["1", "2"])
+    assert outcome.jobs and outcome.jobs[0].nos == ["1"]
+    assert outcome.reason == "partial"
+    assert outcome.dropped == ["2"]
+    assert "2" in outcome.detail
+
+
+def test_plan_all_unresolved_falls_back_with_reason_not_error():
+    raw = (
+        "@@TOTAL@@ 1\n@@PAPER@@ Test\n@@GROUP@@ reading|Reading|\n"
+        "@@Q@@ 1\n@@PASSAGE_REF@@ P404\n@@STEM@@\nOne\n@@END_Q@@\n"
+    )
+    outcome = plan_explanations_with_reason(raw, LOADER, 1, ["1"])
+    assert outcome.jobs == []
+    assert outcome.reason == "all_unresolved"
+    assert outcome.detail
+
+
+def test_plan_dedupes_cross_group_duplicate_numbers():
+    """按节重新编号的卷子可能出现跨组同号：只保留首次出现，避免同一题写两遍。"""
+    raw = (
+        "@@TOTAL@@ 2\n@@PAPER@@ Test\n"
+        "@@GROUP@@ reading|Reading|\n@@Q@@ 1\n@@STEM@@\nOne\n@@END_Q@@\n"
+        "@@GROUP@@ grammar|Grammar|\n@@Q@@ 1\n@@STEM@@\nOne again\n@@END_Q@@\n"
+    )
+    outcome = plan_explanations_with_reason(raw, LOADER, 1)
+    assert [no for job in outcome.jobs for no in job.nos] == ["1"]
+    assert outcome.reason == ""
+    assert "1" in outcome.detail or outcome.detail == ""
+
+
+def test_partial_unresolved_selection_keeps_healthy_questions_parallel(api, monkeypatch):
+    """续写名单里混进语篇未解析的题：健康题照常并行，不再整批 400/退回单流。"""
+    client, chat, logs, charges = api
+    seen = []
+
+    class Fake:
+        async def chat_stream_with_stop(self, *, user_prompt, usage_out, **kwargs):
+            nos = requested_nos(user_prompt)
+            seen.extend(nos)
+            for no in nos:
+                yield analysis(no)
+            usage_out.update(prompt_tokens=1, completion_tokens=2, total_tokens=3)
+
+    monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
+    raw = (
+        "@@TOTAL@@ 2\n@@PAPER@@ Test\n@@GROUP@@ grammar|Grammar|\n"
+        "@@PASSAGE_DEF@@ P1\nShared passage.\n"
+        "@@Q@@ 1\n@@PASSAGE_REF@@ P1\n@@STEM@@\nOne\n@@END_Q@@\n"
+        "@@Q@@ 2\n@@PASSAGE_REF@@ P404\n@@STEM@@\nTwo\n@@END_Q@@\n"
+    )
+    response = client.post("/api/chat/stream", json={
+        "tool_id": "13", "input": raw, "request_id": "vp-partial-select",
+        "transfer_count": 1, "visual_question_nos": ["1", "2"],
+    })
+    assert response.status_code == 200, response.text[:400]
+    assert seen == ["1"], f"只有健康题应进并行，实际 {seen}"
+    stages = [payload for event, payload in events(response) if event == "stage"]
+    assert any(s.get("degrade", {}).get("code") == "plan_partial" for s in stages), stages
+    parent = next(row for row in logs if row["request_id"] == "vp-partial-select")
+    assert parent["step_meta"]["mode"] == "parallel"
+    assert parent["step_meta"]["degrade"]["code"] == "plan_partial"
+
+
+def test_all_unresolved_selection_falls_back_instead_of_400(api, monkeypatch):
+    """名单里的题全缺语篇：不把用户堵在 400 上，单流兜底并把原因发出去。"""
+    client, chat, logs, charges = api
+    seen = []
+
+    class Fake:
+        async def chat_stream_with_stop(self, *, user_prompt, usage_out, **kwargs):
+            seen.append(user_prompt)
+            yield "@@TOTAL@@ 1\n"
+            usage_out.update(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+
+    monkeypatch.setattr(chat, "_build_llm", lambda *args, **kwargs: Fake())
+    raw = (
+        "@@TOTAL@@ 1\n@@PAPER@@ Test\n@@GROUP@@ grammar|Grammar|\n"
+        "@@Q@@ 1\n@@PASSAGE_REF@@ P404\n@@STEM@@\nOne\n@@END_Q@@\n"
+    )
+    response = client.post("/api/chat/stream", json={
+        "tool_id": "13", "input": raw, "request_id": "vp-all-unresolved",
+        "transfer_count": 1, "visual_question_nos": ["1"],
+    })
+    assert response.status_code == 200, response.text[:400]
+    assert seen, "必须真的发起单流兜底"
+    stages = [payload for event, payload in events(response) if event == "stage"]
+    assert any(s.get("degrade", {}).get("code") == "plan_all_unresolved" for s in stages), stages
+    parent = next(row for row in logs if row["request_id"] == "vp-all-unresolved")
+    assert parent["step_meta"]["mode"] == "single"

@@ -2628,6 +2628,27 @@ function adminApp() {
     logStepIssues(step) {
       return Object.entries(step.step_meta?.issues || {}).map(([no, issues]) => `第 ${no} 题：${issues.join('、')}`).join('；');
     },
+    /* 工具 13 的生成方式：并行 N 路 / 串行。老日志没有 step_meta.mode，返回空。 */
+    logVisualMode(row) {
+      const meta = row && row.step_meta;
+      if (!meta || !meta.mode) return "";
+      if (meta.mode === "parallel") return meta.concurrency ? `并行 ${meta.concurrency} 路` : "并行";
+      return "串行";
+    },
+    /* 悬停/详情里展示的完整原因；串行时这是唯一能回答「为什么没并行」的字段。 */
+    logVisualModeTitle(row) {
+      const meta = row && row.step_meta;
+      const degrade = meta && meta.degrade;
+      if (!degrade) return "";
+      return `${degrade.code || "degraded"}${degrade.detail ? `：${degrade.detail}` : ""}`;
+    },
+    /* 框架校验统计：ok=false 时这是判断「锚点失配还是区间 Q 被误杀」的依据。 */
+    logFrameworkStats(row) {
+      const f = row && row.step_meta && row.step_meta.framework;
+      if (!f) return "";
+      return `命中 ${f.marks_applied}/${f.marks_total} · 跳过 ${f.marks_skipped}`
+        + ` · 结构错误 ${f.structure_errors} · 题目 ${f.questions}`;
+    },
     logPayloadPages(part) {
       return Math.max(1, Math.ceil(part.total / this.logPayloadPageSize));
     },

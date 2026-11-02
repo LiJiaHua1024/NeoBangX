@@ -546,7 +546,7 @@ data: [DONE]
 | `reasoning` | 推理片段（与 token 同样 JSON 编码） | 模型的思考过程，仅用于展示，不计入正文、不写日志；不支持推理的模型不发送该事件，前端回退到原有等待动画 |
 | `fallback` | JSON 字符串 `{"failed_index": 1, "total": 3, "next_index": 2, "reason": "timeout"}` | 当前 Provider 失败、正在切换下一优先级（按优先级链顺序尝试）。`reason` 取值：`timeout`（首块等待超时）/ `empty`（上游未返回任何正文）/ `unavailable`（其余失败）。只用于向前端展示进度，不含 Provider 名称；单 Provider、切换后无下一家、或**正文已经开流**（此时走静默续写，见 7 末段）时不发送 |
 | `truncated` | JSON 字符串 `{"limit": 8192, "completion_tokens": 8100, "finish_reason": "length"}` | **所有工具**：本次输出撞到了上限（工具 32 用 `ocr_max_tokens`，其余用全局 `max_tokens`），结果可能不完整。判据有两条：上游回传 `finish_reason=length`（权威），或 `completion_tokens` 达到上限的 95%（供应商不回传结束原因时的兜底）。前端据此在结果区给出「继续生成」出口、把记录标成「待补全」，不静默交付半份内容（工具 13 有自己的完整性提示，不再重复展示） |
-| `stage` | JSON 字符串 `{"name": "framework" \| "explain", "framework": true, "reset": false}` | **工具 13**：两阶段生成的阶段切换。`framework` = Chores 模型正在插标解析结构（此后的 `token` 是派生的 `@@TAG@@` 骨架）；`explain` = 主模型开始写讲解。`framework` 为 `false` 表示框架解析失败、已回退单阶段老路径；`reset: true` 要求丢弃本轮已发出的残缺骨架，保留续写前的正文。标记失配、漏题、输出触顶或异常时回退原卷，停止生成时保留残片。详见 12.1 |
+| `stage` | JSON 字符串 `{"name": "framework" \| "explain", "framework": true, "reset": false, "parallel": false, "concurrency": 0, "degrade": {"code": "framework_low_quality", "detail": "..."}}` | **工具 13**：两阶段生成的阶段切换。`framework` = Chores 模型正在插标解析结构（此后的 `token` 是派生的 `@@TAG@@` 骨架）；`explain` = 主模型开始写讲解。`framework: false` 表示没有可用骨架（框架关闭/失败/被拒），单流从原卷重跑；`reset: true` 要求丢弃本轮已发出的残缺骨架，保留续写前的正文。`parallel: true` 表示并行精讲已建立，`concurrency` 是实际并发；`degrade` 只在没进并行、或部分题没纳入并行时出现（`code` 为机器可读原因，`detail` 给用户看），前端据此展示「本次未并行：…」。**串行也会发 `explain` stage**（没有阶段一的请求同样发），否则原因没有事件可挂。标记失配、漏题、输出触顶或异常时回退原卷，停止生成时保留残片。详见 12.1 |
 | `explaining` | JSON 字符串 `{"model": "..."}` | 失败已经发生、后端正在把报错转写成给用户看的两句话（Chores 模型，总预算见下）。**非终态事件**：前端收到后立刻停止显示「生成中」（状态条改为「生成没有成功，正在整理说明…」、收起停止按钮），随后由 `error` 事件给出结论 |
 | `done` | `[DONE]` / `[CANCELLED]` | 生成结束；`[CANCELLED]` 表示用户停止或客户端断开 |
 | `visual_task` | JSON 字符串 `{"id":"1","nos":["21","22"],"active_nos":["22"],"state":"running","completed":["21"],"attempt":2,"max_attempts":3,"issues":{},"fallback":null}` | **工具 13**：题目进度。状态为 `pending` / `running` / `retrying` / `done` / `incomplete` / `error` / `cancelled`；`completed` 为完整题号，`issues` 为按题号列出的缺失字段。`fallback` 格式同全局事件且不含供应商信息，由该任务自己的正文或结束事件清除 |
@@ -846,6 +846,8 @@ data: [DONE]
 列表与顶部汇总以用户请求为单位：试卷的框架、并发和补全调用通过 `parent_log_id` 关联主记录，不单独刷入列表。主记录返回 `step_count`，展示的 Token 包含内部调用；数据库只在实际调用上保存用量，避免重复计算。模型和供应商筛选同时匹配内部调用；状态、耗时、扣费显示整次请求的最终结果。旧版本框架和分片记录在启动时按请求 ID 与用户关联回主记录，保留原始数据。
 
 `GET /api/admin/logs/{id}/steps` 返回 `{items,total,page,page_size}`，默认每页 50 条，最多 100 条。子记录包含 `parent_log_id`、`step_name`、`step_meta`（题号、尝试轮数、缺失项、结束原因），不携带大段原始数据；点击调用后复用日志详情和原始数据分页接口。日志保留期清理主记录时一并清理关联调用与原始数据。
+
+工具 13 的父记录现在**无论串行还是并行**都写 `step_meta`：`{mode: "single" | "parallel", concurrency, framework: {marks_total, marks_applied, marks_skipped, questions, passages, pools, structure_errors} | null, degrade: {code, detail} | null}`；并行时另有 `completed` / `missing`。框架子记录写 `{ok, stats, degrade}`。后台列表据此显示「并行 N 路 / 串行」，详情展示 `degrade` 的完整原因——这是排查「为什么没并行」的唯一持久线索。
 
 **查询参数：**
 

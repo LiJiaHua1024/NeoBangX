@@ -178,41 +178,89 @@ def split_work_order(raw: str) -> tuple[str, bool]:
     return body, True
 
 
-def plan_explanations(raw: str, loader, transfer_count: int, selected: list[str] | None = None) -> list[ExplainJob]:
+@dataclass
+class PlanOutcome:
+    """并行规划的结果：jobs 为空时，reason/detail 说明为什么没并成。
+
+    之前 `plan_explanations` 在多种情况下直接 `return []`，调用方和日志都看不到
+    原因——线上只能从「父记录 Prompt 是完整提示词而不是并行占位符」反推串行。
+    现在把原因带出来，SSE `stage` 与使用日志的 `step_meta` 共用同一份文案。
+    """
+
+    jobs: list[ExplainJob] = field(default_factory=list)
+    reason: str = ""
+    detail: str = ""
+    dropped: list[str] = field(default_factory=list)
+
+
+def plan_explanations_with_reason(
+    raw: str, loader, transfer_count: int, selected: list[str] | None = None
+) -> PlanOutcome:
     # 老客户端的自然语言工单仍交给原来的单流处理，不能把其剩余题清单猜成全卷。
     body, has_order = split_work_order(raw)
     if selected is None and has_order:
-        return []
-    raw = body
-    paper = parse_custom_visual_paper(raw)
+        return PlanOutcome([], "legacy_work_order", "输入是旧版续写工单，没有结构化题号，按原卷单流续写")
+    paper = parse_custom_visual_paper(body)
     if not paper:
-        return []
+        return PlanOutcome([], "parse_failed", "骨架解析失败：没有识别出任何分组或题目")
     questions = [q for g in paper["groups"] for q in g["questions"]]
-    nos = [q["no"] for q in questions]
+    numeric = [q for q in questions if re.fullmatch(r"\d{1,3}", q["no"])]
     # 按题过滤，不再「一题坏整卷返回 []」：题号非数字或语篇引用未解析的题退出并行
     # （交给单流/续写处理），健康题照常并行。旧逻辑一题中招就整卷静默降级单流。
-    usable = [q for q in questions
-              if re.fullmatch(r"\d{1,3}", q["no"]) and not q.get("passageUnresolved")]
-    if not usable:
-        return []
-    usable_nos = [q["no"] for q in usable]
-    if len(set(usable_nos)) != len(usable_nos):
-        return []
-    if selected is not None:
+    unresolved = [q["no"] for q in numeric if q.get("passageUnresolved")]
+    usable = [q for q in numeric if not q.get("passageUnresolved")]
+    # 跨组同号在解析端通常已重开合并，但按节重新编号的卷子仍可能出现：保留首次
+    # 出现，避免同一题被两个 Job 各写一遍（重复输出 + 重复计费）。
+    unique: list[dict] = []
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for q in usable:
+        norm = _norm_no(q["no"])
+        if norm in seen:
+            duplicates.append(q["no"])
+            continue
+        seen.add(norm)
+        unique.append(q)
+    if not unique:
+        if not numeric:
+            return PlanOutcome([], "no_numeric_questions", "骨架里的题号无法识别，不能按题号并行")
+        return PlanOutcome(
+            [], "all_unresolved",
+            f"全部 {len(unresolved)} 道题的语篇未解析（缺 PASSAGE_DEF），无法并行",
+        )
+
+    wanted = {_norm_no(q["no"]) for q in unique}
+    dropped: list[str] = []
+    if selected:
         norm_selected = [_norm_no(s) for s in selected]
-        norm_usable = {_norm_no(n) for n in usable_nos}
-        if len(set(norm_selected)) != len(norm_selected) or not set(norm_selected) <= norm_usable:
+        if len(set(norm_selected)) != len(norm_selected):
             raise ValueError("待补全题号为空、重复或不属于当前试卷")
-    # 归一化后的集合用于挑题；写回工单的题号保留骨架原样（显示与序列化都不变）
-    wanted = {_norm_no(s) for s in selected} if selected else {_norm_no(n) for n in usable_nos}
-    jobs = []
+        all_nos = {_norm_no(q["no"]) for q in numeric}
+        selected_set = set(norm_selected)
+        unknown = selected_set - all_nos
+        if unknown and not (selected_set & wanted):
+            raise ValueError("待补全题号为空、重复或不属于当前试卷")
+        wanted = selected_set & wanted
+        dropped = [n for n in norm_selected if n not in wanted]
+        if not wanted:
+            # 题号都在卷面里，但全是语篇未解析的题：不 400，交给单流兜底，
+            # 并把「为什么没并行」写进 degrade。
+            return PlanOutcome(
+                [], "selected_unresolved",
+                f"待补全的 {len(dropped)} 道题语篇未解析，无法并行，改为单流补写",
+                dropped,
+            )
+
+    jobs: list[ExplainJob] = []
+    assigned: set[str] = set()
     # 迁移题量越大，单次处理原题越少，降低单任务撞输出上限的概率。
     # tc>=3 时退化为单题一片；tc 为 0 时按 1 计，避免 3//0 在 max() 求值前抛错。
     size = max(1, 3 // (transfer_count or 1))
     for group in paper["groups"]:
         # 全链路统一用归一化题号：挑题、工单、QuestionBlocks.allowed、publish 查找
         # 都基于它，"01" 与 "1" 才是同一题。序列化回骨架时按原样题号匹配（见下方映射）
-        targets = [_norm_no(q["no"]) for q in group["questions"] if _norm_no(q["no"]) in wanted]
+        targets = [_norm_no(q["no"]) for q in group["questions"]
+                   if _norm_no(q["no"]) in wanted and _norm_no(q["no"]) not in assigned]
         if not targets:
             continue
         material = group_material(paper, group)
@@ -220,14 +268,28 @@ def plan_explanations(raw: str, loader, transfer_count: int, selected: list[str]
             subset = targets[offset:offset + size]
             prompt = loader.render("试卷可视化全解精讲", material, {"transfer_count": transfer_count})
             if prompt is None:
-                return []
+                return PlanOutcome([], "prompt_missing", "精讲提示词缺失，无法生成并行任务")
             prompt += (
                 "\n\n【并行任务】\n"
                 f"本次只为这些题号生成完整讲解：{','.join(subset)}。其他题只作同篇上下文，不输出。\n"
                 "按并行工单契约输出 @@Q@@ 到 @@END_Q@@ 的完整讲解块。\n"
             )
+            assigned.update(subset)
             jobs.append(ExplainJob(str(len(jobs) + 1), subset, material, prompt))
-    return jobs
+    if not jobs:
+        return PlanOutcome([], "no_jobs", "没有可生成的任务")
+    detail = ""
+    if dropped:
+        detail = f"第 {'、'.join(dropped)} 题语篇未解析或不在可用骨架里，未纳入并行"
+    elif duplicates:
+        # 重号只是清理，不是降级：不进 degrade（否则前端会误报「部分题目未并行」）
+        logger.info("可视化精讲：跨组重号 %s，已按首次出现去重", duplicates)
+    return PlanOutcome(jobs, "partial" if dropped else "", detail, dropped)
+
+
+def plan_explanations(raw: str, loader, transfer_count: int, selected: list[str] | None = None) -> list[ExplainJob]:
+    """兼容旧调用方：只取任务列表。新代码请用 `plan_explanations_with_reason`。"""
+    return plan_explanations_with_reason(raw, loader, transfer_count, selected).jobs
 
 
 class QuestionBlocks:

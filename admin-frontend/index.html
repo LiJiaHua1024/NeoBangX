@@ -1061,6 +1061,8 @@
                       :title="`${l.tool_name || ''} #${l.tool_id || ''}${l.agent_mode ? ' · ' + agentModeLabel(l.agent_mode) : ''}`">
                     <span x-text="l.tool_name || l.tool_id || '—'"></span>
                     <span class="dim" x-show="l.step_count" x-text="' · ' + l.step_count + ' 次内部调用'"></span>
+                    <span class="dim" x-show="l.tool_id === '13' && l.step_meta && l.step_meta.mode"
+                          :title="logVisualModeTitle(l)" x-text="' · ' + logVisualMode(l)"></span>
                     <span class="dim" x-show="l.tool_id === 'agent' && l.agent_available !== false && l.agent_steps != null"
                           x-text="' · ' + l.agent_steps + ' 步'"></span>
                     <span class="dim" x-show="l.tool_id && l.tool_id !== 'agent'"> (#<span x-text="l.tool_id"></span>)</span>
@@ -2439,6 +2441,18 @@
                 <div class="meta-item">
                   <span class="meta-label">工具 ID</span>
                   <span class="meta-value mono break-any" x-text="logDetail?.tool_id || '—'"></span>
+                </div>
+                <div class="meta-item meta-item-wide" x-show="logDetail?.tool_id === '13' && logDetail?.step_meta?.mode">
+                  <span class="meta-label">生成方式</span>
+                  <span class="meta-value">
+                    <span x-text="logVisualMode(logDetail)"></span>
+                    <span class="dim" x-show="logVisualModeTitle(logDetail)"
+                          x-text="' · ' + logVisualModeTitle(logDetail)"></span>
+                  </span>
+                </div>
+                <div class="meta-item meta-item-wide" x-show="logDetail?.tool_id === '13' && logFrameworkStats(logDetail)">
+                  <span class="meta-label">框架校验</span>
+                  <span class="meta-value mono" x-text="logFrameworkStats(logDetail)"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">模型</span>

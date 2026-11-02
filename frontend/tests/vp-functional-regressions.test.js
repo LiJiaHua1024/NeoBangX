@@ -1162,3 +1162,42 @@ test("失败态复位写在解卷流的唯一入口，判据只认内容", () =>
     "成功收尾要把建议与失败分类一起清掉"
   );
 });
+
+/* ---------------- 串行原因（stage.degrade）的展示与续写题号筛选 ---------------- */
+
+test("stage.degrade 写入 vpDegrade，串行时给出可读原因", async () => {
+  const c = component();
+  loadPaper(c);
+  c._runStream = async ({ onStage }) => {
+    onStage({ name: "explain", framework: false, reset: true, fallback: "single",
+      parallel: false, degrade: { code: "framework_low_quality", detail: "框架结构未通过校验" } });
+  };
+  await c._runVisualStream("original exam");
+  assert.equal(c.vpParallel, false);
+  assert.equal(c.vpDegrade.code, "framework_low_quality");
+  assert.match(c.vpDegradeText, /本次未并行：框架结构未通过校验/);
+});
+
+test("续写只把数字题号发给后端，'?' 不再把整批拖回串行", async () => {
+  const raw3 = SKELETON.replace("@@TOTAL@@ 2", "@@TOTAL@@ 3") + `@@Q@@ 3
+@@PASSAGE_REF@@ P1
+@@STEM@@
+Third question?
+@@OPTIONS@@
+A. Five
+B. Six
+@@END_Q@@
+`;
+  const c = component();
+  loadPaper(c, raw3);
+  c.vpRefreshFramework = () => {};
+  Object.assign(c.visualPaper.groups[0].questions[0], fullQuestion("1"));
+  const q3 = c.visualPaper.groups[0].questions[2];
+  Object.assign(q3, { ...q3, no: "?" });
+  let captured;
+  c._runStream = async ({ visualQuestionNos }) => { captured = visualQuestionNos; };
+  await c.continueVisualPaper();
+  assert.deepEqual(captured, ["2"]);
+  assert.equal(c.vpDegrade.code, "continuation_partial_nos");
+  assert.match(c.vpDegrade.detail, /1 道题/);
+});

@@ -312,3 +312,21 @@ test("文本 API 保留原文，失败时仍解析 JSON 错误", async () => {
   env.fetch = async () => ({ ok: false, status: 404, json: async () => ({ detail: "原始数据不存在" }) });
   await assert.rejects(actualApi.call(app, "/download", { responseType: "text" }), /原始数据不存在/);
 });
+
+test("工具 13 的日志给出并行/串行与降级原因", () => {
+  const { app } = setup();
+  assert.equal(app.logVisualMode({ tool_id: "13", step_meta: { mode: "parallel", concurrency: 3 } }), "并行 3 路");
+  assert.equal(app.logVisualMode({ tool_id: "13", step_meta: { mode: "single",
+    degrade: { code: "framework_low_quality", detail: "结构未通过" } } }), "串行");
+  assert.equal(app.logVisualModeTitle({ tool_id: "13", step_meta: { mode: "single",
+    degrade: { code: "framework_low_quality", detail: "结构未通过" } } }),
+    "framework_low_quality：结构未通过");
+  assert.equal(app.logVisualMode({ tool_id: "13" }), "", "老日志没有 step_meta 时不显示");
+  assert.equal(app.logFrameworkStats({ tool_id: "13", step_meta: { framework: {
+    marks_total: 10, marks_applied: 8, marks_skipped: 2, structure_errors: 1, questions: 5 } } }),
+    "命中 8/10 · 跳过 2 · 结构错误 1 · 题目 5");
+  const html = fs.readFileSync(path.resolve(__dirname, "../../admin-frontend/index.html"), "utf8");
+  assert.match(html, /logVisualMode\(l\)/, "列表要显示并行/串行");
+  assert.match(html, /logVisualModeTitle\(logDetail\)/, "详情要显示降级原因");
+  assert.match(html, /logFrameworkStats\(logDetail\)/, "详情要显示框架校验统计");
+});

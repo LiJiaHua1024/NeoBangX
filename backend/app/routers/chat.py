@@ -72,7 +72,12 @@ from app.services.visual_paper_framework import (
     FrameworkStats,
     render_numbered_lines,
 )
-from app.services.visual_paper_parallel import explanation_concurrency, plan_explanations, split_work_order, stream_explanations
+from app.services.visual_paper_parallel import (
+    explanation_concurrency,
+    plan_explanations_with_reason,
+    split_work_order,
+    stream_explanations,
+)
 from app.services.runtime_config import (
     visual_concurrency_for,
     find_model_entry,
@@ -1271,17 +1276,42 @@ async def chat_stream(
     # 框架提示词文件缺失视作功能未启用，静默走单阶段老路径。
     visual_framework_prompt: Optional[str] = None
     visual_jobs = []
+    # 这条请求「本来应该跑阶段一」：原卷、非续写、也不是骨架/旧工单。
+    # 只有它才把「框架没跑」记成降级原因；骨架续写跳过阶段一是设计如此。
+    visual_framework_should_run = (
+        req.tool_id == VISUAL_PAPER_TOOL_ID
+        and not req.continue_from
+        and not looks_like_tag_document(req.input)
+        and not split_work_order(req.input)[1]
+    )
+    visual_framework_disabled = False
+    visual_framework_missing = False
+    visual_plan_reason = ""
+    visual_plan_detail = ""
     if req.visual_question_nos is not None:
         if req.tool_id != VISUAL_PAPER_TOOL_ID or req.continue_from or not looks_like_tag_document(req.input):
             raise HTTPException(status_code=400, detail="待补全题号仅适用于试卷骨架续写")
         try:
-            visual_jobs = plan_explanations(
+            outcome = plan_explanations_with_reason(
                 req.input, loader, req.transfer_count or VISUAL_TRANSFER_DEFAULT, req.visual_question_nos
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not visual_jobs:
-            raise HTTPException(status_code=400, detail="试卷骨架不完整或精讲提示词缺失，无法按题号补全")
+        visual_jobs = outcome.jobs
+        visual_plan_reason, visual_plan_detail = outcome.reason, outcome.detail
+        if not visual_jobs and outcome.reason in {"parse_failed", "prompt_missing"}:
+            # 骨架本身解析不出来 / 提示词缺失：单流也救不回来，直接说清楚。
+            raise HTTPException(
+                status_code=400,
+                detail=outcome.detail or "试卷骨架不完整，无法按题号补全",
+            )
+        # 其余空结果（题号都在卷面但语篇未解析、题号非数字……）不 400：
+        # 交给单流兜底，degrade 会说明为什么没并行，用户不会被堵死在错误卡上。
+    visual_plan_degrade = None
+    if visual_plan_reason and visual_plan_reason not in {"", "partial"}:
+        visual_plan_degrade = {"code": f"plan_{visual_plan_reason}", "detail": visual_plan_detail}
+    elif visual_plan_detail:
+        visual_plan_degrade = {"code": "plan_partial", "detail": visual_plan_detail}
     if req.tool_id == VISUAL_PAPER_TOOL_ID:
         if looks_like_tag_document(req.input):
             explain_prompt = loader.render(
@@ -1293,7 +1323,7 @@ async def chat_stream(
                 prompt = explain_prompt
                 # tool_name 由 prompt 文件名派生：续写轮次在用量日志里记为「…精讲」
                 prompt_filename = VISUAL_EXPLAIN_PROMPT
-        elif not req.continue_from and not split_work_order(req.input)[1]:
+        elif visual_framework_should_run:
             # 旧历史没有完整骨架，只能按原卷 + 续写工单补写。
             # 重新提取骨架会丢掉工单，导致第二阶段从头覆盖已有讲解。
             visual_framework_prompt = loader.render(
@@ -1302,6 +1332,7 @@ async def chat_stream(
                 {},
             )
             if visual_framework_prompt is None:
+                visual_framework_missing = True
                 logger.info("框架提示词缺失，试卷可视化全解走单阶段路径")
 
     # 图片识别：图片随请求上传（data URL）或来自扫码配对会话，二选一
@@ -1380,6 +1411,7 @@ async def chat_stream(
             visual_framework_max_tokens = max(512, visual_framework_max_tokens)
         else:
             visual_framework_prompt = None
+            visual_framework_disabled = True
 
     # 日志元数据：客户端信息与原始数据开关（开关随请求读取，改配置即时生效）
     client_ip, user_agent = get_client_info(request)
@@ -1540,6 +1572,24 @@ async def chat_stream(
         parallel_stream = None
         visual_fw_stream = None
         normal_stream = None
+        # 为什么没并行：随 SSE stage 与使用日志 step_meta 一起落库。
+        # 并行阶段也可能带一条「部分题没纳入」的明细，所以不是 None 就代表串行。
+        degrade = visual_plan_degrade
+        if degrade is None and req.tool_id == VISUAL_PAPER_TOOL_ID:
+            if visual_framework_disabled and visual_framework_should_run:
+                degrade = {"code": "framework_disabled",
+                           "detail": "管理后台未启用两阶段框架，本次按原卷单流生成"}
+            elif visual_framework_missing and visual_framework_should_run:
+                degrade = {"code": "framework_prompt_missing",
+                           "detail": "框架提示词文件缺失，本次按原卷单流生成"}
+            elif req.continue_from:
+                degrade = {"code": "continue_from_stream",
+                           "detail": "本次是残文续写，按单流接着写"}
+            elif not visual_framework_should_run and not visual_jobs:
+                degrade = {"code": "continuation_no_nos",
+                           "detail": "没有可并行的题号（缺完整骨架或题号不是数字），按单流续写"}
+        explain_stage_sent = False
+        framework_degrade: Optional[dict] = None
         # 当前生成用的是不是「精讲」提示词：只有它才需要追加结构约束的续写指令。
         # 两阶段里框架成功后会切成精讲提示词，所以这个标记要在跑的过程中更新。
         explain_prompt_active = prompt_filename == VISUAL_EXPLAIN_PROMPT
@@ -1647,14 +1697,32 @@ async def chat_stream(
                         logger.warning("讲解提示词缺失，试卷可视化全解回退单阶段")
                         prompt = base_prompt
                         framework_usable = False
+                        framework_degrade = {
+                            "code": "explain_prompt_missing",
+                            "detail": "精讲提示词缺失，已回退原卷单流",
+                        }
+                        degrade = framework_degrade
                     else:
                         # 接下来写讲解：中途断流的续写指令要带上骨架专用约束
                         explain_prompt_active = True
-                        planned = plan_explanations(
+                        outcome = plan_explanations_with_reason(
                             applier.skeleton_text, loader, req.transfer_count or VISUAL_TRANSFER_DEFAULT
                         )
-                        if planned and continue_messages is None:
-                            explain_jobs = planned
+                        if outcome.jobs and continue_messages is None:
+                            explain_jobs = outcome.jobs
+                            if outcome.detail:
+                                # 并行仍然成立，只是有一部分题没纳入（语篇未解析/重号）
+                                degrade = {"code": "plan_partial", "detail": outcome.detail}
+                        elif continue_messages is not None:
+                            degrade = {
+                                "code": "continue_from_stream",
+                                "detail": "本次是残文续写，未启用并行",
+                            }
+                        else:
+                            degrade = {
+                                "code": f"plan_{outcome.reason or 'empty'}",
+                                "detail": outcome.detail or "并行任务规划为空，改为单流",
+                            }
                 else:
                     # 干净回退：applier 只派生过头部/零散标记，前端几乎没收到内容，
                     # 老路径对原文完整重跑；骨架与老输出同为 @@TAG@@ 文档，解析端兼容
@@ -1662,6 +1730,29 @@ async def chat_stream(
                         "框架解析未产出可用骨架（%s）：stats=%s，回退单阶段",
                         request_id, visual_fw_stats.as_dict(),
                     )
+                    if not client_disconnected and not stop_event.is_set():
+                        s = visual_fw_stats
+                        if visual_fw_error:
+                            framework_degrade = {
+                                "code": "framework_error",
+                                "detail": f"框架提取失败：{visual_fw_error[:160]}",
+                            }
+                        elif _hit_output_cap(visual_fw_usage, visual_framework_max_tokens):
+                            framework_degrade = {
+                                "code": "framework_truncated",
+                                "detail": f"框架提取在 {visual_framework_max_tokens} tokens 处截断，结构不完整",
+                            }
+                        elif not s.ok:
+                            framework_degrade = {
+                                "code": "framework_low_quality",
+                                "detail": (
+                                    f"框架结构未通过校验：命中标记 {s.marks_applied}/{s.marks_total} 条、"
+                                    f"跳过 {s.marks_skipped} 条、结构错误 {s.structure_errors} 处、"
+                                    f"题目 {s.questions} 道"
+                                ),
+                            }
+                        if framework_degrade:
+                            degrade = framework_degrade
                     # 撞框架输出上限时要明说：否则用户以为拿到的是完整两阶段结果，
                     # 实际是残缺骨架回退重跑的，缺哪些题无从判断
                     if _hit_output_cap(visual_fw_usage, visual_framework_max_tokens):
@@ -1677,27 +1768,50 @@ async def chat_stream(
                 if discard_framework:
                     output_parts.clear()
                 # framework 标志告诉前端是否真的存在两阶段骨架（false = 回退单阶段，
-                # 前端不做骨架快照，续写走老路径）。并行规划为空时补 fallback 标记：
-                # 否则前端看到 framework:true 又收不到 parallel，会以为两阶段成功、
-                # 把随后的单流输出 snapshot 成骨架快照，与真实情况相反。
+                # 前端不做骨架快照，续写走老路径）。fallback:"single" 只表示「没进
+                # 并行」，framework:true 时骨架仍然可用——单流也是以骨架为材料、只写
+                # 讲解字段，前端可以安全地把它存成骨架快照（续写才有机会重新并行）。
                 # stop 时也要发：前端 vpStage 只由 stage 事件驱动，停在 framework 会让
                 # 第二步进度永为 0、续写入口不出现。reset 随 discard 一起给，
                 # 前端据此丢掉已推送的残骨架。
                 if not explain_jobs and not client_disconnected:
-                    yield {"event": "stage", "data": json.dumps(
-                        {"name": "explain", "framework": framework_usable, "reset": discard_framework,
-                         "fallback": "single", "stopped": stop_event.is_set()},
-                        ensure_ascii=False,
-                    )}
+                    explain_stage_sent = True
+                    payload = {
+                        "name": "explain", "framework": framework_usable, "reset": discard_framework,
+                        "fallback": "single", "parallel": False, "stopped": stop_event.is_set(),
+                    }
+                    if degrade:
+                        payload["degrade"] = degrade
+                    yield {"event": "stage", "data": json.dumps(payload, ensure_ascii=False)}
+
+            # 没有阶段一（框架关闭/输入是骨架/旧工单）时也要给前端一条 explain stage：
+            # 否则页面只能从「没有 parallel 字段」猜串行，degrade 的原因也就无处显示。
+            if (req.tool_id == VISUAL_PAPER_TOOL_ID and not explain_jobs
+                    and not explain_stage_sent and not client_disconnected):
+                explain_stage_sent = True
+                payload = {
+                    "name": "explain", "framework": False, "reset": False,
+                    "fallback": "single", "parallel": False, "stopped": stop_event.is_set(),
+                }
+                if degrade:
+                    payload["degrade"] = degrade
+                yield {"event": "stage", "data": json.dumps(payload, ensure_ascii=False)}
 
             if explain_jobs and not stop_event.is_set() and not client_disconnected:
-                yield {"event": "stage", "data": json.dumps({
+                explain_stage_sent = True
+                explain_concurrency = explanation_concurrency(
+                    explain_jobs, visual_concurrency_for(cfg, model_used)
+                )
+                explain_stage = {
                     "name": "explain", "framework": True, "parallel": True,
-                    "concurrency": explanation_concurrency(explain_jobs, visual_concurrency_for(cfg, model_used)),
+                    "concurrency": explain_concurrency,
                     "tasks": [job.progress() for job in explain_jobs],
                     # 续写已有骨架，不能把历史的骨架+讲解重新保存成骨架。
                     "reuse_framework": bool(visual_jobs),
-                }, ensure_ascii=False)}
+                }
+                if degrade:
+                    explain_stage["degrade"] = degrade
+                yield {"event": "stage", "data": json.dumps(explain_stage, ensure_ascii=False)}
                 if not visual_jobs:
                     notice = "@@NOTICE@@ 答案为 AI 判断，建议教师核对\n" if "@@KEY@@" not in applier.skeleton_text else ""
                     if notice:
@@ -1945,6 +2059,27 @@ async def chat_stream(
             # 先置位再落库：to_thread 会同步把写库任务提交进线程池，
             # 全局异常处理器据此跳过，避免同一次请求被记两条
             request.state.usage_logged = True
+            # 工具 13 的父记录始终写一份生成方式：串行也要写，否则日志里只能从
+            # 「Prompt 是完整提示词而不是并行占位符」反推，原因完全看不见。
+            visual_step_meta = None
+            if req.tool_id == VISUAL_PAPER_TOOL_ID:
+                visual_step_meta = {
+                    "mode": "parallel" if explain_jobs else "single",
+                    "concurrency": (
+                        explanation_concurrency(explain_jobs, visual_concurrency_for(cfg, model_used))
+                        if explain_jobs else 0
+                    ),
+                    "framework": (
+                        visual_fw_stats.as_dict() if visual_fw_stats is not None else None
+                    ),
+                    "degrade": degrade,
+                }
+                if explain_jobs:
+                    visual_step_meta["completed"] = [n for j in explain_jobs for n in j.completed]
+                    visual_step_meta["missing"] = {
+                        n: j.issues.get(n, ["未返回完整讲解"])
+                        for j in explain_jobs for n in j.nos if n not in j.completed
+                    }
             # 父子记录在同一个后台任务里顺序写入：即使收尾再被取消，也不会留下未关联的分片。
             def write_request_logs():
                 parent_id = _log_llm_call(
@@ -1960,11 +2095,7 @@ async def chat_stream(
                     rendered_prompt="并行精讲，提示词见步骤详情" if explain_jobs else prompt,
                     output_text="".join(output_parts), provider_id=prov_id, provider_name=prov_name,
                     fallback_attempts=attempts, fingerprint=fp_hash, device_summary=fp_summary,
-                    step_meta={
-                        "concurrency": visual_concurrency_for(cfg, model_used),
-                        "completed": [n for j in explain_jobs for n in j.completed],
-                        "missing": {n: j.issues.get(n, ["未返回完整讲解"]) for j in explain_jobs for n in j.nos if n not in j.completed},
-                    } if explain_jobs else None,
+                    step_meta=visual_step_meta,
                 )
                 if visual_fw_stats is not None:
                     fw_prov_id, fw_prov_name, fw_attempts = _router_log_fields(visual_fw_llm) if visual_fw_llm else (None, None, 0)
@@ -1979,6 +2110,13 @@ async def chat_stream(
                         rendered_prompt=visual_framework_prompt, output_text="".join(visual_fw_raw),
                         provider_id=fw_prov_id, provider_name=fw_prov_name, fallback_attempts=fw_attempts,
                         fingerprint=fp_hash, device_summary=fp_summary,
+                        # 框架子记录也写校验结论：ok=false 时父记录没有并行，
+                        # 后台必须能直接看到是「标记没命中/结构错误」而不是靠猜。
+                        step_meta={
+                            "ok": visual_fw_stats.ok,
+                            "stats": visual_fw_stats.as_dict(),
+                            "degrade": framework_degrade,
+                        },
                     )
                 for job in explain_jobs:
                     for index, call in enumerate(job.attempts, 1):
@@ -1999,8 +2137,12 @@ async def chat_stream(
                             provider_id=pid, provider_name=pname, fallback_attempts=count,
                             fingerprint=fp_hash, device_summary=fp_summary,
                         )
+            # run_in_executor 会立刻把写库任务提交给线程池；to_thread 是协程，
+            # 若外层 await 在它的第一步之前就被取消，线程根本不会启动。断连场景下
+            # 日志是审计数据，必须保证已经提交（shutdown 时线程池会等它跑完）。
+            log_future = asyncio.get_running_loop().run_in_executor(None, write_request_logs)
             try:
-                await asyncio.shield(asyncio.to_thread(write_request_logs))
+                await asyncio.shield(log_future)
             except asyncio.CancelledError:
                 logger.info("Request logs shielded from cancellation (%s)", request_id)
             except Exception:

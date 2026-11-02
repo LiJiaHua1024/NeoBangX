@@ -2351,6 +2351,9 @@ function nbx() {
     // 骨架文本存在 visualPaper.frameworkRaw 上——随历史快照一起持久化，历史续写才有骨架可走
     vpStage: "",
     vpParallel: false,
+    // 本次为什么没并行（后端 stage.degrade / 前端续写前判断）：{code, detail}。
+    // 只用于展示与排查，不参与生成逻辑；新一轮生成时清空。
+    vpDegrade: null,
     vpTasks: [],
     // 全屏讲解舞台：总览面板 / 控制台自动隐藏（上下两半可独立唤回）/ 固定
     vpOverviewOpen: false,
@@ -2789,6 +2792,7 @@ function nbx() {
       // newVisualPaperState 一并清空
       this.vpStage = "";
       this.vpParallel = false;
+      this.vpDegrade = null;
       this.vpTasks = [];
       this._vpRenderPending = false;
     },
@@ -3544,6 +3548,14 @@ function nbx() {
         return `已解析 ${this.vpQuestionCount}/${total} 题，未写完`;
       }
       return `讲解完成 ${this.vpExplainPercent}%，未确认写完`;
+    },
+    /* 为什么这一轮没进并行：后端 stage.degrade 或续写前的前端判断。
+       只做提示，不参与逻辑；有原因才显示，避免正常并行时多一行噪音。 */
+    get vpDegradeText() {
+      const d = this.vpDegrade;
+      if (!d || !d.detail) return "";
+      const partial = d.code === "plan_partial" || d.code === "continuation_partial_nos";
+      return `${partial ? "部分题目未并行" : "本次未并行"}：${d.detail}`;
     },
     /* 两阶段指示器状态计算属性 */
     get vpIsStage1Active() {
@@ -9845,7 +9857,7 @@ function nbx() {
       await this._runVisualStream(text, null);
     },
     // 可视化流式共享入口：updateId 非空时在原历史记录上追加更新，不新增记录
-    async _runVisualStream(inputText, updateId, visualQuestionNos = undefined) {
+    async _runVisualStream(inputText, updateId, visualQuestionNos = undefined, initialDegrade = null) {
       // 续写/重试也走这里（不经 resetVisualPaper）：开跑就收浮层，
       // 否则输入坞一收起，浮层会孤零零留在半空中
       this.closeVpSettings();
@@ -9868,6 +9880,7 @@ function nbx() {
       const baselineOutput = this.output;
       const baselineFramework = this.visualPaper.frameworkRaw;
       this.vpParallel = false;
+      this.vpDegrade = initialDegrade || null;
       this.vpTasks = [];
       // 完整骨架续写发送结构化缺失题号；简报兼容旧后端，不回传已有讲解正文。
       return this._runStream({
@@ -9885,10 +9898,13 @@ function nbx() {
           const name = (info && info.name) || "";
           if (name !== this.vpStage) {
             this.fallbackInfo = null;
+            this.vpDegrade = null;
             this.resetReasoning();
           }
           this.vpStage = name;
           this.vpParallel = !!info.parallel;
+          // 旧后端不发 degrade：保留续写前的前端判断，别把原因清空。
+          if (info && info.degrade) this.vpDegrade = info.degrade;
           this.vpTasks = Array.isArray(info.tasks) ? info.tasks : [];
           if (info && info.reset) {
             const historyId = this.vpHistoryId;
@@ -9897,13 +9913,13 @@ function nbx() {
             this._outputDirty = true;
             this.vpDoRender();
           }
-          // fallback:"single" 表示并行规划为空、走了单流兜底。此时不能把单流输出
-          // snapshot 成骨架快照——stage 协议说的是"有骨架"，实际讲解是单流写的，
-          // 快照会污染框架数据，让下一轮续写从原卷突变成骨架。
+          // 骨架可用但并行规划为空（fallback:"single"）时也要快照：后端这条单流
+          // 是以骨架为材料、只让模型写讲解字段，正文里本来就有完整骨架；存下来
+          // 下一轮「继续生成」才能重新并行。framework:false / reset:true 才是
+          // 真的回退重跑，此时绝不能拿单流输出冒充骨架。
           // reuse_framework（复用骨架续写）过去被排除在刷新之外，导致间隙编辑未落盘时
           // 下一轮仍拿旧快照；现在一视同仁地刷新。
-          if (name === "explain" && info.framework
-              && info.fallback !== "single" && this.visualPaper) {
+          if (name === "explain" && info.framework && !info.reset && this.visualPaper) {
             this.vpDoRender();
             this.visualPaper.frameworkRaw = this.vpSerializeRaw({ frameworkOnly: true });
           }
@@ -9945,6 +9961,12 @@ function nbx() {
       // 「思考过程」条和它的 token 统计（有正文时保留，那是正常的中断续写场景）
       if (!this.vpHasData && !this.output.trim()) this.resetReasoning();
       this.vpDoRender();
+      // 结构完整时把当前解析结果固化成骨架快照：串行跑完的记录也适用，下一次
+      // 「继续生成」才能直接按题号并行，而不是永远从原卷重跑单流。结构不完整
+      // （框架阶段就停了、只解析出半卷）不写，避免拿半份结构覆盖上一轮的好快照。
+      if (this.vpQuestionCount > 0 && this.vpQuestionCount >= this.vpTotal) {
+        this.vpRefreshFramework();
+      }
       if (state === "error") {
         this.status = "error";
         this.errorMsg = errMsg || "生成失败";
@@ -10119,8 +10141,20 @@ function nbx() {
       const declaredTotal = Number(this.visualPaper && this.visualPaper.total) || 0;
       const inflated = declaredTotal > 0 && this.vpQuestionCount < declaredTotal
         && declaredTotal > this.vpQuestionCount * 2;
+      // 旧记录/上一轮串行回退的记录可能没存骨架快照：结构已齐时用当前解析结果
+      // 重建一份。已有快照不重写——那是阶段一/编辑保存下来的原始骨架，重写会改变
+      // 文档形状（测试与用户编辑都依赖它保持不变）。
+      if (!this.visualPaper.frameworkRaw) this.vpRefreshFramework();
       const hasFramework = !!(this.visualPaper && this.visualPaper.frameworkRaw)
         && (inflated || this.vpQuestionCount >= this.vpTotal);
+      let continueDegrade = null;
+      if (!hasFramework) {
+        // 骨架不完整/旧记录：这一轮注定是单流，先把原因挂出来（后端 stage 到了会覆盖）
+        continueDegrade = {
+          code: "continuation_no_framework",
+          detail: "没有完整骨架快照，按原卷单流续写",
+        };
+      }
       // 完整骨架不能按最后一个 END_Q 截断：KEY / TOTAL 可能在其后。
       // 从已解析快照重建可同时保住答案区、编辑内容，并丢弃本轮未提交的半题。
       if (hasFramework) {
@@ -10180,13 +10214,21 @@ function nbx() {
       this.vpStage = "explain";
       const missingNos = hasFramework ? this.vpGroups.flatMap(g => g.questions || [])
         .filter(q => !this.vpQuestionAnalyzed(q)).map(q => String(q.no)) : undefined;
+      // 只把数字题号交给后端；个别题号没识别出来（"?"）不应把整批拖回串行。
       // 空数组的 every() 恒真，会把 visual_question_nos: [] 发出去，后端该字段
       // min_length=1 直接 422。空名单时改为不发字段，让后端按「全量」处理。
-      const structuredNos = (missingNos && missingNos.length
-        && missingNos.every(n => /^\d{1,3}$/.test(n))) ? missingNos : undefined;
+      const numericMissing = (missingNos || []).filter(n => /^\d{1,3}$/.test(n));
+      const skippedMissing = (missingNos || []).length - numericMissing.length;
+      if (skippedMissing > 0) {
+        continueDegrade = {
+          code: "continuation_partial_nos",
+          detail: `${skippedMissing} 道题的题号未识别，未纳入并行`,
+        };
+      }
+      const structuredNos = numericMissing.length ? numericMissing : undefined;
       const baseLen = this.output.length;
       const expectedSeq = this._runSeq + 1;
-      await this._runVisualStream(contInput, keepId, structuredNos);
+      await this._runVisualStream(contInput, keepId, structuredNos, continueDegrade);
       // 若续写未新增任何内容（模型未按指令），提示
       if (this._runSeq === expectedSeq && this.vpRunState === "done" && this.output.length === baseLen) {
         this.toast("续写未返回新题目，请重试", "warn");
@@ -10819,6 +10861,8 @@ function nbx() {
     },
     vpRefreshFramework() {
       // 完整旧记录可建立骨架；残缺旧记录仍需回到原卷补齐结构。
+      // 不按「声明总数虚高」强建：只拿到卷尾残片的记录也会满足那个比例，
+      // 强建会把前半卷从骨架里抹掉，下一轮续写就只剩后半卷。
       if (this.visualPaper.frameworkRaw || this.vpQuestionCount >= this.vpTotal) {
         this.visualPaper.frameworkRaw = this.vpSerializeRaw({ frameworkOnly: true });
       }

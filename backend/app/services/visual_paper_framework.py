@@ -108,13 +108,15 @@ class FrameworkStats:
 
     @property
     def ok(self) -> bool:
-        """骨架是否值得交给阶段二：至少解析出一道题，且命中标记数不少于题数
-        （每道题至少有一条 Q 标记才对上）。旧版固定要求 applied>=3，单题写作卷
-        （GROUP+Q 两条有效标记）会被误判成低质骨架、强制回退单阶段重跑整卷。
+        """骨架是否值得交给阶段二：至少解析出一道题，且没有结构错误。
 
-        注意：放宽的前提是空锚点已被 F8 改成不计 applied——否则假锚点也会被放进来。
+        不能用 `marks_applied >= questions` 判：区间 Q（`@@MARK Q 56-65@@`）只算
+        一条 applied，却派生 10 道题——纯语法填空/完形卷会因此被判低质，整卷回退
+        单流。applied 里还混着 GROUP/PASSAGE/OPTIONS/KEY，本来就不是「每题一条
+        标记」的计数。真正该拦的是结构错误：Q/GROUP/PASSAGE/OPTIONS 锚点失配、
+        题号漏标、题号乱序等都会让 ``structure_errors`` 增加，这里只认它。
         """
-        return self.questions >= 1 and self.marks_applied >= self.questions and not self.structure_errors
+        return self.questions >= 1 and not self.structure_errors
 
 
 def _trim_blank_edges(lines: list[str]) -> list[str]:
@@ -496,7 +498,7 @@ class FrameworkApplier:
             self.stats.passages += 1
             # DEF 行延迟到收口时再发：区域为空时（模型锚点与 Q 重合）不能留下一个
             # 没有正文的 @@PASSAGE_DEF@@——解析端不登记它，随后的题会被标上
-            # passageUnresolved，而 plan_explanations 一题中招就整卷关闭并行
+            # passageUnresolved，plan_explanations 会把这些题退出并行
             self._pending_passage_def = ref
             self._region = "passage"
         elif mtype == "Q":
@@ -535,6 +537,14 @@ class FrameworkApplier:
         self._region = "noise"
         content = _trim_blank_edges(content)
         if not content:
+            if kind == "passage" and self._pending_passage_def is not None:
+                # 空语篇区（PASSAGE 与直接 Q 同锚时最常见）：DEF 行不会发，引用也必须
+                # 一起清掉。否则后续题照写 @@PASSAGE_REF@@ Pn，解析端查不到定义 →
+                # passageUnresolved，plan_explanations 把这些题全部退出并行。
+                self.stats.marks_skipped += 1
+                logger.info("框架解析：PASSAGE %s 区域为空，跳过定义行并清空引用", self._pending_passage_def)
+                self._pending_passage_def = None
+                self._passage_ref = None
             return
         if kind == "noise":
             self._noise_lines.extend(content)
@@ -544,14 +554,10 @@ class FrameworkApplier:
                 if m:
                     self._unmarked_nos.add(int(m.group(1) or m.group(2)))
         if kind == "passage":
-            # 语篇区有正文才补发 DEF 行；空区域只留一个 ref 状态，不发空定义
+            # 走到这里语篇区必有正文：补发 DEF 行 + 正文
             if self._pending_passage_def is not None:
-                if content:
-                    self._emit([f"@@PASSAGE_DEF@@ {self._pending_passage_def}"])
-                    self._emit(self._drop_section_headers(content))
-                else:
-                    self.stats.marks_skipped += 1
-                    logger.info("框架解析：PASSAGE %s 区域为空，跳过定义行", self._pending_passage_def)
+                self._emit([f"@@PASSAGE_DEF@@ {self._pending_passage_def}"])
+                self._emit(self._drop_section_headers(content))
                 self._pending_passage_def = None
         elif kind == "stem":
             if self._question is not None:
