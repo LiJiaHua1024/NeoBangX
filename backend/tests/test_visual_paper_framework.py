@@ -956,3 +956,12 @@ def test_empty_passage_region_clears_the_dangling_ref():
     q = data["groups"][0]["questions"][0]
     assert not q.get("passageUnresolved")
     assert q.get("passageRef") in {"", None}
+
+
+def test_output_cap_recognizes_max_tokens_finish_reason():
+    """少数供应商直接回 max_tokens；它和 length 一样是撞上限，不能漏判。"""
+    from app.routers.chat import _hit_output_cap
+
+    assert _hit_output_cap({"finish_reason": "max_tokens"}, 100)
+    assert _hit_output_cap({"finish_reason": "length"}, 100)
+    assert not _hit_output_cap({"finish_reason": "stop"}, 100)

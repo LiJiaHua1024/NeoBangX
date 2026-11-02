@@ -56,6 +56,9 @@ DEFAULT_TOTAL_FIRST_TOKEN_BUDGET = 45.0
 # 继续续写；全链用尽才把错误交给上层（并行按题重试 / 单流错误卡）。
 # 这是安全上限，正常一两次就结束；0 表示关闭（回到「已开流后直接抛错」的老行为）。
 MAX_MIDSTREAM_RESUMES = 4
+# 干净的「撞输出上限」结束原因。LiteLLM 多数供应商归一成 length，少数直接回
+# max_tokens；两者都意味着「模型还有话没写完」，适用于同一套带残文续写。
+_LENGTH_FINISH_REASONS = {"length", "max_tokens"}
 
 # Retry-After 超过这个秒数就放弃快重试、直接切下一家：等 30 秒不如让后面的家
 # 顶上；便宜家的恢复交给熔断器的 HALF_OPEN 探测，不在单次请求里干等。
@@ -243,8 +246,10 @@ class LLMRouter:
             self.max_midstream_resumes = max(0, int(max_midstream_resumes))
         except (TypeError, ValueError):
             self.max_midstream_resumes = MAX_MIDSTREAM_RESUMES
-        # 本请求已续写次数与最后一次续写前的错误摘要（使用日志的可观测性）
+        # 本请求已续写次数与最后一次续写前的错误摘要（使用日志的可观测性）。
+        # length_resumes 是其中「干净撞上限」的次数，用来把日志尾注写准确。
         self.midstream_resumes: int = 0
+        self.length_resumes: int = 0
         self.last_resume_error: str = ""
         self.provider_used: Optional[dict] = None
         # 最后尝试的那家：全链失败时用它给日志归属（provider_used 只在成功时赋值）
@@ -766,6 +771,7 @@ class LLMRouter:
 
         # ---- 请求级状态：跨 Provider、跨续写尝试都要保留 ----
         self.midstream_resumes = 0
+        self.length_resumes = 0
         self.last_resume_error = ""
         streamed_parts: list[str] = []   # 已生成正文原文（含被赞助块过滤器扣住的尾巴）
         emitted = False                  # 是否已向调用方吐过正文
@@ -814,6 +820,8 @@ class LLMRouter:
                         else self._effective_first_token_timeout(quick=retry_pending)
                     )
                     attempt_started = monotonic()
+                    # 本段流自己的结束原因；续写后必须重新记，不能拿上一段的 length 误判
+                    finish_reason_this_attempt: Optional[str] = None
                     try:
                         attempted = True
                         kwargs["messages"] = messages_for_attempt
@@ -840,8 +848,11 @@ class LLMRouter:
                                     if usage_out is not None and getattr(chunk, "usage", None):
                                         extract_usage(chunk.usage, usage_out)
                                     continue
-                                if usage_out is not None and getattr(chunk.choices[0], "finish_reason", None):
-                                    usage_out["finish_reason"] = chunk.choices[0].finish_reason
+                                chunk_finish = getattr(chunk.choices[0], "finish_reason", None)
+                                if chunk_finish:
+                                    finish_reason_this_attempt = chunk_finish
+                                    if usage_out is not None:
+                                        usage_out["finish_reason"] = chunk_finish
                                 delta = chunk.choices[0].delta
                                 if delta is None:
                                     continue
@@ -881,6 +892,34 @@ class LLMRouter:
                             raise EmptyResponseError(
                                 f"{self._provider_label(provider)} 未返回任何正文"
                             )
+                        # 干净地撞输出上限（finish_reason=length / max_tokens）：
+                        # 模型不是失败，只是这一段预算用完了。和断流一样带残文续写，
+                        # 每段都是新的 max_tokens 预算；用完次数才把 length 交给上层，
+                        # 由 chat.py 发 truncated / 前端给「继续生成」。
+                        if (
+                            not stopped
+                            and emitted
+                            and resume_prompt
+                            and str(finish_reason_this_attempt or "").lower() in _LENGTH_FINISH_REASONS
+                            and self.midstream_resumes < self.max_midstream_resumes
+                        ):
+                            self.midstream_resumes += 1
+                            self.length_resumes += 1
+                            messages_for_attempt = self._continue_messages(
+                                base_messages, "".join(streamed_parts), resume_prompt
+                            )
+                            continuation = True
+                            guard = guard.handover()
+                            retry_pending = False
+                            if usage_out is not None:
+                                # 让下一段重新写 finish_reason；旧 length 留着会被
+                                # _hit_output_cap 当成最终结果，成功续写也会误报截断
+                                usage_out.pop("finish_reason", None)
+                            logger.warning(
+                                "LLM stream 撞输出上限，带残文续写（第 %d 次）: model=%s provider=%s",
+                                self.length_resumes, model_id, self._provider_label(provider),
+                            )
+                            continue
                         self._settle_success(provider)
                         return
                     except asyncio.CancelledError:

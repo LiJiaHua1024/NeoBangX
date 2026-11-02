@@ -48,6 +48,14 @@ class _Chunk:
         self.usage = usage
 
 
+def _finish_chunk(reason):
+    """只带 finish_reason 的收尾块（delta=None），例如 length / stop。"""
+    chunk = _Chunk("")
+    chunk.choices[0].finish_reason = reason
+    chunk.choices[0].delta = None
+    return chunk
+
+
 class _Stream:
     """脚本化的上游流：可延迟首块、可在末尾抛错。"""
 
@@ -216,14 +224,15 @@ def test_legacy_service_closes_upstream_on_generator_close(monkeypatch):
     asyncio.run(run())
 
 
-def _run_stream(router, stop_event=None, continue_prompt=None):
+def _run_stream(router, stop_event=None, continue_prompt=None, usage_out=None):
     """跑一遍流式调用，返回 (正文, 推理, 切换事件, 异常)。"""
 
     async def _run():
         texts, reasonings, fallbacks, error = [], [], [], None
         try:
             async for item in router.chat_stream_with_stop(
-                user_prompt="你好", stop_event=stop_event, continue_prompt=continue_prompt
+                user_prompt="你好", stop_event=stop_event, continue_prompt=continue_prompt,
+                usage_out=usage_out,
             ):
                 if isinstance(item, tuple):
                     if item[0] == "reasoning":
@@ -977,3 +986,96 @@ async def test_stream_auto_heals_on_reasoning_error_within_same_provider(monkeyp
     assert len(stream_attempts) == 2
     assert stream_attempts[0].get("reasoning_effort") == "off"
     assert "reasoning_effort" not in stream_attempts[1]
+
+
+def test_stream_continues_after_clean_length_finish(monkeypatch):
+    """干净撞 max output token：带残文续写，第二段结束才按 stop 收尾。"""
+    fake = _install(monkeypatch, [
+        _Stream([_Chunk("前半"), _finish_chunk("length")]),
+        _Stream([_Chunk("后半"), _finish_chunk("stop")]),
+    ])
+    router = _router(count=1)
+    usage = {}
+
+    texts, _, fallbacks, error = _run_stream(
+        router, continue_prompt=CONTINUE_PROMPT, usage_out=usage,
+    )
+
+    assert texts == ["前半", "后半"]
+    assert error is None and fallbacks == []
+    assert router.midstream_resumes == 1
+    assert router.length_resumes == 1
+    assert usage["finish_reason"] == "stop", "续写成功不能把旧 length 留在用量里"
+    sent = fake.calls[1]["messages"]
+    assert sent[0] == {"role": "user", "content": "你好"}
+    assert sent[1] == {"role": "assistant", "content": "前半"}
+    assert sent[2] == {"role": "user", "content": CONTINUE_PROMPT}
+
+
+def test_length_resume_honours_the_shared_resume_cap(monkeypatch):
+    """续写次数用尽后把 length 交回上层：前端仍会拿到 truncated + 继续生成。"""
+    fake = _install(monkeypatch, [
+        _Stream([_Chunk("一"), _finish_chunk("length")]),
+        _Stream([_Chunk("二"), _finish_chunk("length")]),
+        _Stream([_Chunk("不该到这"), _finish_chunk("stop")]),
+    ])
+    router = _router(count=1)
+    router.max_midstream_resumes = 1
+    usage = {}
+
+    texts, _, _, error = _run_stream(
+        router, continue_prompt=CONTINUE_PROMPT, usage_out=usage,
+    )
+
+    assert texts == ["一", "二"]
+    assert error is None
+    assert router.midstream_resumes == 1 and router.length_resumes == 1
+    assert usage["finish_reason"] == "length"
+    assert len(fake.calls) == 2
+
+
+def test_length_finish_without_continue_prompt_keeps_old_behaviour(monkeypatch):
+    """没有续写指令（老调用方）：length 仍按正常结束返回，不偷偷多打一次。"""
+    fake = _install(monkeypatch, [
+        _Stream([_Chunk("半"), _finish_chunk("length")]),
+        _Stream([_Chunk("不该到这"), _finish_chunk("stop")]),
+    ])
+    router = _router(count=1)
+    usage = {}
+
+    texts, _, _, error = _run_stream(router, usage_out=usage)
+
+    assert texts == ["半"]
+    assert error is None
+    assert router.midstream_resumes == 0
+    assert usage["finish_reason"] == "length"
+    assert len(fake.calls) == 1
+
+
+def test_length_resume_eats_the_continue_done_sentinel(monkeypatch):
+    """撞上限后续写只回「其实已经写完」：标记不能泄漏进正文。"""
+    _install(monkeypatch, [
+        _Stream([_Chunk("半"), _finish_chunk("length")]),
+        _Stream([_Chunk("@@CONTINUE"), _Chunk("_DONE@@"), _finish_chunk("stop")]),
+    ])
+    router = _router(count=1)
+
+    texts, _, _, error = _run_stream(router, continue_prompt=CONTINUE_PROMPT)
+
+    assert texts == ["半"]
+    assert error is None
+    assert router.length_resumes == 1
+
+
+def test_resume_log_note_separates_breaks_from_length_caps():
+    """后台尾注要能区分线路抖动（断流）与上限偏小（length）。"""
+    from app.routers.chat import _final_error_message
+
+    router = _router(count=1)
+    router.midstream_resumes = 2
+    router.length_resumes = 1
+    router.last_resume_error = "litellm.BadGatewayError: bad gateway"
+
+    note = _final_error_message(router, "success", "")
+
+    assert note == "中途断流续写×1（litellm.BadGatewayError: bad gateway）；撞上限续写×1"

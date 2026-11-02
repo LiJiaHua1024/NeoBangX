@@ -323,9 +323,10 @@ def _hit_output_cap(usage: dict, limit: int) -> bool:
     """输出是否撞到上限（撞上就提示结果可能不完整，不静默交付半份转录）。"""
     if not limit:
         return False
-    # 结束原因是 length 时一律算撞上限：completion_tokens 可能被本地估算补出一个
-    # 偏低的值（换行/标签的 token 边界误差），只看用量会把截断的骨架判成完整的
-    if str(usage.get("finish_reason") or "").lower() == "length":
+    # 结束原因是 length / max_tokens 时一律算撞上限：completion_tokens 可能被本地
+    # 估算补出一个偏低的值（换行/标签的 token 边界误差），只看用量会把截断的骨架
+    # 判成完整的。LiteLLM 多数供应商归一成 length，少数直接回 max_tokens。
+    if str(usage.get("finish_reason") or "").lower() in {"length", "max_tokens"}:
         return True
     try:
         completion = int(usage.get("completion_tokens") or 0)
@@ -590,16 +591,26 @@ def _final_error_message(llm, status: str, base: str) -> str:
     - 但若调用方另有业务侧结论（如「模型未返回可确认的错因」），它比摘要更贴切，
       拼在前面一起记，避免被逐家摘要盖掉；
     - 成功但发生过备用切换的也留一条尾注，便于后台发现长期不健康的那家；
-    - 中途断流后自动续写过的同样留尾注：用户看到的是连续正文，日志里必须能查到
-      这次请求其实断过一次，否则「某些请求莫名很慢」永远找不到原因。
+    - 中途断流 / 干净撞上限后自动续写过的同样留尾注：用户看到的是连续正文，
+      日志里必须能查到这次请求其实断过或截断过，否则「某些请求莫名很慢」
+      永远找不到原因。两类分开计数：断流会带最后一次异常摘要，撞上限不带。
     """
     if not isinstance(llm, LLMRouter):
         return base
     summary = llm.failure_summary()
-    resume_note = ""
-    if getattr(llm, "midstream_resumes", 0):
+    resumes = getattr(llm, "midstream_resumes", 0)
+    length_resumes = getattr(llm, "length_resumes", 0)
+    break_resumes = max(0, resumes - length_resumes)
+    resume_notes = []
+    if break_resumes:
+        note = f"中途断流续写×{break_resumes}"
         last = getattr(llm, "last_resume_error", "") or ""
-        resume_note = f"中途断流续写×{llm.midstream_resumes}" + (f"（{last}）" if last else "")
+        if last:
+            note += f"（{last}）"
+        resume_notes.append(note)
+    if length_resumes:
+        resume_notes.append(f"撞上限续写×{length_resumes}")
+    resume_note = "；".join(resume_notes)
     if status == STATUS_SUCCESS:
         notes = [f"备用切换：{summary}"] if summary else []
         if resume_note:
