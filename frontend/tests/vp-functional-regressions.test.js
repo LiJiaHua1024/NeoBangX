@@ -1091,3 +1091,74 @@ B. q
   assert.equal(missing[1].qIdx, 1, "第二道缺题必须指向索引 1");
   assert.equal(missing[2].qIdx, 2, "第三道缺题必须指向索引 2");
 });
+
+/* ---------------- 错误卡（红框）在「已经有内容」时不得出现 ---------------- */
+
+test("续写开跑即清掉上一轮失败态，红框不会跟着整轮续写挂出来", async () => {
+  const c = component();
+  loadPaper(c);
+  // 上一轮：正文已经出过，中途失败。错误卡当时被 vpFailedMidStream 压住了。
+  c.errorMsg = "生成中断，内容可能不完整，请重试";
+  c.errorAdvice = "换网络或稍后重试";
+  c.errorCode = "provider_error";
+  c.vpParseError = "生成失败";
+  c.explaining = true;
+  c.vpRunState = "error";
+  let seen = null;
+  // 复位点在 _runVisualStream 里，所以这里只能 stub 它下面那层（stub _runVisualStream 会绕过复位）
+  c._runStream = async () => {
+    c.streaming = true;
+    seen = {
+      errorMsg: c.errorMsg,
+      advice: c.errorAdvice,
+      code: c.errorCode,
+      parseError: c.vpParseError,
+      explaining: c.explaining,
+      // 错误卡的真实显隐条件（index.html: x-show="errorMsg && !vpFailedMidStream"）
+      cardVisible: !!c.errorMsg && !c.vpFailedMidStream,
+    };
+    c.output += "@@Q@@ 1\n@@ANSWER@@ A\n@@END_Q@@\n";
+    return { state: "done" };
+  };
+  await c.continueVisualPaper();
+  assert.deepEqual(seen, {
+    errorMsg: "", advice: "", code: "", parseError: "", explaining: false, cardVisible: false,
+  });
+});
+
+test("历史记录只留下快照、正文为空时，错误卡不常驻", () => {
+  const c = component();
+  loadPaper(c);
+  // 失败记录重开：visualPaper 从快照还原，output 可能是空的
+  c.output = "";
+  c.errorMsg = "生成失败";
+  assert.equal(c.vpHasData, true);
+  assert.equal(c.vpFailedMidStream, true, "有题目就算「出过内容」，不该再挂红框");
+});
+
+test("一题都没解析出来时错误卡照常出现", () => {
+  const c = component();
+  c.visualPaper = c.newVisualPaperState();
+  c.output = "";
+  c.errorMsg = "生成失败";
+  assert.equal(c.vpFailedMidStream, false, "零产出失败必须留错误卡给重试入口");
+});
+
+test("失败态复位写在解卷流的唯一入口，判据只认内容", () => {
+  const entry = SRC.slice(SRC.indexOf("async _runVisualStream("), SRC.indexOf("async _runVisualStream(") + 900);
+  assert.match(entry, /this\.errorMsg = "";/, "开流前要清失败原因");
+  assert.match(entry, /this\.errorAdvice = "";/, "开流前要清「该怎么做」");
+  assert.match(entry, /this\.errorCode = "";/, "开流前要清失败分类");
+  assert.match(entry, /this\.vpParseError = "";/, "开流前要清解析异常");
+  assert.match(entry, /this\.explaining = false;/, "开流前要撤掉「正在整理说明」");
+  const getter = /get vpFailedMidStream\(\) \{\n([\s\S]*?)\n    \},/.exec(SRC);
+  assert.ok(getter, "未找到 vpFailedMidStream，源码结构变了要同步这个用例");
+  assert.match(getter[1], /this\.vpHasData/, "判据要认已解析出的题目");
+  assert.doesNotMatch(getter[1], /!this\.streaming/, "判据不能再看 streaming：续写一开流就会翻成「显示」");
+  const finalize = SRC.slice(SRC.indexOf("finalizeVisualPaper(state, errMsg, opts = {}, seq) {"));
+  assert.match(
+    finalize,
+    /this\.errorMsg = "";\s*\n\s*this\.errorAdvice = "";\s*\n\s*this\.errorCode = "";/,
+    "成功收尾要把建议与失败分类一起清掉"
+  );
+});

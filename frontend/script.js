@@ -3785,12 +3785,14 @@ function nbx() {
       // 只认 done 会让全齐后手停止的卷子永远挂着「待补全」入口，需空跑一轮才知道没得写。
       return this.vpRunState === "done" || this.vpRunState === "stopped";
     },
-    /* 失败是否发生在正文已经开始输出之后。判据用 errorMsg + output：只有正文 token 会
-       追加进 output，思考内容进的是 reasoning，所以在思考阶段就断掉的失败没有 output，
-       仍按「整卷重跑」处理；一旦出过正文，页面保持已解析出的内容、恢复动作收敛成
-       「继续生成」，不再挂一张和它重复的错误卡。 */
+    /* 失败是否发生在正文已经开始输出之后。判据是「有没有产出过内容」：只有正文 token
+       会追加进 output，思考内容进的是 reasoning，所以在思考阶段就断掉的失败没有 output，
+       仍按「整卷重跑」处理；一旦出过正文，或历史快照里已经留下题目，页面就保持已解析出
+       的内容、恢复动作收敛成「继续生成」，不再挂一张和它重复的错误卡。
+       不看 streaming：开流与收尾之间 errorMsg 可能还留着上一轮的值（续写入口就是这样），
+       把「正在生成」当成「没失败过」会让红框在整轮续写里重新挂出来。 */
     get vpFailedMidStream() {
-      return !!this.errorMsg && !this.streaming && !!this.output.trim();
+      return !!this.errorMsg && (!!this.output.trim() || this.vpHasData);
     },
     /* 这份卷子对应的历史记录 id：续写/重试都写回这一条。resetVisualPaper 会把它连同
        卷子快照一起清掉，所以调用方必须在 reset 之前取走 */
@@ -9847,6 +9849,15 @@ function nbx() {
       // 续写/重试也走这里（不经 resetVisualPaper）：开跑就收浮层，
       // 否则输入坞一收起，浮层会孤零零留在半空中
       this.closeVpSettings();
+      // 新一轮开跑前先把上一轮的失败态整组清掉：错误卡、建议、分类、解析异常都属于
+      // 上一轮的结果。runVisualPaper / retryVisualPaper 各自清过，只有
+      // continueVisualPaper 不清——而它一开流 streaming 就为真，错误卡判据会翻回
+      // 「显示」，用户点「继续生成」等于把旧失败原因重新挂到一屏正在生成的内容上。
+      this.errorMsg = "";
+      this.errorAdvice = "";
+      this.errorCode = "";
+      this.vpParseError = "";
+      this.explaining = false;
       // 解卷的正文一律走结构化视图，不套用「从历史打开」的长文折叠
       this.outputFoldEligible = false;
       // 迁移题量随记录一起存：关掉页面再从历史续写时题量不会掉回默认值；
@@ -9970,8 +9981,11 @@ function nbx() {
         this.status = state;
         // 续写/重试成功后撤掉错误提示：这条路不经过 runVisualPaper 的复位，留着会让页面上
         // 一直挂着上次的失败原因，而且 vpFailedMidStream 恒为真——解析异常卡与 Markdown
-        // 回退视图会被它一直压住，明明这次解析成功了也看不到
+        // 回退视图会被它一直压住，明明这次解析成功了也看不到。
+        // 建议与失败分类一起清：它们决定下一次错误卡的第二行和给哪些动作，跨轮残留会串味。
         this.errorMsg = "";
+        this.errorAdvice = "";
+        this.errorCode = "";
         if (this.output.trim()) {
           const updateId = opts.updateId || null;
           let item = updateId ? this.history.find(h => h.id === updateId) : null;
