@@ -325,7 +325,7 @@ test("四条中断路径的确认弹窗都说明「会保存到历史记录」",
 });
 
 test("关页 / 刷新接上了 pagehide，并与「停止」同路收尾", () => {
-  assert.match(SRC, /addEventListener\("pagehide", \(\) => this\._onPageHide\(\)\)/);
+  assert.match(SRC, /addEventListener\("pagehide", \(e\) => this\._onPageHide\(e\)\)/);
   const hide = extractMethod("_onPageHide");
   assert.ok(hide.includes("this.abortActiveGeneration({ keepalive: true })"), "关页要走作废路径并带 keepalive");
   const abort = extractMethod("abortActiveGeneration");

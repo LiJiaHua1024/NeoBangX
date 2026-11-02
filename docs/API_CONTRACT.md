@@ -38,6 +38,7 @@
 | POST | `/api/chat/migration/analyze` | 非流式分析智能错题迁移错因（不扣费） | 可选（无码需免费+无码可用模型） |
 | POST | `/api/chat/migration/quota` | 预检查智能错题迁移额度（不扣费） | 可选 |
 | POST | `/api/chat/stream` | 流式调用工具（SSE） | 可选（无码需免费+无码可用模型）；**工具 32（图片识别）必须携带有效使用码** |
+| GET | `/api/chat/stream/{request_id}` | 断线后从 `since` 续接同一轮生成（SSE，见 8.4） | 可选（同 POST；归属按码 / 指纹） |
 | POST | `/api/chat/stop` | 中止流式生成（含免码的免费模型调用） | 可选 |
 | POST | `/api/chat/title-jobs` | 幂等创建持久标题任务（最多尝试 3 次） | 是 |
 | POST | `/api/chat/title-jobs/status` | 批量对账标题任务 | 是 |
@@ -524,6 +525,11 @@
 
 **响应：** SSE 事件流（`Content-Type: text/event-stream`）
 
+**响应头：** `X-Stream-Id: <实际流 id>`。客户端生成的 `request_id` 与服务端已有流撞名时会被加后缀；
+停止与续接都以这个头为准。
+
+**事件序号：** 每个内容事件带标准 SSE 字段 `id: <seq>`（从 1 递增），断线后按它续接。
+
 ```text
 event: token
 data: 这是
@@ -543,12 +549,14 @@ data: [DONE]
 | 事件 | data 内容 | 说明 |
 |------|-----------|------|
 | `token` | 文本片段 | LLM 生成的内容片段 |
+| `resume` | JSON 字符串 `{"session": "...", "since": 0, "last_seq": 7}` | 续接成功后立即发一条：确认这条连接已接上缓冲，并回传当前队尾。不是内容，不带 `id` |
+| `tick` | JSON 字符串 `{"t": 12.3}` | 保活帧，默认每 3 秒一条（`SSE_TICK_INTERVAL`）。不属于内容、不占序号；客户端据此区分「模型在思考」与「连接已经死了」 |
 | `reasoning` | 推理片段（与 token 同样 JSON 编码） | 模型的思考过程，仅用于展示，不计入正文、不写日志；不支持推理的模型不发送该事件，前端回退到原有等待动画 |
 | `fallback` | JSON 字符串 `{"failed_index": 1, "total": 3, "next_index": 2, "reason": "timeout"}` | 当前 Provider 失败、正在切换下一优先级（按优先级链顺序尝试）。`reason` 取值：`timeout`（首块等待超时）/ `empty`（上游未返回任何正文）/ `unavailable`（其余失败）。只用于向前端展示进度，不含 Provider 名称；单 Provider、切换后无下一家、或**正文已经开流**（此时走静默续写，见 7 末段）时不发送 |
 | `truncated` | JSON 字符串 `{"limit": 8192, "completion_tokens": 8100, "finish_reason": "length"}` | **所有工具**：本次输出撞到了上限（工具 32 用 `ocr_max_tokens`，其余用全局 `max_tokens`），结果可能不完整。判据有两条：上游回传 `finish_reason=length` / `max_tokens`（权威），或 `completion_tokens` 达到上限的 95%（供应商不回传结束原因时的兜底）。**Router 会先带残文自动续写**（与断流共用次数上限；每段重新获得 `max_tokens` 预算），续写成功则不发此事件；只有次数用尽或续写也不可行时，才把最终 `length` 交给上层。前端据此在结果区给出「继续生成」出口、把记录标成「待补全」，不静默交付半份内容（工具 13 有自己的完整性提示，不再重复展示） |
 | `stage` | JSON 字符串 `{"name": "framework" \| "explain", "framework": true, "reset": false, "parallel": false, "concurrency": 0, "degrade": {"code": "framework_low_quality", "detail": "..."}}` | **工具 13**：两阶段生成的阶段切换。`framework` = Chores 模型正在插标解析结构（此后的 `token` 是派生的 `@@TAG@@` 骨架）；`explain` = 主模型开始写讲解。`framework: false` 表示没有可用骨架（框架关闭/失败/被拒），单流从原卷重跑；`reset: true` 要求丢弃本轮已发出的残缺骨架，保留续写前的正文。`parallel: true` 表示并行精讲已建立，`concurrency` 是实际并发；`degrade` 只在没进并行、或部分题没纳入并行时出现（`code` 为机器可读原因，`detail` 给用户看），前端据此展示「本次未并行：…」。**串行也会发 `explain` stage**（没有阶段一的请求同样发），否则原因没有事件可挂。标记失配、漏题、输出触顶或异常时回退原卷，停止生成时保留残片。详见 12.1 |
 | `explaining` | JSON 字符串 `{"model": "..."}` | 失败已经发生、后端正在把报错转写成给用户看的两句话（Chores 模型，总预算见下）。**非终态事件**：前端收到后立刻停止显示「生成中」（状态条改为「生成没有成功，正在整理说明…」、收起停止按钮），随后由 `error` 事件给出结论 |
-| `done` | `[DONE]` / `[CANCELLED]` | 生成结束；`[CANCELLED]` 表示用户停止或客户端断开 |
+| `done` | `[DONE]` / `[CANCELLED]` | 生成结束；`[CANCELLED]` 表示用户停止，或掉线超过续接窗口被服务端收尾（已生成的内容仍保留，前端给「继续生成」） |
 | `visual_task` | JSON 字符串 `{"id":"1","nos":["21","22"],"active_nos":["22"],"state":"running","completed":["21"],"attempt":2,"max_attempts":3,"issues":{},"fallback":null}` | **工具 13**：题目进度。状态为 `pending` / `running` / `retrying` / `done` / `incomplete` / `error` / `cancelled`；`completed` 为完整题号，`issues` 为按题号列出的缺失字段。`fallback` 格式同全局事件且不含供应商信息，由该任务自己的正文或结束事件清除 |
 | `error` | JSON 字符串 `{"message": "...", "advice": "...", "code": "provider_busy", "model": "..."}` | 生成过程中发生错误（含全部 Provider 均失败）。`message` 是给用户看的「发生了什么」，`advice` 是「该怎么做」，两者都由 Chores 模型转写（见下），**不含上游原文**；`code` 是机器可读分类（`context_overflow` / `content_blocked` / `provider_auth` / `provider_busy` / `timeout` / `network` / `unknown`）供前端选动作与后台统计——前端据此收起「注定失败的重试」（超限/内容拦截/密钥权限）并把「编辑输入」提为主按钮，后台日志表按它显示中文分类角标；`model` 供前端失败归因。**失败分类与上游结束原因随使用日志落库**（`usage_logs.error_code` / `usage_logs.finish_reason`，`finish_reason=length` 即撞输出上限），因此后台可以统计错误分布与截断率。 |
 
@@ -608,6 +616,33 @@ data: [DONE]
 - **POST `/api/ocr/pair/{token}/hello`** 除计数外回传 `theme` / `sky`，手机页用会话里的这份权威值最终定色（网址参数只负责首屏不闪）。
 - **GET `/api/ocr/pair/{token}/events`** 推 `{state: waiting|connected, count, expires_in}`；照片每到一张推一帧，直到会话过期（推一帧 `error` 后收尾）或客户端断开。没有「完成」帧。
 - `theme` 是用户可控输入，服务端只按白名单取用，绝不原样写回页面。
+
+---
+
+### 8.4 断线续接（`GET /api/chat/stream/{request_id}`）
+
+POST 建立的那条连接被网络掐断时，生成不跟着停：服务端把它放在可续接会话里继续跑
+（默认 30 秒窗口，见 `SSE_RESUME_GRACE`），客户端用这个接口接回去。
+
+**请求：** `GET /api/chat/stream/{request_id}?since=<最后一条完整事件 id>`
+
+请求头与 POST 相同（`Authorization` 可选，无码规则一致；归属按使用码，匿名按浏览器指纹、再退回 IP）。
+
+| 状态码 | 含义 | 客户端应做 |
+| --- | --- | --- |
+| 200 | 接上了：先发 `resume`，随后按 `since` 补发缺口并继续实时推送 | 继续消费事件，直到 `done` |
+| 404 | 没有这条流，或不属于当前使用码 / 指纹（统一口径，不泄露他人流是否存在） | 停止重试，保留已生成内容，给「继续生成」 |
+| 410 | 有这条流但缓冲不完整 / 序号越界（服务端兜底保护） | 同上 |
+
+**语义：**
+
+- 只补发 `since` 之后的事件，不重复、不丢字。`since` 必须是**完整派发**过的最后一条事件 id（`id:` 行给出），断在事件中间时不要提前推进游标。
+- 断线期间生成照常推进，重连后可能一次收到一簇 token；前端打字机会平滑放完，不跳变。
+- 只有真的有读者在等时才开跑生成：响应头发出、但响应体一次都没被消费就断开的请求，不调用模型、不写日志、不计费。
+- 关掉标签页 / 直接离开且窗口内没人回来，服务端才按「用户停止」收尾并正常结算（与手动停止同口径）。
+- 生成结束后缓冲再保留 `SSE_RESUME_TTL`（默认 600 秒）：浏览器休眠醒来、最后一段丢包都能补齐；过期后返回 404。
+- **首连重发是幂等的**：同一个 `request_id` 的 POST 若撞上一条同属主、尚未结束的会话，服务端直接接回那条流，不会重复调用模型或重复计费（客户端在拿到响应头前被掐断时用它重试）。
+- 多 worker 部署时续接请求必须落回同一个 worker（与既有的 `/api/chat/stop` 同一前提；本项目默认单 uvicorn 进程）。
 
 ---
 
@@ -1505,6 +1540,7 @@ openrouter/deepseek/deepseek-chat
 | 1.26.0 | 2026-11-02 | 流式生成**中途断流改为自动续写**：上游在已经吐出正文后中断（litellm `MidStreamFallbackError` 或其它传输类异常）时不再直接以 `error` 结束，也不从头重来，而是把残文当 assistant 消息、挂上该工具的续写指令（`继续生成.md` / `<工具>续写.md`；工具 13 精讲阶段追加骨架结构约束）再要一次；同一家最多一次、仍失败静默换下一家（全链上限 4 次），续写内容无缝拼接、前端收不到任何事件，**正文开流后不再发 `fallback`**；续写只回 `@@CONTINUE_DONE@@` 时标记由后端吃掉、正常收尾。不可续写或用尽（无指令 / 无残文 / 超限 / 审核 / 4xx / 已停止 / 次数用尽）才抛原异常，并行精讲按题重生成、框架阶段回退单阶段、单流走 `error`（已上屏内容保留）。使用日志成功行新增「中途断流续写×N」尾注；假上游新增 `/v1/mid-abort` 场景用于复现（`mid-error` 是干净截断、不抛异常） |
 | 1.27.0 | 2026-11-02 | 试卷可视化全解**并行可观测**：`stage` 与父/框架日志新增 `degrade`（框架关闭/缺失/异常/触顶/结构校验失败/规划为空/语篇未解析/续写无题号），后台列表与详情显示「并行 N 路 / 串行 + 原因」；续写缺骨架时按解析结构重建快照、只送数字题号，部分题不可并行时保留健康题；框架判定改看 `structure_errors`（区间 Q 不再被 `applied` 误杀），空 PASSAGE 清引用。 |
 | 1.27.1 | 2026-11-02 | **撞输出上限也自动续写**：Router 在干净 `finish_reason=length` / `max_tokens` 收尾时，与中途断流共用「残文 + 续写指令」机制继续写，每段重新获得 `max_tokens` 预算，仍留在同一家 Provider；成功续写后用量记 `stop`，次数用尽才把 `length` 交回上层发 `truncated`。使用日志尾注把「中途断流续写×N」与「撞上限续写×M」分开记。 |
+| 1.28.0 | 2026-11-02 | **SSE 生成可续接**：`/api/chat/stream` 的每个内容事件新增标准 `id:` 序号与 `X-Stream-Id` 响应头（`request_id` 撞名时实际 id 带后缀），新增 `resume` / `tick` 两种非内容事件（续接确认与每 3 秒保活帧）；新增 `GET /api/chat/stream/{request_id}?since=<id>`，断线后只补发缺口（404 会话不存在/非本人、410 缓冲不完整）；同一 `request_id` 的 POST 重发在会话未结束时幂等接回，不重复调用模型或计费；服务端在 `SSE_RESUME_GRACE`（默认 30 秒）内继续生成，已结束的流再保留 `SSE_RESUME_TTL`（默认 600 秒）；归属校验与 `/stop` 同口径（码 / 指纹 / IP），令牌已用尽但签名有效仍算本人。`SSE_RESUME_GRACE=0` 退回「掉线即停」 |
 
 ---
 

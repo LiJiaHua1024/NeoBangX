@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from time import monotonic
 from typing import Annotated, Callable, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, StringConstraints
 from sse_starlette.sse import EventSourceResponse
 from starlette.background import BackgroundTask
@@ -66,6 +67,7 @@ from app.services.request_log import (
     get_fingerprint_info,
     record_usage_log,
 )
+from app.services import stream_hub
 from app.services.visual_paper import looks_like_tag_document
 from app.services.visual_paper_framework import (
     FrameworkApplier,
@@ -101,10 +103,10 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 # 用于支持 SSE 请求中止的全局事件字典
-# key: request_id, value: (asyncio.Event, 发起该流的属主标识)
-# 属主标识形如 "code:12"（持码）或 "fp:xxx"/"ip:1.2.3.4"（匿名免费调用）；
-# 停止请求必须校验属主，否则任何人都能掐断他人的生成。
-_stop_events: dict[str, tuple[asyncio.Event, str]] = {}
+# key: request_id, value: (asyncio.Event, 码属主键, 浏览器/IP 属主键)
+# 码属主键形如 "code:12:NBXU-..."（持码），匿名调用为 None 并退到 "fp:xxx"/"ip:1.2.3.4"；
+# 停止/续接请求必须校验属主，否则任何人都能掐断或偷看他人的生成。
+_stop_events: dict[str, tuple[asyncio.Event, Optional[str], str]] = {}
 
 # 免码调用（免费模型无码可用）在使用日志里的占位使用码
 ANON_CODE_LABEL = "（免码）"
@@ -171,9 +173,77 @@ def _identity_for(request: Request, code: UsageCode | None) -> str:
     return identity_key(code_id=code.id if code else None, fingerprint=fp_hash, ip=client_ip)
 
 
-def _owner_key(request: Request, code: UsageCode | None) -> str:
-    """SSE 流属主标识，用于 /stop 校验归属。"""
-    return f"code:{code.id}" if code else _identity_for(request, None)
+def _token_owner_alias(request: Request) -> Optional[str]:
+    """从 Authorization 里解出「这份令牌属于哪个使用码」。
+
+    只看签名与有效期，不看码当前是否还能用。原因是生成成功扣掉最后一次额度后，
+    客户端再来续接/停止时 `get_code_context` 只能给出「额度已用尽」——如果属主
+    键只按「可用码」算，用户会认不出自己刚发起的那条流。这里补上的别名让归属
+    判断与额度状态解耦，认证强度不变（仍要求令牌签名有效且未过期）。
+    """
+    raw = request.headers.get("authorization") or ""
+    parts = raw.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+        return None
+    try:
+        payload = jwt.decode(parts[1].strip(), settings.jwt_secret, algorithms=["HS256"])
+    except Exception:
+        return None
+    code_value = payload.get("code")
+    try:
+        code_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        return None
+    # 带上码值：SQLite 会复用被删除码的 rowid，只认 id 会把旧令牌认成新码
+    return f"code:{code_id}:{code_value}" if code_value else f"code:{code_id}"
+
+
+def _owner_material(request: Request, code: UsageCode | None) -> tuple[Optional[str], str]:
+    """返回 (码属主键, 浏览器/IP 属主键)。有码时按码，无码时按指纹/IP。"""
+    code_key = (
+        f"code:{code.id}:{code.code}"
+        if code is not None
+        else _token_owner_alias(request)
+    )
+    return code_key, _identity_for(request, None)
+
+
+def _owner_matches(
+    owner_code: Optional[str], owner_identity: str, request: Request, ctx: CodeContext
+) -> bool:
+    """归属校验：有码的流只认同一把码，匿名流只认同一浏览器指纹/IP。"""
+    code_key, identity = _owner_material(request, ctx.code)
+    if owner_code:
+        return code_key is not None and code_key == owner_code
+    return identity == owner_identity
+
+
+def _attach_stream_response(session: "stream_hub.StreamSession", since: int) -> EventSourceResponse:
+    """把一条可续接会话包成 SSE 响应（续接与「首连重发」共用）。
+
+    响应结束时只归还「读者」这一票，不关生成：会话的生命周期由生成任务与续接
+    窗口管。和主链路一样，send 被取消时生成器可能停在 yield，需要显式 aclose
+    才能跑到 detach。
+    """
+    body = session.subscribe(since)
+
+    async def close_body():
+        try:
+            await await_cleanup(asyncio.create_task(body.aclose()))
+        except RuntimeError:
+            # 生成器正被响应任务持有，关不掉：直接按「读者已离开」记账
+            session.detach()
+        except Exception:
+            logger.warning("关闭续接读者失败（%s）", session.id, exc_info=True)
+
+    return EventSourceResponse(
+        body,
+        media_type="text/event-stream",
+        headers={"X-Stream-Id": session.id},
+        background=BackgroundTask(close_body),
+        # sse-starlette 的 ping 单位是「秒」；配置值为毫秒，需换算
+        ping=max(1, settings.sse_retry_timeout // 1000),
+    )
 
 
 def _ensure_model_access(ctx: CodeContext, entry: dict | None) -> None:
@@ -1250,6 +1320,23 @@ async def chat_stream(
     无码或码不可用才返回 429。
     图片识别（工具 32）单独一条链路：需有效使用码、始终不扣次数、只按身份限流。
     """
+    # 同一次请求的重发不该再起一次生成：客户端在「已经发出请求、还没拿到响应头」
+    # 这段被网络掐断时，会带同一个 request_id 重发 POST。若服务端已经有一条同名、
+    # 同属主、还没结束的会话，直接把这条件连接接上去——不重复调用模型、不重复计费。
+    # 已经结束的会话不接：那多半是用户真的又点了一次生成，按新请求走（id 会自动让位）。
+    if req.request_id:
+        existing_session = stream_hub.get_session(req.request_id)
+        if (
+            existing_session is not None
+            and not existing_session.done
+            and existing_session.can_resume_from(0)
+            and _owner_matches(
+                existing_session.owner_code, existing_session.owner_identity, request, ctx
+            )
+        ):
+            logger.info("同一次请求重发，接回在途生成：%s", existing_session.id)
+            return _attach_stream_response(existing_session, 0)
+
     is_ocr = req.tool_id == OCR_TOOL_ID
     is_translate = req.tool_id == TRANSLATE_TOOL_ID
     if is_ocr:
@@ -1439,7 +1526,6 @@ async def chat_stream(
     fp_hash, fp_summary = get_fingerprint_info(request)
     log_payload_enabled = bool(cfg.get("log_payload"))
     owner_id = code.id if code else 0
-    owner_key = f"code:{code.id}" if code else identity_key(fingerprint=fp_hash, ip=client_ip)
 
     # 免费模型：优先走免费额度（不扣次数）并在建立 SSE 之前过防滥用限额；
     # 限额命中时若使用码仍可用（含无限码）则转为按次计费，无码/码不可用才 429。
@@ -1496,11 +1582,12 @@ async def chat_stream(
     llm = _build_llm(cfg, model=model_used, chores=False)
     base_request_id = req.request_id or f"{req.tool_id}_{id(request)}"
     request_id = base_request_id
+    owner_code, owner_identity = _owner_material(request, ctx.code)
     existing = _stop_events.get(base_request_id)
     # 同属主复用同一个 request_id 时也要换名：否则新注册会覆盖旧条目，旧流的
     # stop_event 永远等不到 set（/stop 停不了它），而旧流结束时 finally 的 pop
     # 会把新流的条目一起清掉（/stop 变成 not_found）
-    if existing is not None and existing[1] != owner_key:
+    if existing is not None and (existing[1], existing[2]) != (owner_code, owner_identity):
         # 同毫秒撞名时不覆盖他人注册（属主校验收口在 /stop）
         request_id = f"{base_request_id}_{owner_id}"
     elif existing is not None:
@@ -1508,8 +1595,23 @@ async def chat_stream(
         while f"{base_request_id}_{seq}" in _stop_events:
             seq += 1
         request_id = f"{base_request_id}_{seq}"
+    # 已经结束、但还在续接保留期内的同名会话也要让开：否则新一次生成会顶着旧
+    # 会话的 id，客户端重连时续到上一轮的尾巴上（内容是上一次的）
+    if stream_hub.has_session(request_id):
+        seq = 2
+        while (
+            f"{base_request_id}_{seq}" in _stop_events
+            or stream_hub.has_session(f"{base_request_id}_{seq}")
+        ):
+            seq += 1
+        request_id = f"{base_request_id}_{seq}"
     stop_event = asyncio.Event()
-    _stop_events[request_id] = (stop_event, owner_key)
+    _stop_events[request_id] = (stop_event, owner_code, owner_identity)
+    # 可续接会话：生成往这里写，HTTP 连接只是它的一个读者（见 stream_hub）。
+    # 建在此处而非响应返回前：`/stop` 与 `/stream/{id}` 都要求会话与停止事件同名
+    stream_session = stream_hub.open_session(
+        request_id, owner_code, owner_identity, stop_event
+    )
     reasoning_effort = model_entry.get("reasoning_effort") if model_entry else None
     extra_body = model_entry.get("extra_body") if model_entry else None
     # 免费额度命中的调用不扣次数；转为按次计费时扣 1 次（迁移批次按 charge_units 结算）
@@ -1571,7 +1673,6 @@ async def chat_stream(
         stream_started = True
         charged = False
         migration_finished = False
-        client_disconnected = False
         status = STATUS_SUCCESS
         error_message = ""
         # 失败分类（error_explain 给的机器可读 code）：随使用日志落库，供后台统计错误分布
@@ -1657,10 +1758,6 @@ async def chat_stream(
                             reasoning_text = item[1] if len(item) > 1 else ""
                             if not reasoning_text:
                                 continue
-                            if await request.is_disconnected():
-                                logger.info(f"Client disconnected: {request_id}")
-                                client_disconnected = True
-                                break
                             yield {"event": "reasoning", "data": json.dumps(
                                 {"t": reasoning_text, "n": count_text_tokens(reasoning_text, visual_framework_model)},
                                 ensure_ascii=False,
@@ -1668,15 +1765,11 @@ async def chat_stream(
                             continue
                         token = item
                         visual_fw_raw.append(token)
-                        if await request.is_disconnected():
-                            logger.info(f"Client disconnected: {request_id}")
-                            client_disconnected = True
-                            break
                         derived = applier.feed(token)
                         if derived:
                             output_parts.append(derived)
                             yield {"event": "token", "data": json.dumps(derived, ensure_ascii=False)}
-                    if not client_disconnected and not stop_event.is_set():
+                    if not stop_event.is_set():
                         derived = applier.finish()
                         if derived:
                             output_parts.append(derived)
@@ -1693,7 +1786,7 @@ async def chat_stream(
                     visual_fw_usage.get("completion_tokens"),
                 )
                 visual_fw_elapsed = monotonic() - visual_fw_started
-                if client_disconnected or stop_event.is_set():
+                if stop_event.is_set():
                     visual_fw_status = STATUS_CANCELLED
                 elif visual_fw_error:
                     visual_fw_status = STATUS_ERROR
@@ -1703,7 +1796,6 @@ async def chat_stream(
                     visual_fw_stats.ok
                     and not visual_fw_error
                     and not _hit_output_cap(visual_fw_usage, visual_framework_max_tokens)
-                    and not client_disconnected
                     and not stop_event.is_set()
                 )
                 if framework_usable:
@@ -1751,7 +1843,7 @@ async def chat_stream(
                         "框架解析未产出可用骨架（%s）：stats=%s，回退单阶段",
                         request_id, visual_fw_stats.as_dict(),
                     )
-                    if not client_disconnected and not stop_event.is_set():
+                    if not stop_event.is_set():
                         s = visual_fw_stats
                         if visual_fw_error:
                             framework_degrade = {
@@ -1795,7 +1887,7 @@ async def chat_stream(
                 # stop 时也要发：前端 vpStage 只由 stage 事件驱动，停在 framework 会让
                 # 第二步进度永为 0、续写入口不出现。reset 随 discard 一起给，
                 # 前端据此丢掉已推送的残骨架。
-                if not explain_jobs and not client_disconnected:
+                if not explain_jobs:
                     explain_stage_sent = True
                     payload = {
                         "name": "explain", "framework": framework_usable, "reset": discard_framework,
@@ -1808,7 +1900,7 @@ async def chat_stream(
             # 没有阶段一（框架关闭/输入是骨架/旧工单）时也要给前端一条 explain stage：
             # 否则页面只能从「没有 parallel 字段」猜串行，degrade 的原因也就无处显示。
             if (req.tool_id == VISUAL_PAPER_TOOL_ID and not explain_jobs
-                    and not explain_stage_sent and not client_disconnected):
+                    and not explain_stage_sent):
                 explain_stage_sent = True
                 payload = {
                     "name": "explain", "framework": False, "reset": False,
@@ -1818,7 +1910,7 @@ async def chat_stream(
                     payload["degrade"] = degrade
                 yield {"event": "stage", "data": json.dumps(payload, ensure_ascii=False)}
 
-            if explain_jobs and not stop_event.is_set() and not client_disconnected:
+            if explain_jobs and not stop_event.is_set():
                 explain_stage_sent = True
                 explain_concurrency = explanation_concurrency(
                     explain_jobs, visual_concurrency_for(cfg, model_used)
@@ -1853,9 +1945,6 @@ async def chat_stream(
                 )
                 async with aclosing(parallel_stream):
                     async for event, payload in parallel_stream:
-                        if await request.is_disconnected():
-                            client_disconnected = True
-                            break
                         if event == "token":
                             output_parts.append(payload)
                         yield {"event": event, "data": json.dumps(payload, ensure_ascii=False)}
@@ -1863,12 +1952,12 @@ async def chat_stream(
                 if failed:
                     status = STATUS_ERROR
                     error_message = "部分题目讲解未完成：" + ",".join(n for job in failed for n in job.nos if n not in job.completed)
-                if not stop_event.is_set() and not client_disconnected and not any(job.completed for job in explain_jobs):
+                if not stop_event.is_set() and not any(job.completed for job in explain_jobs):
                     raise RuntimeError(error_message)
 
             async def main_stream():
                 # 停止发生在框架阶段时不得再发起第二步（旧逻辑仅靠上游读到首块才停止）。
-                if explain_jobs or stop_event.is_set() or client_disconnected:
+                if explain_jobs or stop_event.is_set():
                     return
                 async with aclosing(llm.chat_stream_with_stop(
                     user_prompt=prompt,
@@ -1896,10 +1985,6 @@ async def chat_stream(
                     reasoning_text = item[1] if len(item) > 1 else ""
                     if not reasoning_text:
                         continue
-                    if await request.is_disconnected():
-                        logger.info(f"Client disconnected: {request_id}")
-                        client_disconnected = True
-                        break
                     yield {"event": "reasoning", "data": json.dumps(
                         {"t": reasoning_text, "n": count_text_tokens(reasoning_text, model_used)},
                         ensure_ascii=False,
@@ -1912,10 +1997,7 @@ async def chat_stream(
                     continue
                 token = item
                 output_parts.append(token)
-                if await request.is_disconnected():
-                    logger.info(f"Client disconnected: {request_id}")
-                    client_disconnected = True
-                    break
+                # 不在这里看连接：连接只是这条流的读者，掉线由续接窗口决定是否停
                 # JSON 编码 token：SSE 按行分帧会丢失尾部换行符，
                 # 编码后换行以 \n 转义形式单行传输，前端 JSON.parse 无损还原
                 yield {"event": "token", "data": json.dumps(token, ensure_ascii=False)}
@@ -1924,7 +2006,7 @@ async def chat_stream(
                 # 智能错题迁移按已交付卡片数等比扣费：整批价摊到各卡，
                 # 每张交付时立刻扣掉摊到自己头上的那份增量。停止或失败只是
                 # 不再累加，已经产出正文的那部分照扣。
-                completed = not client_disconnected and not stop_event.is_set()
+                completed = not stop_event.is_set()
                 charge_units = _finish_migration_stream(
                     batch_id=req.batch_id or "",
                     batch_index=req.batch_index or 0,
@@ -1944,7 +2026,8 @@ async def chat_stream(
             else:
                 # 保持现有工具的计费行为：流正常收尾（包括用户停止/断开）后扣 1 次；
                 # 免费额度内 quota_units=0 不扣，命中限额转按次计费时扣 1 次，OCR 恒为 0。
-                if client_disconnected or stop_event.is_set():
+                # 掉线本身不算取消（生成在续接窗口里还活着）；只有真的被停掉才是取消
+                if stop_event.is_set():
                     status = STATUS_CANCELLED
                 # 撞输出上限：整卷转录、整卷翻译最容易撞，但**任何**工具都可能撞。
                 # 只对这两个工具提示的后果是：别的工具把半份内容当完整结果交付，
@@ -2172,50 +2255,100 @@ async def chat_stream(
             # 额度预留会一直留在内存里；每次生成收尾顺手扫一遍，代价可忽略
             _cleanup_migration_batches()
 
-    body_stream = event_generator()
+    stream_session.bind_source(event_generator())
+    response_body = stream_session.subscribe(0)
 
     async def close_response_stream():
-        # 断连可能取消的是 HTTP send，此时生成器暂停在 yield，没有收到取消。
-        # SSE 任务组退出后显式关闭，立即回收上游和结算，不依赖 GC finalizer。
-        cancelled = False
-        try:
-            _, cancelled = await await_cleanup(asyncio.create_task(body_stream.aclose()))
-        finally:
-            current = _stop_events.get(request_id)
-            if current is not None and current[0] is stop_event:
-                # 响应头发送时就断开，生成器尚未开始，内部 finally 不会执行。
-                _stop_events.pop(request_id, None)
-                release_free_slot()
-                if migration_batch and not stream_started:
-                    _finish_migration_stream(
-                        batch_id=req.batch_id or "", batch_index=req.batch_index or 0,
-                        owner_id=owner_id, delivered=False,
-                    )
-                if not stream_started:
-                    request.state.usage_logged = True
-                    # 尚未调用模型：只留取消元数据，不计费用或免费用量。
-                    try:
-                        _, log_cancelled = await await_cleanup(asyncio.create_task(asyncio.to_thread(
-                            _log_llm_call, code=code, tool_id=req.tool_id, tool_name=tool_name,
-                            model=model_used, request_id=request_id, status=STATUS_CANCELLED,
-                            started=stream_created, usage={}, units=0, counts_for_free_limit=False,
-                            client=(client_ip, user_agent), log_payload=log_payload_enabled,
-                            input_text=req.input if not is_ocr else f"[图片 {len(ocr_images)} 张]",
-                            rendered_prompt=prompt, output_text="", fingerprint=fp_hash, device_summary=fp_summary,
-                        )))
-                        cancelled |= log_cancelled
-                    except Exception:
-                        logger.exception("Request log failed before stream start (%s)", request_id)
-        if cancelled:
-            raise asyncio.CancelledError
+        # 响应结束（正常收尾 / 客户端掉线 / 出错）都会走到这里。生成器不再跟着
+        # 这条响应一起关闭：响应只是会话的一个读者，掉线后生成继续跑满续接窗口，
+        # 等客户端回来接着收（见 stream_hub）。
+        #
+        # 读者侧必须显式关：客户端在 send 处被取消时，事件生成器停在 yield，
+        # 不会自己收到 GeneratorExit，它的 finally（detach）也就不会跑——
+        # 不补这一步，会话会永远以为还有人在看，续接窗口的看门狗永远不启动。
+        if stream_session.started:
+            try:
+                await await_cleanup(asyncio.create_task(response_body.aclose()))
+            except RuntimeError:
+                # 极端竞态：生成器正被响应任务持有，关不掉。直接按「读者已离开」
+                # 记账，宁可早一点启动看门狗，也不能让会话永远挂着
+                stream_session.detach()
+            except Exception:
+                logger.warning("关闭 SSE 读者失败（%s）", request_id, exc_info=True)
+        # 响应头发出去了但 body 一次都没被遍历就断了：生成本次从未开跑，
+        # 直接作废，不留空记录、不调用模型、不计费。
+        if not stream_session.discard_unstarted():
+            if stream_session.grace <= 0:
+                # SSE_RESUME_GRACE=0（关闭续接）：掉线即停，且要让这次请求等到
+                # 扣费与日志落库再结束，与老版本的可观测性一致
+                try:
+                    await asyncio.wait_for(stream_session.wait_finished(), timeout=30)
+                except asyncio.TimeoutError:
+                    logger.warning("掉线后生成未在 30 秒内收尾（%s）", request_id)
+            return
+        current = _stop_events.get(request_id)
+        if current is None or current[0] is not stop_event:
+            return
+        _stop_events.pop(request_id, None)
+        release_free_slot()
+        if migration_batch and not stream_started:
+            _finish_migration_stream(
+                batch_id=req.batch_id or "", batch_index=req.batch_index or 0,
+                owner_id=owner_id, delivered=False,
+            )
+        if not stream_started:
+            request.state.usage_logged = True
+            # 尚未调用模型：只留取消元数据，不计费用或免费用量。
+            try:
+                await await_cleanup(asyncio.create_task(asyncio.to_thread(
+                    _log_llm_call, code=code, tool_id=req.tool_id, tool_name=tool_name,
+                    model=model_used, request_id=request_id, status=STATUS_CANCELLED,
+                    started=stream_created, usage={}, units=0, counts_for_free_limit=False,
+                    client=(client_ip, user_agent), log_payload=log_payload_enabled,
+                    input_text=req.input if not is_ocr else f"[图片 {len(ocr_images)} 张]",
+                    rendered_prompt=prompt, output_text="", fingerprint=fp_hash, device_summary=fp_summary,
+                )))
+            except Exception:
+                logger.exception("Request log failed before stream start (%s)", request_id)
 
     return EventSourceResponse(
-        body_stream,
+        response_body,
         media_type="text/event-stream",
+        # 客户端用这个 id 做续接与停止：request_id 撞名时服务端会加后缀，
+        # 以这里回传的实际 id 为准
+        headers={"X-Stream-Id": stream_session.id},
         background=BackgroundTask(close_response_stream),
         # sse-starlette 的 ping 单位是「秒」；配置值为毫秒，需换算
         ping=max(1, settings.sse_retry_timeout // 1000),
     )
+
+
+@router.get("/stream/{request_id}")
+async def resume_stream(
+    request_id: str,
+    request: Request,
+    ctx: Annotated[CodeContext, Depends(get_code_context)],
+    since: Annotated[int, Query(ge=0, le=100_000_000)] = 0,
+):
+    """从断点续接同一轮生成（SSE）。
+
+    生成本身活在服务端会话里（见 services/stream_hub），这条 GET 不发起新的生成，
+    只是重新接上那个缓冲：客户端把上一次收到的最后一个事件 id 作为 `since` 传回，
+    服务端只补发之后的事件——不重复、不丢字。POST 建立的那条连接断掉之后，生成
+    仍在续接窗口内继续跑，这段时间内重新连上，用户从头到尾看不到中断。
+    """
+    session = stream_hub.get_session(request_id)
+    # 不存在与不属于本人统一 404：不泄露他人流的存在性
+    if session is None or not _owner_matches(
+        session.owner_code, session.owner_identity, request, ctx
+    ):
+        raise HTTPException(status_code=404, detail="这次生成已经结束，无法续接")
+    if not session.can_resume_from(since):
+        # 缓冲不完整或序号越界：给一个明确的「别再重试」信号，前端据此退回
+        # 「已生成的部分保留 + 继续生成」，而不是无限重连
+        raise HTTPException(status_code=410, detail="断开时间太长，已经无法续接")
+
+    return _attach_stream_response(session, since)
 
 
 async def _charge_guarded(code_id: int, units: int, request_id: str) -> int:
@@ -2274,9 +2407,8 @@ async def stop_stream(
     ctx: Annotated[CodeContext, Depends(get_code_context)],
 ):
     """中止当前调用方自己发起的 SSE 流（含免码的免费模型调用）。"""
-    owner = _owner_key(request, ctx.code)
     entry = _stop_events.get(req.request_id)
-    if entry is not None and entry[1] == owner:
+    if entry is not None and _owner_matches(entry[1], entry[2], request, ctx):
         entry[0].set()
         return {"status": "stopped", "request_id": req.request_id}
     # 不存在或不属于本人：统一返回 not_found，不泄露他人流的存在性

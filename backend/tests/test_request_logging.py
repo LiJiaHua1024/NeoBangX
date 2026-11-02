@@ -792,15 +792,17 @@ async def _never_disconnected(self):
 
 @pytest.fixture
 def unclaimed_stream(stream, monkeypatch):
-    """让 request.is_disconnected() 恒为 False 的流式环境。
+    """模拟「响应体被提前关闭」的流式环境。
 
-    TestClient 一收到响应就把请求标记为已断开，于是生成器在 token 循环里
-    直接 break，走的是「客户端断开」的正常收尾分支 —— 那条路径本来就记
-    cancelled，测不到 GeneratorExit。要复现目标路径必须掐断这个信号，
-    让生成器一直活到测试主动 aclose 它。
+    续接会话架构下，响应体只是生成的一个读者：默认配置会在掉线后继续跑满续接
+    窗口，等客户端回来（见 tests/test_stream_resume.py）。这条用例守的是老口径
+    「连接一断就取消并结算」，所以把窗口关掉（SSE_RESUME_GRACE=0）。
     """
+    from app.config import settings
+
     client, harness = stream
     harness.llm = _InfiniteStreamLLM()
+    monkeypatch.setattr(settings, "sse_resume_grace", 0)
     monkeypatch.setattr(Request, "is_disconnected", _never_disconnected)
     monkeypatch.setattr(chat_router, "EventSourceResponse", _capture_generator)
     return client, harness
@@ -832,9 +834,15 @@ def test_generator_exit_is_logged_as_cancelled_and_charged(unclaimed_stream):
 
     async def scenario():
         agen = _captured["agen"]
-        # 推进到第一个 token 已经 yield 出去，然后按生产路径关闭生成器
+        # 推进到第一个事件（续接元信息）：会话 attach 后生成任务才真正开跑
         await agen.__anext__()
+        await asyncio.sleep(0.02)  # 让生成任务跑到第一个 token
         await agen.aclose()
+        # 生成在独立任务里收尾（扣费 / 写日志也在这里）：等它落库再断言
+        for _ in range(300):
+            if _logs_for(code.id):
+                break
+            await asyncio.sleep(0.01)
 
     asyncio.run(scenario())
 
@@ -856,8 +864,12 @@ def test_generator_exit_survives_a_failing_usage_log(stream, monkeypatch):
     usage_logged 已经置位，全局异常处理器不会补记；这里抛出去只会盖掉
     GeneratorExit，让整条日志连同计费结果一起丢掉。
     """
+    from app.config import settings
+
     client, harness = stream
     harness.llm = _InfiniteStreamLLM()
+    # 「掉线即停」老口径：生成在连接关闭时立刻被取消（默认配置会留续接窗口）
+    monkeypatch.setattr(settings, "sse_resume_grace", 0)
     db = SessionLocal()
     try:
         code = _make_code(db, "NBXU-LOG-G002-0011")

@@ -192,12 +192,12 @@
   <link rel="preload" as="style" href="/static/tailwind.css?v=8e7f78ad1c" fetchpriority="high"
         onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:tailwind')"
         onerror="this.onerror=null;__nbxBootFail('css:tailwind','界面样式')">
-  <link rel="preload" as="style" href="/static/styles.min.css?v=16ecdb2615" fetchpriority="high"
+  <link rel="preload" as="style" href="/static/styles.min.css?v=9e65aa0c61" fetchpriority="high"
         onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:styles')"
         onerror="this.onerror=null;__nbxBootFail('css:styles','主题样式')">
   <noscript>
     <link rel="stylesheet" href="/static/tailwind.css?v=8e7f78ad1c">
-    <link rel="stylesheet" href="/static/styles.min.css?v=16ecdb2615">
+    <link rel="stylesheet" href="/static/styles.min.css?v=9e65aa0c61">
   </noscript>
   <!-- 本地静态资源带 ?v=<内容哈希> 版本串（npm run build:assets 按文件内容生成，勿手改）：
        带 query 的 /static/** 由后端中间件下发 immutable 长缓存，浏览器与 Cloudflare
@@ -232,7 +232,7 @@
        它，且只在生成完成后才出现；3KB 的体积换十几处 getter 的未加载兜底不划算。 -->
   <script defer src="/static/nbx-versions.js?v=7270a8ece4" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
   <!-- 压缩产物：源码是 frontend/script.js，改完跑 npm run build:js 重新生成 -->
-  <script defer src="/static/script.min.js?v=fb44646fd5" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
+  <script defer src="/static/script.min.js?v=58ccf981c9" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
   <script defer src="/static/vendor/alpinejs-3.15.12.min.js?v=57b37d7cae" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
 </head>
 
@@ -1040,7 +1040,7 @@
                         <button class="migration-result-toggle" @click="card.collapsed = !card.collapsed">
                           <span class="migration-result-ico" x-html="icon('target','w-4 h-4')"></span>
                           <span class="migration-result-cause" x-text="card.cause"></span>
-                          <span class="migration-result-status" :class="card.status" x-text="card.status === 'done' ? '已完成' : (card.status === 'error' ? '失败' : (card.status === 'stopped' ? '已停止' : '生成中'))"></span>
+                          <span class="migration-result-status" :class="card.status" x-text="card.status === 'done' ? '已完成' : (card.status === 'error' ? '失败' : (card.status === 'stopped' ? '已停止' : (card.status === 'reconnecting' ? '重连中' : '生成中')))"></span>
                           <span class="chev" x-html="icon('chevron-down','w-4 h-4')"></span>
                         </button>
                         <div class="migration-card-actions" @click.stop @click.outside="closeExportMenu()">
@@ -1051,7 +1051,11 @@
                       </div>
                       <div class="migration-result-body" x-show="!card.collapsed" x-collapse>
                         <div x-show="card.streaming && !card.output && !card.reasoning" class="migration-card-loading">
-                          <span class="thinking-dots"><span></span><span></span><span></span></span>正在生成
+                          <span class="thinking-dots"><span></span><span></span><span></span></span>
+                          <span x-text="card.status === 'reconnecting' ? '网络波动，正在重新连接…' : '正在生成'"></span>
+                        </div>
+                        <div class="migration-net-note" x-show="card.status === 'reconnecting' && card.output">
+                          网络波动，正在重新连接…已经生成的部分不会丢
                         </div>
                         <div x-show="card.reasoning" class="reasoning-box reasoning-box-card" :class="{ 'collapsed': !card.reasoningOpen }">
                           <button class="reasoning-head" @click="card.reasoningOpen = !card.reasoningOpen">
@@ -1572,7 +1576,7 @@
                     </div>
                     <div class="thinking-label">
                       <span class="thinking-dots"><span></span><span></span><span></span></span>
-                      <span class="thinking-text" x-text="theme === 'sora' ? '云正在聚拢' : '等待模型响应'"></span>
+                      <span class="thinking-text" x-text="reconnecting ? '网络波动，正在重新连接…' : (theme === 'sora' ? '云正在聚拢' : '等待模型响应')"></span>
                       <span class="thinking-time" x-text="thinkingTimeText"></span>
                     </div>
                   </div>
@@ -2417,6 +2421,9 @@
                       <span class="thinking-time" x-text="ocrElapsedText"></span>
                     </div>
                   </div>
+                  <div class="ocr-net-note" x-show="ocrStreaming && ocrReconnecting">
+                    网络波动，正在重新连接…已经识别出的内容不会丢
+                  </div>
                   <div class="md ocr-text" x-show="!!ocrText && !ocrStartStepVisible" x-html="ocrRendered"></div>
                   <!-- 停下与截断都要如实交代：半份转录最容易被当成完整结果往下用 -->
                   <div class="ocr-note ocr-note-warn" x-show="ocrStopped && !ocrStreaming && !ocrStartStepVisible">
@@ -2671,7 +2678,7 @@
                       <div class="thinking-orb-wrap"><div class="thinking-orb"><div class="thinking-orb-inner"></div></div></div>
                       <div class="thinking-label">
                         <span class="thinking-dots"><span></span><span></span><span></span></span>
-                        <span class="thinking-text" x-text="'正在翻译成 ' + trTargetLabel"></span>
+                        <span class="thinking-text" x-text="reconnecting ? '网络波动，正在重新连接…' : ('正在翻译成 ' + trTargetLabel)"></span>
                       </div>
                     </div>
                     <!-- 备用通道切换进度：后端真的切过通道时才出现（单 Provider 不会触发）。
@@ -2930,7 +2937,7 @@
                     <span class="thinking-dots">
                       <span></span><span></span><span></span>
                     </span>
-                    <span class="thinking-text" x-text="theme === 'sora' ? '云正在聚拢' : '等待模型响应'"></span>
+                    <span class="thinking-text" x-text="reconnecting ? '网络波动，正在重新连接…' : (theme === 'sora' ? '云正在聚拢' : '等待模型响应')"></span>
                     <span class="thinking-time" x-text="thinkingTimeText"></span>
                   </div>
                 </div>
@@ -4272,6 +4279,23 @@
 
     <!-- 悠空 · 云扫转场（切入 / 切出悠空主题时扫过全屏） -->
     <div x-ref="skySweep" class="sky-sweep" aria-hidden="true"></div>
+
+    <!-- ==================== 断线自动续接条 ==================== -->
+    <!-- 只在 SSE 连接真的掉了、前端正在重连时出现（见 script.js 的 STREAM_* 常量）。
+         刻意不用底部 toast 通道：断线不是一闪而过的通知，它可能在屏上停留十几秒；
+         也不能和「已删除，可撤销」抢同一行。固定顶部居中，避开正文阅读区，
+         除「停止」按钮外不接收指针事件，不挡下面的操作。 -->
+    <div class="net-pill" x-show="reconnecting || reconnected" x-cloak
+         :class="{ 'is-ok': reconnected && !reconnecting }"
+         role="status" aria-live="polite" aria-atomic="true">
+      <span class="net-pill-orb" aria-hidden="true"></span>
+      <span class="net-pill-copy">
+        <span class="net-pill-title" x-text="reconnectBannerText"></span>
+        <span class="net-pill-hint" x-text="reconnectBannerHint"></span>
+      </span>
+      <button type="button" class="net-pill-stop" x-show="reconnecting && streaming" @click="stop()"
+              title="停止生成（已经生成的内容会保留）">停止</button>
+    </div>
 
     <!-- ==================== Toast / 删除撤销条 ==================== -->
     <!-- aria-live 必须常驻在容器上：toast 是插入到既有区域里的，读屏才会念出

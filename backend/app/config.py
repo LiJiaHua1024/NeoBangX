@@ -113,6 +113,16 @@ class Settings(BaseSettings):
     # 名字沿用历史键名（早期当「客户端重连时间」用），实际语义是**服务端心跳间隔**：
     # 每隔这么久往流里发一次注释帧保活，见 chat.py / ocr.py 的 EventSourceResponse(ping=...)
     sse_retry_timeout: int = 30000
+    # 生成中断后的续接窗口（秒）：客户端掉线（切 Wi-Fi、进隧道、手机锁屏）后
+    # 生成仍在服务端继续跑，这段时间内重新连上就从断点接着收，用户看不到中断；
+    # 超过窗口还没有人接，才按「用户离开」停止并结算残文。0 = 关闭（掉线立即停）。
+    sse_resume_grace: int = 30
+    # 已结束的流最多再保留多久（秒）供迟到的客户端补收尾部事件（含终止帧）。
+    # 浏览器休眠后再醒来时用得上；过期后只能走手动的「继续生成」。
+    sse_resume_ttl: int = 600
+    # 保活帧间隔（毫秒）。比 ping 注释帧更频繁：客户端据此区分「模型在想」与
+    # 「连接已经死了」，也是反代按空闲超时切断长连接的防线
+    sse_tick_interval: int = 3000
 
     # Jev 决策模型（Provider 错误重试判定）：TypeSafe 官方 System One 接口。
     # Jev 是 TypeSafe 的决策模型（不是聊天模型）：POST {state, model, questions}

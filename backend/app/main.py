@@ -137,6 +137,11 @@ async def lifespan(app: FastAPI):
     title_worker_task.cancel()
     agent_worker_task.cancel()
     await asyncio.gather(retention_task, title_worker_task, agent_worker_task, return_exceptions=True)
+    # 续接会话里的在途生成是独立任务：关服务时取消它们，别把
+    # 「Task was destroyed but it is pending」留给下一个启动日志
+    from app.services import stream_hub
+
+    await stream_hub.shutdown()
     logger.info("NeoBangX backend shutting down...")
 
 

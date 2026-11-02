@@ -17,10 +17,11 @@ const HTML = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 test("解析 error 事件时读出 advice（老后端缺字段也不报错）", () => {
   const start = SRC.indexOf('if (ev === "error")');
   assert.ok(start > 0, "解析器里没有 error 分支");
-  // 分支体包含注释在内约 900 字符；窗口给宽一点，避免加了字段就把断言挤出范围
-  const branch = SRC.slice(start, start + 1100);
+  // 分支体包含注释在内约 1200 字符；窗口给宽一点，避免加了字段就把断言挤出范围
+  const branch = SRC.slice(start, start + 1800);
   assert.match(branch, /advice = typeof j\.advice === "string" \? j\.advice : "";/, "缺字段要回落空串");
-  assert.match(branch, /Object\.assign\(new Error\(m\), \{ model, advice, code \}\)/, "advice 与 code 要随错误一起带走");
+  assert.match(branch, /model, advice, code,/, "advice 与 code 要随错误一起带走");
+  assert.match(branch, /streamEvent: true/, "要标记成服务端事件错误，外层才不会把它当网络中断去续接");
 });
 
 test("失败收尾把 advice 落到界面状态上", () => {
@@ -51,7 +52,7 @@ test("explaining 状态在收尾、作废、新生成时都会清掉", () => {
 
 test("失败分类驱动错误卡的动作（后端发的 code 不再白发）", () => {
   assert.match(SRC, /code = typeof j\.code === "string" \? j\.code : "";/, "解析要读出 code");
-  assert.match(SRC, /Object\.assign\(new Error\(m\), \{ model, advice, code \}\)/, "code 要随错误带走");
+  assert.match(SRC, /model, advice, code,/, "code 要随错误带走");
   assert.match(SRC, /this\.errorCode = \(e && e\.code\) \|\| "";/);
   assert.match(
     SRC,

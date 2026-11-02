@@ -892,7 +892,13 @@ def test_partial_framework_falls_back_to_original_paper(monkeypatch, failure):
     resp = TestClient(app).post("/api/chat/stream", json={"tool_id": "13", "input": _RAW_PAPER})
     assert resp.status_code == 200
     assert "[DONE]" in resp.text
-    stages = [json.loads(block.split("data: ", 1)[1]) for block in resp.text.replace("\r\n", "\n").split("\n\n") if block.startswith("event: stage\n")]
+    # 事件帧现在可能带 `id:` 行（可续接，行序按 SSE 规范可任意），
+    # 不能再假设每个块都以 `event:` 开头
+    stages = [
+        json.loads(block.split("data: ", 1)[1])
+        for block in resp.text.replace("\r\n", "\n").split("\n\n")
+        if any(line.startswith("event: stage") for line in block.split("\n"))
+    ]
     stage = stages[-1]
     assert stage["name"] == "explain" and stage["framework"] is False
     assert stage["reset"] is True and stage["fallback"] == "single" and stage["parallel"] is False

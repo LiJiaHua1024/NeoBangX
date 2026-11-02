@@ -104,7 +104,7 @@ curl -N -X POST "$BASE/api/chat/stream" \
 | --- | --- | --- |
 | `[DONE]` | 正常收尾 | 生成完成 |
 | `[CANCELLED]` | 被 `/api/chat/stop` 停掉，或 `finish=cancel` | 停止提示条 + 「继续生成」 |
-| `无(断流)` | 没发终止帧就结束了 | 「生成中断，内容可能不完整，请重试」 |
+| `无(断流)` | 没发终止帧就结束了 | 先自动续接；**假后端没有续接接口**，GET 续接 404 后落到「这次生成已经结束，没能补上最后一段」+「继续生成」 |
 | `无(断流)` + 有 `error` | 发了 `event: error` | 错误卡 + 「换个模型重试」 |
 
 ---
@@ -127,6 +127,27 @@ httpx.post(f"{BASE}/__mock__/scenario", json={"scenario": "mid-error", "params":
 httpx.post(f"{BASE}/__mock__/scenario", json={"scenario": "mid-truncate", "params": {"at": 30}})
 # 断言：terminal=无(断流)；文案是「生成中断，内容可能不完整」
 ```
+
+### 测「断线自动续接」（真后端 + 假上游）
+
+假后端没有可续接会话，要测真链路得让**真后端**跑起来、上游指假后端：
+
+```bash
+cd backend
+uv run python -m mock_backend.main --port 8002          # 提供 /v1/slow 假上游
+DATA_DIR=/tmp/nbx-e2e LLM_BASE_URL=http://127.0.0.1:8002/v1/slow \
+  LLM_API_KEY=fake LLM_MODEL=openai/gpt-4o-mini MODELS=openai/gpt-4o-mini \
+  uv run uvicorn app.main:app --port 8003
+```
+
+`/v1/slow` 每块间隔 200ms，留出掐连接的窗口。用可断的 TCP 代理（前置于 8003）打开页面，
+生成到一半时掐掉浏览器到服务端的所有连接：
+- 断言 1：页面出现「网络波动，正在重新连接…」胶囊，正文不消失、**没有错误卡**；
+- 断言 2：随后出现 `GET /api/chat/stream/{id}?since=N`，正文从断点继续长，不重复；
+- 断言 3：`SSE_RESUME_GRACE` 内不接，服务端才按停止结算（日志 `cancelled`）。
+
+CDP 的 `Network.emulateNetworkConditions({offline:true})` **不会掐断已经建立的流**，
+用它测不出这条路径，必须真的断 TCP。
 
 ### 测「继续生成」
 

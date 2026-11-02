@@ -1280,6 +1280,27 @@ function describeError(e, fallbackText = "操作失败，请稍后重试") {
   return raw || fallbackText;
 }
 
+/* ---------------- 生成中断后的自动续接 ----------------
+   生成过程最怕的不是「报错」，而是网络抖一下：切 Wi-Fi、进隧道、手机锁屏，
+   连接被掐断而模型其实还在写。后端把生成放在可续接会话里继续跑
+   （见 backend/app/services/stream_hub.py），前端在中断后自动重连、按事件序号
+   补齐缺口——用户看到的是「网络波动，正在重新连接…」和继续长出来的文字，
+   而不是一张红色错误卡 + 手点「继续生成」。
+
+   - STREAM_STALL_MS：多久没收到任何字节（含服务端每 3 秒一条的 tick）就当这条
+     连接已经死了，主动断开重连。不能等 TCP 自己超时——那可能是几分钟，
+     界面会一直「卡在生成中」，正是这次要消灭的体感。
+   - STREAM_RECONNECT_DELAYS：第 n 次重连前的等待（毫秒，带递增）。总时长要小于
+     后端续接窗口（默认 30 秒），窗口内回来就能原地接着收。
+   - 重连用 GET /api/chat/stream/{id}?since=<last event id>，只补缺口不重发。 */
+const STREAM_STALL_MS = 12000;
+const STREAM_RECONNECT_DELAYS = [0, 600, 1500, 3000, 5000, 8000];
+
+/* 网络层中断的兜底文案：自动重连全部失败后才给用户看。
+   与 describeError 的通用文案区分开——这里明确告诉用户「内容没丢、可以接着写」，
+   而不是一句「请重试」让人以为白等了。 */
+const STREAM_LOST_MESSAGE = "网络断开太久，没能接回这次生成。已生成的内容都保留着，网络恢复后点「继续生成」接着写即可。";
+
 /* ---------------- 运行时依赖按需加载 ----------------
    首屏只保留 Alpine / marked / DOMPurify 这类必需库。mammoth、html-docx、
    KaTeX、qrcode、vp-print 都改成用到时再拉，文件全部自托管在 /static/vendor/，
@@ -2334,6 +2355,26 @@ function nbx() {
     reasoningSpeed: 0,
     _reasoningStartTs: 0,
     requestId: null,
+    /* --- 断线自动续接 ---
+       生成的服务端会话可以按事件序号补发（见 backend/app/services/stream_hub.py）。
+       网络抖动导致连接断掉时，界面进入「正在重新连接」而不是直接报错：
+       - streamId 是服务端回传的实际流 id（request_id 撞名时会被加后缀）
+       - reconnectAttempt / reconnectTotal 只用于文案，不影响重试逻辑本身
+       - streamStallMs 与 streamReconnectDelays 做成字段而不是常量，
+         便于测试收敛到毫秒级 */
+    streamId: "",
+    reconnecting: false,
+    reconnected: false,
+    reconnectAttempt: 0,
+    reconnectTotal: STREAM_RECONNECT_DELAYS.length,
+    streamStallMs: STREAM_STALL_MS,
+    streamReconnectDelays: STREAM_RECONNECT_DELAYS.slice(),
+    _streamLastDataAt: 0,
+    _streamStall: false,
+    // 用户主动停止（与「网络抖动」共用同一条 AbortController，靠这个标记区分）
+    _streamUserStopped: false,
+    _reconnectShowTimer: null,
+    _reconnectedTimer: null,
     maskOn: false,
     copied: false,
 
@@ -2527,6 +2568,9 @@ function nbx() {
     _ocrTimer: null,
     _ocrAbort: null,
     _ocrRequestId: "",
+    // 识别断线自动续接：ocrReconnecting 只驱动一条提示，识别步骤不变
+    ocrReconnecting: false,
+    _ocrStreamId: "",
     /* 扫码配对（阶段五） */
     pairOpen: false,
     pairToken: "",
@@ -4526,9 +4570,10 @@ function nbx() {
     stopVocabReplace() {
       if (!this.vocab || !this.vocab.replacing) return;
       this.vocab.stopRequested = true;
+      this._streamUserStopped = true;
       // 与 stop() 一致：先断本地流让 UI 立即恢复，再异步通知后端
       try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
-      this.notifyStop(this.vocab.requestId);
+      this.notifyStop(this.streamId || this.vocab.requestId);
     },
 
     /* ============ 初始化 ============ */
@@ -4579,11 +4624,18 @@ function nbx() {
           // 回到前台对账一次。LWW 保证本页更晚的选择不会被对端旧值顶掉。
           this._mirrorApplyPrefs();
           this.resumeTitleJobs();
+          // 后台标签页 / 手机锁屏期间定时器会被节流甚至暂停：醒来时那条流可能已经
+          // 死了几分钟。这里按「最后一次收到字节的时间」立刻补判一次，不等定时器
+          this._streamCheckLiveness();
         }
       });
 
-      // 关页 / 刷新：在途生成要留下残文并通知后端停止（见 _onPageHide）
-      window.addEventListener("pagehide", () => this._onPageHide());
+      // 关页 / 刷新：在途生成要留下残文并通知后端停止（见 _onPageHide）。
+      // 进 bfcache 的情况另算：页面没死，回来还能接着看，不停也不落残文
+      window.addEventListener("pagehide", (e) => this._onPageHide(e));
+      window.addEventListener("pageshow", (e) => {
+        if (e && e.persisted) this._streamCheckLiveness();
+      });
 
       // 本地数据（历史为索引 + 分条正文，旧格式在此一次性拆分）
       this.history = this._loadHistory();
@@ -7224,7 +7276,10 @@ function nbx() {
       this._startOcrTimer();
       const requestId = "ocr_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
       this._ocrRequestId = requestId;
-      const ctrl = new AbortController();
+      // 一次识别可能是一整卷转录（几十分钟），断线也按会话续接，而不是重头再识别一遍。
+      // 每次尝试一条新连接、一个新控制器：上一次的 abort（卡死看门狗或用户停止）
+      // 不能把下一次重连一起带走
+      let ctrl = new AbortController();
       this._ocrAbort = ctrl;
       const payload = { tool_id: OCR_TOOL_ID, ocr_mode: this.ocrMode, request_id: requestId, input: "" };
       if (this.ocrPairToken) {
@@ -7235,33 +7290,103 @@ function nbx() {
       } else {
         payload.images = this.ocrImages.map((item) => item.dataUrl);
       }
+      const requestBody = JSON.stringify(payload);
+      const delays = Array.isArray(this.streamReconnectDelays) && this.streamReconnectDelays.length
+        ? this.streamReconnectDelays
+        : STREAM_RECONNECT_DELAYS;
+      const maxAttempts = delays.length;
+      let ocrStreamId = "";
+      let since = 0;
+      let attempt = 0;
+      const giveUpOcr = () => Object.assign(
+        new Error("网络断开太久，这次识别没能接回来。已经识别出的内容已保留，可点「重试」重新识别。"),
+        { code: "network_lost" }
+      );
+      const backoff = async () => {
+        attempt += 1;
+        this.ocrReconnecting = true;
+        await new Promise((r) => setTimeout(r, Number(delays[Math.min(attempt, delays.length - 1)]) || 0));
+      };
       try {
-        const res = await fetch("/api/chat/stream", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...this.authHeaders() },
-          body: JSON.stringify(payload),
-          signal: ctrl.signal,
-        });
-        if (!res.ok) throw await this._ocrHttpError(res);
         // 后端以 [CANCELLED] 收尾 = 这次没跑完（停止请求生效、连接被掐），
         // 不能跟 [DONE] 一样当成「识别完了」交给用户
         let serverStopped = false;
-        await this.consumeSSE(res, (event, data) => {
-          if (event === "token") {
-            let text = data;
-            try { text = JSON.parse(data); } catch { /* 兼容旧式未编码 token */ }
-            this.ocrText += text || "";
-            this.scheduleOcrRender();
-          } else if (event === "truncated") {
-            this.ocrTruncated = true;
-          } else if (event === "done" && data === "[CANCELLED]") {
-            serverStopped = true;
-          } else if (event === "error") {
-            let msg = "识别失败，请稍后重试";
-            try { msg = JSON.parse(data).message || msg; } catch { /* 保留默认文案 */ }
-            throw new Error(msg);
+        while (true) {
+          // 用户停止 / 批次切换后不要再开新连接：abort 只打断当前那一条
+          if (this._ocrCancelReason) {
+            throw Object.assign(new Error("已停止识别"), { name: "AbortError" });
           }
-        });
+          ctrl = new AbortController();
+          this._ocrAbort = ctrl;
+          let res;
+          try {
+            if (!ocrStreamId) {
+              res = await fetch("/api/chat/stream", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...this.authHeaders() },
+                body: requestBody,
+                signal: ctrl.signal,
+              });
+            } else {
+              // 续接不是新识别：POST 会再传一次图、再调一次模型
+              res = await fetch(
+                `/api/chat/stream/${encodeURIComponent(ocrStreamId)}?since=${since}`,
+                { method: "GET", headers: this.authHeaders(), signal: ctrl.signal },
+              );
+            }
+          } catch (e) {
+            if (e && e.name === "AbortError") throw e;
+            if (attempt + 1 >= maxAttempts) throw giveUpOcr();
+            await backoff();
+            continue;
+          }
+          if (!res.ok) {
+            // 续接被拒（404 会话过期 / 410 缓冲不完整）：保留已识别文字，别再重试
+            if (ocrStreamId) throw giveUpOcr();
+            throw await this._ocrHttpError(res);
+          }
+          ocrStreamId = (res.headers && typeof res.headers.get === "function"
+            ? (res.headers.get("X-Stream-Id") || "")
+            : "") || ocrStreamId || requestId;
+          this._ocrStreamId = ocrStreamId;
+          let stalled = false;
+          const progress = { lastId: since };
+          try {
+            await this.consumeSSE(res, (event, data) => {
+              if (event === "token") {
+                let text = data;
+                try { text = JSON.parse(data); } catch { /* 兼容旧式未编码 token */ }
+                this.ocrText += text || "";
+                if (this.ocrReconnecting) this.ocrReconnecting = false;
+                this.scheduleOcrRender();
+              } else if (event === "truncated") {
+                this.ocrTruncated = true;
+              } else if (event === "done" && data === "[CANCELLED]") {
+                serverStopped = true;
+              } else if (event === "error") {
+                let msg = "识别失败，请稍后重试";
+                try { msg = JSON.parse(data).message || msg; } catch { /* 保留默认文案 */ }
+                // 服务端下发的业务错误：换条连接重试也是同一个结果
+                throw Object.assign(new Error(msg), { streamEvent: true });
+              }
+            }, progress, {
+              stallMs: this.streamStallMs,
+              controller: ctrl,
+              onStall: () => { stalled = true; },
+            });
+          } catch (e) {
+            if (e && e.streamEvent) throw e;
+            // 用户停止：不做续接
+            if (e && e.name === "AbortError" && !stalled) throw e;
+            since = progress.lastId;
+            if (attempt + 1 >= maxAttempts) throw giveUpOcr();
+            await backoff();
+            continue;
+          }
+          since = progress.lastId;
+          this.ocrReconnecting = false;
+          break;
+        }
         // 先落状态再收尾渲染：收尾要按「已经不是流式中」的口径画（不带淡入）
         this.ocrStage = serverStopped ? "stopped" : "done";
         if (serverStopped) this.flushOcrRender();
@@ -7295,6 +7420,8 @@ function nbx() {
       } finally {
         this._stopOcrTimer();
         this._ocrCancelReason = "";
+        this.ocrReconnecting = false;
+        this._ocrStreamId = "";
         if (this._ocrAbort === ctrl) this._ocrAbort = null;
       }
     },
@@ -7356,11 +7483,12 @@ function nbx() {
       this._ocrCancelReason = reason;
       try { if (this._ocrAbort) this._ocrAbort.abort(); } catch { /* 忽略 */ }
       if (this._ocrRequestId) {
-        // 通知后端停流：断开的连接不会自动让上游停下
+        // 通知后端停流：断开的连接不会自动让上游停下。
+        // 流 id 以服务端回传的为准（request_id 撞名会被加后缀）
         fetch("/api/chat/stop", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...this.authHeaders() },
-          body: JSON.stringify({ request_id: this._ocrRequestId }),
+          body: JSON.stringify({ request_id: this._ocrStreamId || this._ocrRequestId }),
         }).catch(() => {});
         this._ocrRequestId = "";
       }
@@ -8020,52 +8148,74 @@ function nbx() {
         this._afterRunQuota(quotaBefore);
       }
     },
-    async consumeSSE(res, onEvent) {
+    /* 通用 SSE 读取（识别 / 错题迁移）：解析事件、驱动回调。
+
+       progress 可选：传入 `{lastId}` 时会把「最后一条完整派发的事件 id」写回，
+       断线后用 GET /api/chat/stream/{id}?since=lastId 续接。游标只在 onEvent
+       成功返回之后才推进——断在事件中间时整条重收，不会丢字。 */
+    async consumeSSE(res, onEvent, progress, opts = {}) {
       if (!res.body) throw new Error("浏览器不支持流式读取");
       const reader = res.body.getReader();
       const decoder = new TextDecoder("utf-8");
+      // 可选的空闲看门狗：迁移卡片这类长生成同样可能遇到半开连接。
+      // 只认 opts.stallMs 的调用方（OCR 不走这条，避免把卡住误判成用户取消）
+      let idleTimer = null;
+      const armIdle = () => {
+        const limit = Number(opts.stallMs) || 0;
+        if (!limit) return;
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          try { if (opts.onStall) opts.onStall(); } catch { /* 忽略 */ }
+          try { opts.controller && opts.controller.abort(); } catch { /* 已结束 */ }
+        }, Math.max(200, limit));
+      };
       let buffer = "";
       let eventName = "message";
       let eventData = "";
+      let pendingId = null;
       // 是否收到过终止事件（done/[DONE]/[CANCELLED]）：没收到就断流 = 内容不完整
       let sawTerminal = false;
       const dispatch = () => {
         if (eventData !== "" || eventName !== "message") {
-          if (eventName === "done" || eventData === "[DONE]" || eventData === "[CANCELLED]") {
-            sawTerminal = true;
+          // resume / tick 是连接层的心跳与确认，不是业务内容，不能交给 onEvent
+          if (eventName !== "resume" && eventName !== "tick") {
+            if (eventName === "done" || eventData === "[DONE]" || eventData === "[CANCELLED]") {
+              sawTerminal = true;
+            }
+            onEvent(eventName, eventData);
           }
-          onEvent(eventName, eventData);
+          if (pendingId != null && progress) progress.lastId = pendingId;
         }
         eventName = "message";
         eventData = "";
+        pendingId = null;
       };
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const raw of lines) {
-          const line = raw.replace(/\r$/, "");
-          if (line.startsWith("event:")) eventName = line.slice(6).trim();
-          else if (line.startsWith("data:")) {
-            const data = line.slice(5);
-            eventData += (eventData ? "\n" : "") + (data.startsWith(" ") ? data.slice(1) : data);
-          } else if (!line) dispatch();
+      try {
+        armIdle();
+        while (true) {
+          const { done, value } = await reader.read();
+          armIdle();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const raw of lines) {
+            const line = raw.replace(/\r$/, "");
+            if (line.startsWith("event:")) eventName = line.slice(6).trim();
+            else if (line.startsWith("data:")) {
+              const data = line.slice(5);
+              eventData += (eventData ? "\n" : "") + (data.startsWith(" ") ? data.slice(1) : data);
+            } else if (line.startsWith("id:")) {
+              const id = Number(line.slice(3).trim());
+              if (Number.isFinite(id) && id >= 0) pendingId = id;
+            } else if (!line) dispatch();
+          }
         }
+        // buffer 里是断在事件中间的半条：丢弃，续接会从上一个完整事件之后重发
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
+        try { reader.releaseLock(); } catch { /* 已结束 */ }
       }
-      buffer += decoder.decode();
-      if (buffer) {
-        for (const raw of buffer.split("\n")) {
-          const line = raw.replace(/\r$/, "");
-          if (line.startsWith("event:")) eventName = line.slice(6).trim();
-          else if (line.startsWith("data:")) {
-            const data = line.slice(5);
-            eventData += (eventData ? "\n" : "") + (data.startsWith(" ") ? data.slice(1) : data);
-          } else if (!line) dispatch();
-        }
-      }
-      dispatch();
       // 流干净结束但没给终止事件：多半是反代/网络把连接掐了，半截内容不能当成功
       if (!sawTerminal) {
         try { console.warn("SSE 流未收到终止事件即结束，按中断处理"); } catch { /* 忽略 */ }
@@ -8075,89 +8225,159 @@ function nbx() {
     async streamMigrationCard(card, index, batchId, batchSize) {
       // 迁移卡片正文也要 renderMd 渲染，先备好组件
       await nbxEnsureRenderLibs();
-      const controller = new AbortController();
+      const cause = { id: card.causeId, label: card.cause };
+      const payload = JSON.stringify({
+        tool_id: "26",
+        input: this.migrationBuildInput(cause),
+        model: this.selectedModel || undefined,
+        request_id: card.requestId,
+        batch_id: batchId,
+        batch_size: batchSize,
+        batch_index: index,
+      });
+      // 每张卡片都是独立的一条流，断线后各自按 request_id 续接：
+      // 整批 4 张卡同时抖动时不会互相拖累，也不会因为一张卡断线把整批判失败
+      const delays = Array.isArray(this.streamReconnectDelays) && this.streamReconnectDelays.length
+        ? this.streamReconnectDelays
+        : STREAM_RECONNECT_DELAYS;
+      const maxAttempts = delays.length;
+      let controller = new AbortController();
       this._migrationAbortControllers[card.requestId] = controller;
+      let streamId = "";
+      let since = 0;
+      let attempt = 0;
+      // 重连次数用尽：卡片保留已生成正文，错误只说「网络没接上」，不甩浏览器原文
+      const giveUpCard = () => Object.assign(
+        new Error("网络断开太久，这张卡片没能接回来。已生成的内容已保留，可重试整批。"),
+        { code: "network_lost" }
+      );
       try {
-        const cause = { id: card.causeId, label: card.cause };
-        const res = await fetch("/api/chat/stream", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...this.authHeaders(),
-          },
-          body: JSON.stringify({
-            tool_id: "26",
-            input: this.migrationBuildInput(cause),
-            model: this.selectedModel || undefined,
-            request_id: card.requestId,
-            batch_id: batchId,
-            batch_size: batchSize,
-            batch_index: index,
-          }),
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          // 结构化 403（如额度不足无法支付整批迁移）不是登录态问题，不能清掉本地凭证
-          let quotaShortfall = false;
-          if (res.status === 403) {
-            try {
-              const detail = (await res.clone().json()).detail;
-              quotaShortfall = !!(detail && typeof detail === "object" && "required" in detail);
-            } catch { /* 非 JSON 响应按普通 403 处理 */ }
+        while (true) {
+          // 用户停止 / 切换工具后不要再开新连接：abort 只打断当前那一条，
+          // 退避等待期间可能已经错过它，必须在这里再看一眼标记
+          if (this.migration && this.migration.stopRequested) {
+            throw Object.assign(new Error("已停止生成"), { name: "AbortError" });
           }
-          const msg = await this.migrationReadError(res, `HTTP ${res.status}`);
-          if ((res.status === 401 || res.status === 403) && !quotaShortfall) {
-            this.handleAuthFailure(msg, res.status);
+          // 每次尝试一条新连接、一个新控制器：上一次的 abort（卡死看门狗或
+          // 用户停止）不能把下一次重连一起带走
+          controller = new AbortController();
+          this._migrationAbortControllers[card.requestId] = controller;
+          let res;
+          try {
+            if (!streamId) {
+              res = await fetch("/api/chat/stream", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  ...this.authHeaders(),
+                },
+                body: payload,
+                signal: controller.signal,
+              });
+            } else {
+              // 续接不是新生成：POST 会再调一次模型、再扣一次费
+              res = await fetch(
+                `/api/chat/stream/${encodeURIComponent(streamId)}?since=${since}`,
+                { method: "GET", headers: this.authHeaders(), signal: controller.signal },
+              );
+            }
+          } catch (e) {
+            if (e && e.name === "AbortError") throw e;
+            if (attempt + 1 >= maxAttempts) throw giveUpCard();
+            attempt += 1;
+            card.status = "reconnecting";
+            await new Promise((r) => setTimeout(r, Number(delays[Math.min(attempt, delays.length - 1)]) || 0));
+            continue;
           }
-          throw new Error(msg);
+          if (!res.ok) {
+            // 结构化 403（如额度不足无法支付整批迁移）不是登录态问题，不能清掉本地凭证
+            let quotaShortfall = false;
+            if (res.status === 403) {
+              try {
+                const detail = (await res.clone().json()).detail;
+                quotaShortfall = !!(detail && typeof detail === "object" && "required" in detail);
+              } catch { /* 非 JSON 响应按普通 403 处理 */ }
+            }
+            const msg = await this.migrationReadError(res, `HTTP ${res.status}`);
+            if (!streamId && (res.status === 401 || res.status === 403) && !quotaShortfall) {
+              this.handleAuthFailure(msg, res.status);
+            }
+            throw Object.assign(new Error(
+              streamId ? "网络中断太久，这次生成已经结束。已生成的内容已保留。" : msg
+            ), { migrationResumeGone: !!streamId });
+          }
+          streamId = (res.headers && typeof res.headers.get === "function"
+            ? (res.headers.get("X-Stream-Id") || "")
+            : "") || streamId || card.requestId;
+          card.status = "streaming";
+          const progress = { lastId: since };
+          let stalled = false;
+          try {
+            await this.consumeSSE(res, (event, data) => {
+              if (event === "error") {
+                let message = data;
+                try { message = JSON.parse(data).message || data; } catch {}
+                // 服务端下发的业务错误：换条连接重试也是同一个结果
+                throw Object.assign(new Error(message), { streamEvent: true });
+              }
+              if (event === "reasoning") {
+                let text = data;
+                let tok = 0;
+                try {
+                  const parsed = JSON.parse(data);
+                  if (typeof parsed === "string") text = parsed;
+                  else if (parsed && typeof parsed.t === "string") {
+                    text = parsed.t;
+                    tok = Number(parsed.n) || 0;
+                  }
+                } catch {}
+                if (text) this.appendCardReasoning(card, text, tok);
+                return;
+              }
+              if (event === "token") {
+                let text = data;
+                try {
+                  const parsed = JSON.parse(data);
+                  if (typeof parsed === "string") text = parsed;
+                } catch {}
+                if (text) {
+                  // 首个正文 token 到达即收起本卡推理盒，避免答案被顶下去。
+                  // 只收一次：每个 token 都收会把用户的手动展开立刻打回去。
+                  if (card.reasoning && !card.reasoningDone) {
+                    card.reasoningDone = true;
+                    card.reasoningOpen = false;
+                  }
+                  card.output += text;
+                  this.scheduleCardRender(card);
+                }
+              } else if (event === "done" || data === "[DONE]") {
+                if (card.reasoning && !card.reasoningDone) {
+                  card.reasoningDone = true;
+                  card.reasoningOpen = false;
+                }
+                if (data === "[CANCELLED]") card.status = "stopped";
+                else card.status = "done";
+              }
+            }, progress, {
+              stallMs: this.streamStallMs,
+              controller,
+              onStall: () => { stalled = true; },
+            });
+          } catch (e) {
+            if (e && e.streamEvent) throw e;
+            // 用户停止（或切工具作废批次）与「连接卡死」都会 abort，靠 stalled 区分
+            if (e && e.name === "AbortError" && !stalled) throw e;
+            since = progress.lastId;
+            if (attempt + 1 >= maxAttempts) throw giveUpCard();
+            attempt += 1;
+            card.status = "reconnecting";
+            await new Promise((r) => setTimeout(r, Number(delays[Math.min(attempt, delays.length - 1)]) || 0));
+            continue;
+          }
+          since = progress.lastId;
+          if (card.status === "streaming" || card.status === "waiting") card.status = "done";
+          break;
         }
-        card.status = "streaming";
-        await this.consumeSSE(res, (event, data) => {
-          if (event === "error") {
-            let message = data;
-            try { message = JSON.parse(data).message || data; } catch {}
-            throw new Error(message);
-          }
-          if (event === "reasoning") {
-            let text = data;
-            let tok = 0;
-            try {
-              const parsed = JSON.parse(data);
-              if (typeof parsed === "string") text = parsed;
-              else if (parsed && typeof parsed.t === "string") {
-                text = parsed.t;
-                tok = Number(parsed.n) || 0;
-              }
-            } catch {}
-            if (text) this.appendCardReasoning(card, text, tok);
-            return;
-          }
-          if (event === "token") {
-            let text = data;
-            try {
-              const parsed = JSON.parse(data);
-              if (typeof parsed === "string") text = parsed;
-            } catch {}
-            if (text) {
-              // 首个正文 token 到达即收起本卡推理盒，避免答案被顶下去。
-              // 只收一次：每个 token 都收会把用户的手动展开立刻打回去。
-              if (card.reasoning && !card.reasoningDone) {
-                card.reasoningDone = true;
-                card.reasoningOpen = false;
-              }
-              card.output += text;
-              this.scheduleCardRender(card);
-            }
-          } else if (event === "done" || data === "[DONE]") {
-            if (card.reasoning && !card.reasoningDone) {
-              card.reasoningDone = true;
-              card.reasoningOpen = false;
-            }
-            if (data === "[CANCELLED]") card.status = "stopped";
-            else card.status = "done";
-          }
-        });
-        if (card.status === "streaming" || card.status === "waiting") card.status = "done";
       } catch (e) {
         if (e && e.name === "AbortError") card.status = "stopped";
         else {
@@ -8474,6 +8694,9 @@ function nbx() {
       return !TR_STACK_MQ.matches || this.trResultVisible;
     },
     get trStatusText() {
+      // 断线自动续接优先于「正在翻译」：状态条要说清楚现在在等网络，不是模型在写
+      if (this.streaming && this.reconnecting) return `网络波动，正在重新连接…（第 ${this.reconnectAttempt} 次）`;
+      if (this.streaming && this.reconnected) return "已恢复连接，继续翻译…";
       if (this.streaming) return this.status === "connecting" ? "正在连接…" : "正在翻译…";
       if (this.status === "error") return "翻译失败";
       if (this.status === "stopped") return `已停止 · 保留 ${this.output.length} 字`;
@@ -9042,8 +9265,12 @@ function nbx() {
           quotaDelay = 900;
           finish("stopped", undefined, { ...ctx0, seq });
         } else {
-          // 登录/额度类错误模型根本没执行，不标记；后端 error 事件回传的实际模型优先，快照兜底
-          if (!(e && e.authIssue)) this.failedModel = (e && e.model) || modelUsed;
+          // 登录/额度类错误模型根本没执行，不标记；网络中断也不是模型的锅，
+          // 标记了会让「换个模型重试」把一个完全正常的模型置灰。
+          // 其余失败：后端 error 事件回传的实际模型优先，开跑时的快照兜底
+          if (!(e && e.authIssue) && !(e && e.networkIssue)) {
+            this.failedModel = (e && e.model) || modelUsed;
+          }
           this.errorRetryable = !(e && e.authIssue);
           this.errorLimited = !!(e && e.limited);
           // 后端转写的「该怎么做」：随错误一起落到错误卡的第二行
@@ -9060,66 +9287,242 @@ function nbx() {
       return true;
     },
 
-    /* 通用 SSE 流式调用：返回 { state: "done" | "stopped" }，出错时抛出 Error */
+    /* 通用 SSE 流式调用：返回 { state: "done" | "stopped" }，出错时抛出 Error。
+
+       断线自动续接（本文件顶部 STREAM_* 常量）：
+       - 连接被掐断 / 长时间没有字节 → 不立刻报错，先按退避重连
+         `GET /api/chat/stream/{id}?since=<最后收到的事件 id>`，只补缺口；
+       - 用户点「停止」或服务端给出终止帧后绝不再重连；
+       - 重连全部失败才抛错，交给错误卡（此时已生成的内容已经在上层 output 里，
+         「继续生成」入口照旧可用）。 */
     async _streamChat({ toolId, input, requestId, transferCount, visualQuestionNos, continueFrom, onToken, onReasoning, onFallback, onStage, onVisualTask }) {
       // 结果要用 renderMd 渲染：先把 marked / DOMPurify 备好再发请求。
       // 正常路径下空闲预加载早已完成，这里几乎立即返回；加载失败也继续（renderMd 有降级）。
       await nbxEnsureRenderLibs();
-      const res = await fetch("/api/chat/stream", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...this.authHeaders(),
-        },
-        body: JSON.stringify({
-          tool_id: toolId,
-          input,
-          model: this.selectedModel || undefined,
-          request_id: requestId,
-          transfer_count: transferCount || undefined,
-          visual_question_nos: visualQuestionNos || undefined,
-          // 续写：残文回传后端当上一条 assistant 消息，后端在末尾追加续写指令
-          continue_from: continueFrom || undefined,
-          // 翻译：语言对每次都要发——续写/重试也走这里，模型得知道接着译成什么
-          ...(this.isTranslateTool ? this.trLangPayload() : null),
-        }),
-        signal: this._abortCtrl.signal,
+      // 这段 await 期间用户可能已经点了停止（或切了工具）：此时上层那个
+      // AbortController 已经 abort，不能因为这里新建控制器就把停止请求丢了
+      const priorAborted = !!(this._abortCtrl && this._abortCtrl.signal.aborted);
+      const priorStopped = !!this._streamUserStopped;
+      this._streamUserStopped = false;
+      if (priorAborted || priorStopped) {
+        this._streamReconnectClear(false);
+        throw Object.assign(new Error("已停止生成"), { name: "AbortError" });
+      }
+      const body = JSON.stringify({
+        tool_id: toolId,
+        input,
+        model: this.selectedModel || undefined,
+        request_id: requestId,
+        transfer_count: transferCount || undefined,
+        visual_question_nos: visualQuestionNos || undefined,
+        // 续写：残文回传后端当上一条 assistant 消息，后端在末尾追加续写指令
+        continue_from: continueFrom || undefined,
+        // 翻译：语言对每次都要发——续写/重试也走这里，模型得知道接着译成什么
+        ...(this.isTranslateTool ? this.trLangPayload() : null),
       });
 
-      if (!res.ok) {
-        // 后端 detail 优先（可能是「请先输入使用码」「额度已用尽」「免费模型限额已满」等）
+      // 续接状态：streamId 以服务端回传的为准（request_id 撞名时会被加后缀）。
+      // 游标放在一个可变对象里：读连接抛错时也要保留「已经派发到哪」，否则中途
+      // 报错会退回到这一轮开头，把已经上屏的内容重收一遍
+      const carry = { since: 0 };
+      let streamId = "";
+      let attempt = 0;          // 连续失败次数（成功收到数据后归零）
+      let opened = false;       // 首次请求只能发 POST；之后一律走续接 GET
+      const delays = Array.isArray(this.streamReconnectDelays) && this.streamReconnectDelays.length
+        ? this.streamReconnectDelays
+        : STREAM_RECONNECT_DELAYS;
+      const maxAttempts = delays.length;
+      this.streamId = "";
+      this._streamStall = false;
+      this._streamLastDataAt = Date.now();
+      this._streamReconnectClear(false);
+
+      const authIssueOf = async (res) => {
+        // 非 2xx 的细节处理：POST（新一轮）与续接 GET 的语义不同——
+        // 续接失败不能清登录态（用户可能只是断网久了一点），只有第一次
+        // 建立请求才需要处理 401/403/429。
         let detailMsg = "";
         try {
-          const j = await res.json();
+          const j = await res.clone().json();
           if (j && j.detail != null) detailMsg = formatApiDetail(j.detail) || "";
-        } catch {}
-        if (res.status === 401 || res.status === 403) {
-          // 401：本机凭证失效 → 清掉并请用户重输；403：码还在只是不可用
-          // （禁用 / 额度用尽）→ 保留凭证，别让用户白输一遍
-          this.handleAuthFailure(detailMsg, res.status);
-          throw Object.assign(
-            new Error(
-              detailMsg ||
-                (res.status === 401 ? "请先输入使用码" : "额度已用尽或使用码已被禁用")
-            ),
-            { authIssue: true }
-          );
-        }
-        // 429 = 免费模型限额或接口限速：单独标记，错误卡给出持久解释而不是一句「生成失败」
-        const err = new Error(detailMsg || "HTTP " + res.status);
-        if (res.status === 429) err.limited = true;
-        throw err;
-      }
-      if (!res.body) throw new Error("浏览器不支持流式读取");
+        } catch { /* 非 JSON 响应按状态码走 */ }
+        return detailMsg;
+      };
 
+      const giveUp = (resumeUnavailable) => {
+        this._streamReconnectClear(false);
+        // 本地放弃了就告诉服务端停：别让它在续接窗口里继续烧上游 token。
+        // 网络已经不通时这个请求也会失败，属于预期
+        try { this.notifyStop(streamId || requestId); } catch { /* 忽略 */ }
+        const hasContent = !!String(this.output || "").trim();
+        const err = Object.assign(new Error(
+          hasContent
+            ? STREAM_LOST_MESSAGE
+            : "网络连接中断，这次没能开始生成。请检查网络后重试。"
+        ), {
+          truncated: true,
+          // 给错误卡一个分类：这条文案已经说清楚了，不必再套「模型服务繁忙」
+          code: "network_lost",
+          // 网络问题不是模型的锅：别把当前模型记成「失败模型」，
+          // 否则错误卡换模型重试时会把一个完全正常的模型置灰
+          networkIssue: true,
+          advice: hasContent
+            ? "已生成的内容不会丢。检查网络后，优先点「继续生成」接着往下写，不必整篇重来。"
+            : "",
+        });
+        if (resumeUnavailable) {
+          err.message = "这次生成已经结束，没能补上最后一段。已生成的内容都保留着，可点「继续生成」接着写。";
+        }
+        return err;
+      };
+
+      while (true) {
+        const controller = new AbortController();
+        // stop() / abortActiveGeneration() 掐的是「此刻正在跑的那一条」
+        this._abortCtrl = controller;
+        this._streamStall = false;
+        let res;
+        try {
+          if (!opened) {
+            res = await fetch("/api/chat/stream", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...this.authHeaders(),
+              },
+              body,
+              signal: controller.signal,
+            });
+          } else {
+            // 续接不是新的生成：POST 会重新调用模型、再计一次费。
+            // GET 只把这条连接接回服务端的缓冲，从 since 之后补发
+            res = await fetch(
+              `/api/chat/stream/${encodeURIComponent(streamId)}?since=${carry.since}`,
+              { method: "GET", headers: this.authHeaders(), signal: controller.signal },
+            );
+          }
+        } catch (e) {
+          // 用户点停止（或切工具作废）导致的 abort：原样抛出，由上层按「已停止」收尾
+          if (this._streamUserStopped || (e && e.name === "AbortError" && !this._streamStall)) {
+            this._streamReconnectClear(false);
+            throw e;
+          }
+          // 连响应头都没拿到：没有 streamId 可续接，带同一个 request_id 重发 POST。
+          // 服务端按 request_id 幂等接回在途生成，不会重复调用模型或重复计费
+          if (attempt + 1 >= maxAttempts) throw giveUp(false);
+          attempt += 1;
+          await this._streamReconnectWait(attempt, delays, controller);
+          continue;
+        }
+
+        if (!res.ok) {
+          const detailMsg = await authIssueOf(res);
+          if (opened) {
+            // 续接被服务端拒绝（404 会话已过期 / 410 缓冲不完整 / 5xx）：
+            // 再试也是同一个结果。保留已生成内容，交给上层给「继续生成」出口
+            throw giveUp(res.status === 404 || res.status === 410);
+          }
+          if (res.status === 401 || res.status === 403) {
+            // 401：本机凭证失效 → 清掉并请用户重输；403：码还在只是不可用
+            // （禁用 / 额度用尽）→ 保留凭证，别让用户白输一遍
+            this.handleAuthFailure(detailMsg, res.status);
+            throw Object.assign(
+              new Error(
+                detailMsg ||
+                  (res.status === 401 ? "请先输入使用码" : "额度已用尽或使用码已被禁用")
+              ),
+              { authIssue: true }
+            );
+          }
+          // 429 = 免费模型限额或接口限速：单独标记，错误卡给出持久解释而不是一句「生成失败」
+          const err = new Error(detailMsg || "HTTP " + res.status);
+          if (res.status === 429) err.limited = true;
+          throw err;
+        }
+        if (!res.body) throw new Error("浏览器不支持流式读取");
+
+        // 首次建立响应时拿到真实流 id：续接与停止都用它
+        const headerId = (res.headers && typeof res.headers.get === "function")
+          ? (res.headers.get("X-Stream-Id") || "")
+          : "";
+        streamId = headerId || streamId || requestId;
+        this.streamId = streamId;
+        this._streamLastDataAt = Date.now();
+        // 响应拿到了 = 连接已经重新建立。先把「正在重连」收掉（给一条短暂确认），
+        // 再开始读——不要让用户对着重连提示等第一个 token
+        if (attempt > 0) this._streamReconnectClear(true);
+        opened = true;
+
+        let outcome;
+        try {
+          outcome = await this._consumeStreamChat(res, controller, {
+            since: carry.since, carry, onToken, onReasoning, onFallback, onStage, onVisualTask,
+          });
+        } catch (e) {
+          // 服务端主动下发的 error 事件（模型/上游失败）：不是网络问题，不能再重连。
+          // 顺手掐掉这条连接，别把一个已经结束的流留在后台
+          if (e && e.streamEvent) {
+            try { controller.abort(); } catch { /* 已经结束 */ }
+            throw e;
+          }
+          const aborted = e && e.name === "AbortError";
+          // 用户停止：不做续接
+          if (this._streamUserStopped || (aborted && !this._streamStall)) {
+            this._streamReconnectClear(false);
+            throw e;
+          }
+          if (attempt + 1 >= maxAttempts) throw giveUp(false);
+          attempt += 1;
+          await this._streamReconnectWait(attempt, delays, controller);
+          continue;
+        }
+
+        carry.since = outcome.cursor;
+        if (outcome.sawData) {
+          // 真的收到内容了：这一段中断已经过去，重试预算重置——否则一条反复抖动的
+          // 线路会把 6 次额度耗在几个小时里，最后明明能接上却放弃
+          attempt = 0;
+        }
+        if (outcome.terminal) {
+          return { state: outcome.stopped ? "stopped" : "done" };
+        }
+        // 干净结束但没有终止帧：多半是反代/网络把连接掐了。半截内容不能当成功交付
+        try { console.warn("SSE 流未收到终止事件即结束，尝试续接"); } catch { /* 忽略 */ }
+        if (attempt + 1 >= maxAttempts) throw giveUp(false);
+        attempt += 1;
+        await this._streamReconnectWait(attempt, delays, controller);
+      }
+    },
+
+    /* 读一条 SSE 连接：解析事件、驱动回调、维护续接游标。
+
+       游标只在「整条事件派发完」之后才前进：连接可能恰好在 id 行与空行之间断掉，
+       提前记下 id 会让那一条事件在续接时被跳过（丢字）。 */
+    async _consumeStreamChat(res, controller, handlers) {
+      const { since, carry, onToken, onReasoning, onFallback, onStage, onVisualTask } = handlers;
       const reader = res.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let buffer = "";
       let evName = "message";
       let evData = "";
+      let pendingId = null;
+      let cursor = since;
       let stopped = false;
-      // 是否收到过终止事件（done/[DONE]/[CANCELLED]）：没收到就断流 = 内容不完整
       let sawTerminal = false;
+      let sawData = false;
+      let idleTimer = null;
+
+      const armIdle = () => {
+        this._streamLastDataAt = Date.now();
+        if (idleTimer) clearTimeout(idleTimer);
+        const limit = Math.max(200, Number(this.streamStallMs) || STREAM_STALL_MS);
+        idleTimer = setTimeout(() => {
+          // 连接看起来还在，但已经太久没有任何字节：半开的 TCP 不会自己报错，
+          // 等浏览器超时就是几分钟的「假生成中」。主动断开去重连，内容在服务端
+          this._streamStall = true;
+          try { controller.abort(); } catch { /* 已经结束 */ }
+        }, limit);
+      };
 
       const dispatch = (ev, data) => {
         // [CANCELLED] 必须在 ev === "done" 之前判：两者都是 done 事件，
@@ -9127,6 +9530,9 @@ function nbx() {
         // （识别与迁移那条链路一直是这么判的，这里补齐）
         if (data === "[CANCELLED]") { stopped = true; sawTerminal = true; return; }
         if (ev === "done" || data === "[DONE]") { sawTerminal = true; return; }
+        // resume：服务端确认「接上了」并回传当前队尾；tick：保活帧。
+        // 两者都不是内容，绝不能落到最后的兜底里被拼进正文
+        if (ev === "resume" || ev === "tick") return;
         if (ev === "explaining") {
           // 失败已经发生，后端正在把报错转写成两句话（最多几秒，见后端总预算）。
           // 立刻把界面从「生成中」切走：这段时间继续显示生成中，用户会白等一场
@@ -9153,7 +9559,11 @@ function nbx() {
             }
           } catch {}
           // model 供失败归因：禁用真正失败的模型，而非此刻的 selectedModel
-          throw Object.assign(new Error(m), { model, advice, code });
+          throw Object.assign(new Error(m), {
+            model, advice, code,
+            // 标记「这是服务端下发的事件错误」：外层据此区分网络中断，不要重连
+            streamEvent: true,
+          });
         }
         if (ev === "fallback") {
           // 备用通道切换：{failed_index, total, next_index, reason}，只用于展示进度
@@ -9213,36 +9623,124 @@ function nbx() {
         if (data) onToken(data);
       };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const raw of lines) {
-          const line = raw.replace(/\r$/, "");
-          if (line.startsWith("event:")) {
-            evName = line.slice(6).trim();
-          } else if (line.startsWith("data:")) {
-            const d = line.slice(5);
-            evData = evData ? evData + "\n" + (d.startsWith(" ") ? d.slice(1) : d) : (d.startsWith(" ") ? d.slice(1) : d);
-          } else if (line === "") {
-            if (evData !== "" || evName !== "message") {
-              dispatch(evName, evData);
-            }
-            evName = "message";
-            evData = "";
+      const flushEvent = () => {
+        if (evData !== "" || evName !== "message") {
+          dispatch(evName, evData);
+          // 派发成功才推进游标：见方法头注释。写回 carry，读连接抛错时
+          // 外层也知道「已经派发到哪」，不会把已上屏的内容重收一遍
+          if (pendingId != null) {
+            cursor = pendingId;
+            if (carry) carry.since = pendingId;
           }
         }
+        evName = "message";
+        evData = "";
+        pendingId = null;
+      };
+
+      try {
+        armIdle();
+        while (true) {
+          const { done, value } = await reader.read();
+          armIdle();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          if (buffer.trim()) sawData = true;
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const raw of lines) {
+            const line = raw.replace(/\r$/, "");
+            if (line.startsWith("event:")) {
+              evName = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              const d = line.slice(5);
+              evData = evData ? evData + "\n" + (d.startsWith(" ") ? d.slice(1) : d) : (d.startsWith(" ") ? d.slice(1) : d);
+            } else if (line.startsWith("id:")) {
+              const id = Number(line.slice(3).trim());
+              if (Number.isFinite(id) && id >= 0) pendingId = id;
+            } else if (line === "") {
+              flushEvent();
+            }
+          }
+        }
+        // 连接断在事件中间时 buffer 里是半条事件：整条丢弃，不要派发。
+        // 服务端的事件总以空行结束；这里补发半条会把半截 token 拼进正文，
+        // 而续接从上一个完整事件之后重发，本来就不会丢。
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
       }
-      if (evData !== "" || evName !== "message") dispatch(evName, evData);
-      // 流干净结束但没给终止事件：多半是反代/网络把连接掐了，
-      // 此时已收到的内容只是半截，绝不能当成功交付
-      if (!sawTerminal) {
-        try { console.warn("SSE 流未收到终止事件即结束，按中断处理"); } catch { /* 忽略 */ }
-        throw Object.assign(new Error("生成中断，内容可能不完整，请重试"), { truncated: true });
+      return { terminal: sawTerminal, stopped, sawData, cursor };
+    },
+
+    /* 重连等待与文案。失败次数做成 state：状态条与浮动条都靠它显示第几次尝试。 */
+    async _streamReconnectWait(attempt, delays, failedController) {
+      this._streamReconnectNotice(attempt);
+      const delay = Number(delays[Math.min(attempt, delays.length - 1)]) || 0;
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      // 等待期间用户点了停止 / 切了工具：不再重连，按已停止收尾
+      const aborted = (failedController && failedController.signal.aborted)
+        || (this._abortCtrl && this._abortCtrl.signal.aborted);
+      if (this._streamUserStopped || (aborted && !this._streamStall)) {
+        this._streamReconnectClear(false);
+        throw Object.assign(new Error("已停止生成"), { name: "AbortError" });
       }
-      return { state: stopped ? "stopped" : "done" };
+    },
+
+    _streamReconnectNotice(attempt) {
+      this.reconnectAttempt = attempt;
+      this.reconnectTotal = Math.max(1, (this.streamReconnectDelays || []).length || 1);
+      // 又断了：上一次的「已恢复」确认立刻让位给正在重连，不能两个状态同时挂着
+      if (this._reconnectedTimer) {
+        clearTimeout(this._reconnectedTimer);
+        this._reconnectedTimer = null;
+      }
+      this.reconnected = false;
+      if (this._reconnectShowTimer) clearTimeout(this._reconnectShowTimer);
+      // 第一次重连是立即发起的：接通了就当无事发生，别让提示闪一下。
+      // 超过 350ms 还没接上，才值得告诉用户「网络出了问题」
+      this._reconnectShowTimer = setTimeout(() => {
+        this._reconnectShowTimer = null;
+        this.reconnecting = true;
+      }, 350);
+    },
+
+    _streamReconnectClear(recovered) {
+      if (this._reconnectShowTimer) {
+        clearTimeout(this._reconnectShowTimer);
+        this._reconnectShowTimer = null;
+      }
+      const wasShowing = this.reconnecting;
+      this.reconnecting = false;
+      this.reconnectAttempt = 0;
+      if (!recovered) {
+        if (this._reconnectedTimer) {
+          clearTimeout(this._reconnectedTimer);
+          this._reconnectedTimer = null;
+        }
+        this.reconnected = false;
+      }
+      if (recovered && wasShowing) {
+        // 恢复后给一条短暂的确认，避免用户不确定刚才那几秒发生了什么
+        this.reconnected = true;
+        if (this._reconnectedTimer) clearTimeout(this._reconnectedTimer);
+        this._reconnectedTimer = setTimeout(() => {
+          this._reconnectedTimer = null;
+          this.reconnected = false;
+        }, 1800);
+      }
+    },
+
+    /* 回到前台时检查流是否已经「假活着」：后台标签页的定时器会被浏览器节流，
+       手机锁屏更是直接暂停——醒来时那条连接可能已经死了几分钟，靠 idle 定时器
+       要等到下一次触发。这里立刻按最后收数据的时间补一次判断。 */
+    _streamCheckLiveness() {
+      if (!this.streaming || this.reconnecting) return;
+      const last = Number(this._streamLastDataAt) || 0;
+      if (!last) return;
+      const limit = Math.max(200, Number(this.streamStallMs) || STREAM_STALL_MS);
+      if (Date.now() - last < limit) return;
+      this._streamStall = true;
+      try { this._abortCtrl && this._abortCtrl.abort(); } catch { /* 已经结束 */ }
     },
 
     /* 通知后端尽早释放上游调用。不 await：本地中断不依赖网络往返，通知失败也不影响已停止的事实。
@@ -9262,7 +9760,11 @@ function nbx() {
     },
     stop() {
       if (!this.streaming) return;
-      const requestId = this.requestId;
+      // 明确记下「是用户要停」：断线重连与用户停止都会 abort 同一条连接，
+      // 只看 AbortError 分不开，会把用户主动停止误当成又一次网络抖动去重连
+      this._streamUserStopped = true;
+      this._streamReconnectClear(false);
+      const requestId = this.streamId || this.requestId;
       // 先断本地流：UI 立刻恢复，不会因 /stop 请求挂起而一直卡在生成中
       try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
       this.notifyStop(requestId);
@@ -9275,10 +9777,12 @@ function nbx() {
     abortActiveGeneration({ keepalive = false } = {}) {
       this._saveAbortedPartial();
       this._runSeq += 1;
+      this._streamUserStopped = true;
+      this._streamReconnectClear(false);
       // 作废的同时把「正在整理说明」也清掉：旧流的收尾被跳过（代次不符），
       // 留着它会让新工具的界面一直显示「生成没有成功，正在整理说明…」
       this.explaining = false;
-      const requestId = this.requestId;
+      const requestId = this.streamId || this.requestId;
       try { this._abortCtrl && this._abortCtrl.abort(); } catch {}
       this.streaming = false;
       this.thinking = false;
@@ -9419,13 +9923,18 @@ function nbx() {
        用 pagehide 而不是 unload——后者在移动端与 bfcache 场景常常不触发。
        这里一并作废在途流（递增代次），否则页面若被 bfcache 留住、流又跑完了，
        finalize 会再写一条完整记录，与刚存下的残文重复。 */
-    _onPageHide() {
+    _onPageHide(event) {
       /* 关页前把还在防抖里的草稿落盘，别把刚敲的字丢掉 */
       try { this.flushDraft(); } catch { /* 卸载阶段不抛错 */ }
       /* 手机扫码那一批照片存在服务器内存里：页面一关 / 一进后台就释放，
          否则要等后端超时回收——用户已经走了，内存还占着 */
       try { if (this.pairToken || this.ocrPairToken) this.releasePairSession(); } catch { /* 卸载阶段不抛错 */ }
       if (!this.streaming) return;
+      /* 进往返缓存（bfcache）时页面并没有死：JS 状态和已经上屏的正文都还在，
+         回来时流可能只是连接断了，续接逻辑能接上。这里既不能停生成、也不能
+         落残文——否则回来后 finalize 会再写一条，与刚存下的残文重复。
+         真关页（persisted=false）仍按老口径：落残文 + 通知后端停止。 */
+      if (event && event.persisted) return;
       try { this.abortActiveGeneration({ keepalive: true }); } catch { /* 落盘失败不阻塞卸载 */ }
     },
 
@@ -13878,9 +14387,34 @@ function nbx() {
       }
       return dots;
     },
+    /* 断线续接条的文案：标题说「发生了什么」，副行说「我该担心什么」。
+       重连期间最怕用户以为内容丢了，所以副行固定强调「已收到的部分不会丢」。 */
+    get reconnectBannerText() {
+      if (this.reconnecting) return "网络波动，正在重新连接…";
+      // 恢复确认只说明「刚才那一下已经接上」，不承诺还在生成——
+      // 短内容可能在确认的 1.8 秒里就已经跑完了
+      if (this.reconnected) return "已恢复连接";
+      return "";
+    },
+    get reconnectBannerHint() {
+      // 次数放在副行：窄屏会隐藏副行，标题就能完整显示，不会被「（第 2 次）」挤成省略号
+      if (this.reconnecting) {
+        return `第 ${Math.max(1, this.reconnectAttempt)} 次尝试 · 内容还在服务端继续生成，已经显示的部分不会丢`;
+      }
+      if (this.reconnected) return "刚才的断线已经接上";
+      return "";
+    },
     get statusText() {
       // 失败已发生、后端在整理说明：如实说明，别继续显示「生成中」
       if (this.explaining) return "生成没有成功，正在整理说明…";
+      // 断线续接：说清楚是网络在重连，不是模型卡住了。
+      // 这一条要在 connecting/streaming 之前判，否则状态条会一直说「生成中」
+      if (this.reconnecting) {
+        return `网络波动，正在重新连接…（第 ${Math.max(1, this.reconnectAttempt)} 次）`;
+      }
+      if (this.reconnected && (this.status === "connecting" || this.status === "streaming")) {
+        return "已恢复连接，继续生成…";
+      }
       switch (this.status) {
         case "connecting": return this.thinking ? this.liveWaitText : "正在连接模型…";
         case "streaming": return this.thinking ? this.liveWaitText : "生成中… " + this.elapsed + "s";

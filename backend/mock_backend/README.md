@@ -107,7 +107,7 @@ http://127.0.0.1:8000/__mock__/
 | `reasoning-heavy` | 超长思考后接正文 | 思考面板展开/收起、tok/s |
 | `reasoning-only` | 只出思考不出正文 | 空正文边界 |
 | `mid-error` | 出 30 个 token 后发 `event: error` | 错误卡、`failedModel`、「换个模型重试」弹窗 |
-| `mid-truncate` | 出 30 个 token 后**直接断流** | 「生成中断，内容可能不完整」+ `truncated` 标记 |
+| `mid-truncate` | 出 30 个 token 后**直接断流** | 前端先自动续接；假后端没有续接接口，GET 404 后落到「这次生成已经结束，没能补上最后一段」+「继续生成」（真链路的续接见 `docs/MOCK_BACKEND_TESTING.md`） |
 | `fallback` / `fallback-chain` | 先发 1~2 次 `event: fallback` 再出正文 | 「备用通道切换」方格面板逐格点亮 |
 | `fallback-fail` | fallback 之后 error | 全链失败卡 + toast |
 | `cancel` | 慢速流（约 9 秒） | **点「停止」**→ 停止提示条 +「继续生成」+ 历史标 `partial` |

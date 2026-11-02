@@ -1058,7 +1058,12 @@ def test_route_concurrent_retries_keep_provider_and_usage_logs_separate(api, mon
 
 @pytest.mark.parametrize("mode", ["stop", "disconnect"])
 def test_asgi_stop_and_disconnect_close_retries_and_settle_logs_once(api, monkeypatch, mode):
+    from app.config import settings
     from app.main import app
+
+    # 这条用例守的是「掉线即停」的老口径；默认配置现在会留续接窗口（生成继续跑，
+    # 等客户端回来接着收），对应的新口径见 tests/test_stream_resume.py。
+    monkeypatch.setattr(settings, "sse_resume_grace", 0)
 
     _, chat, logs, charges = api
 
@@ -1131,8 +1136,11 @@ def test_asgi_stop_and_disconnect_close_retries_and_settle_logs_once(api, monkey
 
 
 def test_asgi_disconnect_while_sending_closes_suspended_generator_immediately(api, monkeypatch):
+    from app.config import settings
     from app.main import app
 
+    # 「掉线即停」老口径（见 test_stream_resume.py 的默认续接窗口口径）
+    monkeypatch.setattr(settings, "sse_resume_grace", 0)
     _, chat, logs, charges = api
     contents = []
     original_response = chat.EventSourceResponse
@@ -1200,8 +1208,11 @@ def test_asgi_disconnect_while_sending_closes_suspended_generator_immediately(ap
 
 def test_asgi_disconnect_during_charge_does_not_double_charge_or_lose_log_units(api, monkeypatch):
     import threading
+    from app.config import settings
     from app.main import app
 
+    # 「掉线即停」老口径（见 test_stream_resume.py 的默认续接窗口口径）
+    monkeypatch.setattr(settings, "sse_resume_grace", 0)
     _, chat, logs, charges = api
 
     async def run():
