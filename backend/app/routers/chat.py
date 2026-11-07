@@ -495,6 +495,12 @@ def _build_llm(cfg: dict, model: Optional[str] = None, chores: bool = False) -> 
     # 若没有多 Provider 配置，回退旧单 LLMService 行为
     providers = cfg.get("providers") or []
     mp_map = cfg.get("model_provider_map") or {}
+    # 日志里的模型标识：配置了展示名称就用名称，没有才回退到模型 ID。
+    model_names = {
+        str(m.get("id") or "").strip(): str(m.get("name") or "").strip()
+        for m in cfg.get("models") or []
+        if m.get("id")
+    }
     # 兼容：providers 为空时走旧单 Provider
     if not providers and not mp_map:
         if chores:
@@ -504,6 +510,7 @@ def _build_llm(cfg: dict, model: Optional[str] = None, chores: bool = False) -> 
                 base_url=cfg["chores_base_url"],
                 max_tokens=min(cfg["max_tokens"], 256),
                 timeout=cfg["timeout"],
+                model_names=model_names,
             )
         return LLMService(
             api_key=cfg["llm_api_key"],
@@ -511,6 +518,7 @@ def _build_llm(cfg: dict, model: Optional[str] = None, chores: bool = False) -> 
             base_url=cfg["llm_base_url"],
             max_tokens=cfg["max_tokens"],
             timeout=cfg["timeout"],
+            model_names=model_names,
         )
 
     # 多 Provider 聚合路径
@@ -532,6 +540,7 @@ def _build_llm(cfg: dict, model: Optional[str] = None, chores: bool = False) -> 
         first_token_timeout=cfg.get("first_token_timeout") or DEFAULT_FIRST_TOKEN_TIMEOUT,
         # Jev 重试判定配置：未启用/未配齐时 Router 内部直接走启发式，不碰网络
         jev_config=cfg.get("jev") if isinstance(cfg.get("jev"), dict) else None,
+        model_names=model_names,
     )
     return router
 
@@ -587,7 +596,8 @@ async def _explain_failure_for_user(
                 if supported is False and rule.get("on_unsupported") == "fail":
                     # 规则配了「直接失败」：不调用 Chores，直接用机械文案。
                     # 解释是补充信息，这里没有「拦下请求」可做，跳过就是它的语义
-                    logger.info("报错解读：%s 不支持推理且规则为直接失败，跳过解释", actual_model)
+                    logger.info("报错解读：%s 不支持推理且规则为直接失败，跳过解释",
+                                (model_entry or {}).get("name") or actual_model)
                     return mechanical_explanation(
                         classify_failure(exc=exc, raw_message=str(exc or ""))
                     )
@@ -1547,7 +1557,8 @@ async def chat_stream(
                 raise
             charged_free = False
             logger.info(
-                "免费模型限额命中，转为按次计费：model=%s code_id=%s", model_used, code.id
+                "免费模型限额命中，转为按次计费：model=%s code_id=%s",
+                (model_entry or {}).get("name") or model_used, code.id,
             )
     # 日志展示用名称：迁移与识别都用工具名而不是底层 prompt 文件名
     # （识别有印刷/手写两份提示词，按文件名记会让同一个工具在日志里分成两条）

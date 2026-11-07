@@ -248,12 +248,14 @@ class LLMService:
         base_url: str = "",
         max_tokens: int = 4096,
         timeout: int = 120,
+        model_names: dict[str, str] | None = None,
     ):
         self.api_key = api_key
         self.default_model = default_model
         self.base_url = base_url
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.model_names = dict(model_names or {})
 
         # 设置 LiteLLM 日志级别
         litellm.set_verbose = False
@@ -262,6 +264,12 @@ class LLMService:
 
     def _get_model(self, model: Optional[str]) -> str:
         return model or self.default_model
+
+    def _model_label(self, model_id: str) -> str:
+        """日志里的模型标识：直接显示配置的展示名称，没有才回退到 ID。"""
+        model_id = (model_id or "").strip()
+        name = (self.model_names.get(model_id) or "").strip()
+        return name or model_id or "未知模型"
 
     def _get_messages(self, system_prompt: Optional[str], user_prompt: str) -> list:
         messages = []
@@ -358,7 +366,7 @@ class LLMService:
                 if has_reasoning_params(kwargs) and is_reasoning_param_error(e):
                     logger.warning(
                         "LLM chat 上游拒绝推理参数（%s），自动剥离推理参数原地重试: %s",
-                        kwargs.get("model"), e,
+                        self._model_label(kwargs.get("model") or ""), e,
                     )
                     safe_kwargs = strip_reasoning_kwargs(kwargs)
                     response = await acompletion(**safe_kwargs)
@@ -465,7 +473,7 @@ class LLMService:
                 if has_reasoning_params(kwargs) and is_reasoning_param_error(e):
                     logger.warning(
                         "LLM stream 上游拒绝推理参数（%s），自动剥离推理参数原地重试: %s",
-                        kwargs.get("model"), e,
+                        self._model_label(kwargs.get("model") or ""), e,
                     )
                     safe_kwargs = strip_reasoning_kwargs(kwargs)
                     response = await acompletion(**safe_kwargs)

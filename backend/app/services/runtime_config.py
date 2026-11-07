@@ -524,6 +524,23 @@ def find_model_entry(models: list[dict], model_id: str) -> dict | None:
     return None
 
 
+def build_model_labels(models: list[dict]) -> dict[str, str]:
+    """模型 ID → 展示名称（无名或与 ID 相同的条目不收录，调用方自然回退到 ID）。"""
+    labels: dict[str, str] = {}
+    for m in models:
+        model_id = str(m.get("id") or "").strip()
+        name = str(m.get("name") or "").strip()
+        if model_id and name and name != model_id:
+            labels[model_id] = name
+    return labels
+
+
+def model_label(labels: dict[str, str], model_id: str) -> str:
+    """日志展示用的模型名称：配置了展示名称就用它，没有才回退到模型 ID。"""
+    model_id = (model_id or "").strip()
+    return labels.get(model_id) or model_id
+
+
 def _env_defaults() -> dict[str, str]:
     return {
         "default_model": settings.default_model,

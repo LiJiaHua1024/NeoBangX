@@ -121,6 +121,30 @@ def test_analytics_latency_matches_full_sort_reference():
         db.close()
 
 
+def test_log_model_name_prefers_display_name():
+    """使用日志的模型列显示配置的展示名称，没有名称才回退模型 ID。"""
+    import json
+
+    from app.routers.admin import _attach_model_names
+    from app.services.runtime_config import get_config_value, set_config_values
+
+    db = SessionLocal()
+    old_models = get_config_value(db, "models", "")
+    try:
+        set_config_values(db, {"models": json.dumps([
+            {"id": "vendor/named-model", "name": "好懂的名字"},
+            {"id": "vendor/bare-model", "name": ""},
+        ])})
+        items = [{"model": "vendor/named-model"}, {"model": "vendor/bare-model"}]
+        _attach_model_names(db, items)
+
+        assert items[0]["model_name"] == "好懂的名字"
+        assert items[1]["model_name"] == "vendor/bare-model"
+    finally:
+        set_config_values(db, {"models": old_models})
+        db.close()
+
+
 def test_analytics_latency_empty_window_stays_null():
     """窗口内没有任何耗时记录时保持原来的空值形状，前端展示不受影响。"""
     db = SessionLocal()

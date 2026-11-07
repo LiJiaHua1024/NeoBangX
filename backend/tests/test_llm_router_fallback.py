@@ -1079,3 +1079,32 @@ def test_resume_log_note_separates_breaks_from_length_caps():
     note = _final_error_message(router, "success", "")
 
     assert note == "中途断流续写×1（litellm.BadGatewayError: bad gateway）；撞上限续写×1"
+
+
+# ---- 8. 日志里的模型标识 ----
+
+def test_model_label_prefers_display_name_over_id():
+    """运行时日志用配置的展示名称；只配了 ID 的模型才显示 ID。"""
+    router = _router(count=1)
+    router.model_names = {"test-model": "测试模型", "bare-model": "  "}
+
+    assert router._model_label("test-model") == "测试模型"
+    assert router._model_label("bare-model") == "bare-model"
+    assert router._model_label("unlisted-model") == "unlisted-model"
+
+
+def test_stream_fallback_logs_model_display_name(monkeypatch, caplog):
+    """切换日志里的 model 字段显示展示名称，而不是 LiteLLM 模型 ID。"""
+    import logging
+
+    _install(monkeypatch, [_auth_error(), _Stream([_Chunk("备用")])])
+    router = _router(count=2)
+    router.model_names = {"test-model": "测试模型"}
+
+    with caplog.at_level(logging.WARNING, logger=router_module.__name__):
+        _run_stream(router)
+
+    fallback_lines = [r.getMessage() for r in caplog.records if "fallback (" in r.getMessage()]
+    assert fallback_lines
+    assert all("model=测试模型" in line for line in fallback_lines)
+    assert all("model=test-model" not in line for line in fallback_lines)

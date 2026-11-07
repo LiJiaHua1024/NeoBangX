@@ -207,6 +207,7 @@ class LLMRouter:
     providers_for_model: 已按该模型的 priority 排序且仅含 enabled 的 Provider 列表
         每项为 dict {id, name, base_url, api_key, enabled, ...}。构造时按
         `provider_health` 的熔断状态重排：熔断 OPEN 中的沉底，其余保持原顺序。
+    model_names: 模型 ID → 显示名称；日志里优先显示名称，没有才回退 ID。
     """
 
     def __init__(
@@ -222,9 +223,11 @@ class LLMRouter:
         quick_retry_timeout: float = DEFAULT_QUICK_RETRY_TIMEOUT,
         total_first_token_budget: float = DEFAULT_TOTAL_FIRST_TOKEN_BUDGET,
         max_midstream_resumes: int = MAX_MIDSTREAM_RESUMES,
+        model_names: dict[str, str] | None = None,
     ):
         self.providers = list(providers_for_model or [])
         self.default_model = default_model
+        self.model_names = dict(model_names or {})
         self.max_tokens = max_tokens
         self.timeout = timeout
         # Jev 判定配置（管理后台可配）：None/未启用时直接走启发式，不碰网络
@@ -277,6 +280,12 @@ class LLMRouter:
         name = (provider.get("name") or "").strip()
         pid = (provider.get("id") or "").strip()
         return name or pid or "未知 Provider"
+
+    def _model_label(self, model_id: str) -> str:
+        """日志里的模型标识：直接显示配置的展示名称，没有才回退到 ID。"""
+        model_id = (model_id or "").strip()
+        name = (self.model_names.get(model_id) or "").strip()
+        return name or model_id or "未知模型"
 
     def _remember_failure(self, provider: dict, exc: Exception, *, quick_retried: bool = False) -> None:
         """记下这一家为什么失败，供最终的使用日志留痕。
@@ -666,7 +675,7 @@ class LLMRouter:
                     self.quick_retries += 1
                     logger.warning(
                         "LLM chat quick retry: model=%s provider=%s 失败 %.0fms，%.0fms 后同家重试: %s",
-                        model_id, self._provider_label(provider), attempt_elapsed * 1000, delay * 1000, e,
+                        self._model_label(model_id), self._provider_label(provider), attempt_elapsed * 1000, delay * 1000, e,
                     )
                     await asyncio.sleep(delay)
                     retry_kwargs = dict(kwargs)
@@ -683,7 +692,7 @@ class LLMRouter:
                         self._settle_success(provider)
                         logger.info(
                             "LLM chat quick retry recovered: model=%s provider=%s",
-                            model_id, self._provider_label(provider),
+                            self._model_label(model_id), self._provider_label(provider),
                         )
                         return strip_end_sponsor(content)
                     except Exception as retry_exc:  # noqa: BLE001
@@ -698,7 +707,7 @@ class LLMRouter:
                 if idx < len(providers) - 1 and await self._should_retry(provider_exc, provider, idx, len(providers), model_id):
                     logger.warning(
                         "LLM chat fallback: model=%s provider=%s 失败，将尝试下一优先级: %s",
-                        model_id, self._provider_label(provider), provider_exc,
+                        self._model_label(model_id), self._provider_label(provider), provider_exc,
                     )
                     continue
                 # 不可重试或已无下一家
@@ -917,7 +926,7 @@ class LLMRouter:
                                 usage_out.pop("finish_reason", None)
                             logger.warning(
                                 "LLM stream 撞输出上限，带残文续写（第 %d 次）: model=%s provider=%s",
-                                self.length_resumes, model_id, self._provider_label(provider),
+                                self.length_resumes, self._model_label(model_id), self._provider_label(provider),
                             )
                             continue
                         self._settle_success(provider)
@@ -949,13 +958,13 @@ class LLMRouter:
                                     retry_pending = False
                                     logger.warning(
                                         "LLM stream 中途断流，同家带残文续写（第 %d 次）: model=%s provider=%s: %s",
-                                        self.midstream_resumes, model_id, self._provider_label(provider), e,
+                                        self.midstream_resumes, self._model_label(model_id), self._provider_label(provider), e,
                                     )
                                     continue
                                 # 该家续写名额已用：静默换下一家继续续写（不发 fallback 事件）
                                 logger.warning(
                                     "LLM stream 续写仍失败，静默换下一优先级继续续写: model=%s provider=%s: %s",
-                                    model_id, self._provider_label(provider), e,
+                                    self._model_label(model_id), self._provider_label(provider), e,
                                 )
                                 last_exc = provider_exc
                                 self._remember_failure(provider, provider_exc, quick_retried=retry_pending)
@@ -977,7 +986,7 @@ class LLMRouter:
                             retry_pending = True
                             logger.warning(
                                 "LLM stream quick retry: model=%s provider=%s 失败 %.0fms，%.0fms 后同家重试: %s",
-                                model_id, self._provider_label(provider), attempt_elapsed * 1000, delay * 1000, e,
+                                self._model_label(model_id), self._provider_label(provider), attempt_elapsed * 1000, delay * 1000, e,
                             )
                             await asyncio.sleep(delay)
                             continue
@@ -996,7 +1005,7 @@ class LLMRouter:
                                 reason = "unavailable"
                             logger.warning(
                                 "LLM stream fallback (%s): model=%s provider=%s 失败，切下一优先级: %s",
-                                reason, model_id, self._provider_label(provider), provider_exc,
+                                reason, self._model_label(model_id), self._provider_label(provider), provider_exc,
                             )
                             yield ("fallback", {
                                 "failed_index": idx + 1,

@@ -300,6 +300,28 @@ def test_log_list_attaches_agent_summary(admin, identity):
     assert gone_detail.json()["agent_available"] is False
 
 
+def test_report_shows_model_display_name(admin, identity):
+    """运行记录与每一步都带上 model_name，前端优先显示名称而不是模型 ID。"""
+    import json as _json
+
+    from app.services.runtime_config import get_config_value, set_config_values
+
+    task, run, log_id, model_id, _prompt, _text = _seed(identity)
+    with SessionLocal() as db:
+        old_models = get_config_value(db, "models", "")
+        try:
+            set_config_values(db, {"models": _json.dumps([
+                {"id": "test-model", "name": "测试模型"},
+            ])})
+            data = admin.get(f"/api/admin/logs/{log_id}/agent-run").json()
+        finally:
+            set_config_values(db, {"models": old_models})
+
+    assert data["run"]["model_name"] == "测试模型"
+    entry = next(item for item in data["entries"] if item["id"] == model_id)
+    assert entry["details"]["model_name"] == "测试模型"
+
+
 def test_entry_duration_is_estimated_for_old_rows(admin, identity):
     """新条目记录真实耗时；旧条目没有该字段时按「下一条开始」估算并标注。"""
     task, run, log_id, model_id, _prompt, _text = _seed(identity)

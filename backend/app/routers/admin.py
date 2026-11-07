@@ -61,12 +61,14 @@ from app.services.runtime_config import (
     OCR_MAX_TOKENS_LIMIT,
     REASONING_EFFORTS,
     TOOL_REASONING_UNSUPPORTED_ACTIONS,
+    build_model_labels,
     get_config_map,
     find_model_entry,
     find_tool_reasoning_rule,
     get_config_value,
     has_any_capability,
     mask_config,
+    model_label,
     parse_mirror_settings,
     parse_models,
     parse_origins,
@@ -527,6 +529,8 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
     total_tok = kpis["total_tokens"] or 0
 
     # ---------- 按模型 ----------
+    # 分组键仍是数据库里的模型 ID（聚合口径不能变），展示名另挂一个字段。
+    model_labels = _model_labels(db)
     by_model = []
     for r in _dist_group(UsageLog.model, limit=15):
         req = int(r.requests or 0)
@@ -534,6 +538,7 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
         err = int(r.error or 0)
         by_model.append({
             "model": r.model or "（未记录）",
+            "model_name": model_label(model_labels, r.model or "") or "（未记录）",
             "requests": req,
             "share": round(req / total_req, 4) if total_req else 0.0,
             "success": int(r.success or 0),
@@ -604,7 +609,8 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
             "tool_id": r.tool_id or "",
             "tool_name": r.tool_name or "",
             "model": r.model or "",
-            "label": f"{r.tool_name or r.tool_id or '—'} × {r.model or '—'}",
+            "model_name": model_label(model_labels, r.model or ""),
+            "label": f"{r.tool_name or r.tool_id or '—'} × {model_label(model_labels, r.model or '') or '—'}",
             "requests": req,
             "share": round(req / total_req, 4) if total_req else 0.0,
             "total_tokens": tok,
@@ -840,7 +846,8 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
         for r in rows:
             slowest.append({
                 "log_id": r.id, "code": r.code, "tool_id": r.tool_id, "tool_name": r.tool_name,
-                "model": r.model, "status": r.status or "success",
+                "model": r.model, "model_name": model_label(model_labels, r.model or ""),
+                "status": r.status or "success",
                 "duration_ms": r.duration_ms, "total_tokens": r.total_tokens,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             })
@@ -859,7 +866,8 @@ def _usage_analytics_impl(db: Session, days: int) -> dict:
         for r in rows:
             recent_errors.append({
                 "log_id": r.id, "code": r.code, "tool_id": r.tool_id, "tool_name": r.tool_name,
-                "model": r.model, "provider_name": r.provider_name or "", "provider_id": r.provider_id or "",
+                "model": r.model, "model_name": model_label(model_labels, r.model or ""),
+                "provider_name": r.provider_name or "", "provider_id": r.provider_id or "",
                 "error_message": (r.error_message or "")[:200],
                 "duration_ms": r.duration_ms,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -1096,8 +1104,16 @@ def _apply_log_filters(
         query = query.filter(UsageLog.tool_id == tool_id.strip())
     if model:
         like = f"%{model.strip()}%"
-        query = query.filter(or_(UsageLog.model.ilike(like), select(child.id).where(
-            child.parent_log_id == UsageLog.id, child.model.ilike(like)).exists()))
+        # 列表里展示的是模型名称，筛选也要认名称：先把命中的名称换回 ID 一起匹配。
+        conditions = [UsageLog.model.ilike(like), select(child.id).where(
+            child.parent_log_id == UsageLog.id, child.model.ilike(like)).exists()]
+        if db is not None:
+            labels = _model_labels(db)
+            keyword = model.strip().lower()
+            ids = [mid for mid, name in labels.items() if keyword in name.lower()]
+            if ids:
+                conditions.append(UsageLog.model.in_(ids))
+        query = query.filter(or_(*conditions))
     if provider:
         like = f"%{provider.strip()}%"
         query = query.filter(
@@ -1244,6 +1260,7 @@ def list_logs(
         # 未按工具筛选时避免额外 join，保留直接分页的短路径。
         rows = query.order_by(desc(UsageLog.id)).offset(offset).limit(page_size).all()
     items = [r.to_dict() for r in rows]
+    _attach_model_names(db, items)
     _attach_step_summaries(db, items)
     _attach_agent_summaries(db, items)
     _attach_devices(db, items)
@@ -1306,6 +1323,46 @@ def _attach_agent_summaries(db: Session, items: list[dict]) -> None:
         item["agent_mode"] = modes.get(run_id, "")
 
 
+def _model_labels(db: Session) -> dict[str, str]:
+    """模型 ID → 展示名称。
+
+    除逻辑模型 ID 外，也把各 Provider 绑定的真实模型 ID 映射到同一个名称：
+    AI 画像等字段记录的是实际调用上游用的 ID，同样要显示成配置的名称。
+    纯展示用，读配置失败时返回空映射，让调用方回退到 ID，不影响接口本身。
+    """
+    labels: dict[str, str] = {}
+    try:
+        labels = build_model_labels(parse_models(get_config_value(db, "models", "")))
+    except Exception:
+        logger.exception("读取模型名称配置失败，日志将显示模型 ID")
+        return {}
+    try:
+        from app.services.provider_config import get_model_provider_details
+
+        for model_id, rows in get_model_provider_details(db).items():
+            name = labels.get(model_id)
+            if not name:
+                continue
+            for row in rows:
+                actual = (row.get("provider_model_id") or "").strip()
+                if actual and actual not in labels:
+                    labels[actual] = name
+    except Exception:
+        logger.exception("构建模型真实 ID 映射失败，日志将只显示逻辑 ID 对应的名称")
+    return labels
+
+
+def _attach_model_names(db: Session, items: list[dict]) -> None:
+    """给日志项挂 model_name：配置了展示名称就用名称，没有才回退到模型 ID。
+
+    UsageLog.model 存的是 LiteLLM 模型 ID（真正调用上游用的标识），
+    「使用日志」页面要的是人看得懂的名字，因此在读取时映射一次。
+    """
+    labels = _model_labels(db)
+    for item in items:
+        item["model_name"] = model_label(labels, item.get("model") or "")
+
+
 def _attach_devices(db: Session, items: list[dict]) -> None:
     """为日志项批量挂载 device 摘要（避免 N+1，缺失则挂 None）。"""
     ids = sorted({i.get("device_id") for i in items if i.get("device_id")})
@@ -1334,6 +1391,7 @@ def log_detail(
     if not row:
         raise HTTPException(status_code=404, detail="日志不存在")
     data = row.to_dict()
+    _attach_model_names(db, [data])
     _attach_step_summaries(db, [data])
     if include_payload:
         payload = db.get(LogPayload, log_id)
@@ -1371,7 +1429,9 @@ def log_steps(log_id: int, db: Annotated[Session, Depends(get_db)], page: int = 
         raise HTTPException(status_code=404, detail="日志不存在")
     query = db.query(UsageLog).filter(UsageLog.parent_log_id == log_id)
     rows = query.order_by(UsageLog.id).offset((page - 1) * page_size).limit(page_size).all()
-    return {"items": [row.to_dict() for row in rows], "total": query.count(), "page": page, "page_size": page_size}
+    items = [row.to_dict() for row in rows]
+    _attach_model_names(db, items)
+    return {"items": items, "total": query.count(), "page": page, "page_size": page_size}
 
 
 @router.get("/logs/{log_id}/agent-run")
@@ -1391,6 +1451,12 @@ def agent_run_report(log_id: int, db: Annotated[Session, Depends(get_db)]):
     data = report.run_report(db, log)
     if data is None:
         raise HTTPException(status_code=404, detail="运行记录已不存在（使用码删除会连带清理工作台数据）")
+    labels = _model_labels(db)
+    data["run"]["model_name"] = model_label(labels, data["run"].get("model") or "")
+    for entry in data.get("entries") or []:
+        details = entry.get("details")
+        if isinstance(details, dict) and details.get("model"):
+            details["model_name"] = model_label(labels, details["model"])
     return data
 
 
@@ -1609,6 +1675,7 @@ async def device_detail(
     if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
     base = db.query(UsageLog).filter(UsageLog.device_id == device.id)
+    model_labels = _model_labels(db)
 
     try:
         total = base.count()
@@ -1768,7 +1835,11 @@ async def device_detail(
             .limit(30)
             .all()
         )
-        models = [{"model": r[0] or "", "count": int(r[1] or 0)} for r in rows]
+        models = [
+            {"model": r[0] or "", "model_name": model_label(model_labels, r[0] or ""),
+             "count": int(r[1] or 0)}
+            for r in rows
+        ]
     except Exception:
         models = []
 
@@ -1783,6 +1854,7 @@ async def device_detail(
                     "tool_id": log.tool_id or "",
                     "tool_name": log.tool_name or "",
                     "model": log.model or "",
+                    "model_name": model_label(model_labels, log.model or ""),
                     "status": log.status or "success",
                     "ip": log.ip or "",
                     "duration_ms": log.duration_ms,
@@ -1800,6 +1872,7 @@ async def device_detail(
         "summary_raw": device.device_summary or "",
         "identity": identify_device(summary, top_ua),
         "ai_profile": device.ai_profile or "",
+        "ai_profile_model_name": model_label(model_labels, device.ai_profile_model or ""),
         "profile": build_profile(summary, top_ua),
         "signals": build_signals(
             code_count=len(codes), ip_count=len(ips), ua_count=len(user_agents)
@@ -2118,6 +2191,7 @@ async def generate_device_ai_profile(
         "ai_profile": device.ai_profile,
         "ai_profile_at": device.ai_profile_at.isoformat() if device.ai_profile_at else None,
         "ai_profile_model": device.ai_profile_model,
+        "ai_profile_model_name": model_label(_model_labels(db), device.ai_profile_model or ""),
     }
 
 

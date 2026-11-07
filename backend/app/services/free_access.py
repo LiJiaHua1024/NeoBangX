@@ -193,7 +193,7 @@ def register_free_use(*, entry: dict, identity: str) -> Callable[[], None]:
             if used >= limit:
                 logger.info(
                     "免费模型限额命中：model=%s identity=%s %s上限=%s 已用=%s",
-                    model_id, identity, label, limit, used,
+                    entry.get("name") or model_id, identity, label, limit, used,
                 )
                 raise HTTPException(
                     status_code=429,

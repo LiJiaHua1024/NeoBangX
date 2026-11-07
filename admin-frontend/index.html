@@ -534,7 +534,7 @@
                     <tr x-show="!analyticsData?.by_model.length"><td colspan="8" class="empty">暂无数据</td></tr>
                     <template x-for="m in analyticsData?.by_model" :key="m.model">
                       <tr>
-                        <td class="mono truncate-cell" data-label="模型" data-span="full" x-text="m.model"></td>
+                        <td class="mono truncate-cell" data-label="模型" data-span="full" :title="m.model" x-text="m.model_name || m.model"></td>
                         <td class="num mono" data-label="请求" x-text="fmtCompact(m.requests)"></td>
                         <td data-label="请求占比" data-span="full"><div class="ana-hbar"><div class="ana-hbar-fill" :style="`width:${anaRowW(m.share)}`"></div><span class="mono dim" x-text="fmtPct(m.share)"></span></div></td>
                         <td class="num mono" data-label="Tokens" x-text="fmtCompact(m.total_tokens)"></td>
@@ -745,7 +745,7 @@
                     <span class="ana-recent-time" x-text="fmtTime(r.created_at)"></span>
                     <div class="ana-recent-meta">
                       <span x-text="r.tool_name || ('工具 ' + (r.tool_id || '—'))"></span>
-                      <span class="mono" x-text="r.model || '模型未记录'"></span>
+                      <span class="mono" x-text="r.model_name || r.model || '模型未记录'"></span>
                       <span class="mono" x-text="r.code"></span>
                       <span class="mono" x-show="r.provider_name || r.provider_id" x-text="r.provider_name || r.provider_id"></span>
                     </div>
@@ -765,7 +765,7 @@
                         <tr class="log-row" @click="openAnalyticsLog(s.log_id)">
                           <td class="mono" data-label="日志" x-text="`#${s.log_id}`"></td>
                           <td class="num mono" data-label="耗时" x-text="fmtDuration(s.duration_ms)"></td>
-                          <td data-label="工具 / 模型" data-span="full"><span x-text="s.tool_name || s.tool_id || '—'"></span> <span class="dim mono" x-text="s.model || ''"></span> <span class="status-badge" :class="'st-' + (s.status || 'success')" x-text="logStatusLabel(s.status)"></span></td>
+                          <td data-label="工具 / 模型" data-span="full"><span x-text="s.tool_name || s.tool_id || '—'"></span> <span class="dim mono" x-text="s.model_name || s.model || ''"></span> <span class="status-badge" :class="'st-' + (s.status || 'success')" x-text="logStatusLabel(s.status)"></span></td>
                           <td class="num mono" data-label="Tokens" x-text="s.total_tokens ?? '—'"></td>
                           <td class="dim mono" data-label="时间" data-span="full" x-text="fmtTime(s.created_at)"></td>
                         </tr>
@@ -1067,7 +1067,7 @@
                           x-text="' · ' + l.agent_steps + ' 步'"></span>
                     <span class="dim" x-show="l.tool_id && l.tool_id !== 'agent'"> (#<span x-text="l.tool_id"></span>)</span>
                   </td>
-                  <td class="dim mono truncate-cell" data-label="模型" data-span="full" :title="l.model" x-text="l.model || '—'"></td>
+                  <td class="dim mono truncate-cell" data-label="模型" data-span="full" :title="l.model" x-text="l.model_name || l.model || '—'"></td>
                   <td class="dim mono truncate-cell" data-label="Provider" data-span="full" :title="l.provider_name ? `${l.provider_name} (${l.provider_id})` : (l.provider_id || '')" x-text="l.provider_name || l.provider_id || '—'"></td>
                   <td data-label="状态">
                     <span class="status-badge" :class="'st-' + (l.status || 'success')"
@@ -2456,7 +2456,7 @@
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">模型</span>
-                  <span class="meta-value mono break-any" x-text="logDetail?.model || '—'"></span>
+                  <span class="meta-value mono break-any" x-text="logDetail?.model_name || logDetail?.model || '—'"></span>
                 </div>
                 <div class="meta-item">
                   <span class="meta-label">命中 Provider</span>
@@ -2507,7 +2507,7 @@
                   <template x-for="step in logSteps" :key="step.id">
                     <button class="log-step-item" @click="openLogDetail(step.id)">
                       <span class="log-step-head"><strong x-text="step.step_name || step.tool_name"></strong><span class="status-badge" :class="'st-' + step.status" x-text="logStatusLabel(step.status)"></span></span>
-                      <span class="field-hint" x-text="(step.provider_name || step.model) + ' · ' + fmtDuration(step.duration_ms) + ' · ' + fmtNum(step.total_tokens) + ' tokens'"></span>
+                      <span class="field-hint" x-text="(step.provider_name || step.model_name || step.model) + ' · ' + fmtDuration(step.duration_ms) + ' · ' + fmtNum(step.total_tokens) + ' tokens'"></span>
                       <span class="field-hint" x-show="logStepIssues(step)" x-text="logStepIssues(step)"></span>
                     </button>
                   </template>
@@ -2669,7 +2669,7 @@
                   生成后保存，可随时点「重新生成」覆盖。
                 </div>
                 <div class="dim mono" style="font-size:0.72rem; margin-top:0.5rem" x-show="deviceDetail?.ai_profile_at"
-                     x-text="`生成于 ${fmtTime(deviceDetail?.ai_profile_at)} · 模型 ${deviceDetail?.ai_profile_model || '—'}`"></div>
+                     x-text="`生成于 ${fmtTime(deviceDetail?.ai_profile_at)} · 模型 ${deviceDetail?.ai_profile_model_name || deviceDetail?.ai_profile_model || '—'}`"></div>
                 <div class="ai-loading" x-show="aiProfileGenerating" x-cloak>
                   <span class="ai-spinner"></span>
                   <span>正在分析该设备的全部数据（识别、使用码、IP、时段…），约需几十秒</span>
@@ -2769,7 +2769,7 @@
                   <div style="padding:0.6rem 0.8rem; display:flex; flex-direction:column; gap:0.45rem">
                     <template x-for="m in deviceDetail?.models" :key="m.model">
                       <div style="display:flex; align-items:baseline; gap:0.5rem">
-                        <span class="mono" style="font-size:0.78rem" x-text="m.model"></span>
+                        <span class="mono" style="font-size:0.78rem" x-text="m.model_name || m.model"></span>
                         <span class="dim mono" style="font-size:0.76rem; margin-left:auto" x-text="`×${m.count}`"></span>
                       </div>
                     </template>
@@ -2964,7 +2964,7 @@
         </div>
         <div class="arv-stat">
           <span class="arv-stat-k">模型</span>
-          <strong class="arv-stat-v arv-stat-model" x-text="agentRun?.run?.model || '—'"></strong>
+          <strong class="arv-stat-v arv-stat-model" x-text="agentRun?.run?.model_name || agentRun?.run?.model || '—'"></strong>
           <span class="arv-stat-d" x-text="agentModelSub()"></span>
         </div>
       </div>
@@ -3203,7 +3203,7 @@
                   </div>
                   <h2 class="arv-detail-title" x-text="agentEntryLabel(agentEntry)"></h2>
                   <div class="arv-detail-chips">
-                    <span class="arv-chip" x-show="agentEntry.details?.model" x-text="agentEntry.details?.model"></span>
+                    <span class="arv-chip" x-show="agentEntry.details?.model" x-text="agentEntry.details?.model_name || agentEntry.details?.model"></span>
                     <span class="arv-chip" x-show="agentEntry.details?.provider_id"
                           x-text="`Provider ${agentEntry.details?.provider_id}`"></span>
                     <span class="arv-chip" x-show="agentEntry.details?.attempts != null"

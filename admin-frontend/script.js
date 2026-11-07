@@ -1064,7 +1064,8 @@ function adminApp() {
         if (kind === "problem" && !problem) return false;
         if (kind !== "all" && kind !== "problem" && entry.kind !== kind) return false;
         if (!query) return true;
-        const text = [entry.label, entry.kind, entry.details?.error, entry.details?.provider_id]
+        const text = [entry.label, entry.kind, entry.details?.error, entry.details?.provider_id,
+          entry.details?.model_name, entry.details?.model]
           .filter(Boolean).join(" ").toLowerCase();
         return text.includes(query);
       });
@@ -2520,7 +2521,7 @@ function adminApp() {
         `耗时：平均 ${this.fmtDuration(k.avg_duration_ms)} / P95 ${this.fmtDuration(d.latency?.p95)} / P99 ${this.fmtDuration(d.latency?.p99)}`,
         `活跃：使用码 ${k.active_codes ?? 0} · 设备 ${k.active_devices ?? 0} · 模型 ${k.active_models ?? 0} · 工具 ${k.active_tools ?? 0} · 扣费 ${k.units ?? 0} 次`,
         "",
-        `模型 Top（按请求）：${(d.by_model || []).slice(0, 5).map((m) => `${m.model}×${m.requests}（${this.fmtPct(m.share)}）`).join("、") || "—"}`,
+        `模型 Top（按请求）：${(d.by_model || []).slice(0, 5).map((m) => `${m.model_name || m.model}×${m.requests}（${this.fmtPct(m.share)}）`).join("、") || "—"}`,
         `工具 Top（按请求）：${(d.by_tool || []).slice(0, 5).map((t) => `${t.label}×${t.requests}（${this.fmtPct(t.share)}）`).join("、") || "—"}`,
         `Provider Top：${(d.by_provider || []).slice(0, 5).map((p) => `${p.label}×${p.requests}（${this.fmtPct(p.share)}）`).join("、") || "—"}`,
         `使用码 Top：${(d.top_codes || []).slice(0, 5).map((c) => `${c.code}×${c.requests}`).join("、") || "—"}`,
@@ -3151,7 +3152,7 @@ function adminApp() {
         { label: "开始", value: this.agentEntryTime(entry) },
       ];
       if (details.role) facts.push({ label: "角色", value: this.agentRoleLabel(details.role) });
-      if (details.model) facts.push({ label: "模型", value: details.model, mono: true });
+      if (details.model) facts.push({ label: "模型", value: details.model_name || details.model, mono: true });
       if (details.provider_id) facts.push({ label: "Provider", value: details.provider_id, mono: true });
       if (details.attempts != null) facts.push({ label: "尝试", value: `${details.attempts} 次` });
       if (details.first_token_ms != null) facts.push({ label: "首字延迟", value: this.fmtDuration(details.first_token_ms) });
@@ -3653,6 +3654,7 @@ function adminApp() {
           ai_profile: data.ai_profile || "",
           ai_profile_at: data.ai_profile_at || null,
           ai_profile_model: data.ai_profile_model || "",
+          ai_profile_model_name: data.ai_profile_model_name || "",
           device: { ...det.device, has_ai_profile: true, ai_profile_at: data.ai_profile_at || null },
         };
         this.aiProfileHtml = this.renderAiProfile(data.ai_profile);
@@ -3709,7 +3711,7 @@ function adminApp() {
         `关联使用码（${(det.codes || []).length}）：${(det.codes || []).map((c) => `${c.code}×${c.count}`).join("、") || "—"}`,
         `IP（${(det.ips || []).length}）：${(det.ips || []).map((x) => `${x.ip}×${x.count}`).join("、") || "—"}`,
         `常用工具：${(det.tools || []).map((t) => `${t.tool_name || t.tool_id}×${t.count}`).join("、") || "—"}`,
-        `常用模型：${(det.models || []).map((m) => `${m.model}×${m.count}`).join("、") || "—"}`,
+        `常用模型：${(det.models || []).map((m) => `${m.model_name || m.model}×${m.count}`).join("、") || "—"}`,
       ];
       if ((det.signals || []).length) {
         lines.push("", "风险提示（仅供参考）：", ...det.signals.map((s) => `· ${s}`));
@@ -3717,7 +3719,7 @@ function adminApp() {
       if (det.ai_profile) {
         lines.push(
           "",
-          `AI 用户画像（${this.fmtTime(det.ai_profile_at)} · ${det.ai_profile_model || "Chores 模型"}）：`,
+          `AI 用户画像（${this.fmtTime(det.ai_profile_at)} · ${det.ai_profile_model_name || det.ai_profile_model || "Chores 模型"}）：`,
           det.ai_profile,
         );
       }
@@ -3811,7 +3813,7 @@ function adminApp() {
         `时间：${this.fmtTime(l.created_at)}`,
         `使用码：${l.code}`,
         `工具：${l.tool_name || "—"}（ID ${l.tool_id || "—"}）`,
-        `模型：${l.model || "—"}`,
+        `模型：${l.model_name || l.model || "—"}`,
         `Provider：${l.provider_name ? `${l.provider_name} (${l.provider_id})` : (l.provider_id || "—")}  尝试 ${l.fallback_attempts ?? "—"} 次`,
         `状态：${this.logStatusLabel(l.status)}`,
         `耗时：${this.fmtDuration(l.duration_ms)}`,
