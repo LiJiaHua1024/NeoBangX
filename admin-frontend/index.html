@@ -954,7 +954,7 @@
                     x-text="'语法有误：' + logFilterParsed.error"></span>
             </div>
             <div class="lf-stale field-hint" x-show="logFilterStale" x-cloak>
-              ⓘ 后端尚未更新，高级筛选暂未生效（返回的仍是未过滤数据）；请重启后端服务后重试。
+              ⓘ 后端未接受筛选表达式，当前列表仍是未过滤数据。请确认后端服务与前端静态资源为同一版本，并检查反向代理是否丢弃了 expr 参数。
             </div>
 
             <input type="search" x-model="logCode" @keydown.enter="logsPage = 1; loadLogs()" placeholder="使用码">

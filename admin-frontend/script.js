@@ -945,7 +945,7 @@ function adminApp() {
     logFilterExpr: "",            // 人类可读表达式，与工具栏输入框 / 弹窗 textarea 双向绑定
     logFilterParsed: parseLogFilter(""), // parseLogFilter() 结果，供 chips / 校验提示 / 按钮态派生
     logFilterOpen: false,         // 高级筛选弹窗
-    logFilterStale: false,        // 后端未重启、静默忽略 expr 参数时的常驻告警
+    logFilterStale: false,        // 后端未接受筛选表达式时的常驻告警（旧版 / 参数丢失）
     logFilterFields: LOG_FILTER_FIELDS,
     logFilterPresets: LOG_FILTER_PRESET_GROUPS,
     logFilterExamples: LOG_FILTER_EXAMPLES,
@@ -1382,7 +1382,7 @@ function adminApp() {
     get logFilterMatchText() {
       if (!this.logFilterParsed || !this.logFilterParsed.ok) return "语法有误，修正后自动查询";
       if (!this.logFilterParsed.clauses.length) return "留空表示不筛选；输入条件即时生效";
-      if (this.logFilterStale) return "后端尚未更新，当前匹配数不是筛选后的结果";
+      if (this.logFilterStale) return "筛选条件未被后端接受，当前匹配数不是筛选后的结果";
       return `✓ ${this.logFilterParsed.clauses.length} 个条件生效 · 当前匹配 ${this.fmtNum(this.logSummary.total)} 条`;
     },
     /* Agent 运行记录：只在这里派生展示数据，不改后端返回结构 */
@@ -2498,8 +2498,10 @@ function adminApp() {
           params.set("end", end.toISOString());
         }
       }
-      // AST 走独立参数，与上面的基础筛选在后端 AND 叠加；列表 / 汇总 / 分页共用同一份
-      if (parsed.ast.g.length) params.set("filter", JSON.stringify(parsed.ast));
+      // AST 走独立参数 expr（必须与后端 list_logs / logs_summary 的 Query 参数名一致，
+      // 两处改名要同步，否则后端静默忽略、界面却显示筛选已生效）；
+      // 与上面的基础筛选在后端 AND 叠加，列表 / 汇总 / 分页共用同一份
+      if (parsed.ast.g.length) params.set("expr", JSON.stringify(parsed.ast));
       return params;
     },
 
@@ -2525,9 +2527,9 @@ function adminApp() {
         params.set("include_summary", "true");
         const data = await this.api(`/api/admin/logs?${params}`, { signal: controller.signal });
         if (request !== logsRequest) return;
-        // 新版后端会回显 filter_applied；老后端没有这个字段，说明 expr 被静默忽略了，
-        // 此时必须明确告警，否则管理员会以为「已经过滤掉标题生成」
-        this.logFilterStale = params.has("filter") && data.filter_applied !== true;
+        // 新版后端会回显 filter_applied；为 false / 缺失都说明后端没收到 expr
+        // （旧版代码、参数名漂移、或反向代理丢参数），必须明确告警而不是假装已筛选
+        this.logFilterStale = params.has("expr") && data.filter_applied !== true;
         // 清理后当前页可能已超出末页（返回空列表但 total 正常），收敛页码重查
         const maxPage = Math.max(1, Math.ceil((data.total || 0) / this.logsPageSize));
         if (this.logsPage > maxPage) {

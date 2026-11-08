@@ -359,11 +359,18 @@ test("筛选语法解析：排除、中文别名、单位、OR 分组与非法�
   assert.equal(parse("x".repeat(300)).ok, false, "超长值挡在前端，避免后端 400");
 });
 
-test("表达式下推为 filter 参数；语法有误时不发请求也不卡加载态", async () => {
+test("表达式下推为 expr 参数且与后端参数名一致；语法有误时不发请求", async () => {
   const { app, requests } = setup();
   app.logFilterExpr = "-tool:title";
   const params = app._logFilterParams();
-  assert.equal(JSON.parse(params.get("filter")).g[0][0].n, true);
+  assert.equal(params.get("filter"), null, "后端只认 expr，绝不能再发 filter");
+  assert.equal(JSON.parse(params.get("expr")).g[0][0].n, true);
+  // 跨语言契约：前端发的参数名必须与后端 Query 参数名一致。这里曾经漂移过一次
+  // （前端 filter / 后端 expr），结果是筛选静默失效、版本告警还误报成「后端未更新」，
+  // 所以直接读后端源码把两个端点的接收名钉死，防止单侧改名再次漏网。
+  const backend = fs.readFileSync(path.resolve(__dirname, "../../backend/app/routers/admin.py"), "utf8");
+  const receivers = (backend.match(/expr: str = Query\("/g) || []).length;
+  assert.ok(receivers >= 2, "list_logs 与 logs_summary 两个端点都要以 expr 接收");
 
   app.logFilterExpr = "foo:bar";
   const pending = app.loadLogs();
@@ -372,14 +379,14 @@ test("表达式下推为 filter 参数；语法有误时不发请求也不卡加
   assert.equal(app.logsLoading, false, "提前 return 不能把加载态卡住");
 });
 
-test("后端未回显 filter_applied 时标记陈旧，避免误报匹配数", async () => {
+test("后端未回显 filter_applied 时标记未接受，避免误报匹配数", async () => {
   const { app, requests } = setup();
   app.logFilterExpr = "-tool:title";
   const pending = app.loadLogs();
   requests[0].resolve({ items: [], total: 0, summary: { total: 0 } }); // 老后端没有这个字段
   await pending;
   assert.equal(app.logFilterStale, true);
-  assert.match(app.logFilterMatchText, /后端尚未更新/);
+  assert.match(app.logFilterMatchText, /未被后端接受/);
 });
 
 test("快捷条件切换、chips 精确摘除、可视化拼接与重置", () => {
