@@ -36,7 +36,7 @@
   <!-- init() 由 Alpine 3 自动调用（组件含 init 方法时）；不要再写 x-init="init()"，
        否则 init 双跑：背景 canvas 会出现两条动画链轮流重绘同一画布（高频闪烁），
        还会泄漏定时器与监听器、双倍发起初始请求 -->
-  <div x-data="adminApp()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || resetUsageModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen || ruleModalOpen || confirmOpen || agentRunOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || resetUsageModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen || ruleModalOpen || confirmOpen || agentRunOpen)">
+  <div x-data="adminApp()" x-cloak class="layout" x-effect="document.documentElement.classList.toggle('modal-open', createOpen || quotaModalOpen || resetUsageModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen || ruleModalOpen || confirmOpen || agentRunOpen || logFilterOpen); document.body.classList.toggle('modal-open', createOpen || quotaModalOpen || resetUsageModalOpen || modelModalOpen || providerModalOpen || modelProvidersModalOpen || logDetailOpen || providerTestModalOpen || deviceModalOpen || deviceDetailOpen || codeNoteModalOpen || ruleModalOpen || confirmOpen || agentRunOpen || logFilterOpen)">
     <!-- 侧栏 -->
     <aside class="sidebar glass">
       <div class="brand">
@@ -904,6 +904,59 @@
 
         <div class="glass card toolbar" :class="{ 'picker-open': !!datePickerOpen }">
           <div class="filters log-filters">
+            <!-- 高级筛选：表达式直接输入即时生效；点「高级筛选」打开语法 tips + 可视化按钮窗口 -->
+            <div class="lf-query-row">
+              <div class="lf-query-box" :class="{ bad: !logFilterParsed.ok }">
+                <svg class="lf-query-icon" viewBox="0 0 24 24" width="15" height="15" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 5h18l-7 8v6l-4 2v-8z"></path>
+                </svg>
+                <input type="text" class="lf-query-input mono" x-model="logFilterExpr"
+                       @keydown.enter="applyLogFilterExpr()"
+                       :aria-invalid="!logFilterParsed.ok ? 'true' : 'false'"
+                       placeholder="筛选表达式，例如 -tool:title 排除标题生成；或直接点「高级筛选」"
+                       aria-label="筛选表达式">
+                <button class="lf-query-clear" x-show="!!logFilterExpr" @click="clearLogFilterExpr()"
+                        title="清空表达式" aria-label="清空表达式">×</button>
+              </div>
+              <button class="btn-ghost lf-advanced" @click="openLogFilterModal()">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 6h16M7 12h10M10 18h4"></path>
+                </svg>
+                <span>高级筛选</span>
+                <span class="lf-badge" x-show="logFilterParsed.clauses.length"
+                      x-text="logFilterParsed.clauses.length"></span>
+              </button>
+            </div>
+
+            <!-- 已生效条件：点 × 精确摘除该 token；语法错误时就地说明，不发请求 -->
+            <div class="lf-clause-row" x-show="logFilterParsed.clauses.length" x-cloak>
+              <template x-for="(c, i) in logFilterParsed.clauses" :key="c.start + '|' + c.raw">
+                <span class="lf-clause" :class="{ neg: c.n }" :title="c.label">
+                  <span class="lf-clause-text mono" x-text="c.raw"></span>
+                  <button class="lf-clause-x" @click="removeLogFilterClause(i)"
+                          :aria-label="'移除条件 ' + c.raw">×</button>
+                </span>
+              </template>
+            </div>
+            <div class="lf-quick-row" x-show="!logFilterParsed.clauses.length">
+              <span class="field-hint">快捷：</span>
+              <template x-for="p in logFilterQuick" :key="p.token">
+                <button class="preset-chip" :class="{ on: isLogFilterPresetOn(p) }"
+                        :aria-pressed="isLogFilterPresetOn(p) ? 'true' : 'false'"
+                        @click="toggleLogFilterPreset(p)" x-text="p.label" :title="p.hint || p.token"></button>
+              </template>
+              <span class="field-hint" x-show="logFilterParsed.ok">
+                · 空格=且，<code class="mono">OR</code>=或，<code class="mono">-</code>=排除
+              </span>
+              <span class="lf-error field-hint" x-show="!logFilterParsed.ok"
+                    x-text="'语法有误：' + logFilterParsed.error"></span>
+            </div>
+            <div class="lf-stale field-hint" x-show="logFilterStale" x-cloak>
+              ⓘ 后端尚未更新，高级筛选暂未生效（返回的仍是未过滤数据）；请重启后端服务后重试。
+            </div>
+
             <input type="search" x-model="logCode" @keydown.enter="logsPage = 1; loadLogs()" placeholder="使用码">
             <input type="search" x-model="logDevice" @keydown.enter="logsPage = 1; loadLogs()" placeholder="设备（短码/备注/昵称）">
             <input type="text" x-model="logToolId" @keydown.enter="logsPage = 1; loadLogs()" placeholder="工具 ID">
@@ -2856,6 +2909,164 @@
         <div class="modal-foot">
           <button class="btn-ghost" @click="deviceModalOpen = false">取消</button>
           <button class="btn-primary" @click="saveDeviceEditor()" :disabled="savingDevice">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 使用日志 · 高级筛选：语法速查 + 可视化构建，全部沿用现有自研控件（无浏览器原生组件） -->
+    <div class="modal-mask lf-mask" x-show="logFilterOpen" x-transition.opacity x-cloak
+         @click.self="closeLogFilterModal()" @keydown.escape.window="logFilterOpen && closeLogFilterModal()">
+      <div class="modal glass modal-filter" @click.stop role="dialog" aria-modal="true" aria-label="高级筛选">
+        <div class="modal-head">
+          <div class="lf-modal-title">
+            <h3>高级筛选 <span class="dim">· 使用日志</span></h3>
+            <p class="field-hint">条件即时生效、关闭后仍保留；与上方基础筛选叠加（AND）。</p>
+          </div>
+          <button class="icon-x" @click="closeLogFilterModal()" title="关闭（Esc）">×</button>
+        </div>
+
+        <div class="modal-body lf-modal-body">
+          <!-- A. 表达式 + 已生效条件 + 即时匹配数 -->
+          <section class="lf-section">
+            <div class="lf-section-head">
+              <span class="lf-section-title">筛选表达式</span>
+              <button class="link-btn" @click="clearLogFilterExpr()" x-show="!!logFilterExpr">清空</button>
+            </div>
+            <textarea class="lf-expr mono" x-ref="logFilterExprInput" x-model="logFilterExpr"
+                      rows="2" spellcheck="false" aria-label="筛选表达式编辑"
+                      placeholder="例如：-tool:title status:异常 OR error:timeout"></textarea>
+            <div class="lf-status" :class="{ bad: !logFilterParsed.ok }">
+              <span x-text="logFilterMatchText"></span>
+              <span x-show="!logFilterParsed.ok" class="field-hint" x-text="' · ' + logFilterParsed.error"></span>
+            </div>
+            <div class="lf-clause-row" x-show="logFilterParsed.clauses.length">
+              <template x-for="(c, i) in logFilterParsed.clauses" :key="c.start + '|' + c.raw">
+                <span class="lf-clause" :class="{ neg: c.n }" :title="c.label">
+                  <span class="lf-clause-text mono" x-text="c.raw"></span>
+                  <button class="lf-clause-x" @click="removeLogFilterClause(i)"
+                          :aria-label="'移除条件 ' + c.raw">×</button>
+                </span>
+              </template>
+            </div>
+          </section>
+
+          <!-- B. 可视化拼接：选字段 → 选条件 → 填值 → 添加 -->
+          <section class="lf-section">
+            <div class="lf-section-head">
+              <span class="lf-section-title">可视化拼接</span>
+              <span class="field-hint">不用记语法：选字段、条件、值，点「添加条件」</span>
+            </div>
+            <div class="lf-builder">
+              <div class="lf-builder-row">
+                <span class="lf-builder-label">字段</span>
+                <div class="preset-chips lf-field-chips" role="group" aria-label="选择筛选字段">
+                  <template x-for="f in logFilterFields" :key="f.key">
+                    <button class="preset-chip" :class="{ on: logFilterBuilderField === f.key }"
+                            :aria-pressed="logFilterBuilderField === f.key ? 'true' : 'false'"
+                            @click="setLogFilterBuilderField(f.key)" x-text="f.label" :title="f.tip"></button>
+                  </template>
+                </div>
+              </div>
+              <div class="lf-builder-row">
+                <span class="lf-builder-label">条件</span>
+                <div class="preset-chips" role="group" aria-label="选择运算符">
+                  <template x-for="op in logFilterBuilderOps()" :key="op.sym">
+                    <button class="preset-chip" :class="{ on: logFilterBuilderOp === op.sym }"
+                            :aria-pressed="logFilterBuilderOp === op.sym ? 'true' : 'false'"
+                            @click="logFilterBuilderOp = op.sym" x-text="op.label"
+                            :title="'运算符 ' + op.sym"></button>
+                  </template>
+                  <button class="preset-chip lf-neg-chip" :class="{ on: logFilterBuilderNeg }"
+                          :aria-pressed="logFilterBuilderNeg ? 'true' : 'false'"
+                          @click="logFilterBuilderNeg = !logFilterBuilderNeg"
+                          title="生成 - 前缀，排除满足该条件的日志">排除（−）</button>
+                </div>
+              </div>
+              <div class="lf-builder-row lf-builder-value-row">
+                <span class="lf-builder-label">值</span>
+                <input type="text" class="lf-builder-value" x-model="logFilterBuilderValue"
+                       @keydown.enter="addLogFilterClause()"
+                       :placeholder="logFilterBuilderPlaceholder()" aria-label="条件值">
+                <button class="btn-primary lf-add" @click="addLogFilterClause()">添加条件</button>
+              </div>
+              <div class="lf-builder-row" x-show="logFilterBuilderValues().length">
+                <span class="lf-builder-label">常用</span>
+                <div class="preset-chips">
+                  <template x-for="v in logFilterBuilderValues()" :key="v.value">
+                    <button class="preset-chip" @click="logFilterBuilderValue = v.value"
+                            x-text="v.label" :title="v.hint || v.value"></button>
+                  </template>
+                </div>
+              </div>
+            </div>
+            <p class="lf-builder-error field-hint" x-show="!!logFilterBuilderError"
+               x-text="logFilterBuilderError"></p>
+          </section>
+
+          <!-- C. 快捷条件：点击即切换（签名一致时再点取消） -->
+          <section class="lf-section">
+            <div class="lf-section-head">
+              <span class="lf-section-title">快捷条件</span>
+              <span class="field-hint">点一下加上，再点一下取消</span>
+            </div>
+            <template x-for="g in logFilterPresets" :key="g.title">
+              <div class="lf-preset-group">
+                <div class="lf-preset-title" x-text="g.title"></div>
+                <div class="preset-chips">
+                  <template x-for="p in g.items" :key="p.token">
+                    <button class="preset-chip" :class="{ on: isLogFilterPresetOn(p) }"
+                            :aria-pressed="isLogFilterPresetOn(p) ? 'true' : 'false'"
+                            @click="toggleLogFilterPreset(p)" x-text="p.label"
+                            :title="(p.hint || p.token) + '（' + p.token + '）'"></button>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </section>
+
+          <!-- D. 语法速查：运算符说明 + 字段表（点击示例插入）+ 组合示例 -->
+          <section class="lf-section lf-tips-section">
+            <div class="lf-section-head">
+              <span class="lf-section-title">语法速查</span>
+              <span class="field-hint">点击任意示例即可插入到表达式</span>
+            </div>
+            <div class="lf-tips">
+              <div class="lf-tips-legend">
+                <span><code class="mono">字段:值</code> 包含</span>
+                <span><code class="mono">字段=值</code> 精确</span>
+                <span><code class="mono">-字段:值</code> 排除</span>
+                <span><code class="mono">&gt; &gt;= &lt; &lt;=</code> 比较</span>
+                <span><code class="mono">空格</code> 且（AND）</span>
+                <span><code class="mono">OR / 或 / |</code> 或</span>
+                <span><code class="mono">"含 空格"</code> 引号</span>
+                <span><code class="mono">2k / 10s</code> 单位</span>
+              </div>
+              <div class="lf-tips-table">
+                <template x-for="f in logFilterFields" :key="f.key">
+                  <button class="lf-tip-row" @click="insertLogFilterToken(f.example)" :title="f.tip">
+                    <span class="lf-tip-field" x-text="f.label"></span>
+                    <span class="lf-tip-alias dim" x-text="f.key + ' / ' + f.aliases.slice(0, 2).join(' / ')"></span>
+                    <span class="lf-tip-example mono" x-text="f.example"></span>
+                    <span class="lf-tip-plus">＋</span>
+                  </button>
+                </template>
+              </div>
+              <div class="lf-examples">
+                <span class="lf-preset-title">组合示例</span>
+                <div class="preset-chips">
+                  <template x-for="ex in logFilterExamples" :key="ex.expr">
+                    <button class="preset-chip" @click="insertLogFilterToken(ex.expr)"
+                            :title="'插入：' + ex.expr" x-text="ex.label"></button>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="modal-foot">
+          <button class="btn-ghost" @click="clearLogFilterExpr()">清空表达式</button>
+          <button class="btn-primary" @click="closeLogFilterModal()">完成</button>
         </div>
       </div>
     </div>

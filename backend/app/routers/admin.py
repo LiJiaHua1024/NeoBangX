@@ -6,6 +6,7 @@ import asyncio
 import bisect
 import json
 import logging
+import math
 import re
 import secrets as secrets_lib
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,7 @@ from typing import Annotated, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.config import settings
@@ -1083,6 +1084,245 @@ def _parse_log_date(value: str, name: str) -> datetime:
     return dt
 
 
+# ---------- 使用日志：高级筛选表达式 ----------
+# 前端把人类可读的筛选语法解析成紧凑 AST，JSON 放进 expr 参数：
+#   {"v":1,"g":[[{"f":"tool","o":"contains","v":"title","n":true}], ...]}
+#   g = OR 分组（组间 OR、组内 AND），n = 对该子句取反。
+# 这里只认白名单里的字段 / 运算符，并把值编译成参数化的 SQLAlchemy 表达式；
+# 全程不拼接原始 SQL 字符串，表达式不会变成注入口。
+LOG_FILTER_TEXT_FIELDS = {
+    "tool": ("tool_id", "tool_name"),
+    "model": ("model",),
+    "provider": ("provider_id", "provider_name"),
+    "code": ("code",),
+    "ip": ("ip",),
+    "error": ("error_code", "error_message"),
+    "finish": ("finish_reason",),
+    "step": ("step_name",),
+    "request": ("request_id",),
+    # 裸词：跨多个字段的自由搜索
+    "free": ("code", "tool_id", "tool_name", "model", "provider_id", "provider_name",
+             "ip", "step_name", "error_message", "request_id"),
+}
+LOG_FILTER_NUM_FIELDS = {
+    "tokens": "total_tokens",
+    "input": "prompt_tokens",
+    "output": "completion_tokens",
+    "cached": "cached_tokens",
+    "duration": "duration_ms",
+    "units": "units",
+    "fallback": "fallback_attempts",
+    "id": "id",
+}
+LOG_FILTER_DATE_FIELDS = {"date"}
+LOG_FILTER_ENUM_FIELDS = {"status"}
+LOG_FILTER_DEVICE_FIELDS = {"device"}
+LOG_FILTER_FIELDS = (
+    set(LOG_FILTER_TEXT_FIELDS) | set(LOG_FILTER_NUM_FIELDS) | LOG_FILTER_DATE_FIELDS
+    | LOG_FILTER_ENUM_FIELDS | LOG_FILTER_DEVICE_FIELDS
+)
+LOG_FILTER_TEXT_OPS = {"eq", "contains"}
+LOG_FILTER_NUM_OPS = {"eq", "gt", "gte", "lt", "lte"}
+LOG_FILTER_DATE_OPS = {"eq", "gt", "gte", "lt", "lte"}
+LOG_FILTER_ENUM_OPS = {"eq"}
+LOG_FILTER_DEVICE_OPS = {"eq", "contains"}
+# 前端表达式本身限 4000 字；AST 序列化后（含转义）会比原文长，上限留足余量，
+# 避免「前端判定合法、后端却报过长」的错位。
+LOG_FILTER_MAX_EXPR = 20000
+LOG_FILTER_MAX_GROUPS = 8
+LOG_FILTER_MAX_CLAUSES = 32
+
+
+def _lf_text_contains(cols, value) -> object:
+    """大小写不敏感的包含匹配。用 instr + coalesce，既避开 ilike 的通配符注入，
+    又让可空列按「空串」参与比较——取反时不会把 NULL 行误杀。"""
+    needle = str(value).lower()
+    return or_(*[
+        func.instr(func.lower(func.coalesce(c, "")), needle) > 0 for c in cols
+    ])
+
+
+def _lf_text_eq(cols, value) -> object:
+    needle = str(value).lower()
+    return or_(*[
+        func.lower(func.coalesce(c, "")) == needle for c in cols
+    ])
+
+
+def _lf_negate(cond) -> object:
+    """CASE WHEN cond THEN 0 ELSE 1 END = 1。
+
+    直接写 ~cond 时，若被比较的列是 NULL，cond 本身为 NULL，~NULL 仍是 NULL，
+    该行会被 WHERE 丢掉；但「排除」的语义应当保留这些「无从判断」的行。
+    CASE 的 ELSE 分支把 NULL 一并归到「不满足」，语义才正确。
+    """
+    return case((cond, 0), else_=1) == 1
+
+
+def _device_match_condition(device: str, db: Optional[Session]):
+    """按设备筛选日志：短码 / 备注 / 自动昵称 / 全哈希模糊匹配。
+
+    抽成条件（而非 query）是为了让高级筛选表达式里的 device 取反也能复用同一套口径。
+    纯数字视为 device_id 精确匹配；子查询把 devices 候选并进条件，避免把 id 列表取回
+    Python 再拼 IN 撞上 SQLite 变量数上限。db 为空时退化为仅指纹匹配。
+    """
+    like = f"%{device.strip()}%"
+    conditions = [UsageLog.fingerprint.ilike(like)]
+    if device.strip().isdigit():
+        conditions.append(UsageLog.device_id == int(device.strip()))
+    if db is not None:
+        try:
+            device_ids = db.query(Device.id).filter(
+                or_(
+                    Device.short_code.ilike(like),
+                    Device.note.ilike(like),
+                    Device.auto_name.ilike(like),
+                    Device.fingerprint.ilike(like),
+                )
+            )
+            conditions.append(UsageLog.device_id.in_(device_ids.scalar_subquery()))
+        except Exception:
+            logger.exception("设备筛选子查询构造失败，退化为仅按指纹匹配")
+    return or_(*conditions)
+
+
+def _validate_log_clause(clause) -> dict:
+    """系统边界校验：字段 / 运算符 / 值全部走白名单，非法输入给可读的 400。"""
+    if not isinstance(clause, dict):
+        raise HTTPException(status_code=400, detail="筛选条件格式不合法")
+    f = clause.get("f")
+    o = clause.get("o")
+    v = clause.get("v")
+    n = clause.get("n", False)
+    if f not in LOG_FILTER_FIELDS:
+        raise HTTPException(status_code=400, detail=f"筛选字段不支持：{f}")
+    if not isinstance(n, bool):
+        raise HTTPException(status_code=400, detail="筛选条件的取反标记不合法")
+    if not isinstance(v, (str, int, float)) or isinstance(v, bool):
+        raise HTTPException(status_code=400, detail="筛选值格式不合法")
+    text = str(v)
+    if not text.strip() or len(text) > 200:
+        raise HTTPException(status_code=400, detail="筛选值不能为空或过长")
+    if f in LOG_FILTER_NUM_FIELDS:
+        if o not in LOG_FILTER_NUM_OPS:
+            raise HTTPException(status_code=400, detail=f"字段 {f} 不支持运算符 {o}")
+        try:
+            num = float(text)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"「{text}」不是有效数字") from None
+        if not math.isfinite(num):
+            raise HTTPException(status_code=400, detail="筛选数值超出范围")
+        return {"f": f, "o": o, "v": num, "n": n}
+    if f in LOG_FILTER_DATE_FIELDS:
+        if o not in LOG_FILTER_DATE_OPS:
+            raise HTTPException(status_code=400, detail=f"字段 {f} 不支持运算符 {o}")
+        _parse_log_date(text, "date")
+        return {"f": f, "o": o, "v": text, "n": n}
+    if f in LOG_FILTER_ENUM_FIELDS:
+        if o not in LOG_FILTER_ENUM_OPS or text not in LOG_STATUSES:
+            raise HTTPException(status_code=400, detail=f"状态值不合法：{text}")
+        return {"f": f, "o": o, "v": text, "n": n}
+    if f in LOG_FILTER_DEVICE_FIELDS:
+        if o not in LOG_FILTER_DEVICE_OPS:
+            raise HTTPException(status_code=400, detail=f"字段 {f} 不支持运算符 {o}")
+        return {"f": f, "o": o, "v": text, "n": n}
+    if o not in LOG_FILTER_TEXT_OPS:
+        raise HTTPException(status_code=400, detail=f"字段 {f} 不支持运算符 {o}")
+    return {"f": f, "o": o, "v": text, "n": n}
+
+
+def _compile_log_clause(clause: dict, db: Optional[Session], labels: dict):
+    """把一个已校验的子句编译成 SQLAlchemy 条件。labels 由调用方一次性算好，
+    避免多个 model 子句各自重读一遍模型配置。"""
+    field, op, value, neg = clause["f"], clause["o"], clause["v"], clause["n"]
+    child = aliased(UsageLog)
+    cond = None
+
+    if field in LOG_FILTER_TEXT_FIELDS:
+        cols = [getattr(UsageLog, name) for name in LOG_FILTER_TEXT_FIELDS[field]]
+        cond = _lf_text_contains(cols, value) if op == "contains" else _lf_text_eq(cols, value)
+        if field == "model":
+            # 与基础筛选一致：模型展示名可反查 ID；并行子调用只记在子行时也能命中父行。
+            keyword = str(value).lower()
+            matched = [mid for mid, name in labels.items()
+                       if (keyword in name.lower() if op == "contains" else keyword == name.lower())]
+            child_cond = (_lf_text_contains([child.model], value) if op == "contains"
+                          else _lf_text_eq([child.model], value))
+            extra = [select(child.id).where(child.parent_log_id == UsageLog.id, child_cond).exists()]
+            if matched:
+                extra.append(UsageLog.model.in_(matched))
+            cond = or_(cond, *extra)
+        elif field == "provider":
+            child_cols = [child.provider_id, child.provider_name]
+            child_cond = (_lf_text_contains(child_cols, value) if op == "contains"
+                          else _lf_text_eq(child_cols, value))
+            cond = or_(cond, select(child.id).where(
+                child.parent_log_id == UsageLog.id, child_cond).exists())
+    elif field in LOG_FILTER_DEVICE_FIELDS:
+        cond = _device_match_condition(value, db)
+    elif field in LOG_FILTER_ENUM_FIELDS:
+        cond = status_matches(value)
+    elif field in LOG_FILTER_NUM_FIELDS:
+        col = getattr(UsageLog, LOG_FILTER_NUM_FIELDS[field])
+        num = float(value)
+        cond = {
+            "eq": col == num, "gt": col > num, "gte": col >= num,
+            "lt": col < num, "lte": col <= num,
+        }[op]
+    elif field in LOG_FILTER_DATE_FIELDS:
+        dt = _parse_log_date(value, "date")
+        if op == "eq":
+            cond = and_(UsageLog.created_at >= dt, UsageLog.created_at < dt + timedelta(days=1))
+        else:
+            cond = {
+                "gt": UsageLog.created_at > dt, "gte": UsageLog.created_at >= dt,
+                "lt": UsageLog.created_at < dt, "lte": UsageLog.created_at <= dt,
+            }[op]
+
+    if cond is None:
+        raise HTTPException(status_code=400, detail=f"筛选字段不支持：{field}")
+    return _lf_negate(cond) if neg else cond
+
+
+def _compile_log_filter(expr: str, db: Optional[Session]):
+    """把 AST 编译成 SQLAlchemy 条件；空表达式返回 None（不过滤）。"""
+    if not expr or not expr.strip():
+        return None
+    if len(expr) > LOG_FILTER_MAX_EXPR:
+        raise HTTPException(status_code=400, detail="筛选表达式过长")
+    try:
+        data = json.loads(expr)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="筛选表达式格式不合法") from None
+    if not isinstance(data, dict) or data.get("v") != 1:
+        raise HTTPException(status_code=400, detail="筛选表达式版本不支持")
+    groups = data.get("g")
+    if not isinstance(groups, list):
+        raise HTTPException(status_code=400, detail="筛选表达式分组格式不合法")
+    if not groups:
+        return None
+    if len(groups) > LOG_FILTER_MAX_GROUPS:
+        raise HTTPException(status_code=400, detail="筛选表达式的 OR 分组过多")
+    needs_labels = any(
+        isinstance(raw, dict) and raw.get("f") == "model"
+        for group in groups if isinstance(group, list) for raw in group
+    )
+    labels = _model_labels(db) if (needs_labels and db is not None) else {}
+    compiled = []
+    total = 0
+    for group in groups:
+        if not isinstance(group, list) or not group:
+            raise HTTPException(status_code=400, detail="筛选表达式存在空分组")
+        conds = []
+        for raw in group:
+            total += 1
+            if total > LOG_FILTER_MAX_CLAUSES:
+                raise HTTPException(status_code=400, detail="筛选条件过多")
+            conds.append(_compile_log_clause(_validate_log_clause(raw), db, labels))
+        compiled.append(and_(*conds))
+    return or_(*compiled)
+
+
 def _apply_log_filters(
     query,
     *,
@@ -1094,6 +1334,7 @@ def _apply_log_filters(
     end: Optional[str],
     provider: str = "",
     device: str = "",
+    expr: str = "",
     db: Optional[Session] = None,
 ):
     query = query.filter(UsageLog.parent_log_id.is_(None))
@@ -1131,35 +1372,21 @@ def _apply_log_filters(
         query = query.filter(UsageLog.created_at < _parse_log_date(end, "end"))
     if device and device.strip():
         query = _filter_by_device(query, device.strip(), db)
+    # 高级筛选表达式与上面的基础条件 AND 叠加；列表、汇总、分页共用这一处，口径天然一致
+    if expr:
+        condition = _compile_log_filter(expr, db)
+        if condition is not None:
+            query = query.filter(condition)
     return query
 
 
 def _filter_by_device(query, device: str, db: Optional[Session]):
     """按设备筛选日志：短码 / 备注 / 自动昵称 / 全哈希模糊匹配。
 
-    纯数字视为 device_id 精确匹配；否则用子查询把 devices 的候选并进条件
-    （子查询而不是把 id 列表取回 Python 再拼 IN：设备数增长后 IN 列表会撞上
-    SQLite 的变量数上限直接报错，结果集与逐条取回完全一致）。
-    db 为空时退化为仅指纹匹配。
+    具体条件抽到 _device_match_condition，与高级筛选表达式里的 device 子句共用，
+    避免基础筛选与表达式对「同一台设备」给出不同结果。
     """
-    like = f"%{device}%"
-    conditions = [UsageLog.fingerprint.ilike(like)]
-    if device.strip().isdigit():
-        conditions.append(UsageLog.device_id == int(device.strip()))
-    if db is not None:
-        try:
-            device_ids = db.query(Device.id).filter(
-                or_(
-                    Device.short_code.ilike(like),
-                    Device.note.ilike(like),
-                    Device.auto_name.ilike(like),
-                    Device.fingerprint.ilike(like),
-                )
-            )
-            conditions.append(UsageLog.device_id.in_(device_ids.scalar_subquery()))
-        except Exception:
-            logger.exception("设备筛选子查询构造失败，退化为仅按指纹匹配")
-    return query.filter(or_(*conditions))
+    return query.filter(_device_match_condition(device, db))
 
 
 # 注意：/logs/summary 与 /logs/purge 必须先于 /logs/{log_id} 声明，
@@ -1175,11 +1402,12 @@ def logs_summary(
     end: Optional[str] = Query(None, description="结束时间（ISO，不含）"),
     provider: str = Query("", description="按 Provider 筛选（模糊，匹配 id 或名称）"),
     device: str = Query("", description="按设备筛选（短码/备注/昵称/指纹模糊，数字按设备 ID）"),
+    expr: str = Query("", description="高级筛选表达式 AST（JSON，见 _compile_log_filter）"),
 ):
     query = _apply_log_filters(
         db.query(UsageLog),
         code=code, tool_id=tool_id, model=model, status=status, start=start, end=end, provider=provider,
-        device=device, db=db,
+        device=device, expr=expr, db=db,
     )
     return _log_summary(query)
 
@@ -1235,6 +1463,7 @@ def list_logs(
     end: Optional[str] = Query(None, description="结束时间（ISO，不含）"),
     provider: str = Query("", description="按 Provider 筛选（模糊）"),
     device: str = Query("", description="按设备筛选（短码/备注/昵称/指纹模糊，数字按设备 ID）"),
+    expr: str = Query("", description="高级筛选表达式 AST（JSON，见 _compile_log_filter）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
     include_summary: bool = Query(False, description="同时返回汇总，复用汇总计数避免重复扫描"),
@@ -1242,7 +1471,7 @@ def list_logs(
     query = _apply_log_filters(
         db.query(UsageLog),
         code=code, tool_id=tool_id, model=model, status=status, start=start, end=end, provider=provider,
-        device=device, db=db,
+        device=device, expr=expr, db=db,
     )
 
     # 同步路由由 FastAPI 在线程池运行，大日志查询不占用事件循环。
@@ -1269,6 +1498,9 @@ def list_logs(
         "page": page,
         "page_size": page_size,
         "items": items,
+        # 前端据此识别「静态文件已更新但后端未重启」：老后端会静默忽略未知的 expr
+        # 参数，界面却显示筛选已生效，属于最危险的那种「看起来对、其实没筛」。
+        "filter_applied": bool(expr),
     }
     if summary is not None:
         result["summary"] = summary

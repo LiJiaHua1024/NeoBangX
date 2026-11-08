@@ -43,6 +43,317 @@ const ADMIN_THEMES = [
 /* 悠空主题：favicon 联动（云朵图标） */
 const FAVICON_SORA = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%236fa8d8'/%3E%3Cstop offset='1' stop-color='%23a8cbe8'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M20 44a8 8 0 0 1-.9-15.95A11 11 0 0 1 40.5 24 9.5 9.5 0 0 1 44 42.9z' fill='white'/%3E%3C/svg%3E";
 
+/* ===== LOG_FILTER_MODULE_START =====
+   使用日志 · 筛选表达式语法（纯函数，无 DOM 依赖，可单独校验）
+
+   一条表达式由若干「条件」组成：
+     tool:title              工具包含 title（: 对文本=包含，对枚举/数值/日期=精确）
+     -tool:title / !tool:title   排除（前缀 - / ! / 非），即 NOT
+     tool=agent              精确等于（=）
+     tokens>2000             数值比较（> >= < <=），支持 2k / 3w / 1.5m
+     duration>10s            时长比较，支持 ms / s / 分
+     date>=2026-11-01        日期比较（YYYY-MM-DD / 今天 / 昨天）
+     "Agent 任务标题"         引号内可含空格；裸词在多个字段里自由搜索
+     OR / 或 / |             或（组间 OR、组内 AND，AND 优先级更高）
+
+   字段同时接受中文别名（工具 / 模型 / 状态 / 耗时 …），见 LOG_FILTER_FIELDS。
+   解析结果编译成紧凑 AST 交给后端：{ v:1, g:[[{f,o,v,n},...],...] }
+   g 为 OR 分组、组内 AND、n 为取反。后端只认白名单字段/运算符并参数化编译，
+   不拼原始 SQL。每个条件保留在原文中的起止偏移，供条件 chips 精确删除。
+   ================================================================ */
+const LOG_FILTER_FIELDS = [
+  { key: "tool",     label: "工具",       aliases: ["工具", "工具id", "tool_id"],              kind: "text",     example: "tool:title",       tip: "工具 ID 或名称：title（标题生成）/ agent / 13 …" },
+  { key: "model",    label: "模型",       aliases: ["模型"],                                   kind: "text",     example: "model:gpt-4o",     tip: "模型 ID 或展示名（模糊）" },
+  { key: "provider", label: "Provider",  aliases: ["供应商", "服务商"],                       kind: "text",     example: "provider:openai",  tip: "Provider ID 或名称" },
+  { key: "status",   label: "状态",       aliases: ["状态"],                                   kind: "enum",     example: "status:异常",      tip: "成功 / 用户停止 / 异常" },
+  { key: "code",     label: "使用码",     aliases: ["使用码", "码"],                           kind: "text",     example: "code:ABCD",        tip: "使用码（模糊）" },
+  { key: "device",   label: "设备",       aliases: ["设备"],                                   kind: "text",     example: "device:7",         tip: "设备短码 / 备注 / 昵称 / 指纹；纯数字按设备 ID" },
+  { key: "ip",       label: "IP",        aliases: ["地址"],                                   kind: "text",     example: "ip:192.168",       tip: "客户端 IP" },
+  { key: "error",    label: "错误",       aliases: ["错误", "错误码", "error_code"],           kind: "text",     example: "error:timeout",    tip: "错误分类码（timeout / context_overflow …）或错误文本" },
+  { key: "finish",   label: "结束原因",   aliases: ["结束原因", "finish_reason"],             kind: "text",     example: "finish:length",    tip: "上游结束原因；length 表示输出被截断" },
+  { key: "step",     label: "内部步骤",   aliases: ["步骤", "step_name"],                     kind: "text",     example: "step:框架提取",    tip: "并行子调用的步骤名" },
+  { key: "request",  label: "请求 ID",    aliases: ["请求id", "request_id", "请求"],          kind: "text",     example: "request:run_1",    tip: "请求 / 任务 ID" },
+  { key: "tokens",   label: "总 Tokens",  aliases: ["tokens", "总token", "token"],            kind: "number",   example: "tokens>2k",        tip: "总 token 数；支持 k / w / m 后缀" },
+  { key: "input",    label: "输入 Tokens",aliases: ["输入", "输入token", "prompt"],            kind: "number",   example: "input>1k",         tip: "输入 token 数" },
+  { key: "output",   label: "输出 Tokens",aliases: ["输出", "输出token", "completion"],        kind: "number",   example: "output>500",       tip: "输出 token 数" },
+  { key: "cached",   label: "缓存命中",   aliases: ["缓存", "缓存命中", "cached"],            kind: "number",   example: "cached>0",         tip: "缓存命中 token 数" },
+  { key: "duration", label: "耗时",       aliases: ["耗时", "时长"],                           kind: "duration", example: "duration>10s",     tip: "耗时；支持 ms / s / 分" },
+  { key: "units",    label: "扣费次数",   aliases: ["次数", "扣费"],                           kind: "number",   example: "units=0",          tip: "本次扣减额度次数；标题生成 / 辅助调用为 0" },
+  { key: "fallback", label: "回退次数",   aliases: ["重试", "回退"],                           kind: "number",   example: "fallback>1",       tip: "Provider 回退尝试次数" },
+  { key: "id",       label: "日志 ID",    aliases: ["编号", "日志id"],                         kind: "number",   example: "id>1000",          tip: "日志主键 ID" },
+  { key: "date",     label: "日期",       aliases: ["日期", "时间"],                           kind: "date",     example: "date>=2026-11-01", tip: "YYYY-MM-DD / 今天 / 昨天；支持 > < 比较" },
+];
+
+const LOG_FILTER_ALIAS = (() => {
+  const map = new Map();
+  for (const f of LOG_FILTER_FIELDS) {
+    map.set(f.key.toLowerCase(), f.key);
+    for (const a of f.aliases) map.set(a.toLowerCase(), f.key);
+  }
+  return map;
+})();
+const LOG_FILTER_BY_KEY = (() => {
+  const map = {};
+  for (const f of LOG_FILTER_FIELDS) map[f.key] = f;
+  return map;
+})();
+
+const LOG_FILTER_STATUS = {
+  "success": "success", "成功": "success", "正常": "success",
+  "cancelled": "cancelled", "用户停止": "cancelled", "停止": "cancelled", "取消": "cancelled",
+  "error": "error", "异常": "error", "失败": "error", "错误": "error",
+};
+const LOG_FILTER_DATE_WORDS = { "today": 0, "今天": 0, "yesterday": -1, "昨天": -1 };
+
+/* 快捷条件 / 组合示例：可视化按钮直接生成标准 token，点一下即切换 */
+const LOG_FILTER_PRESET_GROUPS = [
+  { title: "状态", items: [
+    { label: "只看异常", token: "status:异常", hint: "status = error" },
+    { label: "只看成功", token: "status:成功", hint: "status = success" },
+    { label: "只看用户停止", token: "status:用户停止", hint: "status = cancelled" },
+  ]},
+  { title: "快捷排除", items: [
+    { label: "排除标题生成", token: "-tool:title", hint: "过滤掉所有标题生成任务（tool_id = title）" },
+    { label: "排除未扣费调用", token: "-units=0", hint: "只看实际扣减额度的请求" },
+    { label: "排除 Agent", token: "-tool:agent", hint: "过滤掉 Agent 工作台请求" },
+  ]},
+  { title: "工具", items: [
+    { label: "只看 Agent", token: "tool:agent", hint: "tool_id 含 agent" },
+    { label: "只看工具 13", token: "tool=13", hint: "试卷可视化全解（并行）" },
+    { label: "只看标题生成", token: "tool:title", hint: "tool_id 含 title" },
+  ]},
+  { title: "用量与质量", items: [
+    { label: "大请求 >2k Tokens", token: "tokens>2k", hint: "总 token 数大于 2000" },
+    { label: "慢请求 >10s", token: "duration>10s", hint: "耗时超过 10 秒" },
+    { label: "输出被截断", token: "finish:length", hint: "上游以 length 结束" },
+    { label: "超时错误", token: "error:timeout", hint: "失败分类为超时" },
+  ]},
+];
+const LOG_FILTER_EXAMPLES = [
+  { label: "排除标题生成", expr: "-tool:title" },
+  { label: "异常且慢", expr: "status:异常 duration>10s" },
+  { label: "异常或超时", expr: "status:异常 OR error:timeout" },
+  { label: "某码的大请求", expr: "code:ABCD tokens>2k" },
+  { label: "排除标题与 Agent", expr: "-tool:title -tool:agent" },
+];
+/* 工具栏里常驻的一键快捷（引用上面的对象，sig 在下方统一计算） */
+const LOG_FILTER_QUICK = [
+  LOG_FILTER_PRESET_GROUPS[1].items[0],
+  LOG_FILTER_PRESET_GROUPS[0].items[0],
+  LOG_FILTER_PRESET_GROUPS[3].items[1],
+];
+
+function lfIsSpace(ch) {
+  return ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\u3000";
+}
+function lfQuoteEnd(ch) {
+  if (ch === '"' || ch === "'") return ch;
+  if (ch === "“") return "”";
+  if (ch === "‘") return "’";
+  return "";
+}
+
+/* 按空白切词，引号内的空格保留为一个值；start/end 是原文偏移（含引号） */
+function tokenizeLogFilter(text) {
+  const tokens = [];
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    while (i < n && lfIsSpace(text[i])) i++;
+    if (i >= n) break;
+    const start = i;
+    let buf = "";
+    let end = "";
+    while (i < n) {
+      const ch = text[i];
+      if (end) {
+        if (ch === end) { end = ""; i++; continue; }
+        buf += ch; i++; continue;
+      }
+      const q = lfQuoteEnd(ch);
+      if (q) { end = q; i++; continue; }
+      if (lfIsSpace(ch)) break;
+      buf += ch; i++;
+    }
+    if (end) return { tokens: [], error: "引号未闭合" };
+    tokens.push({ text: buf, start: start, end: i });
+  }
+  return { tokens: tokens, error: "" };
+}
+
+function isLogFilterOr(text) {
+  return text.toLowerCase() === "or" || text === "或" || text === "|" || text === "||";
+}
+
+function parseLogFilterNumber(raw, kind) {
+  let s = "";
+  for (const ch of String(raw).toLowerCase()) {
+    if (lfIsSpace(ch) || ch === "," || ch === "，" || ch === "_") continue;
+    s += ch;
+  }
+  let i = s[0] === "-" ? 1 : 0;
+  const numStart = i;
+  let dots = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch >= "0" && ch <= "9") { i++; continue; }
+    if (ch === "." && dots === 0) { dots = 1; i++; continue; }
+    break;
+  }
+  if (i === numStart) return null;
+  const num = Number(s.slice(0, i));
+  if (!Number.isFinite(num)) return null;
+  const u = s.slice(i);
+  let result;
+  if (kind === "duration") {
+    if (u === "" || u === "ms" || u === "毫秒") result = num;
+    else if (u === "s" || u === "秒") result = num * 1000;
+    else if (u === "m" || u === "min" || u === "分" || u === "分钟") result = num * 60000;
+    else return null;
+  } else if (u === "") result = num;
+  else if (u === "k" || u === "千") result = num * 1000;
+  else if (u === "w" || u === "万") result = num * 10000;
+  else if (u === "m" || u === "百万") result = num * 1000000;
+  else return null;
+  // 极大数值乘后缀会溢出成 Infinity，JSON.stringify 会把它变成 null，后端再拒绝；
+  // 不如在解析阶段就当非法值挡掉，避免前后端口径不一致。
+  return Number.isFinite(result) ? result : null;
+}
+
+function normalizeLogFilterDate(raw) {
+  const v = String(raw).trim().toLowerCase();
+  const off = LOG_FILTER_DATE_WORDS[v];
+  if (off !== undefined) {
+    const d = new Date();
+    d.setDate(d.getDate() + off);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  const p = v.split("-");
+  if (p.length !== 3 || p[0].length !== 4 || p[1].length !== 2 || p[2].length !== 2) return null;
+  const y = Number(p[0]), mo = Number(p[1]), da = Number(p[2]);
+  const d = new Date(y, mo - 1, da);
+  if (d.getFullYear() !== y || d.getMonth() !== mo - 1 || d.getDate() !== da) return null;
+  return v;
+}
+
+function logFilterClauseSig(c) {
+  return c.f + "|" + c.o + "|" + String(c.v).toLowerCase() + "|" + (c.n ? "1" : "0");
+}
+
+const LF_OPS = ["!=", "!:", ">=", "<=", ">", "<", "=", ":"];
+const LF_OP_LABEL = { contains: "包含", eq: "等于", gt: "大于", gte: "不小于", lt: "小于", lte: "不大于" };
+
+function parseLogFilterToken(t, expr) {
+  const raw = expr.slice(t.start, t.end);
+  let body = t.text;
+  let n = false;
+  while (body.length && (body[0] === "-" || body[0] === "!" || body[0] === "非")) {
+    n = true;
+    body = body.slice(1);
+  }
+  if (!body) return { error: "条件缺少内容" };
+
+  let op = "", pos = -1;
+  for (const cand of LF_OPS) {
+    const p = body.indexOf(cand);
+    if (p > 0 && (pos < 0 || p < pos)) { pos = p; op = cand; }
+  }
+
+  let f, o, v, def;
+  if (pos < 0) {
+    if (body.length > 200) return { error: "条件值过长（最多 200 字）" };
+    f = "free"; o = "contains"; v = body;
+  } else {
+    const fieldRaw = body.slice(0, pos).trim().toLowerCase();
+    f = LOG_FILTER_ALIAS.get(fieldRaw);
+    if (!f) return { error: "未知字段「" + body.slice(0, pos).trim() + "」，可用：工具 / 模型 / 状态 / Provider / 使用码 / 设备 / IP / 耗时 / Tokens / 日期" };
+    def = LOG_FILTER_BY_KEY[f];
+    const isNot = op === "!=" || op === "!:";
+    if (isNot) n = true;
+    if (op === ":" || op === "!:") o = def.kind === "text" ? "contains" : "eq";
+    else if (op === "=" || op === "!=") o = "eq";
+    else o = { ">": "gt", ">=": "gte", "<": "lt", "<=": "lte" }[op];
+    const cmp = o === "gt" || o === "gte" || o === "lt" || o === "lte";
+    if (cmp && !(def.kind === "number" || def.kind === "duration" || def.kind === "date")) {
+      return { error: "字段「" + def.label + "」不支持大小比较，请用 : 或 =" };
+    }
+    const valRaw = body.slice(pos + op.length);
+    if (!valRaw.trim()) return { error: "条件「" + def.label + "」缺少值" };
+    // 与后端白名单的上限保持一致，避免「前端说合法、后端 400」的错位
+    if (valRaw.length > 200) return { error: "条件值过长（最多 200 字）" };
+    if (f === "status") {
+      const s = LOG_FILTER_STATUS[valRaw.trim().toLowerCase()];
+      if (!s) return { error: "状态只能是 成功 / 用户停止 / 异常" };
+      v = s;
+    } else if (def.kind === "number" || def.kind === "duration") {
+      const num = parseLogFilterNumber(valRaw, def.kind);
+      if (num === null) return { error: "「" + valRaw + "」不是有效的" + (def.kind === "duration" ? "时长" : "数字") + "（可用 2k / 10s）" };
+      v = num;
+    } else if (def.kind === "date") {
+      const d = normalizeLogFilterDate(valRaw);
+      if (!d) return { error: "日期请用 YYYY-MM-DD，或 今天 / 昨天" };
+      v = d;
+    } else {
+      v = valRaw.trim();
+    }
+  }
+
+  const c = {
+    f: f, o: o, v: v, n: n,
+    raw: raw, start: t.start, end: t.end,
+    label: (n ? "排除：" : "") + (def ? def.label : "全文") + " " + LF_OP_LABEL[o] + " " + v,
+  };
+  c.sig = logFilterClauseSig(c);
+  return { clause: c };
+}
+
+function parseLogFilter(text) {
+  const expr = String(text == null ? "" : text);
+  const bad = (error) => ({ ok: false, error: error, ast: null, clauses: [], groups: [] });
+  if (!expr.trim()) return { ok: true, error: "", ast: { v: 1, g: [] }, clauses: [], groups: [], empty: true };
+  if (expr.length > 4000) return bad("表达式过长（最多 4000 字）");
+  const tz = tokenizeLogFilter(expr);
+  if (tz.error) return bad(tz.error);
+  const groups = [];
+  const clauses = [];
+  let cur = [];
+  for (const t of tz.tokens) {
+    if (isLogFilterOr(t.text)) {
+      if (!cur.length) return bad("OR / 或 前面缺少条件");
+      groups.push(cur);
+      cur = [];
+      continue;
+    }
+    const r = parseLogFilterToken(t, expr);
+    if (r.error) return bad(r.error);
+    cur.push({ f: r.clause.f, o: r.clause.o, v: r.clause.v, n: r.clause.n });
+    clauses.push(r.clause);
+    if (clauses.length > 32) return bad("条件过多（最多 32 个）");
+  }
+  if (cur.length) groups.push(cur);
+  else if (groups.length) return bad("OR / 或 后面缺少条件");
+  if (groups.length > 8) return bad("OR 分组过多（最多 8 组）");
+  return { ok: true, error: "", ast: { v: 1, g: groups }, clauses: clauses, groups: groups, empty: false };
+}
+
+function logFilterOperators(kind) {
+  if (kind === "number" || kind === "duration" || kind === "date") {
+    return [
+      { sym: "=", label: "等于" }, { sym: ">", label: "大于" }, { sym: ">=", label: "≥" },
+      { sym: "<", label: "小于" }, { sym: "<=", label: "≤" },
+    ];
+  }
+  return [{ sym: ":", label: "包含" }, { sym: "=", label: "等于" }];
+}
+
+for (const g of LOG_FILTER_PRESET_GROUPS) {
+  for (const p of g.items) {
+    const r = parseLogFilter(p.token);
+    p.sig = r.ok && r.clauses.length === 1 ? r.clauses[0].sig : p.token;
+  }
+}
+/* ===== LOG_FILTER_MODULE_END ===== */
+
 /* ---------------- 动态光影背景引擎 ---------------- */
 function createBackground(canvas) {
   if (!canvas) return null;
@@ -630,6 +941,21 @@ function adminApp() {
       { id: "error", label: "异常" },
     ],
     logSummary: {},
+    // ============ 使用日志：筛选表达式与高级筛选弹窗 ============
+    logFilterExpr: "",            // 人类可读表达式，与工具栏输入框 / 弹窗 textarea 双向绑定
+    logFilterParsed: parseLogFilter(""), // parseLogFilter() 结果，供 chips / 校验提示 / 按钮态派生
+    logFilterOpen: false,         // 高级筛选弹窗
+    logFilterStale: false,        // 后端未重启、静默忽略 expr 参数时的常驻告警
+    logFilterFields: LOG_FILTER_FIELDS,
+    logFilterPresets: LOG_FILTER_PRESET_GROUPS,
+    logFilterExamples: LOG_FILTER_EXAMPLES,
+    logFilterQuick: LOG_FILTER_QUICK,
+    logFilterBuilderField: "tool",
+    logFilterBuilderOp: ":",
+    logFilterBuilderValue: "",
+    logFilterBuilderNeg: false,
+    logFilterBuilderError: "",
+    logFilterToolOptions: [],
     // ============ 用量分析（顶级 LLM API 后台风格，全部自研 UI：分段选择 + div 条形 + SVG 折线 + conic 环形） ============
     analyticsDays: 30,
     analyticsDaysOptions: [
@@ -1045,11 +1371,19 @@ function adminApp() {
         (this.logDevice || "").trim() ||
         this.logsStatusFilter ||
         this.logStart ||
-        this.logEnd
+        this.logEnd ||
+        this.logFilterExpr.trim()
       );
     },
     get logsPageCount() {
       return Math.max(1, Math.ceil(this.logsTotal / this.logsPageSize));
+    },
+    /* 表达式有效时给弹窗用的即时匹配数（结果来自同一次 loadLogs 的 summary，无需额外请求） */
+    get logFilterMatchText() {
+      if (!this.logFilterParsed || !this.logFilterParsed.ok) return "语法有误，修正后自动查询";
+      if (!this.logFilterParsed.clauses.length) return "留空表示不筛选；输入条件即时生效";
+      if (this.logFilterStale) return "后端尚未更新，当前匹配数不是筛选后的结果";
+      return `✓ ${this.logFilterParsed.clauses.length} 个条件生效 · 当前匹配 ${this.fmtNum(this.logSummary.total)} 条`;
     },
     /* Agent 运行记录：只在这里派生展示数据，不改后端返回结构 */
     get agentEntries() {
@@ -1235,11 +1569,28 @@ function adminApp() {
       if (saved && ADMIN_THEMES.some((t) => t.id === saved)) this.theme = saved;
       this.applyTheme();
 
+      // 筛选表达式跨刷新保留：常用条件（如「排除标题生成」）不必每次重敲。
+      // 隐私模式 / 存储被禁用时静默跳过，不影响筛选本身。
+      try {
+        const savedExpr = localStorage.getItem("nbx_admin_log_filter");
+        if (typeof savedExpr === "string") this.logFilterExpr = savedExpr;
+      } catch { /* localStorage 不可用 */ }
+      this.logFilterParsed = parseLogFilter(this.logFilterExpr);
+
       // 日志筛选：日期与文本条件一变就自动查询（防抖见 scheduleLogReload）。
       // 用 watcher 而不是在每个输入框上挂 @input，改动点集中在一处
       for (const key of ["logCode", "logToolId", "logModel", "logProvider", "logDevice", "logStart", "logEnd"]) {
         this.$watch(key, () => this.scheduleLogReload());
       }
+      // 表达式单独一条 watcher：即时刷新 chips/校验态 + 落盘，再走同一套防抖查询
+      this.$watch("logFilterExpr", () => {
+        this.logFilterParsed = parseLogFilter(this.logFilterExpr);
+        // 只持久化合法表达式：半输入的片段不会被存下来，下次进后台不会莫名「查不出日志」
+        if (this.logFilterParsed.ok) {
+          try { localStorage.setItem("nbx_admin_log_filter", this.logFilterExpr); } catch { /* 忽略 */ }
+        }
+        this.scheduleLogReload();
+      });
 
       // 弹窗语义与 Esc：11 个弹窗共用一套处理，避免逐个补属性时漏掉一两个
       // （主站那边是逐处写 role/aria-modal，这里弹窗多、且都要跟着同一个关闭函数走）。
@@ -1255,6 +1606,7 @@ function adminApp() {
       window.addEventListener("keydown", (e) => {
         if (e.key !== "Escape") return;
         if (this.confirmOpen) { this.resolveConfirm(false); return; }
+        if (this.logFilterOpen) { this.logFilterOpen = false; return; }
         if (this.createOpen) { this.createOpen = false; return; }
         if (this.quotaModalOpen) { this.quotaModalOpen = false; return; }
         if (this.resetUsageModalOpen) { this.resetUsageModalOpen = false; return; }
@@ -2123,8 +2475,13 @@ function adminApp() {
       else if (this.datePickerOpen === "end") this.logEnd = "";
     },
 
-    /* 日期按管理员本地日历日换算成 UTC 瞬时：结束日期取次日零点（后端上界开区间） */
+    /* 日期按管理员本地日历日换算成 UTC 瞬时：结束日期取次日零点（后端上界开区间）。
+       语法有误时返回 null：不发请求、保留上一次结果，界面由错误提示说明原因，
+       避免「悄悄忽略表达式」导致管理员误以为已经过滤。 */
     _logFilterParams() {
+      const parsed = parseLogFilter(this.logFilterExpr);
+      this.logFilterParsed = parsed;
+      if (!parsed.ok) return null;
       const params = new URLSearchParams();
       if (this.logCode.trim()) params.set("code", this.logCode.trim());
       if (this.logToolId.trim()) params.set("tool_id", this.logToolId.trim());
@@ -2141,6 +2498,8 @@ function adminApp() {
           params.set("end", end.toISOString());
         }
       }
+      // AST 走独立参数，与上面的基础筛选在后端 AND 叠加；列表 / 汇总 / 分页共用同一份
+      if (parsed.ast.g.length) params.set("filter", JSON.stringify(parsed.ast));
       return params;
     },
 
@@ -2150,6 +2509,10 @@ function adminApp() {
     },
 
     async loadLogs() {
+      // 先解析表达式：语法有误直接返回，避免把「未过滤」的结果误当成过滤后的结果。
+      // 必须在置 logsLoading 之前，否则提前 return 会让加载态卡住。
+      const params = this._logFilterParams();
+      if (!params) return;
       const request = ++logsRequest;
       if (logsAbort) logsAbort.abort();
       const controller = new AbortController();
@@ -2157,12 +2520,14 @@ function adminApp() {
       this.logsLoading = true;
       this.logsError = "";
       try {
-        const params = this._logFilterParams();
         params.set("page", String(this.logsPage));
         params.set("page_size", String(this.logsPageSize));
         params.set("include_summary", "true");
         const data = await this.api(`/api/admin/logs?${params}`, { signal: controller.signal });
         if (request !== logsRequest) return;
+        // 新版后端会回显 filter_applied；老后端没有这个字段，说明 expr 被静默忽略了，
+        // 此时必须明确告警，否则管理员会以为「已经过滤掉标题生成」
+        this.logFilterStale = params.has("filter") && data.filter_applied !== true;
         // 清理后当前页可能已超出末页（返回空列表但 total 正常），收敛页码重查
         const maxPage = Math.max(1, Math.ceil((data.total || 0) / this.logsPageSize));
         if (this.logsPage > maxPage) {
@@ -2209,6 +2574,146 @@ function adminApp() {
         this.logsPage = 1;
         this.loadLogs();
       }, 300);
+    },
+
+    /* ============ 使用日志：筛选表达式交互 ============ */
+    logFilterBuilderOps() {
+      const def = LOG_FILTER_BY_KEY[this.logFilterBuilderField];
+      return logFilterOperators(def ? def.kind : "text");
+    },
+    logFilterBuilderValues() {
+      const key = this.logFilterBuilderField;
+      if (key === "status") return [
+        { label: "成功", value: "成功" }, { label: "用户停止", value: "用户停止" }, { label: "异常", value: "异常" },
+      ];
+      if (key === "tool") return this.logFilterToolOptions;
+      if (key === "finish") return [
+        { label: "正常 stop", value: "stop" }, { label: "截断 length", value: "length" },
+      ];
+      if (key === "error") return [
+        { label: "超时", value: "timeout" }, { label: "上下文超限", value: "context_overflow" }, { label: "内容拦截", value: "content_blocked" },
+      ];
+      if (key === "units") return [{ label: "0 · 未扣费", value: "0" }, { label: "1 · 已扣费", value: "1" }];
+      if (key === "date") return [{ label: "今天", value: "今天" }, { label: "昨天", value: "昨天" }];
+      return [];
+    },
+    logFilterBuilderPlaceholder() {
+      const def = LOG_FILTER_BY_KEY[this.logFilterBuilderField];
+      return def ? "输入「" + def.label + "」的值" : "输入值";
+    },
+    setLogFilterBuilderField(key) {
+      this.logFilterBuilderField = key;
+      this.logFilterBuilderOp = this.logFilterBuilderOps()[0].sym;
+      this.logFilterBuilderValue = "";
+      this.logFilterBuilderNeg = false;
+      this.logFilterBuilderError = "";
+    },
+    /* 可视化拼接：把「字段 + 运算符 + 值 + 排除」拼成一个标准 token 追加进表达式。
+       先用同一个 parser 自检，避免把非法片段塞进去让整条表达式失效。 */
+    addLogFilterClause() {
+      if (!LOG_FILTER_BY_KEY[this.logFilterBuilderField]) return;
+      const val = (this.logFilterBuilderValue || "").trim();
+      if (!val) { this.logFilterBuilderError = "请先填写条件值"; return; }
+      let hasSpace = false;
+      for (const ch of val) { if (lfIsSpace(ch)) { hasSpace = true; break; } }
+      const quoted = hasSpace ? '"' + val.split('"').join("'") + '"' : val;
+      const token = (this.logFilterBuilderNeg ? "-" : "") + this.logFilterBuilderField + this.logFilterBuilderOp + quoted;
+      const check = parseLogFilter(token);
+      if (!check.ok) { this.logFilterBuilderError = check.error; return; }
+      this.logFilterBuilderError = "";
+      this.logFilterExpr = (this.logFilterExpr.trim() ? this.logFilterExpr.trim() + " " : "") + token;
+      this.logFilterBuilderValue = "";
+      this.logFilterBuilderNeg = false;
+      this.focusLogFilterExpr();
+    },
+    /* 语法速查 / 组合示例：点一下把片段追加到表达式末尾（不覆盖用户已输入的内容） */
+    insertLogFilterToken(token) {
+      const base = this.logFilterExpr.trim();
+      this.logFilterExpr = (base ? base + " " : "") + token;
+      this.focusLogFilterExpr();
+    },
+    focusLogFilterExpr() {
+      this.$nextTick(() => {
+        const el = this.$refs.logFilterExprInput;
+        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+      });
+    },
+    /* 按 token 在原文中的偏移精确删除一个条件；OR 分隔符按「不留悬空 / 不连续」重建 */
+    removeLogFilterClause(idx, parsed) {
+      const p = parsed || this.logFilterParsed;
+      if (!p || !p.ok) return;
+      const c = p.clauses[idx];
+      if (!c) return;
+      const tz = tokenizeLogFilter(this.logFilterExpr);
+      if (tz.error) return;
+      const items = tz.tokens.map((t) => ({
+        raw: this.logFilterExpr.slice(t.start, t.end),
+        or: isLogFilterOr(t.text),
+        drop: !isLogFilterOr(t.text) && t.start === c.start && t.end === c.end,
+      }));
+      const out = [];
+      for (const it of items) {
+        if (it.drop) continue;
+        if (it.or) {
+          if (!out.length || out[out.length - 1].or) continue;
+          out.push(it);
+        } else out.push(it);
+      }
+      while (out.length && out[out.length - 1].or) out.pop();
+      this.logFilterExpr = out.map((x) => (x.or ? "OR" : x.raw)).join(" ");
+    },
+    isLogFilterPresetOn(p) {
+      const parsed = this.logFilterParsed;
+      return !!(parsed && parsed.ok && parsed.clauses.some((c) => c.sig === p.sig));
+    },
+    /* 快捷条件：签名一致即视为已启用，再点一次从表达式里精确摘掉该条件 */
+    toggleLogFilterPreset(p) {
+      const parsed = parseLogFilter(this.logFilterExpr);
+      if (parsed.ok) {
+        const idx = parsed.clauses.findIndex((c) => c.sig === p.sig);
+        if (idx >= 0) { this.removeLogFilterClause(idx, parsed); return; }
+      }
+      this.logFilterExpr = (this.logFilterExpr.trim() ? this.logFilterExpr.trim() + " " : "") + p.token;
+    },
+    clearLogFilterExpr() {
+      this.logFilterExpr = "";
+    },
+    applyLogFilterExpr() {
+      clearTimeout(this._logReloadTimer);
+      this.logsPage = 1;
+      this.loadLogs();
+    },
+    openLogFilterModal() {
+      // 与日期 / 状态下拉互斥，避免弹窗压着浮层
+      this.closeDatePicker();
+      this.logsStatusMenuOpen = false;
+      this.logsSizeMenuOpen = false;
+      this.logFilterOpen = true;
+      this.loadLogFilterTools();
+      this.focusLogFilterExpr();
+    },
+    closeLogFilterModal() {
+      this.logFilterOpen = false;
+    },
+    /* 可视化拼接里「工具」的常用值来自现成工具目录（含 title 等 Chores 项）；
+       目录不可用时静默退回手填，不阻断筛选 */
+    async loadLogFilterTools() {
+      if (this._logFilterToolsLoaded) return;
+      try {
+        const data = await this.api("/api/admin/tools");
+        const out = [];
+        for (const g of data.groups || []) {
+          for (const t of g.tools || []) {
+            out.push({
+              label: t.name + " · " + t.id,
+              value: String(t.id),
+              hint: (g.title || "") + "：" + (t.description || ""),
+            });
+          }
+        }
+        this.logFilterToolOptions = out;
+        this._logFilterToolsLoaded = true;
+      } catch { /* 退回手填 */ }
     },
 
     async loadPayloadFlag() {
@@ -2545,6 +3050,7 @@ function adminApp() {
       this.logsStatusFilter = "";
       this.logStart = "";
       this.logEnd = "";
+      this.logFilterExpr = "";
       this.closeDatePicker();
       this.logsPage = 1;
       this.loadLogs();

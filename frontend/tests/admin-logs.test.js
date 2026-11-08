@@ -330,3 +330,86 @@ test("工具 13 的日志给出并行/串行与降级原因", () => {
   assert.match(html, /logVisualModeTitle\(logDetail\)/, "详情要显示降级原因");
   assert.match(html, /logFrameworkStats\(logDetail\)/, "详情要显示框架校验统计");
 });
+
+/* ---------- 使用日志：高级筛选表达式 ---------- */
+// script.js 在 vm context 里求值，解析结果属于另一个 realm 的 Object/Array，
+// deepStrictEqual 会因原型不同误判；统一转成 JSON 字符串再比。
+const sameJson = (actual, expected, message) =>
+  assert.equal(JSON.stringify(actual), JSON.stringify(expected), message);
+
+test("筛选语法解析：排除、中文别名、单位、OR 分组与非法输入", () => {
+  const { env } = setup();
+  const parse = env.parseLogFilter;
+  sameJson(parse("-tool:title").ast, {
+    v: 1, g: [[{ f: "tool", o: "contains", v: "title", n: true }]],
+  }, "排除标题生成 = NOT(tool 含 title)");
+  sameJson(parse("工具:title").ast.g[0][0], {
+    f: "tool", o: "contains", v: "title", n: false,
+  }, "中文别名与英文 key 等价");
+  sameJson(parse("status:异常 duration>10s").ast.g[0][1], {
+    f: "duration", o: "gt", v: 10000, n: false,
+  }, "状态归一到 error、时长换算成 ms");
+  sameJson(parse("tokens>2k").ast.g[0][0], {
+    f: "tokens", o: "gt", v: 2000, n: false,
+  });
+  assert.equal(parse("status:异常 OR error:timeout").ast.g.length, 2, "OR 拆成两组");
+  assert.equal(parse("foo:bar").ok, false, "未知字段要给可读错误");
+  assert.equal(parse("OR x").ok, false, "OR 前缺条件");
+  assert.equal(parse("tool:").ok, false, "缺值");
+  assert.equal(parse("x".repeat(300)).ok, false, "超长值挡在前端，避免后端 400");
+});
+
+test("表达式下推为 filter 参数；语法有误时不发请求也不卡加载态", async () => {
+  const { app, requests } = setup();
+  app.logFilterExpr = "-tool:title";
+  const params = app._logFilterParams();
+  assert.equal(JSON.parse(params.get("filter")).g[0][0].n, true);
+
+  app.logFilterExpr = "foo:bar";
+  const pending = app.loadLogs();
+  assert.equal(requests.length, 0, "非法表达式不能发出「看起来在筛选」的请求");
+  await pending;
+  assert.equal(app.logsLoading, false, "提前 return 不能把加载态卡住");
+});
+
+test("后端未回显 filter_applied 时标记陈旧，避免误报匹配数", async () => {
+  const { app, requests } = setup();
+  app.logFilterExpr = "-tool:title";
+  const pending = app.loadLogs();
+  requests[0].resolve({ items: [], total: 0, summary: { total: 0 } }); // 老后端没有这个字段
+  await pending;
+  assert.equal(app.logFilterStale, true);
+  assert.match(app.logFilterMatchText, /后端尚未更新/);
+});
+
+test("快捷条件切换、chips 精确摘除、可视化拼接与重置", () => {
+  const { app, env } = setup();
+  const parse = env.parseLogFilter;
+  app.$nextTick = (fn) => fn();
+  app.$refs = { logFilterExprInput: { focus() {}, setSelectionRange() {}, value: "" } };
+  const sync = () => { app.logFilterParsed = parse(app.logFilterExpr); };
+
+  const preset = app.logFilterQuick[0];
+  app.toggleLogFilterPreset(preset); sync();
+  assert.equal(app.logFilterExpr, "-tool:title");
+  assert.equal(app.isLogFilterPresetOn(preset), true);
+  app.toggleLogFilterPreset(preset); sync();
+  assert.equal(app.logFilterExpr, "", "再点一次取消");
+  assert.equal(app.isLogFilterPresetOn(preset), false);
+
+  app.logFilterExpr = "status:异常 OR error:timeout"; sync();
+  app.removeLogFilterClause(0);
+  assert.equal(app.logFilterExpr, "error:timeout", "摘掉首个条件不留悬空 OR");
+
+  app.setLogFilterBuilderField("tokens");
+  sameJson(Array.from(app.logFilterBuilderOps(), (o) => o.sym), ["=", ">", ">=", "<", "<="]);
+  app.logFilterBuilderOp = ">";
+  app.logFilterBuilderValue = "2k";
+  app.addLogFilterClause(); sync();
+  assert.match(app.logFilterExpr, /tokens>2k$/);
+
+  assert.equal(app.hasLogFilters, true);
+  app.resetLogFilters();
+  assert.equal(app.logFilterExpr, "", "重置要清空表达式");
+  assert.equal(app.hasLogFilters, false);
+});

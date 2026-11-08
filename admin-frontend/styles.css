@@ -2748,3 +2748,209 @@ html[data-theme="sora"][data-sky="night"] .arv { --arv-warn: #e2b04a; }
   .arv-step-state.is-live { animation: none; }
   .arv-step { transition: none; }
 }
+
+/* ================= 使用日志 · 高级筛选（表达式 / 弹窗 / 语法速查） =================
+   沿用既有配色变量与毛玻璃配方；所有浮层控件一律用一屏铺开的标签块，
+   不用下拉，避免在 modal-body 的滚动区里被裁切。 */
+.lf-query-row {
+  flex: 1 1 100%;
+  display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+}
+.lf-query-box {
+  flex: 1 1 20rem; min-width: 0;
+  display: flex; align-items: center; gap: 0.5rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.65rem;
+  padding: 0 0.4rem 0 0.7rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.lf-query-box:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.lf-query-box.bad { border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.lf-query-icon { flex: none; color: var(--faint); }
+.lf-query-box:focus-within .lf-query-icon { color: var(--accent); }
+.lf-query-input {
+  flex: 1 1 auto; min-width: 0; width: 100%;
+  background: transparent; border: 0; box-shadow: none;
+  padding: 0.55rem 0; font-size: 0.82rem;
+}
+.lf-query-input:focus { border: 0; box-shadow: none; }
+.lf-query-clear {
+  flex: none; width: 1.6rem; height: 1.6rem; line-height: 1;
+  border: 0; border-radius: 50%; background: var(--hover);
+  color: var(--dim); font-size: 1.05rem; cursor: pointer;
+}
+.lf-query-clear:hover { color: var(--text); background: var(--hover-bg); }
+.lf-advanced { display: inline-flex; align-items: center; gap: 0.4rem; flex: none; white-space: nowrap; }
+.lf-advanced svg { flex: none; }
+.lf-badge {
+  display: inline-grid; place-items: center; min-width: 1.25rem; height: 1.25rem;
+  padding: 0 0.3rem; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent); font-size: 0.7rem; font-weight: 700;
+}
+
+/* 已生效条件 chips / 工具栏一键快捷 */
+.lf-clause-row, .lf-quick-row {
+  flex: 1 1 100%;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
+}
+.lf-clause {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  max-width: 100%; padding: 0.14rem 0.2rem 0.14rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+.lf-clause.neg {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
+}
+.lf-clause-text {
+  font-size: 0.72rem; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 16rem;
+}
+.lf-clause-x {
+  flex: none; width: 1.25rem; height: 1.25rem; line-height: 1;
+  display: grid; place-items: center;
+  border: 0; border-radius: 50%; background: transparent; color: inherit;
+  font-size: 1rem; cursor: pointer; opacity: 0.75;
+}
+.lf-clause-x:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
+.lf-quick-row .preset-chip { padding: 0.25rem 0.6rem; font-size: 0.76rem; }
+.lf-quick-row code { font-size: 0.72rem; }
+.lf-error { color: var(--danger) !important; }
+.lf-stale {
+  flex: 1 1 100%; color: var(--danger) !important;
+  padding: 0.45rem 0.65rem; border-radius: 0.55rem;
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+}
+
+/* 弹窗骨架：宽版、分区滚动 */
+.modal-filter { width: min(860px, 100%); max-height: min(92dvh, 820px); }
+.lf-modal-title h3 { margin: 0; font-size: 0.95rem; }
+.lf-modal-title .dim { font-weight: 500; margin-left: 0.3rem; }
+.lf-modal-title .field-hint { margin: 0.25rem 0 0; }
+.lf-modal-body { padding: 0; display: flex; flex-direction: column; }
+.lf-section { padding: 0.9rem 1.15rem; border-bottom: 1px solid var(--border); }
+.lf-section:last-child { border-bottom: 0; }
+.lf-section-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 0.75rem; margin-bottom: 0.6rem;
+}
+.lf-section-title { font-size: 0.84rem; font-weight: 700; color: var(--text); }
+
+/* 表达式编辑与即时状态（匹配数来自同一次 loadLogs 的 summary，无额外请求） */
+.lf-expr {
+  width: 100%; resize: vertical; min-height: 3.2rem;
+  font-size: 0.82rem; line-height: 1.6; letter-spacing: 0.01em;
+  background: var(--input-bg); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: 0.65rem;
+  padding: 0.55rem 0.7rem;
+}
+.lf-status { margin-top: 0.45rem; font-size: 0.76rem; color: var(--ok); font-weight: 600; }
+.lf-status.bad { color: var(--danger); }
+.lf-status .field-hint { font-weight: 400; }
+
+/* 可视化拼接 */
+.lf-builder { display: flex; flex-direction: column; gap: 0.55rem; }
+.lf-builder-row { display: flex; align-items: flex-start; gap: 0.6rem; }
+.lf-builder-label {
+  flex: 0 0 2.4rem; padding-top: 0.35rem;
+  font-size: 0.76rem; color: var(--faint); font-weight: 650;
+}
+.lf-builder-row > .preset-chips { flex: 1 1 auto; min-width: 0; }
+.lf-field-chips .preset-chip, .lf-builder-row .preset-chip { font-size: 0.76rem; }
+.lf-neg-chip.on {
+  border-color: color-mix(in srgb, var(--danger) 60%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+.lf-builder-value-row { align-items: center; }
+.lf-builder-value { flex: 1 1 12rem; min-width: 0; font-size: 0.82rem; }
+.lf-add { flex: none; white-space: nowrap; }
+.lf-builder-error { color: var(--danger) !important; margin: 0.5rem 0 0 3rem; }
+
+/* 快捷条件分组 */
+.lf-preset-group + .lf-preset-group { margin-top: 0.65rem; }
+.lf-preset-title {
+  font-size: 0.72rem; color: var(--faint); font-weight: 650; margin-bottom: 0.35rem;
+}
+.lf-preset-group .preset-chip, .lf-examples .preset-chip { font-size: 0.76rem; }
+
+/* 语法速查：运算符说明卡 + 可点击字段表 */
+.lf-tips { display: flex; flex-direction: column; gap: 0.7rem; }
+.lf-tips-legend {
+  display: flex; flex-wrap: wrap; gap: 0.35rem 0.9rem;
+  padding: 0.6rem 0.7rem; border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  font-size: 0.72rem; color: var(--dim);
+}
+.lf-tips-legend span { white-space: nowrap; }
+.lf-tips-legend code { font-size: 0.7rem; color: var(--accent); font-weight: 700; }
+.lf-tips-table { display: flex; flex-direction: column; gap: 0.2rem; }
+.lf-tip-row {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%;
+  padding: 0.35rem 0.5rem; border-radius: 0.55rem;
+  border: 1px solid transparent; background: transparent;
+  color: var(--text); text-align: left; cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.lf-tip-row:hover { background: var(--hover); border-color: var(--border); }
+.lf-tip-field { flex: 0 0 5.5rem; font-size: 0.78rem; font-weight: 650; }
+.lf-tip-alias {
+  flex: 1 1 8rem; min-width: 0; font-size: 0.7rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lf-tip-example {
+  flex: 0 1 auto; max-width: 15rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0.14rem 0.5rem; border-radius: 999px;
+  background: var(--code-bg); border: 1px solid var(--border);
+  color: var(--accent); font-size: 0.72rem;
+}
+.lf-tip-plus { flex: 0 0 auto; color: var(--faint); font-size: 0.9rem; }
+.lf-tip-row:hover .lf-tip-plus { color: var(--accent); }
+.lf-examples { display: flex; flex-direction: column; gap: 0.4rem; }
+
+/* 宽屏：字段表两列铺开，20 个字段一屏可览，不必来回滚动 */
+@media (min-width: 961px) {
+  .lf-tips-table { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.15rem 0.6rem; }
+  .lf-tip-field { flex-basis: 4.5rem; }
+  .lf-tip-example { max-width: 8.5rem; }
+}
+/* 中等宽度：收紧字段表列宽 */
+@media (max-width: 960px) {
+  .lf-tip-field { flex-basis: 4.5rem; }
+  .lf-tip-example { max-width: 10rem; }
+}
+/* 窄平板：字段表换行，示例独占一行，避免横向溢出 */
+@media (max-width: 760px) {
+  .lf-tip-row { flex-wrap: wrap; row-gap: 0.2rem; }
+  .lf-tip-field { flex: 1 1 40%; }
+  .lf-tip-alias { flex: 1 1 55%; }
+  .lf-tip-example { order: 3; flex: 1 1 auto; max-width: none; }
+  .lf-tip-plus { order: 4; }
+}
+/* 手机：沿用项目底部抽屉形态，给构建器足够高度；输入框 ≥16px 防 iOS 缩放 */
+@media (max-width: 640px) {
+  .lf-mask .modal-filter { max-height: 96dvh; }
+  .lf-query-row { gap: 0.45rem; }
+  .lf-query-box { flex: 1 1 100%; }
+  .lf-advanced { flex: 1 1 100%; justify-content: center; }
+  .lf-query-input, .lf-expr, .lf-builder-value { font-size: 16px; }
+  .lf-expr { line-height: 1.5; }
+  .lf-clause-x { width: 2rem; height: 2rem; }
+  .lf-clause-text { font-size: 0.78rem; max-width: 12rem; }
+  .lf-section { padding: 0.85rem 1rem; }
+  .lf-builder-label { flex-basis: 2.2rem; }
+  .lf-tips-legend { gap: 0.3rem 0.7rem; }
+  .lf-tip-example { order: 3; flex: 1 1 100%; max-width: none; }
+}
