@@ -16,22 +16,13 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
-  /* 液态玻璃（Liquid Glass）配方：浅色主题轻度模糊（透、不浊）；
-     深色主题在下方分组覆盖回原版较强模糊 */
-  --glass-blur: 3px;
-  --glass-blur-soft: 2px;
-  --glass-blur-deep: 5px;
-  --glass-sat: 150%;
-  --glass-contrast: 104%;
-}
-
-/* 深色主题（obsidian / jade / 悠空·星夜）：恢复原版模糊，避免低模糊下显得脏 */
-html[data-theme="obsidian"],
-html[data-theme="jade"],
-html[data-theme="sora"][data-sky="night"] {
+  /* 液态玻璃（Liquid Glass）配方：模糊必须足以把底层正文隔开，
+     过低的模糊会让浮层侧栏失去边界、看起来像直接透出内容。 */
   --glass-blur: 14px;
   --glass-blur-soft: 10px;
   --glass-blur-deep: 20px;
+  --glass-sat: 150%;
+  --glass-contrast: 104%;
 }
 
 /* 手机档深色主题：小屏上光斑相对占比大，亮度透过玻璃冲淡白字；
