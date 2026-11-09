@@ -15,6 +15,10 @@ class WorkspaceTask(Base):
     status: Mapped[str] = mapped_column(String(24), default="draft")
     active_run: Mapped[str] = mapped_column(String(40), default="")
     adopted_version: Mapped[str] = mapped_column(String(40), default="")
+    origin: Mapped[str] = mapped_column(String(24), default="agent")
+    source_tool: Mapped[str] = mapped_column(String(40), default="")
+    source_ref: Mapped[str] = mapped_column(String(96), default="")
+    source_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow, index=True)
 
@@ -97,8 +101,18 @@ class WorkspaceVersion(Base):
     title: Mapped[str] = mapped_column(String(200))
     content: Mapped[str] = mapped_column(Text)
     origin: Mapped[str] = mapped_column(String(24), default="agent")
+    kind: Mapped[str] = mapped_column(String(16), default="document")
     complete: Mapped[bool] = mapped_column(Boolean, default=True)
     provenance: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
+    created_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class WorkspaceRendition(Base):
+    __tablename__ = "workspace_renditions"
+    version_id: Mapped[str] = mapped_column(ForeignKey("workspace_versions.id", ondelete="CASCADE"), primary_key=True)
+    scene: Mapped[str] = mapped_column(Text, default="")
+    pptx: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    design_version: Mapped[str] = mapped_column(String(40), default="")
     created_at: Mapped[object] = mapped_column(UTCDateTime(), default=utcnow)
 
 

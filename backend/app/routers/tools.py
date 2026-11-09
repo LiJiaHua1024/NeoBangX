@@ -20,6 +20,8 @@ from app.services.tool_search import (
 )
 from app.config import settings
 from app.services.migration import MIGRATION_TOOL_ID, MIGRATION_TOOL_NAME
+from app.services.presentation_blueprints import blueprint_for_tool, supports_presentation
+from app.agent_workspace.settings import load_settings
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
 
@@ -244,6 +246,8 @@ def build_tool_groups(loader: PromptLoader) -> List[dict]:
     搜索是一道覆盖全部工具的 choice 题，不按分组切（分组本身无语义）。
     """
 
+    slides_enabled = load_settings().slides_enabled
+
     def enrich(tools):
         return [
             {
@@ -253,6 +257,8 @@ def build_tool_groups(loader: PromptLoader) -> List[dict]:
                 "description": t["description"],
                 "prompt_filename": _resolve_prompt_filename(t["id"]) + ".md",
                 "prompt_loaded": loader.get(_resolve_prompt_filename(t["id"])) is not None,
+                "ppt_supported": supports_presentation(t["id"], slides_enabled),
+                "ppt_blueprint": blueprint_for_tool(t["id"]) or "",
             }
             for t in tools
         ]

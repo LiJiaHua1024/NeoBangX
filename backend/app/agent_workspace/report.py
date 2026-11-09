@@ -101,12 +101,14 @@ def _sizes(db, entry_ids):
 
 def _run_versions(db, run_id):
     rows = db.execute(
-        select(Version.id, Version.title, func.length(Version.content), Version.complete, Version.origin)
+        select(Version.id, Version.title, func.length(Version.content), Version.complete,
+               Version.origin, Version.kind)
         .where(Version.run_id == run_id)
         .order_by(Version.created_at)
     ).all()
     return [{"id": row[0], "title": row[1], "chars": int(row[2] or 0),
-             "complete": bool(row[3]), "origin": row[4]} for row in rows]
+             "complete": bool(row[3]), "origin": row[4],
+             "kind": row[5] or "document"} for row in rows]
 
 
 def _base_version(db, version_id):

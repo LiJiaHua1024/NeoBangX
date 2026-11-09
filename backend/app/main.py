@@ -14,6 +14,7 @@ from app.database import SessionLocal, bootstrap_lock, init_db
 from app.middleware import StaticCacheMiddleware, index_preload_links
 from app.routers import auth, chat, ocr, parse, tools
 from app.agent_workspace.api import router as workspace_router
+from app.routers.presentations import router as presentations_router
 from app.agent_workspace.runner import worker as workspace_worker
 from app.services.request_log import (
     STATUS_ERROR,
@@ -160,6 +161,7 @@ app.include_router(auth.router)
 app.include_router(parse.router)
 app.include_router(ocr.router)
 app.include_router(workspace_router)
+app.include_router(presentations_router)
 
 
 def _unhandled_usage_log_kwargs(request: Request, exc: Exception) -> dict | None:

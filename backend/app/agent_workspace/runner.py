@@ -15,6 +15,8 @@ from . import context, store, tools, llm, writer
 from .instructions import (DEFAULT_EXECUTION_REQUEST, REVIEW_FEEDBACK, REVIEW_POLICY, REVIEW_SCHEMA,
                            REVISION_RETRY, WRITER_SYSTEM, behavior_of)
 from .settings import load_settings
+from .slides import blueprints as deck_blueprints
+from .slides import writer as deck_writer
 
 log = logging.getLogger(__name__)
 
@@ -118,6 +120,9 @@ class Runner:
         self.task_id = self.run["task_id"]
         self.snapshot = self.run["snapshot"]
         self.config = self.snapshot["config"]
+        self.workspace_settings = await asyncio.to_thread(load_settings)
+        self.slides_enabled = bool(self.workspace_settings.slides_enabled)
+        self.presentation = self.snapshot.get("presentation") or {}
         self.cfg = await asyncio.to_thread(_load_cfg)
         self.limits = self.snapshot["limits"]
         self.step, self.tokens = self.run["step"], self.run["tokens"]
@@ -144,6 +149,10 @@ class Runner:
                 context["instruction"] = DEFAULT_EXECUTION_REQUEST
             self.messages = [{"role": "system", "content": behavior_of(self.config)},
                              {"role": "user", "content": store.encode(context)}]
+            if self.config.get("output") == "slides":
+                self.messages.append({"role": "user", "content":
+                    "本轮成果形式：演示文稿（PPTX）。最终至少用 create_presentation 交付一份 slides 版本；"
+                    "修改演示文稿必须用 revise_presentation；文档只能作为中间材料。"})
             await self.checkpoint()
 
     async def checkpoint(self):
@@ -331,7 +340,8 @@ class Runner:
             details["attempt_log"] = result.attempt_log
         return details
 
-    async def call(self, label, messages, schemas=None, review=False, role="agent", source="", retry=False):
+    async def call(self, label, messages, schemas=None, review=False, role="agent", source="", retry=False,
+                   response_format=None):
         """role 区分调度与写作者：写作者的正文进成果，对话只显示进度；source 把同一次写作的续写归到一起。
 
         retry=True 表示「同一步的重跑」（断流后）：不占新步数、不改 messages，
@@ -363,7 +373,7 @@ class Runner:
         try:
             result = await self.model_call(self.cfg, self.snapshot["model"], messages, schemas,
                                            output_limit, self.emit,
-                                           response_format=REVIEW_SCHEMA if review else None,
+                                           response_format=REVIEW_SCHEMA if review else response_format,
                                            preferred=self.provider_id,
                                            attempts=self.provider_attempts(),
                                            retry_wait_cap=self.retry_wait_cap(),
@@ -445,7 +455,10 @@ class Runner:
         base = args.get("base_version") or self.snapshot.get("base_version") or ""
         previous = None
         if base:
-            previous = (await asyncio.to_thread(tools.document, self.task_id, base))["content"]
+            base_doc = await asyncio.to_thread(tools.document, self.task_id, base)
+            if base_doc.get("kind") == "slides":
+                raise ValueError("这是演示文稿，请用 revise_presentation；不要用 create_document 改 PPT")
+            previous = base_doc["content"]
         prompt = writer.render_prompt(template, DEFAULT_VARIABLES, rows, previous, self.config["goal"], args["instruction"])
         # 写作者独立于调度策略；system 与 prompt 记入依据，修订时逐字重建以复用前缀缓存。
         messages = [{"role": "system", "content": WRITER_SYSTEM}, {"role": "user", "content": prompt}]
@@ -553,8 +566,74 @@ class Runner:
             prompt += "\n\n本次目标：" + self.config["goal"]
         return [{"role": "system", "content": WRITER_SYSTEM}, {"role": "user", "content": prompt}], "fresh"
 
+    async def create_presentation(self, args, key):
+        if not self.slides_enabled:
+            raise ValueError("演示文稿功能暂未开启；已有演示文稿仍可查看和下载")
+        selected = args.get("material_ids") or self.config["materials"]
+        if not set(selected) <= set(self.config["materials"]):
+            raise ValueError("演示文稿所用材料不在本轮范围内")
+        rows = await asyncio.to_thread(tools.materials, self.task_id, selected)
+        if not rows:
+            raise ValueError("没有可用于生成演示文稿的材料")
+        blueprint = args.get("blueprint") or self.presentation.get("blueprint") or "reading"
+        if blueprint not in deck_blueprints.BLUEPRINTS:
+            raise ValueError("未知的演示文稿 blueprint")
+        theme = args.get("theme") or self.presentation.get("theme") or deck_blueprints.BLUEPRINTS[blueprint]["theme"]
+        title = str(args.get("title") or "课堂演示文稿")[:200]
+        instruction = str(args.get("instruction") or "")
+        deck, scene, warnings, _raw = await deck_writer.generate_deck(
+            self, title=title, instruction=instruction, materials=rows,
+            blueprint=blueprint, theme=theme)
+        provenance = deck_writer.deck_provenance(
+            blueprint=blueprint, theme=theme, instruction=instruction,
+            material_ids=selected, source=deck_writer._source_text(rows))
+        provenance["warnings"] = [w for w in warnings if w.startswith(("WARN:", "ERROR:"))]
+        provenance["slide_count"] = len(scene["slides"])
+        version = await asyncio.to_thread(
+            store.save_slides_version, self.task_id, self.id, key, title, deck, scene,
+            "", "agent", True, provenance)
+        self.created_versions.append(version["id"])
+        return {"version_id": version["id"], "title": version["title"], "kind": "slides",
+                "slides": len(scene["slides"]), "theme": theme, "warnings": provenance["warnings"],
+                "outline": deck_writer.outline(deck)}
+
+    async def revise_presentation(self, args, key):
+        base = await asyncio.to_thread(tools.document, self.task_id, args["version_id"])
+        if base.get("kind") != "slides":
+            raise ValueError("只能修订 kind=slides 的演示文稿；文档请用 revise_document")
+        try:
+            base_deck = json.loads(base["content"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("基准演示文稿内容无法读取") from exc
+        provenance = base.get("provenance") or {}
+        selected = provenance.get("materials") or self.config["materials"]
+        if not set(selected) <= set(self.config["materials"]):
+            selected = self.config["materials"]
+        rows = await asyncio.to_thread(tools.materials, self.task_id, selected)
+        blueprint = base_deck.get("blueprint") or self.presentation.get("blueprint") or "reading"
+        theme = (base_deck.get("design") or {}).get("theme") or base_deck.get("theme") or "paper"
+        title = str(args.get("title") or base["title"])[:200]
+        instruction = str(args.get("instruction") or "")
+        deck, scene, warnings, _raw = await deck_writer.generate_deck(
+            self, title=title, instruction=instruction, materials=rows,
+            blueprint=blueprint, theme=theme, base_deck=base_deck, base_version=base["id"])
+        prov = deck_writer.deck_provenance(
+            blueprint=blueprint, theme=theme, instruction=instruction,
+            material_ids=selected, source=deck_writer._source_text(rows), base_version=base["id"])
+        prov["warnings"] = [w for w in warnings if w.startswith(("WARN:", "ERROR:"))]
+        prov["slide_count"] = len(scene["slides"])
+        version = await asyncio.to_thread(
+            store.save_slides_version, self.task_id, self.id, key, title, deck, scene,
+            base["id"], "agent", True, prov)
+        self.created_versions.append(version["id"])
+        return {"version_id": version["id"], "title": version["title"], "kind": "slides",
+                "slides": len(scene["slides"]), "theme": theme, "warnings": prov["warnings"],
+                "new_version": True, "outline": deck_writer.outline(deck)}
+
     async def revise_document(self, args, key):
         version = await asyncio.to_thread(tools.document, self.task_id, args["version_id"])
+        if version.get("kind") == "slides":
+            raise ValueError("只能修订文档；演示文稿请用 revise_presentation")
         if not version["complete"]:
             raise ValueError("该版本尚未完整生成，不能修订；请先补全或选择完整版本")
         feedback = await self.revision_feedback(args)
@@ -662,11 +741,11 @@ class Runner:
             # 显式提交的工具关闭先约束尚未开始的调用；文字要求在整组工具返回后入上下文。
             pending_notes = await asyncio.to_thread(store.take_notes, self.id)
             latest_config = next((n["config"] for n in reversed(pending_notes) if n["config"]), None)
-            if latest_config and name not in {t["function"]["name"] for t in tools.tool_schemas(latest_config)}:
+            if latest_config and name not in {t["function"]["name"] for t in tools.tool_schemas(latest_config, self.slides_enabled)}:
                 raise ValueError("用户已关闭此工具，尚未开始的调用已阻止")
             if latest_config and name == "search_material" and args.get("regex") and "regex" not in latest_config.get("tools", []):
                 raise ValueError("用户已关闭正则工具")
-            schemas = {s["function"]["name"]: s["function"] for s in tools.tool_schemas(self.config)}
+            schemas = {s["function"]["name"]: s["function"] for s in tools.tool_schemas(self.config, self.slides_enabled)}
             if name not in schemas:
                 raise ValueError("此工具已关闭或不在本轮允许范围内")
             validate(args, schemas[name]["parameters"])
@@ -674,6 +753,10 @@ class Runner:
                 result = await self.create_document(args, key)
             elif name == "revise_document":
                 result = await self.revise_document(args, key)
+            elif name == "create_presentation":
+                result = await self.create_presentation(args, key)
+            elif name == "revise_presentation":
+                result = await self.revise_presentation(args, key)
             elif name == "ask_user":
                 ask = tools.normalize_question(args)
                 payload = store.encode(ask)
@@ -710,14 +793,33 @@ class Runner:
 
     async def review(self, version_id):
         version = await asyncio.to_thread(tools.document, self.task_id, version_id)
+        is_slides = version.get("kind") == "slides"
         material_ids = list(dict.fromkeys(version["provenance"].get("materials", []) + self.config["materials"]))
         rows = await asyncio.to_thread(tools.materials, self.task_id, material_ids)
-        payload = {"goal": self.config["goal"], "requirements": self.config["prompt"],
-                   "instruction": self.snapshot.get("instruction", ""), "materials": rows, "draft": {**version, "provenance": writer.review_view(version["provenance"])},
-                   "generation_requirements": writer.review_view(version["provenance"])}
+        if is_slides:
+            deck = json.loads(version["content"])
+            haystack = deck_writer.outline(deck)
+            payload = {"goal": self.config["goal"], "requirements": self.config["prompt"],
+                       "instruction": self.snapshot.get("instruction", ""), "materials": rows,
+                       "version_kind": "slides",
+                       "draft": {"id": version["id"], "title": version["title"], "kind": "slides",
+                                 "outline": haystack,
+                                 "warnings": version["provenance"].get("warnings", [])}}
+            review_prompt = deck_writer.DECK_REVIEW_POLICY
+            custom = (self.config.get("review_prompt") or "").strip()
+            if custom and custom != REVIEW_POLICY:
+                review_prompt += "\n\n任务补充审阅要求：\n" + custom
+            label = "演示文稿审阅"
+        else:
+            haystack = version["content"]
+            payload = {"goal": self.config["goal"], "requirements": self.config["prompt"],
+                       "instruction": self.snapshot.get("instruction", ""), "materials": rows, "draft": {**version, "provenance": writer.review_view(version["provenance"])},
+                       "generation_requirements": writer.review_view(version["provenance"])}
+            review_prompt = self.config.get("review_prompt", REVIEW_POLICY)
+            label = "开放式审阅"
         try:
-            result, entry_id = await self.call("开放式审阅", [{"role": "system", "content": self.config.get("review_prompt", REVIEW_POLICY)},
-                                                           {"role": "user", "content": store.encode(payload)}], review=True)
+            result, entry_id = await self.call(label, [{"role": "system", "content": review_prompt},
+                                                      {"role": "user", "content": store.encode(payload)}], review=True)
         except (BudgetReached, asyncio.CancelledError):
             raise
         except Exception as exc:
@@ -732,10 +834,12 @@ class Runner:
             data = json.loads(result.content)
             validate(data, REVIEW_SCHEMA["json_schema"]["schema"])
             for issue in data["issues"]:
-                if issue["quote"] and issue["quote"] not in version["content"]:
+                if issue["quote"] and issue["quote"] not in haystack:
                     issue["certainty"] = "uncertain"
             await asyncio.to_thread(store.append_chunks, entry_id, {"review": store.encode(data)})
-            await asyncio.to_thread(store.finish_entry, entry_id, "done", {"review_summary": data["summary"][:500], "issues": len(data["issues"]), "version_id": version_id})
+            await asyncio.to_thread(store.finish_entry, entry_id, "done", {
+                "review_summary": data["summary"][:500], "issues": len(data["issues"]),
+                "version_id": version_id, "version_kind": "slides" if is_slides else "document"})
             return {**data, "entry_id": entry_id}
         except Exception:
             # 原始审阅全文保留供阅读，无法解析不能误报通过。
@@ -746,6 +850,16 @@ class Runner:
 
     async def execute(self):
         await self.load()
+        if self.run["mode"] == "presentation":
+            p = self.presentation or {}
+            await self.create_presentation({
+                "title": p.get("title") or "课堂演示文稿",
+                "instruction": p.get("instruction") or "",
+                "material_ids": p.get("material_ids") or self.config["materials"],
+                "blueprint": p.get("blueprint") or "reading",
+                "theme": p.get("theme") or "paper",
+            }, "presentation")
+            return
         if self.run["mode"] == "tool_test":
             version = await self.create_document({"title": "教学工具试运行", "instruction": self.config["goal"],
                 "teaching_tool": self.snapshot["teaching_tool"], "material_ids": self.config["materials"]}, "tool-test")
@@ -785,7 +899,7 @@ class Runner:
             await self.compact(await self._compaction_reason())
             try:
                 result, entry_id = await self.call(f"执行步骤 {self.step+1}", self.messages,
-                                                   tools.tool_schemas(self.config))
+                                                   tools.tool_schemas(self.config, self.slides_enabled))
             except llm.PartialResponseError as exc:
                 # 断流：prompt 一字未变，同家重跑本步一次几乎全是缓存命中；
                 # 只有在"没吐多少 + 时间预算够 + 是瞬态故障"时才这么做。
@@ -793,7 +907,7 @@ class Runner:
                     raise
                 log.warning("执行步骤断流，同 Provider 重跑本步一次：%s", exc)
                 result, entry_id = await self.call(f"执行步骤 {self.step}（断流重试）", self.messages,
-                                                   tools.tool_schemas(self.config), retry=True)
+                                                   tools.tool_schemas(self.config, self.slides_enabled), retry=True)
             if result.finish_reason in {"length", "max_tokens"}:
                 if result.content:
                     await asyncio.to_thread(store.save_version, self.task_id, self.id, "partial:"+entry_id,
@@ -821,7 +935,63 @@ class Runner:
             if await asyncio.to_thread(store.take_notes, self.id):
                 await self.notes()
                 continue
+            if self.config.get("output") == "slides":
+                await self.ensure_slides_delivery()
             return
+
+    async def _has_slides_version(self):
+        for version_id in self.created_versions:
+            try:
+                row = await asyncio.to_thread(tools.document, self.task_id, version_id)
+            except ValueError:
+                continue
+            if row.get("kind") == "slides":
+                return True
+        return False
+
+    async def ensure_slides_delivery(self):
+        """The output switch must not end with only a document.
+
+        If the scheduling agent never called create_presentation, use the
+        newest complete document as the source and make one final deck. This is
+        a last-resort delivery guarantee, not a substitute for the tool call.
+        """
+        if await self._has_slides_version():
+            return
+        source_id = ""
+        source_text = ""
+        for version_id in reversed(self.created_versions):
+            try:
+                row = await asyncio.to_thread(tools.document, self.task_id, version_id)
+            except ValueError:
+                continue
+            if row.get("kind") == "document" and row.get("complete"):
+                source_id = row["id"]
+                source_text = row["content"]
+                break
+        if not source_text and self.snapshot.get("base_version"):
+            try:
+                row = await asyncio.to_thread(tools.document, self.task_id, self.snapshot["base_version"])
+                if row.get("kind") == "document" and row.get("complete"):
+                    source_id, source_text = row["id"], row["content"]
+            except ValueError:
+                pass
+        if source_text:
+            mid = await asyncio.to_thread(store.add_text_material, self.task_id, "本轮文档成果", source_text)
+            if mid not in self.config["materials"]:
+                self.config["materials"].append(mid)
+            selected = [mid]
+        else:
+            selected = list(self.config["materials"])
+        if not selected:
+            raise ValueError("本轮要求演示文稿，但没有可制作 PPT 的成果或材料")
+        await self.create_presentation({
+            "title": (self.config.get("goal") or "课堂演示文稿")[:80],
+            "instruction": "把本轮已有成果整理成课堂演示文稿；不要补写原文。",
+            "material_ids": selected,
+            "blueprint": self.presentation.get("blueprint") or "generic_lesson",
+            "theme": self.presentation.get("theme") or "paper",
+        }, "fallback-presentation")
 
     async def review_cycle(self):
         """审阅本轮最新的完整版本。需要调度 Agent 决定是否修订时，把意见放进对话并返回 True。
@@ -843,9 +1013,10 @@ class Runner:
         state["rounds"] += 1
         version = await asyncio.to_thread(tools.document, self.task_id, version_id)
         issues = "\n".join(writer.format_issue(i, issue) for i, issue in enumerate(review["issues"], 1))
+        note = "\n\n注意：这是演示文稿。修改必须调用 revise_presentation；不要用 revise_document。" if version.get("kind") == "slides" else ""
         self.messages.append({"role": "user", "content": REVIEW_FEEDBACK.format(
             version_id=version_id, title=version["title"], review_id=review["entry_id"], summary=review["summary"],
-            issues=issues, round=state["rounds"], rounds=rounds)})
+            issues=issues, round=state["rounds"], rounds=rounds) + note})
         await self.checkpoint()
         return True
 

@@ -1,0 +1,249 @@
+{
+ "format": "nbx-deck",
+ "version": 2,
+ "title": "The Last Light",
+ "subtitle": "A foggy harbor, a silent bell, and a choice at dusk.",
+ "theme": "paper",
+ "motif": "horizon",
+ "meta": {
+  "subject": "English",
+  "grade": "Grade 11",
+  "lesson": "读后续写",
+  "duration": "45 min"
+ },
+ "slides": [
+  {
+   "layout": "cover",
+   "kicker": "高中英语 · 读后续写 · 高二",
+   "title": "The Last Light",
+   "subtitle": "雾夜、港口、一只沉默的铃。",
+   "question": "铃声能带来什么？",
+   "meta": "45 分钟 · B2 · 读后续写",
+   "notes": "开场：看标题和地平线；猜故事发生在哪里。"
+  },
+  {
+   "layout": "story",
+   "kicker": "读原文 · READ THE STORY",
+   "title": "The Last Light",
+   "story": "The ferry was due at six, but by half past five the fog had swallowed the harbor. Maya stood at the ticket office, clutching a paper bag of oranges for her grandmother. The last bus had left an hour ago; the next one would not come until morning.\n\n“You can wait inside,” said the old man behind the counter. He was polishing a brass bell that had not rung for years. “Or you can take the path along the cliff. It is shorter, but you must go now, while there is still light.”\n\nMaya looked at the darkening sky. Then she looked at the bell. “Why don’t you ring it?” she asked. “Someone might come.”\n\nThe old man smiled. “I have been waiting for someone to ask me that.”\n\nShe stepped outside. The fog was lifting, just a little, and far below, a light moved across the water.",
+   "prompts": [
+    "注意物件：橘子、铜铃、水面上的光。",
+    "跟踪 Maya 的选择：在屋里等，还是走悬崖小路？",
+    "标出老人态度变化的那一句。"
+   ],
+   "starters": [
+    "Maya took the path along the cliff, …",
+    "When she finally reached the harbor, …"
+   ],
+   "note": "先读一遍，再梳理六 W。",
+   "notes": "先读原文，注意物件和 Maya 的选择。"
+  },
+  {
+   "layout": "six_w",
+   "kicker": "审题 · UNPACK THE STORY",
+   "title": "六个问题，锚定这个故事",
+   "items": [
+    {
+     "label": "人物 WHO",
+     "text": "Maya：给外婆送橘子的女孩；老人：售票亭的职员。",
+     "evidence": "“clutching a paper bag of oranges for her grandmother”"
+    },
+    {
+     "label": "事件 WHAT",
+     "text": "雾遮住了港口；六点的渡轮可能来不了；Maya 必须在等待和悬崖小路之间选择。",
+     "evidence": "“The ferry was due at six, but … the fog had swallowed the harbor.”"
+    },
+    {
+     "label": "时空",
+     "text": "傍晚，起雾的小港口售票亭，六点之前。",
+     "evidence": "“by half past five the fog had swallowed the harbor”"
+    },
+    {
+     "label": "原因 WHY",
+     "text": "Maya 想赶到外婆家；老人希望有人问起那只铃——也希望有人连接。",
+     "evidence": "“I have been waiting for someone to ask me that.”"
+    },
+    {
+     "label": "写法 HOW",
+     "text": "第三人称有限视角；安静、克制的氛围；线索是小物件，不是解释。",
+     "evidence": "“a brass bell that had not rung for years”"
+    },
+    {
+     "label": "冲突 CONFLICT",
+     "text": "时间（六点的渡轮）与安全（雾中的悬崖小路）；沉默与连接（铃声）。",
+     "evidence": "“you must go now, while there is still light.”"
+    }
+   ],
+   "prompt": "你准备在结尾回收哪一条线索？",
+   "notes": "六 W 逐个过；每个都回到原文找证据。"
+  },
+  {
+   "layout": "plot",
+   "kicker": "情绪线 · FOLLOW THE FEELING",
+   "title": "故事的情绪线",
+   "nodes": [
+    {
+     "event": "到达",
+     "emotion": "焦虑",
+     "evidence": "fog on the harbor"
+    },
+    {
+     "event": "选择",
+     "emotion": "犹豫",
+     "evidence": "the cliff path"
+    },
+    {
+     "event": "铃声",
+     "emotion": "希望",
+     "evidence": "the brass bell"
+    },
+    {
+     "event": "小路",
+     "emotion": "决心",
+     "evidence": "the fog lifts"
+    },
+    {
+     "event": "灯光",
+     "emotion": "决心",
+     "evidence": "a light on the water"
+    },
+    {
+     "event": "连接（P2）",
+     "emotion": "连接",
+     "evidence": "an orange on the counter"
+    }
+   ],
+   "note": "P1：焦虑 → 决心。  P2：宽慰 → 连接。",
+   "notes": "情绪线：指出 P1/P2 的分界和光的位置。"
+  },
+  {
+   "layout": "plan",
+   "kicker": "两段规划 · PLAN THE ENDING",
+   "title": "两段，两个任务",
+   "label": "一个可能的方案",
+   "note": "提纲用一般现在时；正式写作和范文用一般过去时。",
+   "paragraphs": [
+    {
+     "label": "第一段 P1",
+     "function": "行动与高潮",
+     "points": [
+      "Maya 走上悬崖小路；雾变薄，海面露出一线。",
+      "身后，铜铃响了——一次、两次、三次。",
+      "她看见渡轮的灯光扫过港口，开始奔跑。"
+     ],
+     "emotional": "焦虑 → 决心"
+    },
+    {
+     "label": "第二段 P2",
+     "function": "结果与回味",
+     "points": [
+      "港口里，渡轮在等；老人站在售票亭门口。",
+      "他摇铃为她引路；她在柜台上留下一个橘子。",
+      "他请她再回来；橘子成了一个约定，不是报酬。"
+     ],
+     "emotional": "宽慰 → 连接"
+    }
+   ],
+   "clues": "橘子 · 铜铃 · 水面上的光",
+   "notes": "两段规划：先说要做什么，再给关键词。"
+  },
+  {
+   "layout": "support",
+   "kicker": "语言支架 · LANGUAGE SUPPORT",
+   "title": "动作、情绪、环境的词块",
+   "items": [
+    {
+     "label": "动作",
+     "chunks": "picked her way along\nheld her breath\nbroke into a run",
+     "model": "She picked her way along the cliff, one hand against the cold stone wall."
+    },
+    {
+     "label": "情绪",
+     "chunks": "a knot of fear\nher heart lifted\na wave of relief",
+     "model": "A knot of fear tightened in her chest, then slowly loosened."
+    },
+    {
+     "label": "环境",
+     "chunks": "the fog thinned\nthe beam swept across the water\nthe air tasted of salt",
+     "model": "The fog thinned, and the air tasted of salt."
+    },
+    {
+     "label": "对话",
+     "chunks": "M: “You made it.”\nO: “I heard the bell.”\nM: “I thought you might need it.”",
+     "model": "“You made it,” he said, as if he had never doubted it."
+    }
+   ],
+   "note": "提纲用一般现在时；范文用一般过去时。",
+   "notes": "语言支架：动作、情绪、环境、对话各取一个。"
+  },
+  {
+   "layout": "writing",
+   "kicker": "写作 · YOUR TURN",
+   "title": "续写故事",
+   "starters": [
+    "Maya took the path along the cliff, …",
+    "When she finally reached the harbor, …"
+   ],
+   "checklist": [
+    "回收原文的一条线索。",
+    "用上语言库里的一个词块。",
+    "结尾落在关系的变化上。"
+   ],
+   "skeleton": "P1  行动 → 高潮\nP2  结果 → 回味",
+   "prewrite": [
+    "你准备回收哪条线索？",
+    "P1 和 P2 之间什么变了？",
+    "你希望最后一个画面是什么？"
+   ],
+   "meta": "120–150 词  ·  20 分钟",
+   "notes": "写作：先写 P1，再写 P2；提醒时态。"
+  },
+  {
+   "layout": "model",
+   "kicker": "范文 · MODEL",
+   "title": "一个可能的 P1",
+   "label": "一个可能的版本——比较，不要照抄",
+   "text": "Maya took the path along the cliff, one hand against the cold stone wall. The fog moved in slow ribbons, now hiding the sea, now opening a narrow window of grey water. She counted her steps to keep her breathing steady. Then, behind her, the brass bell broke the silence—once, twice, three times. She stopped. Below, a beam of light swept across the harbor and held, waiting. She began to run.",
+   "highlights": [
+    "one hand against the cold stone wall",
+    "once, twice, three times",
+    "held, waiting"
+   ],
+   "notice": [
+    "身体动作表现情绪；句子不直接命名情绪。",
+    "铃和光在原文里已经存在；结尾只是重新使用它们。"
+   ],
+   "annotations": [
+    {
+     "label": "01 · 具体细节",
+     "text": "“One hand against the cold stone wall” 用身体写出谨慎，不直接解释心理。"
+    },
+    {
+     "label": "02 · 节奏",
+     "text": "“Once, twice, three times” 回收铃声线索，用重复制造紧张，而不是堆形容词。"
+    },
+    {
+     "label": "03 · 呼应",
+     "text": "光“held, waiting” 把光拟人化，也把它和老人的邀请连起来。结尾是准备好的，不是突然宣布的。"
+    }
+   ],
+   "notes": "范文：比较，不要照抄；标出可借用的动作。"
+  },
+  {
+   "layout": "closing",
+   "kicker": "交给你 · OVER TO YOU",
+   "title": "铃声还在响。",
+   "body": "好的续写不解释结尾，而是让物件自己说话：橘子、铜铃、水面上的光。",
+   "checklist": [
+    "回收原文的一条线索。",
+    "保持第三人称有限视角。",
+    "结尾落在关系的变化上，不要总结。"
+   ],
+   "quote": "I have been waiting for someone to ask me that.",
+   "attribution": "老人",
+   "homework": "作业：完成 P2 草稿；带一个“易手”的物件来。",
+   "peer": "交换草稿：问同伴回收了哪条线索，什么变了？",
+   "notes": "收尾：交之前检查；同伴互换问线索。"
+  }
+ ]
+}

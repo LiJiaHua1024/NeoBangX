@@ -76,6 +76,7 @@
     <link rel="stylesheet" href="/static/agent/claude/composer.css" />
     <link rel="stylesheet" href="/static/agent/claude/ask.css" />
     <link rel="stylesheet" href="/static/agent/claude/model-picker.css" />
+    <link rel="stylesheet" href="/static/agent/claude/slides.css" />
     <link rel="stylesheet" href="/static/agent/claude/caret.css" />
     <link rel="stylesheet" href="/static/agent/claude/mascot.css" />
     <link rel="stylesheet" href="/static/agent/claude/workspace.css" />
@@ -561,6 +562,21 @@
                   </div>
 
                   <div class="field">
+                    <span class="field-label">成果形式<span class="hint">决定本轮主要交付物</span></span>
+                    <div class="output-choice" role="radiogroup" aria-label="成果形式">
+                      <button type="button" id="output-document" class="output-choice-btn" role="radio" aria-checked="true">
+                        <span class="output-choice-title">文档</span>
+                        <span class="output-choice-sub">Markdown / Word，适合讲义与长文</span>
+                      </button>
+                      <button type="button" id="output-slides" class="output-choice-btn" role="radio" aria-checked="false">
+                        <span class="output-choice-title">演示文稿 <em>PPTX</em></span>
+                        <span class="output-choice-sub">适合课堂投影；生成后可预览、下载并编辑</span>
+                      </button>
+                    </div>
+                    <p id="output-hint" class="empty-line" hidden>演示文稿功能暂未开启；已有文件仍可查看和下载。</p>
+                  </div>
+
+                  <div class="field">
                     <label for="template">从模板开始</label>
                     <div class="aw-select">
                       <select id="template">
@@ -879,6 +895,34 @@
                       <button id="result-next" class="btn btn-ghost btn-sm" type="button">
                         <span>下一段</span><span data-icon="chevron-right"></span>
                       </button>
+                    </div>
+
+                    <div id="slides-actions" hidden>
+                      <div class="slides-toolbar">
+                        <button id="slides-prev" class="btn btn-ghost btn-sm" type="button" aria-label="上一页">
+                          <span data-icon="chevron-left"></span>
+                        </button>
+                        <span id="slides-page" class="page">1 / 1</span>
+                        <button id="slides-next" class="btn btn-ghost btn-sm" type="button" aria-label="下一页">
+                          <span data-icon="chevron-right"></span>
+                        </button>
+                        <span class="spacer"></span>
+                        <div class="slides-theme-choice" role="radiogroup" aria-label="主题">
+                          <button type="button" class="slides-theme-btn" data-slide-theme="paper"
+                                  role="radio" aria-checked="true" title="纸张：阅读/写作">纸张</button>
+                          <button type="button" class="slides-theme-btn" data-slide-theme="chalk"
+                                  role="radio" aria-checked="false" title="黑板：语法/试题">黑板</button>
+                        </div>
+                        <button id="slides-notes-toggle" class="slides-notes-toggle" type="button"
+                                role="switch" aria-checked="false">备注</button>
+                        <button id="slides-fullscreen" class="icon-btn" type="button"
+                                title="全屏预览" aria-label="全屏预览" data-icon="expand"></button>
+                        <button id="export-pptx" class="icon-btn slides-download-icon" type="button"
+                                title="下载 PPTX" aria-label="下载 PPTX" data-icon="download"></button>
+                      </div>
+                      <div id="slides-stage" class="slides-stage" tabindex="0" aria-label="幻灯片预览"></div>
+                      <div id="slides-thumbs" class="slides-thumbs"></div>
+                      <div id="slides-notes" class="slides-notes" hidden></div>
                     </div>
                   </div>
 

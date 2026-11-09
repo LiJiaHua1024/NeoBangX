@@ -1,6 +1,8 @@
 import asyncio
 import json
+import re
 from typing import Annotated, Literal
+from urllib.parse import quote
 
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, File, Query
@@ -23,6 +25,9 @@ from .models import (WorkspaceTask as Task, WorkspaceRun as Run, WorkspaceEntry 
 from .instructions import DEFAULT_BEHAVIOR, DEFAULT_PROMPT, REVIEW_POLICY
 from .settings import load_settings, search_available
 from .tools import catalog, parse_upload, tool_schemas, execute_readonly
+from .slides.compile import compile_deck
+from .slides.check import check as slide_check
+from .slides.pptx import build_pptx
 
 router = APIRouter(prefix="/api/workspace", tags=["agent-workspace"])
 
@@ -54,6 +59,7 @@ class TaskConfig(BaseModel):
     prompt: str = Field(DEFAULT_PROMPT, max_length=100000)
     behavior: str = Field(DEFAULT_BEHAVIOR, max_length=30000)
     model: str = Field("", max_length=200)
+    output: Literal["document", "slides"] = "document"
     template_id: str = Field("", max_length=80)
     materials: list[str] = Field(default_factory=list, max_length=50)
     tools: list[Literal["material_search", "regex", "vocabulary", "web_search"]] = Field(default_factory=lambda: ["material_search", "regex", "vocabulary"])
@@ -188,7 +194,8 @@ def get_catalog(owner: Owner):
     # 原样返回配置里的默认值会让新任务被钉在一个选择器里不存在的模型上。
     offered = {m["id"] for m in models}
     default_model = cfg.get("default_model") if cfg.get("default_model") in offered else (models[0]["id"] if models else "")
-    return {"enabled": policy.enabled, "models": models, "default_model": default_model,
+    return {"enabled": policy.enabled, "slides_enabled": policy.slides_enabled,
+            "models": models, "default_model": default_model,
             "official_templates": official_templates(), "templates": templates, "tools": catalog(),
             "defaults": TaskConfig().model_dump(), "user": user,
             "limits": {"steps": policy.max_steps, "tokens": policy.max_tokens, "seconds": policy.max_seconds},
@@ -197,9 +204,12 @@ def get_catalog(owner: Owner):
 
 
 @router.get("/tasks")
-def list_tasks(owner: Owner, q: str = "", offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100)):
+def list_tasks(owner: Owner, q: str = "", offset: int = Query(0, ge=0),
+               limit: int = Query(50, ge=1, le=100), include_tool: bool = Query(False)):
     with SessionLocal() as db:
         stmt = select(Task).where(Task.owner == owner)
+        if not include_tool:
+            stmt = stmt.where(Task.origin != "tool")
         if q:
             stmt = stmt.where(Task.title.contains(q, autoescape=True))
         rows = db.scalars(stmt.order_by(Task.updated_at.desc()).offset(offset).limit(limit+1)).all()
@@ -548,6 +558,93 @@ def get_version(task_id: str, version_id: str, owner: Owner):
         return store.version_dict(row, True)
 
 
+class ThemeWrite(BaseModel):
+    theme: Literal["paper", "chalk"]
+
+
+def _slides_scene(version):
+    if version.kind != "slides":
+        raise HTTPException(400, "该成果不是演示文稿")
+    rend = store.rendition(version.id, full=True)
+    if rend and rend.get("scene"):
+        return rend["scene"]
+    try:
+        deck = json.loads(version.content)
+        scene = compile_deck(deck)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(422, f"演示文稿内容无法渲染：{exc}") from exc
+    errors, _warnings = slide_check(scene)
+    if errors:
+        raise HTTPException(422, "演示文稿排版检查未通过")
+    store.save_rendition(version.id, scene, (deck.get("design") or {}).get("design_version", ""))
+    return scene
+
+
+@router.get("/tasks/{task_id}/versions/{version_id}/scene")
+def get_scene(task_id: str, version_id: str, owner: Owner):
+    with SessionLocal() as db:
+        store.owned(db, task_id, owner)
+        version = db.get(Version, version_id)
+        if not version or version.task_id != task_id:
+            raise HTTPException(404, "成果不存在")
+        scene = _slides_scene(version)
+        return {"version_id": version.id, "kind": "slides", "scene": scene,
+                "warnings": (store.decode(version.provenance or "{}").get("warnings") or [])}
+
+
+@router.get("/tasks/{task_id}/versions/{version_id}/export")
+def export_slides(task_id: str, version_id: str, owner: Owner, format: str = Query("pptx")):
+    if format != "pptx":
+        raise HTTPException(400, "仅支持 PowerPoint 导出")
+    with SessionLocal() as db:
+        store.owned(db, task_id, owner)
+        version = db.get(Version, version_id)
+        if not version or version.task_id != task_id:
+            raise HTTPException(404, "成果不存在")
+        scene = _slides_scene(version)
+        data = None
+        rend = store.rendition(version_id, full=False)
+        if rend and rend.get("has_pptx"):
+            full = store.rendition(version_id, full=True)
+            data = full.get("pptx") if full else None
+        if not data:
+            data = build_pptx(scene)
+            store.save_pptx(version_id, data)
+    safe = re.sub(r'[\\/:*?"<>|]+', "-", version.title).strip() or "slides"
+    headers = {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(safe + ".pptx"),
+               "Cache-Control": "private, no-store"}
+    return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    headers=headers)
+
+
+@router.post("/tasks/{task_id}/versions/{version_id}/theme")
+def switch_theme(task_id: str, version_id: str, body: ThemeWrite, owner: Owner):
+    with SessionLocal() as db:
+        store.owned(db, task_id, owner)
+        version = db.get(Version, version_id)
+        if not version or version.task_id != task_id:
+            raise HTTPException(404, "成果不存在")
+        if version.kind != "slides":
+            raise HTTPException(400, "该成果不是演示文稿")
+        try:
+            deck = json.loads(version.content)
+            deck.setdefault("design", {})["theme"] = body.theme
+            deck["theme"] = body.theme
+            scene = compile_deck(deck)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(422, f"主题切换失败：{exc}") from exc
+        errors, _ = slide_check(scene)
+        if errors:
+            raise HTTPException(422, "换主题后排版检查未通过")
+        provenance = store.decode(version.provenance or "{}")
+        provenance.update({"theme": body.theme, "slide_count": len(scene["slides"])})
+        new = store.save_slides_version(task_id, version.run_id,
+                                        "theme:" + store.uid(), version.title + "（换主题）",
+                                        deck, scene, version.id, "agent", True, provenance)
+        store.save_pptx(new["id"], build_pptx(scene))
+        return new
+
+
 @router.post("/tasks/{task_id}/versions")
 def edit_version(task_id: str, body: VersionWrite, owner: Owner):
     with SessionLocal() as db:
@@ -557,6 +654,8 @@ def edit_version(task_id: str, body: VersionWrite, owner: Owner):
             parent = db.get(Version, body.parent_id)
             if not parent or parent.task_id != task_id:
                 raise HTTPException(404, "基准版本不存在或不属于此任务")
+            if parent.kind == "slides":
+                raise HTTPException(400, "演示文稿不支持手动文本编辑；请用要求修订或换主题")
     return store.save_version(task_id, "", "manual:"+body.request_key, body.title, body.content, body.parent_id, "manual")
 
 

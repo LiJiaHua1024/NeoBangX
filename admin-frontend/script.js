@@ -1103,6 +1103,7 @@ function adminApp() {
     // Agent 工作台配置
     agentForm: {
       enabled: true,
+      slides_enabled: false,
       max_steps: 24,
       max_tokens: 2000000,
       output_tokens: 16384,
@@ -5233,6 +5234,7 @@ function adminApp() {
       return {
         ...numbers,
         enabled: !!this.agentForm.enabled,
+        slides_enabled: !!this.agentForm.slides_enabled,
         mcp_enabled: !!this.agentForm.mcp_enabled,
         mcp_url: String(this.agentForm.mcp_url || "").trim(),
         mcp_token: String(this.agentForm.mcp_token || ""),
@@ -5246,6 +5248,7 @@ function adminApp() {
         this.agentHasToken = !!data.has_token;
         this.agentForm = {
           enabled: data.enabled !== false,
+          slides_enabled: !!data.slides_enabled,
           max_steps: data.max_steps ?? 24,
           max_tokens: data.max_tokens ?? 2000000,
           output_tokens: data.output_tokens ?? 16384,

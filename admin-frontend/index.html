@@ -196,6 +196,17 @@
             </div>
           </div>
 
+          <div class="switch-row mt-4">
+            <label class="switch" :class="{ disabled: agentSaving }">
+              <input type="checkbox" id="agent-slides-enabled" x-model="agentForm.slides_enabled" :disabled="agentSaving" aria-label="开启演示文稿生成">
+              <span class="switch-slider"></span>
+            </label>
+            <div class="switch-copy">
+              <div class="switch-title">开启演示文稿（PPTX）生成</div>
+              <div class="field-hint">关闭后新建 PPT 入口隐藏，已有演示文稿仍可查看和下载。开启前先用真实 PowerPoint/WPS 验收样片。</div>
+            </div>
+          </div>
+
           <div class="agent-budget-grid mt-4">
             <label class="field">
               <span>每轮最多步骤</span>

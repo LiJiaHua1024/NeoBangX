@@ -192,12 +192,12 @@
   <link rel="preload" as="style" href="/static/tailwind.css?v=8e7f78ad1c" fetchpriority="high"
         onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:tailwind')"
         onerror="this.onerror=null;__nbxBootFail('css:tailwind','界面样式')">
-  <link rel="preload" as="style" href="/static/styles.min.css?v=9e65aa0c61" fetchpriority="high"
+  <link rel="preload" as="style" href="/static/styles.min.css?v=6672636246" fetchpriority="high"
         onload="this.onload=null;this.rel='stylesheet';__nbxBootMark('css:styles')"
         onerror="this.onerror=null;__nbxBootFail('css:styles','主题样式')">
   <noscript>
     <link rel="stylesheet" href="/static/tailwind.css?v=8e7f78ad1c">
-    <link rel="stylesheet" href="/static/styles.min.css?v=9e65aa0c61">
+    <link rel="stylesheet" href="/static/styles.min.css?v=6672636246">
   </noscript>
   <!-- 本地静态资源带 ?v=<内容哈希> 版本串（npm run build:assets 按文件内容生成，勿手改）：
        带 query 的 /static/** 由后端中间件下发 immutable 长缓存，浏览器与 Cloudflare
@@ -232,7 +232,7 @@
        它，且只在生成完成后才出现；3KB 的体积换十几处 getter 的未加载兜底不划算。 -->
   <script defer src="/static/nbx-versions.js?v=7270a8ece4" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
   <!-- 压缩产物：源码是 frontend/script.js，改完跑 npm run build:js 重新生成 -->
-  <script defer src="/static/script.min.js?v=58ccf981c9" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
+  <script defer src="/static/script.min.js?v=ec66a3a2c3" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
   <script defer src="/static/vendor/alpinejs-3.15.12.min.js?v=57b37d7cae" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
 </head>
 
@@ -2957,6 +2957,29 @@
                 <div class="md" x-ref="mdRoot"
                      :class="{ 'mask-answers': maskOn && currentTool && currentTool.id === '13' }"
                      x-html="rendered"></div>
+                <div class="max-w-3xl mx-auto px-4 sm:px-6 md:px-8 mt-5" x-show="activePpt" x-cloak>
+                  <div class="ppt-card" :class="{ 'is-error': activePpt && activePpt.status === 'error' }">
+                    <div class="ppt-card-badge">PPT</div>
+                    <div class="ppt-card-main">
+                      <strong x-text="pptStatusText(activeHistoryItem)"></strong>
+                    </div>
+                    <div class="ppt-card-actions">
+                      <button type="button" class="ppt-card-btn"
+                              x-show="activePpt && activePpt.status === 'done'"
+                              @click="openPptPreview()">预览</button>
+                      <button type="button" class="ppt-card-btn primary"
+                              x-show="activePpt && activePpt.status === 'done'"
+                              @click="downloadPpt()">下载 PPTX</button>
+                      <a class="ppt-card-btn"
+                         x-show="activePpt && activePpt.status === 'done' && activePpt.task_id"
+                         :href="activePpt ? '/agent/tasks/' + activePpt.task_id : '#'"
+                         target="_blank" rel="noopener">在 Agent 中修改</a>
+                      <button type="button" class="ppt-card-btn"
+                              x-show="activePpt && activePpt.status === 'error'"
+                              @click="retryPpt()">重试</button>
+                    </div>
+                  </div>
+                </div>
                 <!-- 超长历史先折叠渲染，展开时再渲染全文（实时生成不折叠） -->
                 <div class="text-center mt-4" x-show="outputFolded && !streaming">
                   <button class="btn-ghost" @click="unfoldHistoryOutput()"
@@ -3149,6 +3172,14 @@
                               x-html="icon('eraser','w-[18px] h-[18px]')"></button>
                       <span class="text-[11px] text-faint ml-1"
                             x-text="inputMode === 'text' && input.length > 0 ? input.length + ' 字' : ''"></span>
+                      <button type="button" class="ppt-toggle" x-show="pptSupported" x-cloak
+                              :class="{ on: pptEnabled, muted: !isAuthenticated }"
+                              role="switch" :aria-checked="String(pptEnabled)"
+                              :disabled="!isAuthenticated"
+                              :title="isAuthenticated ? '执行成功后额外生成一份可编辑 PPTX；会额外消耗 1 次额度' : '生成 PPT 需要先输入使用码'"
+                              @click="togglePpt()">
+                        <span class="ppt-toggle-label">生成 PPT</span>
+                      </button>
                       <div class="ml-auto">
                         <button class="btn-primary" @click="run()" :disabled="parsingFile">
                           <span x-html="icon('send','w-4 h-4')"></span><span x-text="parsingFile ? '解析中…' : '执行'"></span>
@@ -3328,6 +3359,8 @@
                           title="这条记录的语言对"></span>
                     <span x-show="item.error" class="chip danger">生成失败</span>
                     <span x-show="item.partial && !item.error" class="chip neutral" x-text="(item.truncated || item.toolId === '13') ? '待补全' : '已停止'"></span>
+                    <span x-show="item.ppt" class="chip" :class="{ 'danger': item.ppt && item.ppt.status === 'error' }"
+                          :title="pptStatusText(item)" x-text="pptChip(item)"></span>
                     <!-- 多版本记录：这条有过重新生成，打开后底部可切换新旧结果 -->
                     <span x-show="item.verCount > 1" class="chip neutral"
                           :title="'这条记录保留了 ' + item.verCount + ' 版生成结果，可逐个对比'"
@@ -4274,6 +4307,41 @@
           <button class="btn-primary" @click="closeImportPreview(true)"
                   x-text="'确认导入（' + importPreviewTotal + ' 条变更）'"></button>
         </div>
+      </div>
+    </div>
+
+    <!-- 演示文稿预览：主站样式，自绘控件，不依赖 Agent 的 UI。 -->
+    <div class="modal-mask ppt-preview-mask" x-show="pptPreview.open" x-cloak
+         @click.self="closePptPreview()" @keydown.escape.window="closePptPreview()"
+         role="dialog" aria-modal="true" aria-label="演示文稿预览">
+      <div class="modal-card glass-deep ppt-preview-panel">
+        <div class="ppt-preview-head">
+          <div class="ppt-preview-title-wrap">
+            <span class="ppt-preview-kicker">演示文稿预览</span>
+            <strong x-text="pptPreview.title"></strong>
+          </div>
+          <div class="ppt-preview-actions">
+            <button type="button" class="ppt-preview-notes-toggle"
+                    :class="{ on: pptPreview.notes }" :aria-pressed="String(pptPreview.notes)"
+                    @click="togglePptPreviewNotes()">备注</button>
+            <button type="button" class="ppt-preview-download" @click="downloadPptPreview()">
+              <span x-html="icon('download','w-4 h-4')"></span><span>下载 PPTX</span>
+            </button>
+            <button type="button" class="icon-btn" @click="closePptPreview()"
+                    title="关闭预览" aria-label="关闭预览" x-html="icon('x','w-4 h-4')"></button>
+          </div>
+        </div>
+        <div class="ppt-preview-stage" x-ref="pptPreviewStage"></div>
+        <div class="ppt-preview-foot">
+          <button type="button" class="ppt-preview-arrow" @click="pptPreviewPrev()"
+                  :disabled="pptPreview.index <= 0" aria-label="上一页">‹</button>
+          <span class="ppt-preview-counter" x-text="pptPreviewCounter"></span>
+          <div class="ppt-preview-thumbs" x-ref="pptPreviewThumbs"></div>
+          <button type="button" class="ppt-preview-arrow" @click="pptPreviewNext()"
+                  :disabled="pptPreview.index >= (pptPreview.scene?.slides?.length || 1) - 1"
+                  aria-label="下一页">›</button>
+        </div>
+        <div class="ppt-preview-notes" x-show="pptPreview.notes" x-text="pptPreviewNotes"></div>
       </div>
     </div>
 

@@ -63,6 +63,7 @@ def init_db() -> None:
     with bootstrap_lock():
         Base.metadata.create_all(bind=engine)
         _add_missing_columns()
+        _backfill_workspace_slides()
         _ensure_indexes()
         _drop_legacy_usage_code_type()
         _link_visual_call_logs()
@@ -87,6 +88,17 @@ def _link_visual_call_logs() -> None:
             if parent:
                 conn.execute(text("UPDATE usage_logs SET parent_log_id=:parent, counts_for_free_limit=0 WHERE id=:id"),
                              {"parent": parent, "id": row.id})
+
+
+def _backfill_workspace_slides() -> None:
+    """Old workspace rows predate version kinds/origins; make them explicit.
+
+    ADD COLUMN lands NULL on SQLite. Readers already default to document/agent,
+    but writing the values once keeps admin queries and future migrations sane.
+    """
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE workspace_versions SET kind='document' WHERE kind IS NULL OR kind=''"))
+        conn.execute(text("UPDATE workspace_tasks SET origin='agent' WHERE origin IS NULL OR origin=''"))
 
 
 def _ensure_indexes() -> None:

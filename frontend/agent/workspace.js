@@ -12,6 +12,7 @@ import { createClawd } from "./mascot.mjs";
 import { enhanceSelects, refreshSelects } from "./select.mjs";
 import { markCurrent, playEnter, slidingPill } from "./motion.mjs";
 import { matches as vpMatches, onBreakpoint, toCss, viewportCss } from "./zoom.mjs";
+import { SlideViewer } from "./slides.mjs";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -63,6 +64,10 @@ const state = {
   version: null,
   pages: [],
   page: 0,
+  outputMode: "document",
+  slidesScene: null,
+  slidesViewer: null,
+  slidesVersionId: "",
   composing: false,
   conversation: null,
   menuClose: null,
@@ -963,6 +968,8 @@ for (const [id, key] of Object.entries(FIELDS)) {
     if (id === "prompt" || id === "behavior") autoGrow(el);
   });
 }
+$("#output-document").addEventListener("click", () => setOutputMode("document"));
+$("#output-slides").addEventListener("click", () => setOutputMode("slides"));
 $("#task-title").oninput = changed;
 $("#goal").addEventListener("input", () => {
   if (!state.task) return;
@@ -1581,6 +1588,10 @@ async function openTask(id, push = true, forcedTab = "") {
   state.selectedVersion = null;
   state.pages = [];
   state.page = 0;
+  state.slidesScene = null;
+  state.slidesViewer?.destroy();
+  state.slidesViewer = null;
+  state.slidesVersionId = "";
   clearTimeline();
   $("#conflict").hidden = true;
   saveState("已保存", "saved");
@@ -1647,6 +1658,37 @@ async function openTask(id, push = true, forcedTab = "") {
     saveTimer = setTimeout(() => save().catch(error), 800);
   document.title = `${task.title} - NeoBangX Agent`;
 }
+function renderOutputMode() {
+  const allowed = state.catalog?.slides_enabled !== false;
+  const documentBtn = $("#output-document");
+  const slidesBtn = $("#output-slides");
+  if (!documentBtn || !slidesBtn) return;
+  if (!allowed) {
+    state.outputMode = "document";
+    if (state.task) state.task.config.output = "document";
+  }
+  const mode = state.outputMode === "slides" && allowed ? "slides" : "document";
+  for (const [el, value] of [[documentBtn, "document"], [slidesBtn, "slides"]]) {
+    el.classList.toggle("on", mode === value);
+    el.setAttribute("aria-checked", String(mode === value));
+  }
+  slidesBtn.disabled = !allowed;
+  slidesBtn.setAttribute("aria-disabled", String(!allowed));
+  $("#output-hint").hidden = allowed;
+}
+
+function setOutputMode(mode) {
+  if (!state.task) return;
+  if (mode === "slides" && state.catalog?.slides_enabled === false) {
+    toast("演示文稿功能暂未开启");
+    return;
+  }
+  state.outputMode = mode;
+  state.task.config.output = mode;
+  renderOutputMode();
+  changed();
+}
+
 function fill() {
   const task = state.task;
   if (!task) return;
@@ -1658,6 +1700,7 @@ function fill() {
   for (const [id, key] of Object.entries(FIELDS)) {
     const el = $("#" + id);
     if (el.type === "checkbox") el.checked = Boolean(task.config[key]);
+    else if (key === "output") el.value = task.config.output || "document";
     else el.value = task.config[key] ?? "";
   }
   modelPicker?.setValue(task.config.model || "");
@@ -2660,14 +2703,19 @@ function renderVersions() {
     button.dataset.current = String(version.id === state.version?.id);
     button.innerHTML = `<span class="num">${index + 1}</span><span class="version-main"><strong></strong><small></small></span>${adopted ? '<span class="adopted">已采用</span>' : ""}`;
     button.querySelector("strong").textContent = version.title;
-    setParts(button.querySelector("small"), [version.complete ? "完整" : "待补全", fmtChars(version.chars)]);
+    if (version.kind === "slides") {
+      setParts(button.querySelector("small"), [version.complete ? "完整" : "待补全",
+        `PPT · ${version.slide_count || 0} 页`]);
+    } else {
+      setParts(button.querySelector("small"), [version.complete ? "完整" : "待补全", fmtChars(version.chars)]);
+    }
     button.onclick = () => selectVersion(version.id).catch(error);
     $("#versions-list").append(button);
   });
   $("#version-select").innerHTML = versions
     .map(
       (version, index) =>
-        `<option value="${version.id}">版本 ${index + 1}：${esc(version.title)}${version.id === state.task.adopted_version ? "（已采用）" : ""}</option>`,
+        `<option value="${version.id}">版本 ${index + 1}：${esc(version.title)}${version.kind === "slides" ? " · PPT" : ""}${version.id === state.task.adopted_version ? "（已采用）" : ""}</option>`,
     )
     .join("");
   if (state.version) $("#version-select").value = state.version.id;
@@ -2692,9 +2740,19 @@ async function selectVersion(id) {
   // 先给骨架：纯文本分页会在切换瞬间把 `#`、`|` 之类的原文闪给用户。
   state.pages = [];
   $("#result-actions").hidden = false;
+  $("#result-actions").classList.toggle("slides-mode", version.kind === "slides");
   $("#version-select").value = id;
   refreshSelects();
   renderVersions();
+  if (version.kind === "slides") {
+    state.pages = [];
+    await renderSlides(version, generation, id);
+    return;
+  }
+  state.slidesScene = null;
+  state.slidesVersionId = "";
+  $("#slides-actions").hidden = true;
+  $("#result-body").hidden = false;
   renderDocument();
   try {
     const pages = await work({ type: "pages", text: version.content });
@@ -2717,7 +2775,7 @@ function setDocumentHead(version) {
   $("#document-adopted").hidden = state.task.adopted_version !== version.id;
 }
 function renderDocument() {
-  if (!state.version) return;
+  if (!state.version || state.version.kind === "slides") return;
   if (!state.pages.length) {
     // 排版中：只画标题与骨架，不渲染未排版的原文。
     setDocumentHead(state.version);
@@ -2752,6 +2810,48 @@ function renderDocument() {
     !state.version.complete ||
     state.task.adopted_version === state.version.id;
 }
+async function renderSlides(version, generation, id) {
+  $("#slides-actions").hidden = false;
+  $("#result-body").hidden = true;
+  setDocumentHead(version);
+  $("#adopt").disabled = !version.complete || state.task.adopted_version === version.id;
+  setText($("#slides-page"), "加载中…");
+  setText($("#slides-stage"), "正在加载演示文稿…");
+  try {
+    if (!state.slidesScene || state.slidesVersionId !== id) {
+      const data = await api(path(`/versions/${id}/scene`));
+      if (generation !== state.generation || state.selectedVersion !== id) return;
+      state.slidesScene = data.scene;
+      state.slidesVersionId = id;
+    }
+    if (generation !== state.generation || state.selectedVersion !== id) return;
+    const theme = state.slidesScene.theme || "paper";
+    $$("[data-slide-theme]").forEach((btn) => {
+      const on = btn.dataset.slideTheme === theme;
+      btn.classList.toggle("on", on);
+      btn.setAttribute("aria-checked", String(on));
+    });
+    if (!state.slidesViewer) {
+      state.slidesViewer = new SlideViewer({
+        stage: $("#slides-stage"),
+        thumbs: $("#slides-thumbs"),
+        notes: $("#slides-notes"),
+        counter: $("#slides-page"),
+        prev: $("#slides-prev"),
+        next: $("#slides-next"),
+      });
+    }
+    state.slidesViewer.mount(state.slidesScene);
+    state.slidesViewer.setNotesOpen($("#slides-notes-toggle").getAttribute("aria-checked") === "true");
+    $("#slides-stage").focus({ preventScroll: true });
+  } catch (e) {
+    if (generation !== state.generation || state.selectedVersion !== id) return;
+    $("#slides-stage").textContent = "演示文稿加载失败：" + (e.message || e);
+    setText($("#slides-page"), "");
+    error(e);
+  }
+}
+
 function decorateDocument(root) {
   root.querySelectorAll("a").forEach((anchor) => {
     anchor.target = "_blank";
@@ -2836,6 +2936,53 @@ $("#copy-result").onclick = async () => {
     error(e);
   }
 };
+$("#export-pptx").onclick = async () => {
+  try {
+    const version = state.version;
+    if (!version || version.kind !== "slides") return;
+    const blob = await api(path(`/versions/${version.id}/export?format=pptx`), { blob: true });
+    saveBlob(blob, (version.title || "slides") + ".pptx",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+  } catch (e) {
+    error(e);
+  }
+};
+$("#slides-fullscreen").onclick = async () => {
+  const stage = $("#slides-stage");
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await stage.requestFullscreen();
+    stage.focus({ preventScroll: true });
+  } catch (e) {
+    error(e);
+  }
+};
+$("#slides-notes-toggle").onclick = () => {
+  const btn = $("#slides-notes-toggle");
+  const on = btn.getAttribute("aria-checked") !== "true";
+  btn.setAttribute("aria-checked", String(on));
+  btn.classList.toggle("on", on);
+  state.slidesViewer?.setNotesOpen(on);
+};
+async function switchSlidesTheme(theme) {
+  const version = state.version;
+  if (!version || version.kind !== "slides") return;
+  if (theme === ((state.slidesScene && state.slidesScene.theme) || "paper")) return;
+  try {
+    const created = await api(path(`/versions/${version.id}/theme`), {
+      method: "POST",
+      body: { theme },
+    });
+    upsert(state.task.versions, created);
+    await selectVersion(created.id);
+    toast("已生成换主题的新版本");
+  } catch (e) {
+    error(e);
+  }
+}
+$$("[data-slide-theme]").forEach((btn) => {
+  btn.onclick = () => switchSlidesTheme(btn.dataset.slideTheme);
+});
 $("#export-md").onclick = () =>
   saveBlob(state.version.content, state.version.title + ".md", "text/markdown;charset=utf-8");
 $("#export-docx").onclick = async () => {
@@ -3204,6 +3351,7 @@ async function boot() {
   }
   try {
     state.catalog = await api("/catalog");
+    renderOutputMode();
     if (state.catalog.enabled === false) {
       showAgentDisabled();
       return;

@@ -39,12 +39,12 @@ def catalog():
     return [{**item, "available": ready if item["id"] == "web_search" else item["available"]} for item in CATALOG]
 
 
-def tool_schemas(config):
+def tool_schemas(config, slides_enabled=True):
     enabled = config.get("tools", [])
     tools = [
         schema("read_material", "分段读取已提供的材料。返回字符位置与总长度，有更多内容时继续翻页，不把未读取部分当作缺失。",
                {"material_id": STRING, "offset": NUMBER, "limit": {"type": "integer", "minimum": 1, "maximum": 16000}}, ["material_id"]),
-        schema("read_document", "读取指定成果版本，用于核对或修改。版本列表在任务上下文中。",
+        schema("read_document", "读取指定文档成果版本，用于核对或修改。幻灯片请用 read_presentation。",
                {"version_id": STRING, "offset": NUMBER, "limit": {"type": "integer", "minimum": 1, "maximum": 16000}}, ["version_id"]),
         schema("create_document", "根据完整选中材料和本任务提示词生成新文档或整篇候选稿，返回版本编号。不能用于凭空补写缺失原文。整篇重写已有成果时传入 base_version；局部修改改用 revise_document。",
                {"title": STRING, "instruction": STRING, "material_ids": IDS, "base_version": STRING, "teaching_tool": STRING}, ["title", "instruction", "material_ids"]),
@@ -66,6 +66,24 @@ def tool_schemas(config):
                 "options": {"type": "array", "items": ASK_OPTION, "minItems": 2, "maxItems": 8},
                 "multi_select": {"type": "boolean"}}, ["question"]),
     ]
+    if slides_enabled:
+        tools += [
+            schema("create_presentation",
+                   "根据完整选中材料生成一份可编辑的 PPTX 教学演示文稿。只填教学内容，不写坐标/颜色/HTML；"
+                   "中文讲解 + 英语语料 + 中文备注。页数由 blueprint 决定，不需要逐页指定。",
+                   {"title": STRING, "instruction": STRING, "material_ids": IDS,
+                    "blueprint": {"type": "string", "enum": ["reading", "continuation", "writing", "grammar",
+                                                              "vocabulary", "exam_review", "writing_feedback",
+                                                              "generic_lesson"]},
+                    "theme": {"type": "string", "enum": ["paper", "chalk"]}},
+                   ["title", "instruction", "blueprint"]),
+            schema("revise_presentation",
+                   "按修改要求重做一份演示文稿，旧版本保留。只接受 kind=slides 的版本；不要用 revise_document 改 PPT。",
+                   {"version_id": STRING, "instruction": STRING, "title": STRING},
+                   ["version_id", "instruction"]),
+            schema("read_presentation", "读取演示文稿的逐页大纲、字段和中文备注，用于核对或修订。",
+                   {"version_id": STRING}, ["version_id"]),
+        ]
     if "material_search" in enabled or "regex" in enabled:
         tools.append(schema("search_material", "查找本任务材料，返回匹配位置和上下文。无匹配如实返回，使用 offset 翻页。正则模式需要启用正则工具。",
                             {"query": STRING, "regex": {"type": "boolean"}, "offset": NUMBER, "material_id": STRING}, ["query"]))
@@ -142,7 +160,9 @@ def document(task_id, version_id):
         row = db.get(Version, version_id)
         if not row or row.task_id != task_id:
             raise ValueError("成果版本不存在")
-        return {"id": row.id, "title": row.title, "content": row.content, "complete": row.complete,
+        return {"id": row.id, "title": row.title, "content": row.content,
+                "kind": getattr(row, "kind", "document") or "document",
+                "complete": row.complete,
                 "parent_id": row.parent_id, "origin": row.origin, "provenance": json.loads(row.provenance or "{}")}
 
 
@@ -180,7 +200,20 @@ async def execute_readonly(task_id, config, name, args):
         return {"material_id": rows[0]["id"], "name": rows[0]["name"], **read_slice(rows[0]["content"], args.get("offset", 0), args.get("limit", 8000))}
     if name == "read_document":
         row = await asyncio.to_thread(document, task_id, args["version_id"])
+        if row.get("kind") == "slides":
+            raise ValueError("这是演示文稿，请用 read_presentation 读取大纲")
         return {"version_id": row["id"], **read_slice(row["content"], args.get("offset", 0), args.get("limit", 8000))}
+    if name == "read_presentation":
+        row = await asyncio.to_thread(document, task_id, args["version_id"])
+        if row.get("kind") != "slides":
+            raise ValueError("这不是演示文稿，请用 read_document")
+        from .slides.writer import outline
+        deck = json.loads(row["content"])
+        return {"version_id": row["id"], "title": row["title"], "kind": "slides",
+                "theme": deck.get("design", {}).get("theme") or deck.get("theme"),
+                "blueprint": deck.get("blueprint"),
+                "slides": int(row["provenance"].get("slide_count") or len(deck.get("slides", []))),
+                "outline": outline(deck), "warnings": row["provenance"].get("warnings", [])}
     if name == "search_material":
         if args.get("regex") and "regex" not in config.get("tools", []):
             raise ValueError("正则工具未启用")

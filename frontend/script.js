@@ -890,6 +890,9 @@ function historyIndexOf(item) {
     verCount: historyVerCountOf(item),
     // 翻译记录的语言对标签（如「英→中」）：列表只读索引项，正文不在手上，
     // 所以写作记录时就把这枚标量存进索引（与 inputHead 同一套办法）
+    // PPT job state is small enough for the index; without it the history card
+    // and polling cannot resume after refresh before the body is hydrated.
+    ppt: item.ppt || null,
     trPair: item.translate
       ? trPairShort(item.translate.source, item.translate.target)
       : (item.trPair || ""),
@@ -2262,6 +2265,13 @@ function nbx() {
     toolsLoaded: false,
     toolsError: "",
     currentTool: null,
+    // Tool-page PPT switch: only affects the next successful generic run.
+    pptEnabled: false,
+    _pptRequested: false,
+    _pptTimers: new Map(),
+    pptPreview: { open: false, taskId: "", title: "", scene: null, index: 0, notes: false, item: null },
+    _pptSlideToSvg: null,
+    _pptSlideToSvgPromise: null,
 
     /* --- 描述需求找工具（Jev choice） ---
        两个输入框（首页大搜索框 + 侧栏顶部窄版）共用这一份状态：
@@ -4639,6 +4649,7 @@ function nbx() {
 
       // 本地数据（历史为索引 + 分条正文，旧格式在此一次性拆分）
       this.history = this._loadHistory();
+      this._resumePptJobs();
       // 先建元数据索引（标题 / 摘要 / 工具名），正文由空闲分片在后台补齐；
       // 用户在补齐前就能搜到内容，补齐过程中结果会自动刷新。
       this._historySearchInit();
@@ -5366,6 +5377,8 @@ function nbx() {
         this.submittedInput = "";
         this.submittedFileName = "";
         this.submittedExpanded = false;
+        this.pptEnabled = false;
+        this._pptRequested = false;
         this.resetMigration();
         this.resetVocab();
         this.resetVisualPaper();
@@ -9173,6 +9186,9 @@ function nbx() {
       this.input = "";
       this.attachedFile = null;
       this.inputMode = "text";
+      // Snapshot the switch now: changing it mid-stream must not affect this run.
+      this._pptRequested = !!(this.pptEnabled && this.currentTool?.ppt_supported
+        && this.isAuthenticated);
 
       return this._runStream({
         inputText: text,
@@ -10165,6 +10181,240 @@ function nbx() {
        opts.continueFrom 非空 = 本轮是续写，还要处理「其实没有新增内容」的情形；
        opts.newVersion 为真 = 本轮是整篇重来，结果作为新版本追加，旧版本留在切换器里；
        opts.modelUsed = 本轮请求发起时的模型快照，记录「这一版由谁生成」只能用它。 */
+    /* ============ 工具页 PPT 任务 ============ */
+    get pptSupported() {
+      return !!(this.currentTool && this.currentTool.ppt_supported);
+    },
+    togglePpt() {
+      if (!this.isAuthenticated) {
+        this.toast("生成 PPT 需要先输入使用码", "warn");
+        return;
+      }
+      this.pptEnabled = !this.pptEnabled;
+    },
+    get activeHistoryItem() {
+      return this.history.find((item) => item.id === this.activeHistoryId) || this.history[0] || null;
+    },
+    get activePpt() {
+      return this.activeHistoryItem?.ppt || null;
+    },
+    get pptPreviewCounter() {
+      const n = this.pptPreview.scene?.slides?.length || 0;
+      return n ? `${this.pptPreview.index + 1} / ${n}` : "";
+    },
+    get pptPreviewNotes() {
+      const slides = this.pptPreview.scene?.slides || [];
+      return slides[this.pptPreview.index]?.notes || "本页没有备注。";
+    },
+    async openPptPreview(item = null) {
+      const target = item || this.activeHistoryItem;
+      const p = target?.ppt;
+      if (!p?.task_id) return;
+      this.pptPreview = { open: true, taskId: p.task_id, title: target.title || "课堂演示文稿",
+        scene: null, index: 0, notes: false, item: target };
+      document.body.classList.add("ppt-preview-open");
+      try {
+        const res = await fetch(`/api/presentations/${p.task_id}/scene`, { headers: this.authHeaders() });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw Error(typeof data.detail === "string" ? data.detail : "预览加载失败");
+        if (!this._pptSlideToSvg) {
+          if (!this._pptSlideToSvgPromise) {
+            this._pptSlideToSvgPromise = import("/static/agent/slides.mjs").then((m) => m.slideToSvg);
+          }
+          this._pptSlideToSvg = await this._pptSlideToSvgPromise;
+        }
+        this.pptPreview.scene = data.scene;
+        this.pptPreview.title = data.title || this.pptPreview.title;
+        this.$nextTick(() => this.renderPptPreview());
+      } catch (e) {
+        this.closePptPreview();
+        this.toast(e.message || "预览加载失败", "error");
+      }
+    },
+    renderPptPreview() {
+      const scene = this.pptPreview.scene;
+      const stage = this.$refs.pptPreviewStage;
+      const thumbs = this.$refs.pptPreviewThumbs;
+      if (!scene || !stage || !thumbs || !this._pptSlideToSvg) return;
+      const slides = scene.slides || [];
+      const i = Math.min(this.pptPreview.index, Math.max(0, slides.length - 1));
+      this.pptPreview.index = i;
+      stage.replaceChildren(this._pptSlideToSvg(slides[i]));
+      thumbs.replaceChildren();
+      slides.forEach((slide, n) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "ppt-preview-thumb" + (n === i ? " on" : "");
+        btn.setAttribute("aria-label", `第 ${n + 1} 页`);
+        btn.appendChild(this._pptSlideToSvg(slide, { className: "ppt-preview-thumb-svg" }));
+        btn.addEventListener("click", () => this.pptPreviewGo(n));
+        thumbs.appendChild(btn);
+      });
+    },
+    pptPreviewGo(index) {
+      const n = this.pptPreview.scene?.slides?.length || 0;
+      if (!n) return;
+      this.pptPreview.index = Math.max(0, Math.min(n - 1, index));
+      this.renderPptPreview();
+    },
+    pptPreviewPrev() { this.pptPreviewGo(this.pptPreview.index - 1); },
+    pptPreviewNext() { this.pptPreviewGo(this.pptPreview.index + 1); },
+    togglePptPreviewNotes() { this.pptPreview.notes = !this.pptPreview.notes; },
+    closePptPreview() {
+      this.pptPreview.open = false;
+      this.pptPreview.scene = null;
+      this.pptPreview.item = null;
+      document.body.classList.remove("ppt-preview-open");
+      this.$refs.pptPreviewStage?.replaceChildren();
+      this.$refs.pptPreviewThumbs?.replaceChildren();
+    },
+    downloadPptPreview() {
+      if (this.pptPreview.item) this.downloadPpt(this.pptPreview.item);
+    },
+    _pptHash(text) {
+      let h = 2166136261;
+      for (let i = 0; i < text.length; i += 1) {
+        h ^= text.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0).toString(36);
+    },
+    pptChip(item) {
+      const p = item?.ppt;
+      if (!p) return "";
+      if (p.status === "done") return `PPT · ${p.slides || 0} 页`;
+      if (p.status === "error") return "PPT 失败";
+      return "PPT 生成中";
+    },
+    pptStatusText(item) {
+      const p = item?.ppt;
+      if (!p) return "";
+      if (p.status === "done") return `已生成 ${p.slides || 0} 页可编辑演示文稿`;
+      if (p.status === "error") return p.error || "PPT 生成失败";
+      if (p.status === "queued") return "已排队，等待生成…";
+      return "正在生成演示文稿…";
+    },
+    async startPpt(item) {
+      if (!item || !String(item.output || "").trim() || !this.isAuthenticated) return;
+      const output = String(item.output).trim();
+      const outputHash = this._pptHash(output);
+      if (item.ppt && ["queued", "running"].includes(item.ppt.status)) return;
+      if (item.ppt?.status === "done" && item.ppt.output_hash === outputHash) return;
+      const body = {
+        request_key: `ppt_${item.id}_${outputHash}`.slice(0, 80),
+        tool_id: item.toolId,
+        tool_name: item.toolName || "",
+        history_id: item.id,
+        title: item.title || item.inputHead || "",
+        input: String(item.input || ""),
+        output,
+        model: item.model || this.selectedModel || "",
+      };
+      item.ppt = { status: "queued", output_hash: outputHash };
+      this._persistHistoryItem(item);
+      this._touchHistory();
+      try {
+        const res = await fetch("/api/presentations/from-tool", {
+          method: "POST",
+          headers: { ...this.authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw Error(typeof data.detail === "string" ? data.detail : "PPT 生成请求失败");
+        item.ppt = { status: data.status || "queued", task_id: data.task_id, run_id: data.run_id,
+          blueprint: data.blueprint, slides: 0, theme: data.theme || "paper",
+          output_hash: outputHash };
+        this._persistHistoryItem(item);
+        this._touchHistory();
+        this.pollPpt(item);
+      } catch (e) {
+        item.ppt = { status: "error", error: e.message || String(e) };
+        this._persistHistoryItem(item);
+        this._touchHistory();
+        this.toast(e.message || "PPT 生成失败", "error");
+      }
+    },
+    pollPpt(item) {
+      const taskId = item?.ppt?.task_id;
+      if (!taskId || !this.isAuthenticated) return;
+      clearTimeout(this._pptTimers.get(item.id));
+      const tick = async () => {
+        try {
+          const res = await fetch(`/api/presentations/${taskId}`, { headers: this.authHeaders() });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw Error(typeof data.detail === "string" ? data.detail : "无法读取 PPT 状态");
+          const p = item.ppt || {};
+          p.task_id = taskId;
+          p.status = data.status === "completed" ? "done"
+            : ["failed", "incomplete", "stopped"].includes(data.status) ? "error"
+            : data.status;
+          if (data.version) {
+            p.status = "done";
+            p.version_id = data.version.id;
+            p.slides = data.version.slides || 0;
+            p.theme = data.version.theme || p.theme;
+            p.warnings = data.version.warnings || [];
+          }
+          if (data.error) p.error = data.error;
+          item.ppt = p;
+          this._persistHistoryItem(item);
+          this._touchHistory();
+          if (["queued", "running", "stopping"].includes(p.status)) {
+            this._pptTimers.set(item.id, setTimeout(tick, 2500));
+          } else if (p.status === "error") {
+            this.toast(p.error || "PPT 生成失败", "error");
+          }
+        } catch (e) {
+          const p = item.ppt || {};
+          p.error = e.message || String(e);
+          item.ppt = p;
+          this._persistHistoryItem(item);
+          this._touchHistory();
+          this._pptTimers.set(item.id, setTimeout(tick, 5000));
+        }
+      };
+      tick();
+    },
+    _touchHistory() {
+      // Alpine does not always observe a newly added nested field; a shallow
+      // copy keeps the history chips and the result card in sync.
+      this.history = this.history.slice();
+    },
+    _resumePptJobs() {
+      for (const item of this.history) {
+        if (item.ppt?.task_id && ["queued", "running"].includes(item.ppt.status)) this.pollPpt(item);
+      }
+    },
+    async downloadPpt(item = null) {
+      const p = (item || this.activeHistoryItem)?.ppt;
+      if (!p?.task_id) return;
+      try {
+        const res = await fetch(`/api/presentations/${p.task_id}/export`, { headers: this.authHeaders() });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw Error(typeof data.detail === "string" ? data.detail : "下载失败");
+        }
+        const blob = await res.blob();
+        saveBlob(blob, ((item || this.activeHistoryItem)?.title || "课堂演示文稿") + ".pptx",
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+      } catch (e) {
+        this.toast(e.message || "下载失败", "error");
+      }
+    },
+    async retryPpt(item = null) {
+      const target = item || this.activeHistoryItem;
+      if (!target) return;
+      const taskId = target.ppt?.task_id;
+      if (taskId) {
+        try {
+          await fetch(`/api/presentations/${taskId}`, { method: "DELETE", headers: this.authHeaders() });
+        } catch {}
+      }
+      target.ppt = null;
+      this._persistHistoryItem(target);
+      await this.startPpt(target);
+    },
+
     finalize(state, errMsg, seq, opts = {}) {
       // 代次不符 = 这次流已被切换工具/新建题目作废，收尾交给新流程
       if (seq !== undefined && seq !== this._runSeq) return;
@@ -10304,6 +10554,14 @@ function nbx() {
         }
         if (state === "stopped") this.toast("已停止生成", "warn");
       }
+      // Tool-page PPT switch: only after a complete generic result. Never on
+      // error/stopped/truncated, and never for a continuation of an old item.
+      const pptItem = this.activeHistoryId ? this.history.find((item) => item.id === this.activeHistoryId) : null;
+      if (this._pptRequested && state === "done" && pptItem && !this.outputTruncated
+          && String(this.output || "").trim()) {
+        this.startPpt(pptItem);
+      }
+      this._pptRequested = false;
       // 旧结果快照用完即弃：它只在「新版本整篇重来且零产出」这一刻有意义
       this._regenPrevOutput = "";
     },

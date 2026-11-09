@@ -11,7 +11,8 @@ from app.models import UsageCode, UsageLog, utcnow
 from app.services.free_access import AGENT_TOOL_ID
 from .models import (WorkspaceTask as Task, WorkspaceRun as Run, WorkspaceEntry as Entry,
                      WorkspaceChunk as Chunk, WorkspaceEvent as Event, WorkspaceMaterial as Material,
-                     WorkspaceVersion as Version, WorkspaceNote as Note)
+                     WorkspaceVersion as Version, WorkspaceNote as Note,
+                     WorkspaceRendition)
 
 ACTIVE = {"queued", "running", "stopping"}
 
@@ -42,6 +43,9 @@ def event(db, task_id, kind, data):
 def task_dict(row, full=False):
     value = {"id": row.id, "title": row.title, "revision": row.revision, "status": row.status,
              "active_run": row.active_run, "adopted_version": row.adopted_version,
+             "origin": getattr(row, "origin", "agent") or "agent",
+             "source_tool": getattr(row, "source_tool", "") or "",
+             "source_ref": getattr(row, "source_ref", "") or "",
              "created_at": row.created_at.isoformat(), "updated_at": row.updated_at.isoformat()}
     if full:
         value["config"] = decode(row.config)
@@ -54,12 +58,15 @@ def entry_dict(row):
 
 
 def version_dict(row, full=False):
+    provenance = decode(row.provenance or "{}")
+    kind = getattr(row, "kind", "document") or "document"
     value = {"id": row.id, "run_id": row.run_id, "parent_id": row.parent_id, "title": row.title,
-             "origin": row.origin, "complete": row.complete, "chars": len(row.content),
+             "origin": row.origin, "kind": kind, "complete": row.complete, "chars": len(row.content),
+             "slide_count": int(provenance.get("slide_count") or 0) if kind == "slides" else 0,
              "created_at": row.created_at.isoformat()}
     if full:
         value["content"] = row.content
-        value["provenance"] = decode(row.provenance or "{}")
+        value["provenance"] = provenance
     return value
 
 
@@ -72,7 +79,8 @@ def material_dict(row, full=False):
 
 def run_dict(row, full=False, with_instruction=False):
     value = {"id": row.id, "status": row.status, "mode": row.mode, "step": row.step,
-             "tokens": row.tokens, "error": row.error, "created_at": row.created_at.isoformat(),
+             "tokens": row.tokens, "charged": bool(row.charged),
+             "error": row.error, "created_at": row.created_at.isoformat(),
              "finished_at": row.finished_at.isoformat() if row.finished_at else None}
     if full:
         value["snapshot"] = decode(row.snapshot)
@@ -112,8 +120,11 @@ def task_detail(owner, task_id):
             func.length(Material.content).label("chars"), Material.original.is_not(None).label("has_original"))
             .where(Material.task_id == task_id)).mappings()]
         value["versions"] = [{**dict(v), "created_at": v["created_at"].isoformat()} for v in db.execute(select(
-            Version.id, Version.run_id, Version.parent_id, Version.title, Version.origin, Version.complete,
-            func.length(Version.content).label("chars"), Version.created_at)
+            Version.id, Version.run_id, Version.parent_id, Version.title, Version.origin,
+            Version.kind, Version.complete,
+            func.length(Version.content).label("chars"),
+            func.json_extract(Version.provenance, "$.slide_count").label("slide_count"),
+            Version.created_at)
             .where(Version.task_id == task_id).order_by(Version.created_at)).mappings()]
         # 快照整份是配置与官方提示词全文：只用 json_extract 取需要的两个字段，
         # 避免每个轮次再懒加载一次 snapshot（长任务上线性变慢）。
@@ -366,7 +377,7 @@ def review_data(task_id, entry_id):
             "ignored": set(details.get("ignored", []))}
 
 
-def save_version(task_id, run_id, key, title, content, parent_id="", origin="agent", complete=True, provenance=None):
+def save_version(task_id, run_id, key, title, content, parent_id="", origin="agent", complete=True, provenance=None, kind="document"):
     with SessionLocal() as db:
         # 幂等工具写入；重复执行不产生多个相同版本。
         db.execute(update(Task).where(Task.id == task_id).values(updated_at=Task.updated_at))
@@ -380,7 +391,8 @@ def save_version(task_id, run_id, key, title, content, parent_id="", origin="age
             if provenance is None:
                 provenance = decode(parent.provenance or "{}")
         row = Version(id=uid(), task_id=task_id, run_id=run_id, key=key, title=title[:200],
-                      content=content, parent_id=parent_id, origin=origin, complete=complete, provenance=encode(provenance or {}))
+                      content=content, parent_id=parent_id, origin=origin, kind=kind, complete=complete,
+                      provenance=encode(provenance or {}))
         db.add(row)
         db.flush()
         task = db.get(Task, task_id)
@@ -390,6 +402,90 @@ def save_version(task_id, run_id, key, title, content, parent_id="", origin="age
         event(db, task_id, "version", version_dict(row))
         db.commit()
         return version_dict(row)
+
+
+def add_text_material(task_id, name, text):
+    with SessionLocal() as db:
+        row = Material(id=uid(), task_id=task_id, name=name[:250], content=text)
+        db.add(row)
+        db.flush()
+        event(db, task_id, "material", material_dict(row))
+        db.commit()
+        return row.id
+
+
+def save_slides_version(task_id, run_id, key, title, deck, scene, parent_id="", origin="agent",
+                        complete=True, provenance=None):
+    """Atomically save a slides version and its compiled scene.
+
+    A deck is only saved after compile/check pass; the rendition keeps old
+    versions stable even if layouts change later.
+    """
+    with SessionLocal() as db:
+        db.execute(update(Task).where(Task.id == task_id).values(updated_at=Task.updated_at))
+        old = db.scalar(select(Version).where(Version.task_id == task_id, Version.key == key))
+        if old:
+            return version_dict(old)
+        if parent_id:
+            parent = db.get(Version, parent_id)
+            if not parent or parent.task_id != task_id:
+                raise ValueError("基准版本不属于此任务")
+        data = dict(provenance or {})
+        data.setdefault("slide_count", len(scene.get("slides") or []))
+        data.setdefault("blueprint", deck.get("blueprint", ""))
+        data.setdefault("theme", deck.get("theme", ""))
+        data.setdefault("design_version", (deck.get("design") or {}).get("design_version", ""))
+        row = Version(id=uid(), task_id=task_id, run_id=run_id, key=key, title=title[:200],
+                      content=encode(deck), parent_id=parent_id, origin=origin, kind="slides",
+                      complete=complete, provenance=encode(data))
+        db.add(row)
+        db.flush()
+        db.add(WorkspaceRendition(version_id=row.id, scene=encode(scene),
+                                  design_version=data.get("design_version", "")))
+        task = db.get(Task, task_id)
+        if not task.adopted_version and complete:
+            task.adopted_version = row.id
+        task.updated_at = utcnow()
+        event(db, task_id, "version", version_dict(row))
+        db.commit()
+        return version_dict(row)
+
+
+def rendition(version_id, full=False):
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRendition, version_id)
+        if not row:
+            return None
+        value = {"version_id": row.version_id, "design_version": row.design_version,
+                 "has_pptx": bool(row.pptx)}
+        if full:
+            value["scene"] = decode(row.scene) if row.scene else None
+            value["pptx"] = row.pptx
+        return value
+
+
+def save_rendition(version_id, scene, design_version=""):
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRendition, version_id)
+        if row is None:
+            row = WorkspaceRendition(version_id=version_id, scene=encode(scene),
+                                     design_version=design_version)
+            db.add(row)
+        else:
+            row.scene = encode(scene)
+            if design_version:
+                row.design_version = design_version
+        db.commit()
+
+
+def save_pptx(version_id, data: bytes):
+    with SessionLocal() as db:
+        row = db.get(WorkspaceRendition, version_id)
+        if not row:
+            return False
+        row.pptx = data
+        db.commit()
+        return True
 
 
 def checkpoint(run_id, messages, step, tokens, snapshot=None):

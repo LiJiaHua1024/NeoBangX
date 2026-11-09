@@ -17,6 +17,7 @@ dependencies = [
     "brotli>=1.2.0",
     "jsonschema>=4.23.0",
     "regex>=2024.11.6",
+    "python-pptx>=1.0.2",
 ]
 
 [tool.uv]

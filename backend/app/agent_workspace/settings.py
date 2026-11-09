@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 class WorkspaceSettings(BaseModel):
     enabled: bool = True
+    # Presentation delivery is dark-launched: creation is hidden until the
+    # admin enables it; existing slides versions remain readable.
+    slides_enabled: bool = False
     max_steps: int = Field(24, ge=2, le=100)
     # 预算给管理员自己定：不同模型的思考量差别很大，不设上下限
     max_tokens: int = Field(2000000)

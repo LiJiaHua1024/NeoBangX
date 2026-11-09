@@ -1165,3 +1165,41 @@
 :where(html[data-vp~="w767"]) .action-link {
   display: none;
 }
+
+/* 成果形式：自绘二选一，不用原生 select / radio。 */
+.output-choice {
+  display: grid; grid-template-columns: 1fr 1fr; gap: .55rem;
+}
+.output-choice-btn {
+  min-width: 0; text-align: left; cursor: pointer;
+  border: 1px solid var(--border-3); border-radius: 10px;
+  background: var(--canvas); color: var(--ink-2);
+  padding: .65rem .72rem;
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.output-choice-btn:hover { border-color: var(--border-2); background: var(--hover); }
+.output-choice-btn.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--canvas));
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.output-choice-btn:focus-visible {
+  outline: 2px solid var(--focus-ring); outline-offset: 2px;
+}
+.output-choice-btn:disabled { cursor: not-allowed; opacity: .45; }
+.output-choice-title {
+  display: flex; align-items: center; gap: .35rem;
+  font-size: .84rem; font-weight: 650; color: var(--ink);
+}
+.output-choice-title em {
+  font-style: normal; font-size: .62rem; font-weight: 700;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 4px; padding: 0 .25rem; line-height: 1.45;
+}
+.output-choice-sub {
+  display: block; margin-top: .22rem;
+  color: var(--ink-3); font-size: .72rem; line-height: 1.45;
+}
+@media (max-width: 520px) {
+  .output-choice { grid-template-columns: 1fr; }
+}

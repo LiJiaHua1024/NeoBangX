@@ -1,0 +1,233 @@
+{
+  "format": "nbx-deck",
+  "version": 2,
+  "title": "The Kiosk on the Corner",
+  "subtitle": "A small shelf, a quiet street, and the moment a place becomes a meeting place.",
+  "theme": "paper",
+  "motif": "shelf",
+  "meta": {
+    "subject": "English",
+    "grade": "Grade 10",
+    "lesson": "阅读",
+    "duration": "45 min"
+  },
+  "slides": [
+    {
+      "layout": "cover",
+      "kicker": "高中英语 · 阅读课 · 高一",
+      "title": "The Kiosk\non the Corner",
+      "subtitle": "一个小书架，如何让街角变成社区？",
+      "question": "一个小改变，如何改变一个地方？",
+      "meta": "45 分钟 · B1–B2 · 阅读"
+    },
+    {
+      "layout": "objectives",
+      "kicker": "学习目标 · LEARNING OBJECTIVES",
+      "title": "学完这节课，你能……",
+      "lead": "三个层级：理解 → 应用 → 迁移",
+      "items": [
+        {
+          "level": "理解 UNDERSTAND",
+          "objective": "找出文章的 before–after 结构，标出转折点。",
+          "criterion": "我能标出转折，并说明变化。"
+        },
+        {
+          "level": "应用 APPLY",
+          "objective": "用文中的证据解释：一个小动作如何改变了报刊亭的角色。",
+          "criterion": "我能引用两处细节，并把它们连起来。"
+        },
+        {
+          "level": "迁移 TRANSFER",
+          "objective": "为身边一个熟悉的地方，提出一个小改变，并说明可能的影响。",
+          "criterion": "我能说清改变和影响。"
+        }
+      ],
+      "target": "用文中的两处细节，解释一个小改变如何改变一个地方。"
+    },
+    {
+      "layout": "pre_reading",
+      "kicker": "读前活动 · BEFORE READING",
+      "title": "什么样的地方，会让人觉得“这里属于所有人”？",
+      "lead": "看标题，和同伴聊 60 秒。",
+      "provocation": "A kiosk.\nA shelf.\nA note: take one, pass it on.",
+      "prompts": [
+        "你猜这个报刊亭卖什么？",
+        "想一想你每天路过的一个地方：什么会让你停下来？",
+        "预测：一个小改变，可能怎样改变一条街？"
+      ],
+      "note": "两人对话 · 60 秒",
+      "frames": "I think it might…   ·   A place like this could…",
+      "focus": "听学生说：地方 · 小改变 · 对人的影响"
+    },
+    {
+      "layout": "text_structure",
+      "kicker": "文章结构 · HOW THE TEXT WORKS",
+      "title": "一个小转折，改变了整条街",
+      "stages": [
+        {
+          "label": "之前 BEFORE",
+          "title": "人们路过的报刊亭",
+          "quote": "Most people walked past it without looking up.",
+          "ref": "¶1",
+          "signal": "At first"
+        },
+        {
+          "label": "转折 TURN",
+          "title": "一个书架和一张纸条",
+          "quote": "Take one. Bring it back when you’re done—or pass it on.",
+          "ref": "¶1",
+          "signal": "Then"
+        },
+        {
+          "label": "之后 AFTER",
+          "title": "人们停留的地方",
+          "quote": "Within a month, … the kiosk had become a meeting place.",
+          "ref": "¶2",
+          "signal": "Within a month"
+        }
+      ],
+      "takeaway": "一个小动作，改变了这个地方的意义。"
+    },
+    {
+      "layout": "passage",
+      "staged": true,
+      "kicker": "细读 · CLOSE READING",
+      "title": "读出那个转折",
+      "source": "THE KIOSK ON THE CORNER",
+      "passage": "At first, the old kiosk on the corner sold nothing but newspapers and lottery tickets. Most people walked past it without looking up. Then, one rainy Monday, the owner, Mr. Alvarez, put a wooden shelf outside the door. It held twenty books, each with a handwritten note: “Take one. Bring it back when you’re done—or pass it on.”\n\nAt first, only a few children stopped. They picked up picture books, then chapter books, then books about volcanoes and football. Within a month, the shelf had grown into three shelves, and the kiosk had become a meeting place. Parents chatted while their children chose books; teenagers did homework at a small table Mr. Alvarez added beside the door.\n\nThe kiosk still sells newspapers. But now, when people say they are “just passing by,” they usually mean they are stopping for a while.",
+      "highlight": "Within a month, the shelf had grown into three shelves, and the kiosk had become a meeting place.",
+      "first_read": [
+        "开头，报刊亭卖什么？",
+        "哪一句标志着转折？",
+        "“just passing by”是什么意思？"
+      ],
+      "annotations": [
+        {
+          "label": "01 · 之前 BEFORE",
+          "text": "“Most people walked past it without looking up.” 报刊亭是“看不见的”：人们经过，却不会为它停下。"
+        },
+        {
+          "label": "02 · 转折 TURN",
+          "text": "一个书架和一张手写纸条，把一次交易变成了一个邀请。"
+        },
+        {
+          "label": "03 · 证据 EVIDENCE",
+          "text": "“Within a month” 说明变化之快；一连串人物说明它成了新的场所。"
+        },
+        {
+          "label": "04 · 结尾 ENDING",
+          "text": "“Just passing by” 现在意味着“停下来”；这个短语被重新定义了。"
+        }
+      ],
+      "takeaway": "事件很小；改变的是这个地方的意义。"
+    },
+    {
+      "layout": "language",
+      "kicker": "语言积累 · LANGUAGE THAT TRAVELS",
+      "title": "四个可以带走的词块",
+      "items": [
+        {
+          "chunk": "walk past without looking up",
+          "meaning": "路过却不抬头看",
+          "example": "Every day, we walk past the same faces without looking up."
+        },
+        {
+          "chunk": "pass it on",
+          "meaning": "用完后把它传给下一个人",
+          "example": "Read the book, then pass it on to a friend."
+        },
+        {
+          "chunk": "within a month",
+          "meaning": "一个月之内",
+          "example": "Within a month, the empty room had become a studio."
+        },
+        {
+          "chunk": "just passing by",
+          "meaning": "只是路过，本来没打算停留",
+          "example": "I was just passing by, but I stayed for an hour."
+        }
+      ],
+      "task": "小任务：从四个词块中选一个填空。 “I only went in to say hello — I was ______ — but I stayed for an hour.”"
+    },
+    {
+      "layout": "questions",
+      "staged": true,
+      "kicker": "问题链 · QUESTION CHAIN",
+      "title": "三个问题，沿着思维阶梯往上走",
+      "items": [
+        {
+          "level": "Q1 · 字面",
+          "question": "What did Mr. Alvarez put outside the kiosk, and what did the note say?",
+          "support": "在 ¶1 找句子。",
+          "answer": "一个木书架，二十本书。纸条上写着：“Take one. Bring it back when you’re done—or pass it on.”"
+        },
+        {
+          "level": "Q2 · 推断",
+          "question": "Why did the kiosk become a meeting place?",
+          "support": "把书架、纸条和人连起来。",
+          "answer": "书架给了人们停下来的理由；家长聊天，青少年在那里写作业。"
+        },
+        {
+          "level": "Q3 · 评价",
+          "question": "What does the writer suggest by redefining “just passing by”?",
+          "support": "看最后一句：什么变了？",
+          "answer": "“Passing by” 不再等于“不停留”；这个地方改变了这个短语的意思。"
+        }
+      ]
+    },
+    {
+      "layout": "task",
+      "kicker": "读后任务 · AFTER READING",
+      "title": "把想法变成你的",
+      "brief": [
+        {
+          "label": "你的角色",
+          "text": "校刊记者。"
+        },
+        {
+          "label": "你的产出",
+          "text": "为学校图书馆的“社区书架”做 60 秒提案。"
+        },
+        {
+          "label": "你的听众",
+          "text": "学校议事会。"
+        },
+        {
+          "label": "时间",
+          "text": "12 分钟准备 · 60 秒陈述 · 四人一组。"
+        }
+      ],
+      "support": [
+        "What if we…",
+        "Within a month, …",
+        "It turned into…"
+      ],
+      "criteria": [
+        "说出地方和小改变。",
+        "用今天的一个词块。",
+        "结尾落到对人的影响。"
+      ],
+      "model": "What if we put a shelf outside the library? Within a month, students would…",
+      "outline": "提案提纲：1 钩子 · 2 小改变 · 3 影响"
+    },
+    {
+      "layout": "summary",
+      "kicker": "出口票 · EXIT TICKET",
+      "title": "一句话，一个问题",
+      "takeaways": [
+        "一个小转折能改变一个地方的角色。",
+        "路标词让变化可见。",
+        "结尾重新定义了一个熟悉的短语。"
+      ],
+      "prompts": [
+        "用“just passing by”写一句话。",
+        "你会为学校做哪一个“小改变”？"
+      ],
+      "model": "I was just passing by, but I stayed for an hour.",
+      "selfcheck": "一句话 · 一个词块 · 一个影响",
+      "minutes": "3 分钟",
+      "handin": "下课时把票交到门口。",
+      "closure": "报刊亭没有改变它的工作；\n它改变了人们经过的方式。"
+    }
+  ]
+}
