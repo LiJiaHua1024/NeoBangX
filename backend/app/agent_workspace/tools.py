@@ -69,8 +69,12 @@ def tool_schemas(config, slides_enabled=True):
     if slides_enabled:
         tools += [
             schema("create_presentation",
-                   "根据完整选中材料生成一份可编辑的 PPTX 教学演示文稿。只填教学内容，不写坐标/颜色/HTML；"
-                   "中文讲解 + 英语语料 + 中文备注。页数由 blueprint 决定，不需要逐页指定。",
+                   "根据选中材料生成一份可编辑的 PPTX 教学演示文稿，中文讲解 + 英语语料 + 中文备注；"
+                   "只填教学内容，不写坐标/颜色/HTML，页数预算由 blueprint 决定。"
+                   "覆盖多个语篇（如一整张试卷）时一次调用生成完整的一份：instruction 写明要覆盖的篇目，"
+                   "页数预算会随语篇数自动扩展，不要遗漏要分析的篇目。"
+                   "标准课型选对应 blueprint；语篇结构、主旨分析等非常规课用 generic_lesson。"
+                   "失败会返回具体原因（缺必选页、超页数、排版溢出），按原因修改 instruction 后再调用，不要原样重试。",
                    {"title": STRING, "instruction": STRING, "material_ids": IDS,
                     "blueprint": {"type": "string", "enum": ["reading", "continuation", "writing", "grammar",
                                                               "vocabulary", "exam_review", "writing_feedback",
@@ -78,7 +82,8 @@ def tool_schemas(config, slides_enabled=True):
                     "theme": {"type": "string", "enum": ["paper", "chalk"]}},
                    ["title", "instruction", "blueprint"]),
             schema("revise_presentation",
-                   "按修改要求重做一份演示文稿，旧版本保留。只接受 kind=slides 的版本；不要用 revise_document 改 PPT。",
+                   "按修改要求重做一份演示文稿，旧版本保留。instruction 写清要改什么和改动范围；"
+                   "只接受 kind=slides 的版本，不要用 revise_document 改 PPT。",
                    {"version_id": STRING, "instruction": STRING, "title": STRING},
                    ["version_id", "instruction"]),
             schema("read_presentation", "读取演示文稿的逐页大纲、字段和中文备注，用于核对或修订。",

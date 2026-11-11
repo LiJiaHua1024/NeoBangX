@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from .blueprints import BLUEPRINTS, REVEAL_LAYOUTS
+from .blueprints import BLUEPRINTS, MAX_UNITS, REVEAL_LAYOUTS, page_budget
 from .themes import THEMES
 
 LAYOUTS = {
@@ -21,7 +21,8 @@ LAYOUTS = {
     "plan", "support", "writing", "model", "closing", "grammar", "exam",
 }
 
-MAX_SLIDES = 20
+# 绝对安全网，真正的页数契约是 blueprint×units 的区间校验。
+MAX_SLIDES = 80
 MAX_TITLE = 200
 MAX_NOTES = 4000
 
@@ -41,6 +42,7 @@ class Deck(BaseModel):
     format: str = "nbx-slides/1"
     design: Design = Field(default_factory=Design)
     blueprint: str = "reading"
+    units: int = Field(1, ge=1)
     title: str = Field(..., min_length=1, max_length=MAX_TITLE)
     subtitle: str = Field("", max_length=300)
     meta: dict[str, Any] = Field(default_factory=dict)
@@ -96,6 +98,20 @@ def normalize_deck(raw: dict) -> dict:
     raw.setdefault("format", "nbx-slides/1")
     if not raw.get("blueprint"):
         raw["blueprint"] = _infer_blueprint(raw.get("slides") or [])
+    # 页数/单元数超界时先给带出路的错误，而不是让 pydantic 抛没有数字的"结构不合法"。
+    slides = raw.get("slides")
+    if not isinstance(slides, list) or not slides:
+        raise DeckError("slides 必须是非空数组")
+    if len(slides) > MAX_SLIDES:
+        raise DeckError(f"slides 有 {len(slides)} 页，超过单份演示文稿的绝对上限 {MAX_SLIDES} 页；"
+                        f"请压缩每个语篇的页数；内容确实超出时可分多次调用生成")
+    units = raw.get("units")
+    if units is None and isinstance(raw.get("meta"), dict):
+        units = raw["meta"].get("units")
+        if units is not None:
+            raw["units"] = units
+    if units is not None and (isinstance(units, bool) or not isinstance(units, int) or units < 1):
+        raise DeckError("units 必须是不小于 1 的整数（本演示文稿覆盖的语篇/专题数）")
     try:
         deck = Deck.model_validate(raw)
     except ValidationError as exc:
@@ -135,16 +151,34 @@ def expanded_count(deck: dict) -> int:
                for s in deck["slides"])
 
 
+def deck_units(deck: dict) -> int:
+    """写作者声明的教学单元数；缺失或非法时按 1 处理，预算按 MAX_UNITS 封顶。"""
+    try:
+        units = int(deck.get("units") or 1)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(units, MAX_UNITS))
+
+
 def _validate_blueprint(deck: dict):
-    bp = BLUEPRINTS.get(deck.get("blueprint", "reading"))
+    blueprint = deck.get("blueprint", "reading")
+    bp = BLUEPRINTS.get(blueprint)
     if not bp:
-        raise DeckError(f"未知 blueprint：{deck.get('blueprint')!r}")
+        raise DeckError(f"未知 blueprint：{blueprint!r}")
     layouts = {s.get("layout") for s in deck["slides"]}
     missing = [x for x in bp["required"] if x not in layouts]
     if missing:
-        raise DeckError(f"缺少 {bp['name']} 必需页：{', '.join(missing)}")
+        raise DeckError(f"缺少 {bp['name']} 必选页：{', '.join(missing)}；"
+                        f"补上对应版式的页面，或改用必选页更少的 blueprint")
+    units = deck_units(deck)
+    lo, hi = page_budget(blueprint, units)
     count = expanded_count(deck)
-    if count < bp["min_pages"] or count > bp["max_pages"]:
-        raise DeckError(f"{bp['name']} 展开后 {count} 页，要求 {bp['min_pages']}–{bp['max_pages']} 页")
+    if count > hi:
+        raise DeckError(f"{bp['name']} 展开后 {count} 页，超过 units={units} 时的上限 {hi} 页"
+                        f"（staged:true 按 2 页计）；核对 units 是否等于覆盖的语篇数，"
+                        f"或删可选页精简内容")
+    if count < lo:
+        raise DeckError(f"{bp['name']} 展开后 {count} 页，低于 units={units} 时的下限 {lo} 页；"
+                        f"请补齐必选页和教学环节")
     if deck.get("design", {}).get("theme") not in THEMES:
         raise DeckError("未知主题")

@@ -152,7 +152,8 @@ class Runner:
             if self.config.get("output") == "slides":
                 self.messages.append({"role": "user", "content":
                     "本轮成果形式：演示文稿（PPTX）。最终至少用 create_presentation 交付一份 slides 版本；"
-                    "修改演示文稿必须用 revise_presentation；文档只能作为中间材料。"})
+                    "修改演示文稿必须用 revise_presentation；文档只能作为中间材料。"
+                    "材料包含多篇语篇或整张试卷时，在一份演示文稿里逐篇组织、覆盖全部要分析的篇目，不要遗漏。"})
             await self.checkpoint()
 
     async def checkpoint(self):
@@ -987,7 +988,7 @@ class Runner:
             raise ValueError("本轮要求演示文稿，但没有可制作 PPT 的成果或材料")
         await self.create_presentation({
             "title": (self.config.get("goal") or "课堂演示文稿")[:80],
-            "instruction": "把本轮已有成果整理成课堂演示文稿；不要补写原文。",
+            "instruction": "把本轮已有成果整理成课堂演示文稿；材料含多篇语篇时逐篇组织、覆盖全部篇目，不要补写原文。",
             "material_ids": selected,
             "blueprint": self.presentation.get("blueprint") or "generic_lesson",
             "theme": self.presentation.get("theme") or "paper",
