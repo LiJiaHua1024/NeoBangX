@@ -74,7 +74,9 @@ def tool_schemas(config, slides_enabled=True):
                    "覆盖多个语篇（如一整张试卷）时一次调用生成完整的一份：instruction 写明要覆盖的篇目，"
                    "页数预算会随语篇数自动扩展，不要遗漏要分析的篇目。"
                    "标准课型选对应 blueprint；语篇结构、主旨分析等非常规课用 generic_lesson。"
-                   "失败会返回具体原因（缺必选页、超页数、排版溢出），按原因修改 instruction 后再调用，不要原样重试。",
+                   "失败会返回具体原因：缺必选页、超页数是结构问题，按提示调整 instruction（覆盖范围、篇目）"
+                   "或 blueprint 后可再试一次；排版、字段类问题系统会自动修复，若仍失败说明问题持续存在，"
+                   "直接向用户说明即可，不要反复重试。同一工具连续失败时本轮会自动停止。",
                    {"title": STRING, "instruction": STRING, "material_ids": IDS,
                     "blueprint": {"type": "string", "enum": ["reading", "continuation", "writing", "grammar",
                                                               "vocabulary", "exam_review", "writing_feedback",

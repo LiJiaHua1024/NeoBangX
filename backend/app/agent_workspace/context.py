@@ -58,7 +58,27 @@ def _short(value, limit: int) -> str:
 
 
 def _tool_line(message: dict) -> str:
+    """工具结果的机械摘要行：失败必须留下失败与原因，不能只记字符数。
+
+    压缩丢掉失败史，模型就会把同样的调用再发一遍——事故复盘里重试风暴
+    的放大器之一。摘要保持确定性：只用结果里的既有字段，不加时间戳。
+    """
     content = message.get("content")
+    if isinstance(content, str):
+        head = content.strip()
+        if head.startswith("{"):
+            try:
+                data = json.loads(head)
+            except ValueError:
+                data = None
+            if isinstance(data, dict):
+                if data.get("error"):
+                    return f" → 失败：{_short(data['error'], 80)}"
+                if data.get("unchanged"):
+                    return " → 未生效"
+                if data.get("version_id"):
+                    pages = data.get("slides")
+                    return f" → 成功（{pages} 页）" if pages else " → 成功"
     size = len(content) if isinstance(content, str) else 0
     return f" → 返回 {size:,} 字符"
 
@@ -91,8 +111,8 @@ def render_digest(dropped: list[list[dict]], start_step: int = 1) -> str:
                 lines.append(f"- 步骤 {step}：{line[2:]}")
         tool_messages = [m for m in unit if m.get("role") == "tool"]
         if tool_messages:
-            sizes = "、".join(f"{len(m.get('content') or ''):,}" for m in tool_messages)
-            lines.append(f"- 步骤 {step}：工具返回合计 {sizes} 字符")
+            outcomes = "、".join(_tool_line(m).lstrip(" →") for m in tool_messages)
+            lines.append(f"- 步骤 {step}：工具结果 {outcomes}")
     if not lines:
         return ""
     text = DIGEST_HEADER + "\n" + "\n".join(lines)

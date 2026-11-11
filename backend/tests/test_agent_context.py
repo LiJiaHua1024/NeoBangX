@@ -69,6 +69,24 @@ def test_digest_is_deterministic_and_names_tools():
     assert "1,200" in first
 
 
+def test_digest_keeps_tool_failure_outcome():
+    """压缩后不能丢失败史：否则模型会把同样的失败调用再发一遍（事故放大器）。"""
+    unit = [{"role": "assistant", "content": None,
+             "tool_calls": [{"id": "c1", "function": {"name": "create_presentation",
+                                                     "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1",
+             "content": json.dumps({"error": "deck JSON 不合法：第 4 页 signal 超高",
+                                    "unchanged": True}, ensure_ascii=False)}]
+    text = context.render_digest([unit])
+    assert "失败" in text and "deck JSON 不合法" in text
+    ok = [{"role": "assistant", "content": None,
+           "tool_calls": [{"id": "c2", "function": {"name": "create_presentation",
+                                                   "arguments": "{}"}}]},
+          {"role": "tool", "tool_call_id": "c2",
+           "content": json.dumps({"version_id": "v1", "slides": 11})}]
+    assert "成功（11 页）" in context.render_digest([ok])
+
+
 def test_plan_cut_keeps_head_and_user_notes():
     head = [{"role": "system", "content": "S"}, {"role": "user", "content": "CTX"}]
     messages = head + [
