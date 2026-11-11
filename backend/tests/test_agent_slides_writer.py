@@ -9,7 +9,7 @@ from app.agent_workspace import store
 from app.agent_workspace.models import WorkspaceTask
 from app.agent_workspace.slides.compile import compile_deck
 from app.agent_workspace.slides.schema import DeckError, expanded_count, normalize_deck
-from app.agent_workspace.slides.writer import generate_deck, outline
+from app.agent_workspace.slides.writer import DeckGenerationError, generate_deck, outline
 
 FIX = Path(__file__).parent / "fixtures" / "slides"
 
@@ -65,8 +65,9 @@ def test_generate_deck_rejects_when_repair_fails():
     with pytest.raises(Exception) as exc:
         asyncio.run(generate_deck(runner, title="x", instruction="", materials=[{"id": "m", "name": "x", "content": "x" * 100}],
                                   blueprint="reading", theme="paper"))
-    assert len(runner.calls) == 2  # 初稿 + 一次修复，之后如实失败
+    assert len(runner.calls) == 3  # 初稿 + 两轮修复，之后如实失败
     assert "必选页" in str(exc.value)
+    assert "内部已自动修复 2 轮" in str(exc.value)
 
 
 def test_page_budget_error_guides_units_check():
@@ -80,7 +81,7 @@ def test_page_budget_error_guides_units_check():
                                   blueprint="generic_lesson", theme="paper"))
     message = str(exc.value)
     assert "units=1" in message and "核对 units" in message
-    assert len(runner.calls) == 2  # 修复机会用完后才失败
+    assert len(runner.calls) == 3  # 两轮修复机会用完后才失败
 
 
 def test_whole_paper_deck_fits_scaled_budget():
@@ -151,3 +152,53 @@ def test_save_slides_version_atomically_stores_scene(workspace_code):
         from app.agent_workspace.models import WorkspaceTask as T
         db.delete(db.get(T, task_id))
         db.commit()
+
+
+def _overflowed_deck():
+    raw = json.loads((FIX / "reading.json").read_text(encoding="utf-8"))
+    for slide in raw["slides"]:
+        if slide["layout"] == "text_structure":
+            slide["stages"][0]["signal"] = "a very long signal phrase that absolutely cannot fit " * 3
+    return json.dumps(raw, ensure_ascii=False)
+
+
+def test_overflow_error_names_page_field_dimension_target_and_sample():
+    """排版错误要可行动：页码、字段、超的维度、压到多少、文本样本都在 message 里；
+    且绝不回传 Python 内部异常文本（那是事故里调度层盲目重试的根源）。"""
+    runner = FakeRunner(_overflowed_deck())
+    with pytest.raises(DeckGenerationError) as exc:
+        asyncio.run(generate_deck(runner, title="x", instruction="",
+                                  materials=[{"id": "m", "name": "x", "content": "x" * 100}],
+                                  blueprint="reading", theme="paper"))
+    message = str(exc.value)
+    assert "第 4 页" in message and "signal" in message
+    assert "超高" in message and "压到 1 行" in message
+    assert "a very long signal phrase" in message
+    assert "内部已自动修复 2 轮" in message
+    assert "重试 create_presentation 无益" in message
+    assert exc.value.kind == "generation"
+    for leaked in ("expected string or bytes-like object", "KeyError", "Traceback"):
+        assert leaked not in message
+
+
+def test_repair_prompt_carries_actionable_overflow_details():
+    runner = FakeRunner(_overflowed_deck(), _overflowed_deck())
+    with pytest.raises(DeckGenerationError):
+        asyncio.run(generate_deck(runner, title="x", instruction="",
+                                  materials=[{"id": "m", "name": "x", "content": "x" * 100}],
+                                  blueprint="reading", theme="paper"))
+    repair_prompt = runner.calls[1][1][1]["content"]
+    assert "signal" in repair_prompt and "压到 1 行" in repair_prompt
+
+
+def test_structural_failures_are_kind_structural():
+    """缺必选页/超页数是结构问题：调度层改 instruction/units 有意义，不标'重试无益'。"""
+    raw = json.loads((FIX / "reading.json").read_text(encoding="utf-8"))
+    raw["slides"] = [s for s in raw["slides"] if s.get("layout") != "task"]
+    runner = FakeRunner(json.dumps(raw, ensure_ascii=False))
+    with pytest.raises(DeckGenerationError) as exc:
+        asyncio.run(generate_deck(runner, title="x", instruction="",
+                                  materials=[{"id": "m", "name": "x", "content": "x" * 100}],
+                                  blueprint="reading", theme="paper"))
+    assert exc.value.kind == "structural"
+    assert "重试 create_presentation 无益" not in str(exc.value)

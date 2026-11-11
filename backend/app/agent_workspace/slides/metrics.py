@@ -56,6 +56,25 @@ def _table(family: str, weight: int) -> dict:
     return widths[str(picked)]
 
 
+def as_text(value) -> str:
+    """渲染层入口的防御性转换：任何标量/列表都转成可渲染文本。
+
+    字段形状已在 schema.normalize_slide 归一化过；这里是纵深防御，保证
+    parse_markup/fit 永远不会因为拿到 int/list 而抛 TypeError。
+    """
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return "\n".join(t for t in (as_text(v) for v in value) if t)
+    return str(value)
+
+
 def advance(text: str, family: str, weight: int, size: int) -> float:
     """Advance width in design px from the committed metric table.
 
@@ -72,6 +91,7 @@ def advance(text: str, family: str, weight: int, size: int) -> float:
 
 def parse_markup(text: str, base: Run, accent: str) -> list[Run]:
     """`**粗体**` 与 `==强调色==`，其余按基础样式。"""
+    text = as_text(text)
     runs: list[Run] = []
     for part in MARKUP.split(text):
         if not part:

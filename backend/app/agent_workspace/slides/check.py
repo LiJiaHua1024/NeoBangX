@@ -64,14 +64,14 @@ def check(scene: dict):
             wr = maxw / max(1.0, p["w"])
             th = len(p["lines"]) * p["line_height"]
             hr = th / max(1.0, p["h"])
-            item = (n, label, round(wr, 3), round(hr, 3), text[:36])
+            item = (n, label, round(wr, 3), round(hr, 3), text[:60], len(p["lines"]))
             if maxw > p["w"] + TOL or th > p["h"] + 4:
                 errors.append(item)
             elif label not in LABELISH and (wr > WARN_RATIO or (len(p["lines"]) > 1 and hr > 0.97)):
                 warnings.append(item)
             x, y, w, h = p["x"], p["y"], p["w"], p["h"]
             if x < SAFE[0] or y < SAFE[1] or x + w > SAFE[2] or y + h > SAFE[3]:
-                warnings.append((n, label + " · safe-area", round(wr, 3), round(hr, 3), text[:36]))
+                warnings.append((n, label + " · safe-area", round(wr, 3), round(hr, 3), text[:60], len(p["lines"])))
             # If the text sits inside a card, every visual line must stay inside
             # that card with a small padding. This is the "text crosses the card
             # edge" check that a pure box-width check misses.
@@ -87,7 +87,7 @@ def check(scene: dict):
                     if by < card["y"] - 2 or by + bh > card["y"] + card["h"] + 2:
                         over.append("v")
                 if over:
-                    warnings.append((n, label + " · card-edge", round(wr, 3), round(hr, 3), text[:36]))
+                    warnings.append((n, label + " · card-edge", round(wr, 3), round(hr, 3), text[:60], len(p["lines"])))
             text_boxes.append((p, label, text))
         # Text-text collision: use visual line boxes, not the full text frame.
         for i in range(len(text_boxes)):
@@ -102,7 +102,7 @@ def check(scene: dict):
                             warnings.append((n, f"{li} × {lj} · text-overlap",
                                              round(max(ax + aw, bx + bw) - min(ax, bx), 1),
                                              round(max(ay + ah, by + bh) - min(ay, by), 1),
-                                             (ti[:16] + " / " + tj[:16])))
+                                             (ti[:16] + " / " + tj[:16]), 0))
                             break
                     else:
                         continue
@@ -118,11 +118,11 @@ def main():
     if errors:
         print("\nERRORS (measured overflow):")
         for e in errors:
-            print("  slide %02d  %-18s  width %.2f  height %.2f  %r" % e)
+            print("  slide %02d  %-18s  width %.2f  height %.2f  lines %d  %r" % e)
     if warnings:
         print("\nWARNINGS (tight; review before shipping):")
         for w in warnings:
-            print("  slide %02d  %-18s  width %.2f  height %.2f  %r" % w)
+            print("  slide %02d  %-18s  width %.2f  height %.2f  lines %d  %r" % w)
     print(f"\n{len(errors)} errors, {len(warnings)} warnings")
     return 1 if errors else 0
 

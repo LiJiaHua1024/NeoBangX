@@ -13,7 +13,7 @@ from typing import Any
 from .blueprints import BLUEPRINTS, PER_UNIT_MAX_PAGES, PER_UNIT_MIN_PAGES, page_budget
 from .check import check
 from .compile import compile_deck
-from .schema import DeckError, normalize_deck
+from .schema import DeckError, normalize_deck, render_layout_guide
 from .themes import THEMES
 
 MAX_SOURCE_CHARS = 80000
@@ -28,27 +28,14 @@ DECK_WRITER_SYSTEM = """把英语课的教学内容写成演示文稿内容稿�
 输出：只输出符合本次字段说明的 JSON，不要 markdown fence，不要解释；不写坐标、颜色、HTML、Markdown 表格或图片。
 """
 
-LAYOUT_GUIDE = """可用 layout 与字段（只填需要的字段；文本里的 **粗体** 和 ==强调色== 可用；passage/questions/exam 标 staged:true 时展开为「提问页＋揭晓页」两张，计入页数）：
+# 字段说明由 slides/schema.py 的字段契约渲染：契约是唯一事实源，
+# 这里不再手写一份会跟编译层漂移的清单。
+LAYOUT_GUIDE = render_layout_guide()
 
-cover: kicker, title（可含换行）, subtitle, question, meta
-objectives: kicker, title, lead, items[{level,objective,criterion}], target
-pre_reading: kicker, title, lead, provocation, prompts[3], note, frames, focus
-text_structure: kicker, title, stages[3]{label,title,quote,ref,signal}, takeaway
-passage: kicker, title, source, passage, first_read[3], annotations[4]{label,text}, takeaway, staged:true
-language: kicker, title, items[4]{chunk,meaning,example}, task
-questions: kicker, title, items[3]{level,question,support,answer}, staged:true
-task: kicker, title, brief[4]{label,text}, support, criteria[3], model, outline
-summary: kicker, title, takeaways[3], closure, model, prompts[2], selfcheck, minutes, handin
-story: kicker, title, story, prompts[3], starters[2], note
-six_w: kicker, title, items[6]{label,text,evidence}, prompt
-plot: kicker, title, nodes[6]{event,emotion,evidence}, note
-plan: kicker, title, label, note, paragraphs[2]{label,function,points[3],emotional}, clues
-support: kicker, title, items[4]{label,chunks,model}, note
-writing: kicker, title, starters[2], checklist[3], skeleton, prewrite[3], meta
-model: kicker, title, label, text, highlights[], notice[2], annotations[3]{label,text}
-closing: kicker, title, body, checklist[3], quote, source, homework, peer
-grammar: kicker, title, rows[{label,left,right}], trap, note
-exam: kicker, title, meta, stem, options[4]{key,text,correct}, answer, evidence, why, trap, pattern, staged:true"""
+# 初稿之后最多修几轮。修复都在写作层内部完成：调度层只能改
+# title/instruction/blueprint，对字段/排版问题无能为力，反复重掷骰子
+# 只会把整份 deck 从头重新生成很多遍（一次事故烧掉 40 万+ tokens 的根源）。
+MAX_REPAIRS = 2
 
 DECK_SCHEMA = {
     "type": "json_schema",
@@ -127,9 +114,13 @@ async def _call_writer(runner, messages, source):
 
 
 class DeckGenerationError(ValueError):
-    def __init__(self, message: str, errors: list[str] | None = None):
+    """kind=structural：改 instruction/units/blueprint 能修，调用方可以再试；
+    kind=generation：writer 输出问题（JSON/字段/排版），原样重试没有意义。"""
+
+    def __init__(self, message: str, errors: list[str] | None = None, kind: str = "generation"):
         super().__init__(message)
         self.errors = errors or [message]
+        self.kind = kind
 
 
 def _strip_json(text: str) -> str:
@@ -150,7 +141,8 @@ def _source_text(materials: list[dict]) -> str:
         parts.append(f"【{m.get('name') or '材料'}】\n{content}")
     source = "\n\n".join(parts)
     if len(source) > MAX_SOURCE_CHARS:
-        raise DeckGenerationError(f"来源材料 {len(source)} 字，超过单次生成上限 {MAX_SOURCE_CHARS} 字；请分段生成")
+        raise DeckGenerationError(f"来源材料 {len(source)} 字，超过单次生成上限 {MAX_SOURCE_CHARS} 字；请分段生成",
+                                  kind="structural")
     return source
 
 
@@ -221,9 +213,9 @@ async def generate_deck(runner, *, title: str, instruction: str, materials: list
                         base_version: str = "") -> tuple[dict, dict, list[str], str]:
     """Return (normalized deck, scene, warnings, raw_content)."""
     if blueprint not in BLUEPRINTS:
-        raise DeckError(f"未知 blueprint：{blueprint}")
+        raise DeckError(f"未知 blueprint：{blueprint}", kind="structural")
     if theme not in THEMES:
-        raise DeckError(f"未知主题：{theme}")
+        raise DeckError(f"未知主题：{theme}", kind="structural")
     source = _source_text(materials)
 
     def build_messages(repair: list[str] | None) -> list[dict]:
@@ -234,30 +226,51 @@ async def generate_deck(runner, *, title: str, instruction: str, materials: list
 
     label = f"deck:{base_version or 'new'}"
     raw, truncated = await _write_deck(runner, build_messages(None), label)
-    try:
-        deck, scene, warnings, raw = _accept(raw, title=title, blueprint=blueprint, theme=theme)
-    except DeckGenerationError as exc:
-        repair = list(exc.errors)
-        if truncated:
-            repair.insert(0, "输出连续触及单次输出上限，JSON 仍不完整；"
-                            "请压缩内容（精简每页文本、合并页面）后输出完整 JSON")
-    else:
-        repair = [w[6:] for w in warnings if w.startswith("ERROR:")] or None
-        if not repair:
-            return deck, scene, warnings, raw
+    repair, kind = None, "generation"
+    for round_ in range(MAX_REPAIRS + 1):
+        try:
+            deck, scene, warnings, raw = _accept(raw, title=title, blueprint=blueprint, theme=theme)
+        except DeckGenerationError as exc:
+            repair, kind = list(exc.errors), exc.kind
+            if truncated:
+                repair.insert(0, "输出连续触及单次输出上限，JSON 仍不完整；"
+                                "请压缩内容（精简每页文本、合并页面）后输出完整 JSON")
+        else:
+            repair = [w[6:] for w in warnings if w.startswith("ERROR:")] or None
+            kind = "generation"
+            if not repair:
+                return deck, scene, warnings, raw
+        if round_ == MAX_REPAIRS:
+            break
+        messages = build_messages(repair) + [
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": "请修复上面列出的错误，重新输出完整 JSON；只输出 JSON。"}]
+        raw, truncated = await _write_deck(runner, messages, f"{label}:repair{round_ + 1}")
+    # 修复用尽仍失败：错误摘要进 message（调度层只看得到 message），并按 kind
+    # 说明出路——结构问题改 instruction/units/blueprint 有意义，生成问题没有。
+    errors = repair or ["未知错误"]
+    prefix = "演示文稿结构未通过检查" if kind == "structural" else "演示文稿生成未通过检查"
+    tail = ("" if kind == "structural" else
+            "。这类失败重试 create_presentation 无益；已有版本不受影响，请向用户说明情况"
+            "或在已有版本上用 revise_presentation 调整")
+    raise DeckGenerationError(
+        f"{prefix}（内部已自动修复 {MAX_REPAIRS} 轮）：" + "；".join(errors[:3]) + tail,
+        errors, kind=kind)
 
-    # 结构错误（schema/缺必选页/超页数）与排版溢出同样只有一次修复机会：
-    # 错误清单带恢复指引，修复仍失败时如实报错，交给调度层调整范围再来。
-    messages = build_messages(repair) + [
-        {"role": "assistant", "content": raw},
-        {"role": "user", "content": "请修复上面列出的错误，重新输出完整 JSON；只输出 JSON。"}]
-    raw, _truncated = await _write_deck(runner, messages, f"{label}:repair")
-    deck, scene, warnings, raw = _accept(raw, title=title, blueprint=blueprint, theme=theme)
-    errors = [w[6:] for w in warnings if w.startswith("ERROR:")]
-    if errors:
-        # 错误摘要进 message：调度层只看得到 message，看不到 details。
-        raise DeckGenerationError("演示文稿排版未通过检查：" + "；".join(errors[:3]), errors)
-    return deck, scene, warnings, raw
+
+def _overflow_message(n, label, wr, hr, text, lines):
+    """把实测比例翻译成「超的是哪个维度、压到多少」，附出问题的文本样本。"""
+    if wr > 1.0 and hr > 1.0:
+        over = f"超宽超高（实测 {wr:.2f}×框宽 / {hr:.2f}×框高）"
+    elif hr > 1.0:
+        over = f"超高（实测 {hr:.2f}×框高，宽 {wr:.2f}×框宽）"
+    else:
+        over = f"超宽（实测 {wr:.2f}×框宽，高 {hr:.2f}×框高）"
+    if hr > 1.0:
+        target = f"；压到 {max(1, int(lines / hr))} 行内"
+    else:
+        target = f"；压短约 {max(1, int((1 - 1 / wr) * 100))}%"
+    return f"ERROR: 第 {n} 页 {label} {over}{target}：『{text}』"
 
 
 def _accept(raw: str, *, title: str, blueprint: str, theme: str):
@@ -267,14 +280,20 @@ def _accept(raw: str, *, title: str, blueprint: str, theme: str):
         data.setdefault("blueprint", blueprint)
         data.setdefault("design", {"pack": "builtin", "theme": theme, "design_version": "2026-11"})
         deck = normalize_deck(data)
-    except (ValueError, TypeError, json.JSONDecodeError) as exc:
-        raise DeckGenerationError(f"deck JSON 不合法：{exc}") from exc
-    scene = compile_deck(deck)
+    except (ValueError, TypeError) as exc:
+        if isinstance(exc, DeckError):
+            message, details, kind = str(exc), list(exc.details), exc.kind
+        else:
+            message, details, kind = f"deck JSON 不合法：{exc}", [str(exc)], "generation"
+        raise DeckGenerationError(message, details, kind=kind) from exc
+    try:
+        scene = compile_deck(deck)
+    except DeckError as exc:
+        raise DeckGenerationError(str(exc), list(exc.details), kind=exc.kind) from exc
     errors, warnings = check(scene)
-    messages = [f"ERROR: 第 {n} 页 {label} 实测 {width:.2f}×框宽 / {height:.2f}×框高"
-                for n, label, width, height, _ in errors]
+    messages = [_overflow_message(*item) for item in errors]
     messages += [f"WARN: 第 {n} 页 {label} 接近边界 {width:.2f}×{height:.2f}"
-                 for n, label, width, height, _ in warnings]
+                 for n, label, width, height, _text, _lines in warnings]
     for i, slide in enumerate(deck["slides"]):
         if not str(slide.get("notes") or "").strip():
             messages.append(f"WARN: 第 {i + 1} 页缺少中文备注")
@@ -314,8 +333,12 @@ def _flatten(value) -> list[str]:
     return []
 
 
-def outline(deck: dict, include_notes: bool = True) -> str:
-    """Compact human/agent-readable outline used by read_presentation and review."""
+def outline(deck: dict, include_notes: bool = True, cap: int = 6000) -> str:
+    """Compact human/agent-readable outline used by read_presentation and review.
+
+    cap 默认 6000：调度层上下文是注意力预算，大 deck 的逐页全文会把失败史
+    挤出上下文；需要全文核对时（review）显式放大 cap。
+    """
     lines = [f"{deck.get('title', '')} · {deck.get('blueprint', '')} · {len(deck.get('slides', []))} 页"]
     for i, slide in enumerate(deck.get("slides", []), 1):
         head = slide.get("title") or slide.get("kicker") or slide.get("layout", "")
@@ -328,7 +351,7 @@ def outline(deck: dict, include_notes: bool = True) -> str:
                 lines.append(f"{key}: {text[:1500]}")
         if include_notes and slide.get("notes"):
             lines.append(f"notes: {str(slide['notes'])[:1500]}")
-    return "\n".join(lines)[:40000]
+    return "\n".join(lines)[:cap]
 
 
 def deck_warnings(scene: dict, check_warnings: list[str] | None = None) -> list[str]:

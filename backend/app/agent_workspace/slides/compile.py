@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .metrics import fit
+from .metrics import as_text, fit
+from .schema import DeckError
 
 from .themes import CONTENT_W, H, L, R, TS, THEMES, W
 
@@ -42,6 +43,7 @@ class Scene:
     def text(self, x, y, w, h, value, *, family="sans", size=18, min_size=12, weight=400,
              color=None, accent=None, line_height=1.55, align="left", valign="top",
              max_lines=None, letter_spacing=0, opacity=1, italic=False, label=""):
+        value = as_text(value)
         color = color or self.t["ink"]
         accent = accent or self.t["accent"]
         # Hard floors: student-facing payload never goes below 16px; labels
@@ -909,7 +911,16 @@ def compile_deck(deck: dict) -> dict:
     slides, warnings = [], []
     for i, slide in enumerate(slides_data):
         scene = Scene(theme, slide, i, total, deck)
-        prims = scene.build()
+        # 每页兜底：任何渲染异常都带页码与 layout 交回去，绝不裸抛
+        # TypeError/KeyError —— 那种错误文本对调用方毫无行动价值。
+        try:
+            prims = scene.build()
+        except DeckError:
+            raise
+        except KeyError as exc:
+            raise DeckError(f"第 {i + 1} 页（{slide['layout']}）缺少字段 {exc.args[0]!r}") from exc
+        except Exception as exc:
+            raise DeckError(f"第 {i + 1} 页（{slide['layout']}）渲染失败：{exc}") from exc
         reveal = slide.get("reveal", True)
         warnings.extend(f"Slide {i + 1}: {w}" for w in scene.warnings)
         warnings.extend(f"Slide {i + 1}: {w}" for w in density_warnings(prims, slide["layout"], reveal))
