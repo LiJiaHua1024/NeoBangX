@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -27,6 +28,25 @@ HEARTBEAT_SECONDS = 0.75
 DEFAULT_CONTEXT_BUDGET = 262144
 DEFAULT_PROVIDER_ATTEMPTS = 3
 DEFAULT_RETRY_WAIT_CAP = 60.0
+# 工具失败熔断：失败分两类记账。系统性失败（生成问题、崩溃类异常）调用方
+# 无从修复，累计 TOOL_FAILURE_LIMIT 次即停；可行动失败（参数错误、结构问题）
+# 模型改参数确实有意义，宽限到 TOOL_ACTIONABLE_LIMIT 次，但也必须有界。
+# 相同工具+相同参数连续失败 TOOL_REPEAT_LIMIT 次是原样重试的信号，直接停。
+# 事故复盘：没有熔断时调度层对不可行动的错误重试了 15+ 次，烧掉 40 万+ tokens。
+TOOL_FAILURE_LIMIT = 3
+TOOL_ACTIONABLE_LIMIT = 5
+TOOL_REPEAT_LIMIT = 2
+
+
+def _failure_is_systemic(exc: BaseException) -> bool:
+    """失败是否「调用方无从修复」：只有这类失败快速熔断。"""
+    kind = getattr(exc, "kind", None)
+    if kind == "structural":
+        return False
+    if kind == "generation":
+        return True
+    # ValueError 多为参数/引用校验（材料不在范围、序号超范围……），换参数能修。
+    return not isinstance(exc, ValueError)
 STOP_GRACE_SECONDS = 3.0
 _LOOP = None
 _ACTIVE = {}
@@ -95,6 +115,11 @@ class BudgetReached(Exception):
     pass
 
 
+class ToolLoopError(BudgetReached):
+    """同一工具连续失败，继续重试只是烧钱；按预算终止的口径落终态。"""
+    pass
+
+
 class Runner:
     def __init__(self, run_id, model_call=None):
         self.id = run_id
@@ -114,6 +139,38 @@ class Runner:
         self.partial_retries = 0
         self.config_changed = False
         self._token_cache: dict = {}
+        # 熔断标记：置位后失败结果照常入 messages，由 execute() 在配对完整后终止。
+        self.terminal_tool_error = ""
+
+    def _record_tool_failure(self, name: str, raw: str, error: str, systemic: bool) -> None:
+        """记录工具失败并在达到阈值时置熔断标记。
+
+        计数随 snapshot 落库：进程重启后继续累计，不会把三连失败拆成两个“两次”。
+        """
+        digest = hashlib.sha1(f"{name}\n{raw}".encode()).hexdigest()
+        state = self.snapshot.setdefault("tool_failures", {})
+        record = state.get(name) or {"count": 0, "systemic": 0, "args_hash": "", "repeat": 0}
+        record["repeat"] = record["repeat"] + 1 if digest == record.get("args_hash") else 1
+        record["args_hash"] = digest
+        record["count"] = int(record.get("count") or 0) + 1
+        if systemic:
+            record["systemic"] = int(record.get("systemic") or 0) + 1
+        record["last_error"] = error[:120]
+        state[name] = record
+        self.snapshot["tool_failures"] = state
+        limit = TOOL_FAILURE_LIMIT if systemic else TOOL_ACTIONABLE_LIMIT
+        if (record["systemic"] >= TOOL_FAILURE_LIMIT or record["count"] >= limit
+                or record["repeat"] >= TOOL_REPEAT_LIMIT):
+            self.terminal_tool_error = (
+                f"{name} 连续失败，已停止本轮（累计 {record['count']} 次、"
+                f"其中系统性失败 {record['systemic']} 次、相同调用连续 {record['repeat']} 次）："
+                f"{record['last_error']}。请调整任务配置、材料或要求后继续执行")
+
+    def _reset_tool_failure(self, name: str) -> None:
+        state = self.snapshot.get("tool_failures")
+        if state and name in state:
+            state.pop(name)
+            self.snapshot["tool_failures"] = state
 
     async def load(self):
         self.run = await asyncio.to_thread(store.load_run, self.id)
@@ -596,7 +653,7 @@ class Runner:
         self.created_versions.append(version["id"])
         return {"version_id": version["id"], "title": version["title"], "kind": "slides",
                 "slides": len(scene["slides"]), "theme": theme, "warnings": provenance["warnings"],
-                "outline": deck_writer.outline(deck)}
+                "outline": deck_writer.outline(deck, cap=4000)}
 
     async def revise_presentation(self, args, key):
         base = await asyncio.to_thread(tools.document, self.task_id, args["version_id"])
@@ -629,7 +686,7 @@ class Runner:
         self.created_versions.append(version["id"])
         return {"version_id": version["id"], "title": version["title"], "kind": "slides",
                 "slides": len(scene["slides"]), "theme": theme, "warnings": prov["warnings"],
-                "new_version": True, "outline": deck_writer.outline(deck)}
+                "new_version": True, "outline": deck_writer.outline(deck, cap=4000)}
 
     async def revise_document(self, args, key):
         version = await asyncio.to_thread(tools.document, self.task_id, args["version_id"])
@@ -718,6 +775,11 @@ class Runner:
 
     async def tool_call(self, call, key=None):
         name, raw = call["function"]["name"], call["function"]["arguments"]
+        if self.terminal_tool_error:
+            # 已熔断：不再执行任何工具（尤其不能再整份重新生成），结果照常
+            # 返回以保持 tool 配对完整，execute() 随后终止本轮。
+            return {"error": "本轮已触发连续失败保护，工具调用已跳过：" + self.terminal_tool_error,
+                    "unchanged": True}
         # 幂等键不能只信 provider 的 id：缺 id 时共用一个空键，第二次调用会拿回第一次的结果。
         if not key and call.get("id"):
             key = "tool:" + call["id"]
@@ -769,6 +831,7 @@ class Runner:
                 result = await tools.execute_readonly(self.task_id, self.config, name, args)
             full = store.encode(result)
             await asyncio.to_thread(store.finish_tool, entry["id"], result)
+            self._reset_tool_failure(name)
             # 完整结果另存，模型收到有明确范围说明的结果视图。
             return self.result_view(full, entry["id"])
         except asyncio.CancelledError:
@@ -781,8 +844,16 @@ class Runner:
             await asyncio.to_thread(store.finish_entry, entry["id"], "incomplete", {"error": str(exc)})
             raise
         except Exception as exc:
-            error = sanitize_error_text(str(exc))[:500]
+            # 调度层只看得到 message：details（逐条错误）内嵌进 message，
+            # 否则模型拿到的是一句没有页码/字段的摘要，无从行动。
+            message = str(exc)
+            details = [e for e in (getattr(exc, "details", None) or getattr(exc, "errors", None) or []) if e]
+            embed = [e for e in details[:3] if e not in message]
+            if embed:
+                message += "；" + "；".join(embed)
+            error = sanitize_error_text(message)[:500]
             await asyncio.to_thread(store.finish_entry, entry["id"], "failed", {"error": error})
+            self._record_tool_failure(name, raw, error, systemic=_failure_is_systemic(exc))
             return {"error": error, "unchanged": True}
 
     @staticmethod
@@ -799,7 +870,7 @@ class Runner:
         rows = await asyncio.to_thread(tools.materials, self.task_id, material_ids)
         if is_slides:
             deck = json.loads(version["content"])
-            haystack = deck_writer.outline(deck)
+            haystack = deck_writer.outline(deck, cap=40000)
             payload = {"goal": self.config["goal"], "requirements": self.config["prompt"],
                        "instruction": self.snapshot.get("instruction", ""), "materials": rows,
                        "version_kind": "slides",
@@ -893,6 +964,9 @@ class Runner:
                     result = await self.tool_call(call, key=f"tool:{position}:{at}")
                     self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": store.encode(result)})
                     await self.checkpoint()
+                if self.terminal_tool_error:
+                    # 失败结果已入 messages、tool 配对完整，现在可以安全终止。
+                    raise ToolLoopError(self.terminal_tool_error)
                 continue
             if self.step >= self.limits["max_steps"]:
                 raise BudgetReached("已达到本轮步骤上限，已有成果保留，可继续执行")
