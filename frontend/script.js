@@ -10297,6 +10297,12 @@ function nbx() {
     async startPpt(item) {
       if (!item || !String(item.output || "").trim() || !this.isAuthenticated) return;
       const output = String(item.output).trim();
+      if (output.length < 200) {
+        // 后端要求工具结果至少 200 字，短了会被请求模型直接拦成 422，
+        // 前端只能显示「PPT 生成请求失败」——在这里先给出同款可行动的说明
+        this.toast("工具结果太短，无法生成完整课堂 PPT（至少 200 字）", "warn");
+        return;
+      }
       const outputHash = this._pptHash(output);
       if (item.ppt && ["queued", "running"].includes(item.ppt.status)) return;
       if (item.ppt?.status === "done" && item.ppt.output_hash === outputHash) return;
@@ -10395,8 +10401,7 @@ function nbx() {
           throw Error(typeof data.detail === "string" ? data.detail : "下载失败");
         }
         const blob = await res.blob();
-        saveBlob(blob, ((item || this.activeHistoryItem)?.title || "课堂演示文稿") + ".pptx",
-          "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+        this.downloadBlob(blob, ((item || this.activeHistoryItem)?.title || "课堂演示文稿") + ".pptx");
       } catch (e) {
         this.toast(e.message || "下载失败", "error");
       }
@@ -10557,9 +10562,16 @@ function nbx() {
       // Tool-page PPT switch: only after a complete generic result. Never on
       // error/stopped/truncated, and never for a continuation of an old item.
       const pptItem = this.activeHistoryId ? this.history.find((item) => item.id === this.activeHistoryId) : null;
-      if (this._pptRequested && state === "done" && pptItem && !this.outputTruncated
-          && String(this.output || "").trim()) {
+      const pptReady = state === "done" && !this.outputTruncated && !!String(this.output || "").trim();
+      if (this._pptRequested && pptItem && pptReady) {
         this.startPpt(pptItem);
+      } else if (this._pptRequested && pptItem && !pptReady) {
+        // 开着开关却没有 PPT 时必须给说法：静默跳过会让「开」和「关」看起来一模一样，
+        // 用户只能猜是不是哪里触发了 fallback
+        this.toast(this.outputTruncated
+          ? "结果撞到输出上限，PPT 未生成；PPT 只随完整结果创建"
+          : state === "stopped" ? "已停止生成，PPT 未生成"
+          : "本次结果不完整，PPT 未生成", "warn");
       }
       this._pptRequested = false;
       // 旧结果快照用完即弃：它只在「新版本整篇重来且零产出」这一刻有意义

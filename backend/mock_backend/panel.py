@@ -77,9 +77,34 @@ async def set_quota(request: Request) -> dict:
     return {"ok": True, "state": STATE.snapshot()}
 
 
+@router.post("/slides")
+async def set_slides(request: Request) -> dict:
+    """演示文稿总开关：{"enabled": false} 模拟管理后台关掉 PPTX 生成。"""
+    body = await _json(request)
+    STATE.slides_enabled = bool(body.get("enabled", True))
+    return {"ok": True, "state": STATE.snapshot()}
+
+
+@router.post("/ppt")
+async def set_ppt_scenario(request: Request) -> dict:
+    """PPT 任务的默认场景：{"scenario": "ppt-fail"}（"" 或缺省 = 回到 ppt-ok）。
+
+    不走粘性场景：PPT 创建紧随流式收尾发生，中间还夹着标题请求，粘性会被偷走。
+    """
+    body = await _json(request)
+    scenario = str(body.get("scenario") or "").strip()
+    if scenario and scenario not in {"ppt-ok", "ppt-slow", "ppt-fail", "ppt-403"}:
+        return JSONResponse({"error": f"未知 PPT 场景「{scenario}」"}, status_code=400)
+    STATE.ppt_scenario = scenario
+    return {"ok": True, "state": STATE.snapshot()}
+
+
 @router.post("/reset")
 async def reset_state() -> dict:
     STATE.reset()
+    hook = CONFIG.get("reset_hook")
+    if callable(hook):
+        hook()
     return {"ok": True}
 
 
@@ -271,7 +296,9 @@ async def panel_page() -> HTMLResponse:
     return HTMLResponse(_PAGE)
 
 
-def add_control_routes(app, *, default_scenario: str = "happy", upstream_enabled: bool = True) -> None:
+def add_control_routes(app, *, default_scenario: str = "happy", upstream_enabled: bool = True,
+                       reset_hook=None) -> None:
     CONFIG["default_scenario"] = default_scenario
     CONFIG["upstream_enabled"] = upstream_enabled
+    CONFIG["reset_hook"] = reset_hook
     app.include_router(router)

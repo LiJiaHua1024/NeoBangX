@@ -51,6 +51,12 @@ class MockState:
     quota: int | None = None
     used: int = 0
     sticky: dict | None = None          # {"scenario":..., "params": {...}, "times": int|None}
+    # 演示文稿（PPTX）总开关：对应管理后台的「开启演示文稿生成」。
+    # 真实后端默认关；假后端默认开，让 PPT 链路开箱可测，测门禁时再 POST /__mock__/slides 关掉
+    slides_enabled: bool = True
+    # PPT 任务的默认场景名（"" = ppt-ok）。由 POST /__mock__/ppt 设置；
+    # 不走粘性场景——PPT 创建紧随流式收尾发生，中间还夹着标题请求，粘性会被偷走
+    ppt_scenario: str = ""
     mirror_enabled: bool = False
     mirror_origins: list[str] = field(default_factory=list)
     requests: deque = field(default_factory=lambda: deque(maxlen=MAX_REQUESTS))
@@ -125,6 +131,8 @@ class MockState:
         with self.lock:
             self.used = 0
             self.sticky = None
+            self.slides_enabled = True
+            self.ppt_scenario = ""
             self.requests.clear()
 
     def snapshot(self) -> dict:
@@ -135,6 +143,8 @@ class MockState:
                 "sticky": dict(self.sticky) if self.sticky else None,
                 "mirror_enabled": self.mirror_enabled,
                 "mirror_origins": list(self.mirror_origins),
+                "slides_enabled": self.slides_enabled,
+                "ppt_scenario": self.ppt_scenario,
                 "request_count": len(self.requests),
             }
 

@@ -18,11 +18,13 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import sys
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -31,7 +33,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from mock_backend import catalog, paper as paper_mod, panel, upstream
+from app.services.presentation_blueprints import BLUEPRINTS, blueprint_for_tool, supports_presentation
+from mock_backend import catalog, paper as paper_mod, panel, slides as slides_mod, upstream
 from mock_backend.engine import StreamStats, sse_frame, stats_summary, stream_frames
 from mock_backend.scenarios import SCENARIOS, parse_directive, resolve_plan
 from mock_backend.state import STATE
@@ -50,6 +53,11 @@ _STREAMS: dict[str, asyncio.Event] = {}
 
 # 标题任务：(Bearer, job_id) -> 状态。假后端只模拟接口语义，不做持久化。
 _TITLE_JOBS: dict[tuple[str, str], dict[str, Any]] = {}
+
+# 工具页 PPT 任务：task_id -> 任务状态（内存即丢，与真实后端的差异见 README）
+_PPT_JOBS: dict[str, dict[str, Any]] = {}
+# request_key -> task_id：与真实后端一样按「同一历史记录 + 同一输出」去重
+_PPT_BY_KEY: dict[str, str] = {}
 
 
 # ---------------------------------------------------------------- 请求模型
@@ -93,6 +101,20 @@ class StopBody(BaseModel):
 
 class QuotaBody(BaseModel):
     cause_count: int = Field(..., ge=1)
+
+
+class PresentationFromTool(BaseModel):
+    """与 app/routers/presentations.py 的 FromTool 同构（字段约束逐字一致）。"""
+
+    request_key: str = Field(..., min_length=8, max_length=80)
+    tool_id: str = Field(..., max_length=40)
+    tool_name: str = Field("", max_length=120)
+    history_id: str = Field(..., min_length=1, max_length=96)
+    title: str = Field("", max_length=200)
+    input: str = Field("", max_length=80000)
+    output: str = Field(..., min_length=200, max_length=80000)
+    model: str = Field("", max_length=200)
+    theme: Literal["paper", "chalk"] | None = None
 
 
 # ---------------------------------------------------------------- 工具函数
@@ -316,7 +338,7 @@ def create_app(
 
     @app.get("/api/tools/")
     async def tools() -> dict:
-        return catalog.tools_payload()
+        return catalog.tools_payload(slides_enabled=STATE.slides_enabled)
 
     @app.get("/api/tools/models")
     async def tool_models() -> dict:
@@ -611,7 +633,7 @@ def create_app(
         asyncio.create_task(_complete())
         STATE.record(
             ts=time.time(), method="POST", path="/api/chat/title-jobs",
-            authorization=True, fingerprint=_fingerprint(request),
+            authorization=True, fingerprint=_fingerprint(request), scenario="title",
             body={"job_id": job_id, "history_id": history_id, "tool_id": tool_id},
             summary="title job queued",
         )
@@ -739,10 +761,145 @@ def create_app(
             return {"status": "stopped", "request_id": body.request_id}
         return {"status": "not_found", "request_id": body.request_id}
 
+    # ---- 工具页 PPT 任务（/api/presentations/*，与真实端点同形的最小镜像）----
+    def _ppt_job_or_404(task_id: str) -> dict:
+        job = _PPT_JOBS.get(task_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="PPT 任务不存在")
+        return job
+
+    def _ppt_auth(request: Request) -> None:
+        if not _bearer(request):
+            raise HTTPException(status_code=401, detail="请先输入使用码")
+
+    def _ppt_plan(request: Request) -> Any:
+        """PPT 生命周期场景：请求头/查询串 > POST /__mock__/ppt 的默认场景。
+
+        不吃粘性场景：PPT 创建紧随流式收尾发生，中间还夹着标题请求，
+        粘性会被那些请求偷走，控制用 /__mock__/ppt 或 X-Mock-Scenario。
+        """
+        plan, _warnings, _ = resolve_plan(
+            header=request.headers.get("x-mock-scenario") or "",
+            query=request.query_params.get("mock") or "",
+            default_scenario=(STATE.ppt_scenario or "").strip() or "ppt-ok",
+        )
+        return plan
+
+    def _ppt_job_dict(job: dict) -> dict:
+        data = {"task_id": job["task_id"], "run_id": job["run_id"], "status": job["status"],
+                "title": job["title"], "blueprint": job["blueprint"]}
+        if job["status"] == "completed":
+            scene = slides_mod.scene()
+            data["version"] = {"id": job["version_id"], "title": job["title"], "kind": "slides",
+                               "slides": len(scene["slides"]), "theme": job["theme"],
+                               "warnings": scene.get("warnings", [])}
+        if job.get("error"):
+            data["error"] = job["error"]
+        return data
+
+    @app.post("/api/presentations/from-tool")
+    async def presentation_from_tool(request: Request, body: PresentationFromTool) -> dict:
+        plan = _ppt_plan(request)
+        _ppt_auth(request)
+        if STATE.quota is not None and max(0, STATE.quota - STATE.used) <= 0:
+            raise HTTPException(status_code=403, detail="额度已用尽")
+        rec = STATE.record(
+            ts=time.time(), method="POST", path="/api/presentations/from-tool",
+            authorization=bool(_bearer(request)), fingerprint=_fingerprint(request),
+            scenario=plan.scenario,
+            body={**body.model_dump(exclude={"output", "input"}),
+                  "output 长度": len(body.output), "input 长度": len(body.input)},
+        )
+        if plan.ppt_mode == "forbidden" or not STATE.slides_enabled:
+            _note(rec, status=403, summary="slides disabled")
+            raise HTTPException(status_code=403, detail="演示文稿功能暂未开启")
+        if not supports_presentation(body.tool_id, True):
+            _note(rec, status=400, summary="tool unsupported")
+            raise HTTPException(status_code=400, detail="该工具暂不支持生成 PPT")
+        blueprint = blueprint_for_tool(body.tool_id)
+        if not blueprint:
+            _note(rec, status=400, summary="no blueprint")
+            raise HTTPException(status_code=400, detail="该工具还没有对应的 PPT 结构")
+        if len(body.output.strip()) < 200:
+            _note(rec, status=400, summary="output too short")
+            raise HTTPException(status_code=400, detail="工具结果太短，无法生成完整课堂 PPT")
+        existing = _PPT_BY_KEY.get(body.request_key)
+        if existing and existing in _PPT_JOBS:
+            _note(rec, summary=f"dedupe -> {existing}")
+            return _ppt_job_dict(_PPT_JOBS[existing])
+        theme = body.theme or BLUEPRINTS[blueprint]["theme"]
+        task_id = f"ppt{int(time.time() * 1000) % 10_000_000}"
+        run_id = f"run{int(time.time() * 1000) % 10_000_000}"
+        _PPT_JOBS[task_id] = {
+            "task_id": task_id, "run_id": run_id, "request_key": body.request_key,
+            "title": (body.title.strip() or f"{body.tool_name or '工具结果'} · 课堂 PPT")[:200],
+            "blueprint": blueprint, "theme": theme, "tool_id": body.tool_id,
+            "mode": plan.ppt_mode, "polls_needed": max(1, int(plan.ppt_polls)),
+            "polls": 0, "status": "queued", "error": "", "version_id": f"ver{int(time.time() * 1000) % 10_000_000}",
+        }
+        _PPT_BY_KEY[body.request_key] = task_id
+        STATE.consume(1)
+        _note(rec, summary=f"created {task_id} mode={plan.ppt_mode}")
+        return {"task_id": task_id, "run_id": run_id, "status": "queued",
+                "blueprint": blueprint, "theme": theme, "charged": True}
+
+    @app.get("/api/presentations/{task_id}")
+    async def presentation_get(task_id: str, request: Request) -> dict:
+        _ppt_auth(request)
+        job = _ppt_job_or_404(task_id)
+        if job["status"] in {"queued", "running"}:
+            job["polls"] += 1
+            if job["polls"] >= job["polls_needed"]:
+                if job["mode"] == "fail":
+                    job["status"] = "failed"
+                    job["error"] = "假后端场景：演示文稿生成失败"
+                else:
+                    job["status"] = "completed"
+            else:
+                job["status"] = "running"
+        return _ppt_job_dict(job)
+
+    @app.get("/api/presentations/{task_id}/scene")
+    async def presentation_scene(task_id: str, request: Request) -> dict:
+        _ppt_auth(request)
+        job = _ppt_job_or_404(task_id)
+        if job["status"] != "completed":
+            raise HTTPException(status_code=409, detail="PPT 还没有生成完成")
+        scene = slides_mod.scene()
+        return {"version_id": job["version_id"], "title": job["title"], "scene": scene,
+                "warnings": scene.get("warnings", [])}
+
+    @app.get("/api/presentations/{task_id}/export")
+    async def presentation_export(task_id: str, request: Request) -> Response:
+        _ppt_auth(request)
+        job = _ppt_job_or_404(task_id)
+        if job["status"] != "completed":
+            raise HTTPException(status_code=409, detail="PPT 还没有生成完成")
+        safe = re.sub(r'[\\/:*?"<>|]+', "-", job["title"]).strip() or "slides"
+        return Response(
+            content=slides_mod.pptx(),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(safe + ".pptx"),
+                     "Cache-Control": "private, no-store"},
+        )
+
+    @app.delete("/api/presentations/{task_id}")
+    async def presentation_delete(task_id: str, request: Request) -> dict:
+        _ppt_auth(request)
+        job = _ppt_job_or_404(task_id)
+        if job["status"] in {"queued", "running"}:
+            raise HTTPException(status_code=409, detail="PPT 正在生成，请先停止再删除")
+        _PPT_JOBS.pop(task_id, None)
+        _PPT_BY_KEY.pop(job["request_key"], None)
+        return {"deleted": True}
+
     # ---- 控制面 ----
     if upstream_enabled:
         upstream.add_upstream_routes(app)
-    panel.add_control_routes(app, default_scenario=default_scenario, upstream_enabled=upstream_enabled)
+    panel.add_control_routes(
+        app, default_scenario=default_scenario, upstream_enabled=upstream_enabled,
+        reset_hook=lambda: (_PPT_JOBS.clear(), _PPT_BY_KEY.clear()),
+    )
 
     return app
 

@@ -83,8 +83,10 @@ async def stream_frames(
 
     # ---- 正文 ----
     body = content_mod.build_content(plan.content, plan, req, input_text, tool_id)
+    truncated = False
     if plan.max_chars and len(body) > plan.max_chars:
         body = body[: plan.max_chars]
+        truncated = True
     tokens = _split(body, plan.chunk_chars)
     fallback_points = sorted(int(p) for p in (plan.fallback_at or ()))
 
@@ -135,6 +137,10 @@ async def stream_frames(
     # 试卷的 paper-mid-truncate 走这条——内容本身就是截断的半道题。
     if plan.fault == "truncate" and not plan.fault_at and not plan.fault_chars:
         return
+    if truncated:
+        # 撞到输出上限（max_chars 截断正文）：与真实后端一样先发 truncated
+        # 标记再正常收尾。前端据此置 outputTruncated，结果区提示「可继续生成」。
+        yield ("truncated", "")
     stats.terminal = "[DONE]"
     yield ("done", "[DONE]")
 

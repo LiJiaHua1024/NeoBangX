@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from app.services.migration import MIGRATION_TOOL_ID, MIGRATION_TOOL_NAME
+from app.services.presentation_blueprints import blueprint_for_tool, supports_presentation
 
 # 分组顺序、折叠态与 tools.py 的 TOOL_GROUPS 完全一致
 TOOL_GROUPS: list[dict] = [
@@ -155,8 +156,8 @@ def find_tool(tool_id: str) -> dict | None:
     return None
 
 
-def tools_payload() -> dict:
-    """与真实 /api/tools/ 响应同构：groups[].tools 带 prompt_loaded。"""
+def tools_payload(slides_enabled: bool = True) -> dict:
+    """与真实 /api/tools/ 响应同构：groups[].tools 带 prompt_loaded 与 PPT 能力标记。"""
     groups = []
     for g in TOOL_GROUPS:
         tools = []
@@ -168,6 +169,8 @@ def tools_payload() -> dict:
                 "description": t["description"],
                 "prompt_filename": t["prompt_filename"],
                 "prompt_loaded": True,
+                "ppt_supported": supports_presentation(t["id"], slides_enabled),
+                "ppt_blueprint": blueprint_for_tool(t["id"]) or "",
             })
         groups.append({"id": g["id"], "title": g["title"], "collapsed": g["collapsed"], "tools": tools})
     return {

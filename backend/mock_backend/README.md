@@ -141,6 +141,25 @@ http://127.0.0.1:8000/__mock__/
 | `vocab` | 超标词替换流（超标词排查本身走真实 3500 词表，见 `/api/chat/vocab/check`） |
 | `title` | 标题生成正文场景；`/api/chat/title-jobs` 另会在内存中异步完成标题，便于查看 Shimmer 与刷新对账 |
 
+### 工具页 PPT 任务（/api/presentations/*）
+
+「生成 PPT」胶囊的完整链路已打桩：创建 → 轮询 → scene 预览 → .pptx 下载。
+scene 与 .pptx 都走**真实编译链路**（golden deck → compile_deck → build_pptx），
+预览缩略图和下载文件都是真的。生命周期场景用 `POST /__mock__/ppt` 控制
+（不走粘性场景：PPT 创建紧随流式收尾发生，中间还夹着标题请求，粘性会被偷走），
+也可用 `X-Mock-Scenario: ppt-*` / `?mock=ppt-*` 单次指定：
+
+| 场景 | 说明 |
+| --- | --- |
+| `ppt-ok` | 默认：第 2 次轮询完成，出 3 页语法课 deck |
+| `ppt-slow` | 第 6 次轮询才完成，看「生成中」卡片与轮询节奏 |
+| `ppt-fail` | 生成失败：`status=failed` + error 文案 |
+| `ppt-403` | 创建即被拒：403「演示文稿功能暂未开启」 |
+
+总开关另由 `POST /__mock__/slides {"enabled": false}` 控制（对应管理后台
+「开启演示文稿生成」）：关闭后工具目录 `ppt_supported` 全为 false（胶囊隐藏），
+`from-tool` 返回 403。
+
 ### 描述需求找工具（搜索框）
 
 `POST /api/tools/search` 桩已实现且与真实端点同形（键集由
@@ -221,11 +240,13 @@ GET    /m/upload?token=...               手机拍照页（真实前端文件，
 程序化入口：
 
 ```
-GET    /__mock__/state        当前场景/粘性/额度/镜像配置/上游开关
+GET    /__mock__/state        当前场景/粘性/额度/镜像配置/上游开关/PPT 开关与场景
 GET    /__mock__/scenarios    场景清单（含每个场景覆盖的参数）
 POST   /__mock__/scenario     {"scenario":"mid-error","params":{"at":5},"times":1}
 DELETE /__mock__/scenario     清除粘性场景
 POST   /__mock__/quota        {"quota":5}（null = 无限）
+POST   /__mock__/slides       {"enabled":false} 模拟管理后台关掉 PPTX 生成
+POST   /__mock__/ppt          {"scenario":"ppt-fail"} 设 PPT 任务默认场景（"" = 回到 ppt-ok）
 GET    /__mock__/requests     请求日志 JSON
 DELETE /__mock__/requests     清空日志
 POST   /__mock__/reset        重置全部状态
@@ -321,6 +342,8 @@ uv run python -m mock_backend.main --port 8000 --mirror-origin http://localhost:
 有意简化、测试时不会误判的地方：
 
 - **没有数据库**：使用码、设备、使用日志、LLM 配置全部在进程内存里，重启即清零。
+- **`slides_enabled` 默认开**：真实后端默认关（管理后台开启后才显示 PPT 入口），假后端反过来，让 PPT 链路开箱可测。
+- **PPT 内容是固定 deck**：scene/.pptx 走真实编译链路，但内容恒为 `assets/mock-deck.json` 那份语法课样例（3 页），与请求的工具/蓝图无关。
 - **`/api/tools/` 的 `prompt_loaded` 恒为 true**：真实后端会检查 `prompts/*.md` 是否存在。
 - **`/api/chat/preview` 返回的是输入原文**，不是渲染后的完整 Prompt。
 - **token 数是粗略估计**（`len/2`），真实后端用 litellm tokenizer。

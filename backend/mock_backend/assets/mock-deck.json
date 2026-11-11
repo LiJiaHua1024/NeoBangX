@@ -1,0 +1,78 @@
+{
+ "format": "nbx-deck",
+ "version": 2,
+ "title": "Grammar & Question Analysis",
+ "subtitle": "Dense layouts in the chalk theme",
+ "theme": "chalk",
+ "meta": {
+  "subject": "English",
+  "grade": "Grade 10",
+  "lesson": "Grammar & exam",
+  "duration": "—"
+ },
+ "slides": [
+  {
+   "layout": "grammar",
+   "kicker": "FORM · MEANING · USE",
+   "title": "Past simple vs present perfect",
+   "rows": [
+    {
+     "label": "FORM",
+     "left": "V2 / past form\nShe lost her keys.",
+     "right": "have / has + V3 (past participle)\nShe has lost her keys."
+    },
+    {
+     "label": "MEANING",
+     "left": "A finished event at a finished time.",
+     "right": "A past event with a result or relevance now."
+    },
+    {
+     "label": "USE",
+     "left": "Stories, dates, sequences: yesterday, in 2019, then.",
+     "right": "Experience, change, unfinished: ever, since, so far."
+    },
+    {
+     "label": "SIGNALS",
+     "left": "yesterday · ago · in 2019 · last week",
+     "right": "since · for · ever · already · yet"
+    }
+   ],
+   "trap": "Finished time: “I have seen him yesterday.” ✗ → “I saw him yesterday.” ✓\nUnfinished time: “I saw him since 2019.” ✗ → “I have seen him since 2019.” ✓",
+   "note": "Quick check: “I ______ (live) here since 2015.”",
+   "notes": "先用两个时间轴对比过去时和现在完成时。"
+  },
+  {
+   "layout": "exam",
+   "staged": true,
+   "kicker": "QUESTION ANALYSIS · READING",
+   "title": "Question analysis: “just passing by”",
+   "meta": "READING · QUESTION 24",
+   "stem": "What does the writer suggest by saying that people “usually mean they are stopping for a while”?",
+   "options": [
+    {
+     "key": "A",
+     "text": "The kiosk has become a place people visit on purpose.",
+     "correct": true
+    },
+    {
+     "key": "B",
+     "text": "People no longer buy newspapers at the kiosk."
+    },
+    {
+     "key": "C",
+     "text": "The street has become busier than before."
+    },
+    {
+     "key": "D",
+     "text": "The writer dislikes people who pass by."
+    }
+   ],
+   "answer": "A",
+   "evidence": "“But now, when people say they are ‘just passing by,’ they usually mean they are stopping for a while.”",
+   "why": "The phrase usually means “not staying.” The ending reverses it: passing by now leads to stopping.",
+   "trap": "B is true but does not answer the question. D invents an attitude the writer never shows.",
+   "pattern": "PATTERN · Locate the phrase → compare its usual meaning with the ending → infer what the reversal says about the place.",
+   "notes": "先做题，不要看答案；圈出时间状语。"
+  }
+ ]
+}

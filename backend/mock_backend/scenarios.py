@@ -52,6 +52,9 @@ class StreamPlan:
     more_cause_count: int = 3
     # PDF 解析分支
     pdf_mode: str = "ok"
+    # 工具页 PPT 任务（/api/presentations/*）：生命周期分支与完成前的轮询次数
+    ppt_mode: str = "ok"               # ok | slow | fail | forbidden
+    ppt_polls: int = 2                 # 第几次状态轮询后落定（slow 场景用它拉长「生成中」）
     # 试卷
     paper_questions: int = 5
     paper_done: int = 0            # 0 = 全发完；>0 = 只发这么多道完整题
@@ -117,6 +120,11 @@ SCENARIOS: dict[str, dict[str, Any]] = {
     "pdf-no-token": {"pdf_mode": "no-token"},
     "pdf-empty": {"pdf_mode": "empty"},
     "pdf-truncated": {"pdf_mode": "truncated"},
+    # ---- 工具页 PPT 任务（/api/presentations/*） ----
+    "ppt-ok": {"ppt_mode": "ok"},
+    "ppt-slow": {"ppt_mode": "slow", "ppt_polls": 6},
+    "ppt-fail": {"ppt_mode": "fail"},
+    "ppt-403": {"ppt_mode": "forbidden"},
 }
 
 # 面板 / 文档用的场景说明（顺序即展示顺序）
@@ -163,6 +171,10 @@ SCENARIO_DOC: list[tuple[str, str]] = [
     ("pdf-no-token", "503 未配置 MinerU Token"),
     ("pdf-empty", "502 解析结果为空"),
     ("pdf-truncated", "成功但超过 5 万字被截断"),
+    ("ppt-ok", "PPT 任务正常：排队 → 生成 → 完成（第 2 次轮询落定）"),
+    ("ppt-slow", "PPT 任务慢慢生成：第 6 次轮询才完成，看「生成中」卡片与轮询"),
+    ("ppt-fail", "PPT 任务生成失败：完成前报「演示文稿生成失败」"),
+    ("ppt-403", "PPT 创建被拒：403「演示文稿功能暂未开启」"),
 ]
 
 # 参数别名 -> StreamPlan 字段名
@@ -176,7 +188,7 @@ ALIASES: dict[str, str] = {
 _INT_PARAMS = {
     "fault_at", "fault_chars", "delay_ms", "pre_delay_ms", "chunk_chars", "max_chars",
     "reasoning_chars", "reasoning_delay_ms", "cause_count", "more_cause_count",
-    "paper_questions", "paper_done", "transfer_count", "http_status",
+    "paper_questions", "paper_done", "transfer_count", "http_status", "ppt_polls",
 }
 _TUPLE_PARAMS = {"fallback_at"}
 

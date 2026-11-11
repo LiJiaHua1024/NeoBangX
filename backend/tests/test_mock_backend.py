@@ -32,6 +32,8 @@ def _clean_state():
     STATE.quota = None
     mock_main.DEFAULT_SCENARIO = "happy"
     mock_main.DEFAULT_PDF_MODE = "ok"
+    mock_main._PPT_JOBS.clear()
+    mock_main._PPT_BY_KEY.clear()
     yield
     STATE.reset()
     STATE.clear_sticky()
@@ -91,6 +93,7 @@ def test_tools_endpoint_keys_match_real_shape(client):
             for tool in group["tools"]:
                 assert set(tool) == {
                     "id", "name", "icon", "description", "prompt_filename", "prompt_loaded",
+                    "ppt_supported", "ppt_blueprint",
                 }
         for model in payload["models"]:
             assert set(model) == {"id", "name", "description", "aa_index", "is_free", "free_no_code"}
@@ -112,6 +115,146 @@ def test_config_endpoint_shape(client):
         }
         assert set(data["mirror"]) == {"enabled", "origins"}
         assert data["mirror"] == {"enabled": False, "origins": []}
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------- 工具页 PPT 桩
+
+
+def _ppt_body(**over):
+    body = {
+        "request_key": "ppt_hist1_abc123",
+        "tool_id": "1",
+        "tool_name": "语篇深度分析",
+        "history_id": "hist1",
+        "title": "阅读课 · 课堂 PPT",
+        "input": "一篇关于共享书店的语篇",
+        "output": "语篇深度分析结果。" * 30,
+        "model": "mock/mock-flash",
+    }
+    body.update(over)
+    return body
+
+
+AUTH = {"Authorization": "Bearer mock-token"}
+
+
+def test_ppt_capability_matches_real_rules():
+    """PPT 能力标记必须与真实后端同一套判定（supports_presentation/blueprint 映射）。"""
+    from app.services.presentation_blueprints import blueprint_for_tool, supports_presentation
+
+    payload = catalog.tools_payload()
+    for group in payload["groups"]:
+        for tool in group["tools"]:
+            assert tool["ppt_supported"] == supports_presentation(tool["id"], True), tool["id"]
+            assert tool["ppt_blueprint"] == (blueprint_for_tool(tool["id"]) or ""), tool["id"]
+
+
+def test_ppt_capability_follows_slides_switch():
+    """关掉演示文稿开关后，所有工具的 ppt_supported 都要变 False。"""
+    payload = catalog.tools_payload(slides_enabled=False)
+    assert not any(t["ppt_supported"] for g in payload["groups"] for t in g["tools"])
+
+
+def test_presentation_lifecycle_matches_real_shape(client):
+    async def run():
+        r = await client.post("/api/presentations/from-tool", json=_ppt_body(), headers=AUTH)
+        assert r.status_code == 200, r.text
+        created = r.json()
+        assert set(created) == {"task_id", "run_id", "status", "blueprint", "theme", "charged"}
+        assert created["blueprint"] == "reading"
+        task_id = created["task_id"]
+
+        r = await client.get(f"/api/presentations/{task_id}", headers=AUTH)
+        assert r.status_code == 200
+        assert r.json()["status"] == "running"   # 第 1 次轮询：生成中
+
+        r = await client.get(f"/api/presentations/{task_id}", headers=AUTH)
+        data = r.json()
+        assert data["status"] == "completed"     # 第 2 次轮询：完成
+        assert set(data) >= {"task_id", "run_id", "status", "title", "blueprint", "version"}
+        assert set(data["version"]) == {"id", "title", "kind", "slides", "theme", "warnings"}
+        assert data["version"]["kind"] == "slides" and data["version"]["slides"] >= 3
+
+        r = await client.get(f"/api/presentations/{task_id}/scene", headers=AUTH)
+        scene = r.json()
+        assert set(scene) == {"version_id", "title", "scene", "warnings"}
+        slides = scene["scene"]["slides"]
+        assert len(slides) == data["version"]["slides"]
+        assert all(s["primitives"] for s in slides)
+        assert all("notes" in s for s in slides)
+
+        r = await client.get(f"/api/presentations/{task_id}/export", headers=AUTH)
+        assert r.status_code == 200
+        assert r.content[:2] == b"PK"            # 真 pptx（zip），不是占位文本
+        assert "presentationml" in r.headers["content-type"]
+
+        r = await client.delete(f"/api/presentations/{task_id}", headers=AUTH)
+        assert r.status_code == 200 and r.json() == {"deleted": True}
+        r = await client.get(f"/api/presentations/{task_id}", headers=AUTH)
+        assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_presentation_dedupe_by_request_key(client):
+    async def run():
+        r1 = await client.post("/api/presentations/from-tool", json=_ppt_body(), headers=AUTH)
+        r2 = await client.post("/api/presentations/from-tool", json=_ppt_body(), headers=AUTH)
+        assert r1.json()["task_id"] == r2.json()["task_id"]
+
+    asyncio.run(run())
+
+
+def test_presentation_gates(client):
+    async def run():
+        # 无使用码 401
+        r = await client.post("/api/presentations/from-tool", json=_ppt_body())
+        assert r.status_code == 401
+
+        # 总开关关闭 403（管理后台「开启演示文稿生成」）
+        STATE.slides_enabled = False
+        r = await client.post("/api/presentations/from-tool", json=_ppt_body(), headers=AUTH)
+        assert r.status_code == 403 and "暂未开启" in r.json()["detail"]
+        STATE.slides_enabled = True
+
+        # 场景强制 403（ppt-403）
+        r = await client.post("/api/presentations/from-tool?mock=ppt-403", json=_ppt_body(), headers=AUTH)
+        assert r.status_code == 403
+
+        # 不支持 PPT 的工具 400（自由对话 25 在 NO_PRESENTATION_TOOLS）
+        r = await client.post("/api/presentations/from-tool", json=_ppt_body(tool_id="25"), headers=AUTH)
+        assert r.status_code == 400 and "不支持" in r.json()["detail"]
+
+        # 正文太短：与真实一样先被请求模型的 min_length 拦成 422
+        r = await client.post("/api/presentations/from-tool", json=_ppt_body(output="太短"), headers=AUTH)
+        assert r.status_code == 422
+
+    asyncio.run(run())
+
+
+def test_presentation_fail_scenario(client):
+    async def run():
+        r = await client.post("/__mock__/ppt", json={"scenario": "ppt-fail"})
+        assert r.status_code == 200
+        r = await client.post("/api/presentations/from-tool", json=_ppt_body(), headers=AUTH)
+        task_id = r.json()["task_id"]
+        await client.get(f"/api/presentations/{task_id}", headers=AUTH)
+        data = (await client.get(f"/api/presentations/{task_id}", headers=AUTH)).json()
+        assert data["status"] == "failed"
+        assert data["error"]
+        assert "version" not in data
+
+    asyncio.run(run())
+
+
+def test_presentation_scene_before_done_conflicts(client):
+    async def run():
+        r = await client.post("/api/presentations/from-tool", json=_ppt_body(), headers=AUTH)
+        task_id = r.json()["task_id"]
+        r = await client.get(f"/api/presentations/{task_id}/scene", headers=AUTH)
+        assert r.status_code == 409
 
     asyncio.run(run())
 
