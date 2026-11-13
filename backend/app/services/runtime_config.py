@@ -127,8 +127,9 @@ logger = logging.getLogger(__name__)
 def _clamp_aa_index(value) -> float | None:
     """校验 AA 智能指数（0-100），非法值返回 None（= 未评级）。
 
-    评级按打击级别区间映射（17-35 常规火炮 / 36-42 温压弹 / 43-47 原子弹 /
-    48-51 氢弹 / 52-54 光粒 / 55-58 二向箔 / 59+ 归零者），映射由前端展示层负责。
+    AAII v5.0.1 评级在展示层四舍五入后按区间映射（6-22 常规火炮 / 23-33 温压弹 /
+    34-43 原子弹 / 44-51 氢弹 / 52-58 光粒 / 59-65 二向箔 / 66+ 未知），
+    映射由前端展示层负责。
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -364,7 +365,8 @@ def parse_models(raw: str) -> list[dict]:
     user_usable / ocr_usable / chores_usable / agent_usable / enabled /
     is_free / free_no_code / free_limits / agent_free / agent_free_limits；
     旧格式：逗号分隔的模型 ID 字符串，自动升级为结构化条目。
-    aa_index 为 AA 智能指数（0-100），前端按打击级别区间映射展示；留空 = 未评级。
+    aa_index 为 AAII v5.0.1 智能指数（0-100），前端四舍五入后按打击级别区间映射展示；
+    留空或低于 6 分 = 未评级。
     旧的 score（0-10 推荐评分）读入即丢弃、视为未评级，不再落库。
     enabled 缺省为 True（兼容老数据）；禁用后四项用途一律不可用。
     用途能力位见 parse_capabilities（旧 chores_only 会在读取时迁移）；

@@ -338,8 +338,8 @@ try {
       "缺少免码标签",
     );
     assert(
-      (await defaultRow.innerText()).includes("原子弹级"),
-      "缺少 AA 打击级别",
+      (await defaultRow.innerText()).includes("氢弹级"),
+      "缺少 AAII v5.0.1 打击级别",
     );
     assert(
       (await defaultRow.innerText()).includes("界面验收用的本地假模型。"),

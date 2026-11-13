@@ -122,7 +122,7 @@ class ModelEntry(BaseModel):
         None, description="【已废弃】旧 0-10 推荐评分；读入即丢弃、不再落库，模型评级改用 aa_index 打击级别"
     )
     aa_index: Optional[float] = Field(
-        None, ge=0, le=100, description="AA 智能指数 0-100；前端按打击级别区间映射展示，留空为未评级"
+        None, ge=0, le=100, description="AAII v5.0.1 智能指数 0-100；展示时四舍五入后按打击级别区间映射，留空为未评级"
     )
     reasoning_effort: Optional[str] = Field(
         None, description="思考强度档位：直接透传给上游（如 none/off/instant/low/medium/high/xhigh 等）；空为供应商默认"

@@ -232,7 +232,7 @@
        它，且只在生成完成后才出现；3KB 的体积换十几处 getter 的未加载兜底不划算。 -->
   <script defer src="/static/nbx-versions.js?v=7270a8ece4" onload="__nbxBootMark('js:versions')" onerror="__nbxBootFail('js:versions','版本组件')"></script>
   <!-- 压缩产物：源码是 frontend/script.js，改完跑 npm run build:js 重新生成 -->
-  <script defer src="/static/script.min.js?v=fdf1cb38e7" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
+  <script defer src="/static/script.min.js?v=5243cfcbf9" fetchpriority="high" onload="__nbxBootMark('js:app')" onerror="__nbxBootFail('js:app','核心脚本')"></script>
   <script defer src="/static/vendor/alpinejs-3.15.12.min.js?v=57b37d7cae" onload="__nbxBootMark('js:alpine')" onerror="__nbxBootFail('js:alpine','界面引擎')"></script>
 </head>
 
@@ -3610,7 +3610,7 @@
             </template>
           </div>
           <!-- 等级说明入口：与模型下拉底部的入口一致 -->
-          <button class="ms-guide ms-guide-block mt-3" @click="openStrikeGuide()" title="评级标准与依据（AA 指数映射）">
+          <button class="ms-guide ms-guide-block mt-3" @click="openStrikeGuide()" title="评级标准与依据（AAII v5.0.1 映射）">
             <span x-html="icon('question','w-3.5 h-3.5')"></span>
             <span>打击级别评级说明</span>
           </button>
@@ -3627,7 +3627,7 @@
            role="dialog" aria-modal="true" aria-label="打击级别说明">
         <div class="flex items-center gap-2 px-5 py-4 border-b shrink-0" style="border-color:var(--border)">
           <span class="text-dim" x-html="icon('sparkle','w-4 h-4')"></span>
-          <h3 class="font-bold text-sm sg-title">AI 智力与算力打击评级系统（AA 指数映射标准）</h3>
+          <h3 class="font-bold text-sm sg-title">AI 智力与算力打击评级系统（AAII v5.0.1 映射标准）</h3>
           <button class="icon-btn ml-auto" @click="closeStrikeGuide()" title="关闭" x-html="icon('x','w-4 h-4')"></button>
         </div>
 
@@ -3636,8 +3636,8 @@
             <h4>背景</h4>
             <p>人类已身处<strong>智能爆炸</strong>：AGI 应已达成——并无某一个明确的标识点——并正在以极快的速度穿越智能。模型能力以天为单位迭代，数日即可产出此前数周乃至数月的改进量，指数型爆发仍在加速。</p>
             <p>0-10 制评分在这一速度下已被撑爆：主流模型集中于 9~10 分区间，区分度归零、评价词穷。相对评分另有结构性缺陷——已有模型的能力不因新模型发布而改变，若据相对位置下调其评分，评级即失去公信力。</p>
-            <p>评级体系因此重建为<strong>绝对刻度映射</strong>：以 Artificial Analysis 智能指数（AA 智能指数）为量化输入，与人类科学破壁里程碑、《三体》/核武打击梯度做硬性绑定。评级只取决于模型在刻度上的位置，与接入时间无关，永不贬值。</p>
-            <p>刻度性质：<strong>两三分的差距即代表代际跨越</strong>。一级之差未必等于一个代际——数个代际凑出一级亦属常态；但在当前指数爆发的节奏下，大致一个代际对应一级。</p>
+            <p>评级体系因此重建为<strong>绝对刻度映射</strong>：以 Artificial Analysis 智能指数（AA 智能指数 v5.0.1）为量化输入，与人类科学破壁里程碑、《三体》/核武打击梯度做硬性绑定。评级只取决于模型在刻度上的位置，与接入时间无关，永不贬值。</p>
+            <p>刻度性质：<strong>三五分的差距即代表代际跨越</strong>。一级之差未必等于一个代际——数个代际凑出一级亦属常态；但在当前指数爆发的节奏下，大致一个代际对应一级。</p>
           </section>
 
           <div class="sg-cols">
@@ -3657,7 +3657,7 @@
               <template x-for="lv in strikeLevels()" :key="lv.lv">
                 <div class="sg-level-card" :style="{ '--lv': lv.color }">
                   <div class="sg-level-head">
-                    <span class="sg-level-name" x-text="lv.lv ? 'Lv.' + lv.lv + ' ' + lv.name : lv.name"></span>
+                    <span class="sg-level-name" x-text="lv.lv <= 6 ? 'Lv.' + lv.lv + ' ' + lv.name : lv.name"></span>
                     <span class="sg-level-alias" x-show="lv.alias" x-text="'（' + lv.alias + '）'"></span>
                     <span class="sg-level-range" x-text="aaRangeText(lv)"></span>
                   </div>
@@ -3708,7 +3708,7 @@
               </div>
               <div class="sg-tl-item">
                 <span class="sg-tl-dot"></span>
-                <div><b>2026 年 9 月下旬</b> · 722 篇数学手稿批量产出——「二向箔级」语义来源。</div>
+                <div><b>2026 年 9 月下旬</b> · 722 篇数学手稿内部生成（10 月 6 日正式公开）——「二向箔级」语义来源。</div>
               </div>
             </div>
           </section>
@@ -3717,17 +3717,17 @@
           <div class="sg-cols">
           <section class="sg-sec">
             <h4>落地：英语教学场景</h4>
-            <p>温压弹级即<strong>学科满分级</strong>：彻底打穿标准化考试（高考英语除作文满分），常规题型精准覆盖。就备考而言，36 分以上的模型已是降维配置；级别差异实际体现在解析深度、长链条思辨与创造层。</p>
-            <p>出题难于做题：命题质量随智能水平单调上升。低智能模型所出试题「对的太对、错的太错」，干扰项失真、区分度不足；随智能水平提升，命题质量将<strong>达到并必将超过高考出题标准</strong>。</p>
+            <p>温压弹级即<strong>学科满分级</strong>：彻底打穿标准化考试（高考英语除作文满分），常规题型精准覆盖。就备考而言，23 分以上的模型已是降维配置；级别差异实际体现在解析深度、长链条思辨与创造层。</p>
+            <p>出题难于做题：命题质量随智能水平单调上升。低智能模型所出试题「对的太对、错的太错」，干扰项失真、区分度不足；随智能水平提升，命题质量将<strong>达到并必将超过高考出题标准</strong>。就高精度命题与复杂解析而言，建议优先选用 Lv.3 原子弹级（34 分）及以上模型，以避开低分或偏科模型在干扰项设计与知识严谨度上的幻觉短板。</p>
           </section>
 
           <section class="sg-sec">
             <h4>口径说明</h4>
             <div class="sg-faq">
               <p><b>为何弃用星级与百分制。</b>相对评分必然再次撑爆、词穷；打击级别锚定绝对刻度，可量化、抗词穷，且具备强视觉锚点。</p>
-              <p><b>未评级。</b>尚未录入 AA 指数，或低于 17 分（未达评级线）。未评级不显示任何评级角标。</p>
-              <p><b>59 分及以上为何标注「未知」。</b>现有评测体系上限之外的强度不可知——未知的未知，故不设级别，直接标注「未知」。</p>
-              <p><b>评级稳定性。</b>评级由 AA 指数硬性映射：模型能力不变则级别不变，新模型发布不影响既有评级。</p>
+              <p><b>未评级。</b>尚未录入 AA 指数，或低于 6 分（未达评级线）。未评级不显示任何评级角标。</p>
+              <p><b>66 分及以上为何标注「未知」。</b>现有评测体系上限之外的强度不可知——未知的未知，故不设级别，直接标注「未知」。</p>
+              <p><b>评级稳定性。</b>评级由 AA 指数硬性映射：模型能力不变则级别不变，新模型发布不影响既有评级。（同版本 AA 指数内永不贬值；仅当 AA 评测体系本身发生大版本换代时，按标尺偏移同步重标定区间。）</p>
             </div>
           </section>
           </div>

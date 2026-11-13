@@ -2143,14 +2143,14 @@
             <span class="field-hint">每份试卷第二步同时发起的请求数，自动补全共用此设置。1 为串行，0 或负数（如 -1）表示不限并发；点顶栏“保存设置”后对新请求生效。</span>
           </div>
           <label class="field mb-3">
-            <span>AA 智能指数（Artificial Analysis）</span>
+            <span>AA 智能指数（AAII v5.0.1）</span>
             <div class="aa-level-row">
               <input type="number" x-model.number="modelForm.aa_index" min="0" max="100" step="0.1" placeholder="留空 = 未评级，用户端不显示级别">
               <!-- 说明标签：填入即时映射打击级别，鼠标悬停看区间与含义 -->
               <span class="badge aa-level-chip" :style="aaLevelStyle(modelForm.aa_index)" :title="aaLevelTip(modelForm.aa_index)"
                     x-text="aaLevelOf(modelForm.aa_index) ? aaLevelLabel(modelForm.aa_index) : '未评级'"></span>
             </div>
-            <span class="field-hint">按打击级别区间自动映射（如 52–54 分 = 光粒级）；鼠标悬停右侧标签可看区间与含义。留空或低于 17 分为未评级，用户端不显示评级角标；59 分及以上为「未知」——未知的未知，不设级别。</span>
+            <span class="field-hint">按 AAII v5.0.1 打击级别区间自动映射（如 52–58 分 = 光粒级），原始浮点分四舍五入后匹配；鼠标悬停右侧标签可看区间与含义。留空或低于 6 分为未评级，用户端不显示评级角标；66 分及以上为「未知」——未知的未知，不设级别。</span>
           </label>
           <label class="field mb-3">
             <span>思考强度档位（Reasoning Effort）</span>
